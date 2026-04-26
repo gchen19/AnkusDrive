@@ -3,3 +3,4 @@ __pycache__/
 *.FCBak
 scratch/out/
 .venv/
+tests/reliability_cache/

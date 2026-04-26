@@ -58,35 +58,101 @@ Notes gathered from the scripting docs and the FEM Python tutorial:
 - `--console`, `-M <moddir>`, `-P <pypath>`, `--pass <args>`, `FreeCAD.ConfigGet(...)` for env info
 - `FreeCADGui` is **not** available headless — keep design logic in `App`/`Part`/`Fem` only
 
-## Planned CLI surface (first cut)
+## How an agent reaches FreeCAD: three layers
 
-```
-driftpin run <script.py>              # execute arbitrary script against worker
-driftpin shell                        # interactive REPL with helpers preloaded
-driftpin box --w 10 --d 20 --h 5 -o out.FCStd
-driftpin export <in.FCStd> --format step|stl|iges -o out.step
-driftpin fem run <doc.FCStd> --solver ccx -o results/
-driftpin fem report <results/>        # summarize max stress/displacement
-```
+DriftPin exposes FreeCAD through three layers, each with a different audience
+and a different cost-of-use. Knowing which layer a feature lives in tells you
+how to invoke it.
 
-## Planned MCP tools (first cut)
+### Layer 1 — typed MCP tools (the agent surface)
 
-| Tool | Purpose |
+~70 first-class MCP tools cover the **core mechanical-design surface area**.
+They have validated parameters, structured returns, and stable handles for
+chaining. This is the happy path — what an agent uses for things people do
+every day.
+
+| Domain | What's covered |
 |---|---|
-| `open_document` / `new_document` / `save_document` | Document lifecycle |
-| `list_objects` / `get_object` | Introspection, returns ID + TypeId + key props |
-| `add_primitive` | Box/Cylinder/Sphere/Cone with dims + placement |
-| `boolean_op` | cut / fuse / common over object IDs |
-| `make_sketch` / `add_sketch_constraint` / `pad_sketch` | Parametric modeling |
-| `export_shape` | STEP / STL / IGES / BREP |
-| `fem_new_analysis` | Create analysis container + default solver |
-| `fem_set_material` | Assign material to solid by object ID |
-| `fem_add_constraint` | Fixed / force / pressure / displacement on face(s) |
-| `fem_mesh` | Gmsh or Netgen, with element-size param |
-| `fem_run` | Invoke CalculiX (or Elmer) |
-| `fem_results` | Max/min stress, displacement, per-node if requested |
+| Document lifecycle | `new_document`, `open_document`, `save_document`, `list_documents`, `set_active_document`, `close_document` |
+| Geometry primitives | `add_primitive` (box/cyl/sphere), `boolean_op`, `export_shape` (STEP/IGES/BREP/STL) |
+| Selection (stable refs) | `list_faces`, `list_edges`, `query_faces`, `resolve_face`, `resolve_edge` |
+| PartDesign | `make_body`, `make_datum_plane`, `make_sketch`, `add_sketch_geometry`, `add_sketch_constraint`, `add_sketch_external`, `close_sketch`, `pad`, `pocket`, `revolve`, `hole`, `loft`, `sweep`, `helix`, `partdesign_fillet`, `partdesign_chamfer`, `linear_pattern`, `polar_pattern`, `mirrored`, `thickness`, `draft` |
+| Generic property access | `get_object`, `set_property` |
+| Mass / assembly / drawings | `mass_properties`, `make_assembly`, `add_part`, `list_assembly_parts`, `interference_check`, `bom_extract`, `make_drawing_page`, `add_projection_group` |
+| Visual feedback | `render_view`, `render_views` (8 preset views, multi-view sheets) |
+| FEM | `fem_new_analysis`, `fem_set_solver`, `fem_set_material`, `fem_add_constraint` (fixed/force/pressure/displacement/temperature/heatflux/initial_temperature), `fem_mesh`, `fem_mesh_refinement`, `fem_modal`, `fem_buckling`, `fem_run`, `fem_results`, `fem_modal_results`, `fem_buckling_results`, `fem_thermal_results`, plus the legacy `fem_cantilever_demo` |
+| Operations | `transaction_open`, `transaction_commit`, `transaction_abort` |
 
-All tools return JSON with stable object IDs so an agent can chain calls.
+All tools return JSON; geometry-creating tools return a `handle` (e.g.
+`pad_1`) that subsequent calls reference.
+
+### Layer 2 — generic property reflection
+
+For the long tail of "I just need to tweak this one property" without a
+dedicated tool:
+
+- **`get_object(handle)`** — dump every entry in `obj.PropertiesList` with
+  Quantities → float (mm/deg), Vectors → list, Placements → dict.
+- **`set_property(handle, name, value)`** — set any single property by name.
+
+Use this when a typed tool exists for the object kind but doesn't expose the
+exact property you need (e.g. `Refine` on a Pad, `Sections` ordering on a
+Loft, internal tunables on a CCX solver).
+
+### Layer 3 — `run_script` (the universal escape hatch)
+
+For features that have **no first-class MCP tool at all** — e.g. Path
+workbench (CAM toolpaths), Surface workbench, Arch/BIM, Spreadsheet,
+TechDraw dimensions, contact/spring FEM constraints, B-spline sketcher
+operations, expression-engine bindings, anything in a workbench DriftPin
+doesn't wrap.
+
+```python
+run_script(code='''
+import Path
+job = Path.Job.Create("Job", [_resolve("pad_1")])
+__result__ = {"job_name": job.Name}
+''')
+```
+
+Inside the script, the worker pre-injects: `App` / `FreeCAD`, `Part`,
+`ObjectsFem`, plus `_register(prefix, obj)` / `_resolve(handle)` /
+`_handles` so scripts can register new objects into the same handle
+registry that typed tools use. Set `__result__ = ...` to a JSON-serializable
+value to return data; print statements go to /dev/null.
+
+The escape hatch costs more (the agent has to write FreeCAD Python) but
+makes the entire FreeCAD API reachable. The Phase 2 plan's "After Phase 2"
+section calls out which run_script patterns deserve promotion to typed
+tools — that's how the surface grows over time.
+
+### What the CLI is (and isn't)
+
+The CLI is **not the agent surface** — it's a human-debugging + transport
+tool. Seven subcommands:
+
+| Command | Purpose |
+|---|---|
+| `driftpin ping` / `version` | Health check — boot a worker, prove FreeCAD is reachable |
+| `driftpin box` / `cylinder` | Single-shot primitive → .FCStd (manual smoke tests) |
+| `driftpin export <in.FCStd> -o <out.step>` | Headless format conversion |
+| `driftpin run <script.py>` | Execute arbitrary FreeCAD Python in a live worker (set `__result__` to return JSON) |
+| `driftpin mcp` | **Start the MCP server over stdio** — this is how an MCP host launches DriftPin |
+| `driftpin fem cantilever` | Run the built-in canned demo |
+
+Agents do not invoke the CLI. They speak MCP via stdio after the host has
+launched `driftpin mcp`. The CLI's job is (a) to start that server and
+(b) to give a human a way to poke at the worker without writing an MCP
+client.
+
+### Decision rule
+
+| Need | Use |
+|---|---|
+| Standard CAD/FEM operation | First-class MCP tool (Layer 1) |
+| Tool exists but I need property X | `get_object` / `set_property` (Layer 2) |
+| Workbench / API not wrapped at all | `run_script` (Layer 3) |
+| Smoke test from a shell, or stand up MCP | CLI |
 
 ## Roadmap
 
