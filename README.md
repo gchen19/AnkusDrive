@@ -15,6 +15,63 @@ FreeCAD exposes almost everything it does through a Python API — create docume
 - Bundled Python, `ccx` (CalculiX), and `gmsh` already ship inside the `.app` — no extra install needed for basic FEM.
 - Host-side rendering needs `Pillow` and `numpy` (in `.venv`); FreeCAD's bundled Python is left untouched.
 
+## Setup
+
+DriftPin isn't on PyPI yet — install from a clone. The MCP server runs in a
+host-side venv (the FastMCP loop, `Pillow`, `numpy`); `freecadcmd` is launched
+as a subprocess and uses its own bundled Python.
+
+```bash
+# 1. Install FreeCAD 1.1.1 from https://www.freecad.org/ (macOS: drag to /Applications)
+# 2. Clone and create a venv for DriftPin's host-side deps
+git clone https://github.com/<you>/DriftPin.git
+cd DriftPin
+python3 -m venv .venv
+.venv/bin/pip install mcp Pillow numpy
+
+# 3. Smoke-test that the worker can reach FreeCAD
+.venv/bin/python -m driftpin ping
+# → ping=pong freecad=1.1.1.xxxxx
+```
+
+The path to `freecadcmd` is hard-coded to the macOS default
+(`/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`) in
+`driftpin/client.py`. On Linux/Windows or a non-default install, edit
+`FREECADCMD` there until env-var override lands.
+
+### Wiring it into an MCP host
+
+The MCP server speaks stdio. Point your host at the venv's Python and let it
+run `-m driftpin mcp`.
+
+**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`
+(macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "driftpin": {
+      "command": "/absolute/path/to/DriftPin/.venv/bin/python",
+      "args": ["-m", "driftpin", "mcp"]
+    }
+  }
+}
+```
+
+**Claude Code** — register from the repo root:
+
+```bash
+claude mcp add driftpin -- "$PWD/.venv/bin/python" -m driftpin mcp
+```
+
+**Other hosts (Cursor, Continue, custom MCP clients)** — same shape: stdio
+transport, command = venv Python, args = `["-m", "driftpin", "mcp"]`.
+
+After restarting the host, you should see ~72 `driftpin__*` tools become
+available. If startup hangs or the host reports a closed connection, run
+`.venv/bin/python -m driftpin ping` directly — that exercises the same worker
+boot path with cleaner error messages.
+
 ## Architecture sketch
 
 ```
