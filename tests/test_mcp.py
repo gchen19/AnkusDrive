@@ -139,6 +139,35 @@ async def _test_tool_error_returns_cleanly(session):
     assert "pong" in _text_payload(r2)
 
 
+async def _test_restart_worker_clears_state(session):
+    """restart_worker must drop all in-process state: an open document and
+    handle from before the restart should be gone after."""
+    await session.call_tool("new_document", {"name": "before_restart"})
+    box_r = await session.call_tool(
+        "add_primitive", {"kind": "box", "w": 5, "d": 5, "h": 5},
+    )
+    box = json.loads(_text_payload(box_r))
+    assert box["handle"], box
+
+    rr = await session.call_tool("restart_worker", {})
+    payload = json.loads(_text_payload(rr))
+    assert payload["restarted"] is True, payload
+    assert payload["freecad"], payload
+
+    docs_r = await session.call_tool("list_documents", {})
+    docs_text = _text_payload(docs_r)
+    docs = json.loads(docs_text) if docs_text else []
+    assert all(d["name"] != "before_restart" for d in docs), docs
+
+    # Stale handle should now be unknown.
+    bad = await session.call_tool("get_object", {"handle": box["handle"]})
+    assert bad.isError, f"expected stale handle to fail, got: {bad}"
+
+    # Worker is healthy: ping responds, can create a fresh doc.
+    pong = await session.call_tool("ping", {})
+    assert "pong" in _text_payload(pong)
+
+
 async def _test_fem_cantilever_tool(session):
     with tempfile.TemporaryDirectory() as tmp:
         r = await session.call_tool(
@@ -166,6 +195,7 @@ ASYNC_TESTS = [
     ("test_export_roundtrip", _test_export_roundtrip),
     ("test_run_script_tool", _test_run_script_tool),
     ("test_tool_error_returns_cleanly", _test_tool_error_returns_cleanly),
+    ("test_restart_worker_clears_state", _test_restart_worker_clears_state),
     ("test_fem_cantilever_tool", _test_fem_cantilever_tool),
 ]
 

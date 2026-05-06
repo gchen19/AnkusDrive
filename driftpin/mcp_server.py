@@ -55,6 +55,26 @@ def ping() -> str:
 
 
 @mcp.tool()
+def restart_worker() -> dict:
+    """Kill the FreeCAD worker process and spawn a fresh one. Use when the worker
+    is wedged (e.g. App.ActiveDocument desynced from internal state). All open
+    documents, unsaved changes, and handles are lost — save first if needed.
+    Returns {restarted: True, freecad: [...]}."""
+    global _worker
+    if _worker is not None:
+        try:
+            _worker.shutdown(timeout=3.0)
+        except Exception:
+            pass
+        if _worker.proc.poll() is None:
+            _worker.proc.kill()
+            _worker.proc.wait()
+        _worker = None
+    w = _ensure_worker()
+    return {"restarted": True, "freecad": w.freecad_version}
+
+
+@mcp.tool()
 def version() -> dict:
     """Return FreeCAD and bundled Python versions from the worker."""
     return _call("version")

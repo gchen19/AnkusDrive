@@ -600,9 +600,18 @@ _DATUM_PLANES = {
 
 def _active_doc():
     doc = App.ActiveDocument
-    if doc is None:
+    if doc is not None:
+        return doc
+    open_docs = list(App.listDocuments().keys())
+    if not open_docs:
         raise RuntimeError("no active document; call new_document first")
-    return doc
+    if len(open_docs) == 1:
+        App.setActiveDocument(open_docs[0])
+        return App.ActiveDocument
+    raise RuntimeError(
+        f"App.ActiveDocument is None but {len(open_docs)} documents are open "
+        f"({open_docs}); call set_active_document"
+    )
 
 
 @handler("make_body")

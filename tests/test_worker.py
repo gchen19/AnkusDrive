@@ -1305,6 +1305,68 @@ def test_close_document_invalidates_handles():
         assert w.call("ping") == "pong"
 
 
+_FORCE_DESYNC = """
+import sys, FreeCAD as App
+worker = sys.modules['worker']
+class _FakeApp:
+    ActiveDocument = None
+    listDocuments = staticmethod(App.listDocuments)
+    setActiveDocument = staticmethod(App.setActiveDocument)
+worker._real_App = App
+worker.App = _FakeApp
+"""
+
+_RESTORE_APP = """
+import sys
+worker = sys.modules['worker']
+worker.App = worker._real_App
+"""
+
+
+def test_active_doc_self_heals_when_only_one_open():
+    """If App.ActiveDocument desyncs to None but exactly one doc is open, the
+    next handler call should silently re-activate it instead of erroring."""
+    with Worker() as w:
+        w.call("new_document", name="solo")
+        w.call("run_script", code=_FORCE_DESYNC)
+        try:
+            # _active_doc reads App.ActiveDocument (None via fake), sees one
+            # open doc, calls setActiveDocument to recover. After we restore
+            # the real App, the recovery should be visible.
+            w.call("run_script", code="""
+import sys
+worker = sys.modules['worker']
+worker._active_doc()
+""")
+        finally:
+            w.call("run_script", code=_RESTORE_APP)
+        docs = w.call("list_documents")
+        assert any(d["name"] == "solo" and d["active"] for d in docs), docs
+
+
+def test_active_doc_raises_with_doc_list_when_ambiguous():
+    """Multiple docs open + ActiveDocument None → error must name the open docs
+    so the caller knows what to set_active_document to."""
+    with Worker() as w:
+        w.call("new_document", name="amb_a")
+        w.call("new_document", name="amb_b")
+        w.call("run_script", code=_FORCE_DESYNC)
+        try:
+            w.call("run_script", code="""
+import sys
+worker = sys.modules['worker']
+worker._active_doc()
+""")
+        except Exception as e:
+            msg = str(e)
+            assert "amb_a" in msg and "amb_b" in msg, msg
+            assert "set_active_document" in msg, msg
+        else:
+            raise AssertionError("expected error when active doc is ambiguous")
+        finally:
+            w.call("run_script", code=_RESTORE_APP)
+
+
 def test_transaction_rollback():
     """Open a transaction, add a primitive, abort. The added object should be gone."""
     with Worker() as w:
