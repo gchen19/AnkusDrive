@@ -11,8 +11,9 @@ FreeCAD exposes almost everything it does through a Python API — create docume
 
 ## Target environment
 
-- FreeCAD 1.0+ (tested path: `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`)
+- FreeCAD 1.1.1 (tested path: `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`)
 - Bundled Python, `ccx` (CalculiX), and `gmsh` already ship inside the `.app` — no extra install needed for basic FEM.
+- Host-side rendering needs `Pillow` and `numpy` (in `.venv`); FreeCAD's bundled Python is left untouched.
 
 ## Architecture sketch
 
@@ -154,21 +155,35 @@ client.
 | Workbench / API not wrapped at all | `run_script` (Layer 3) |
 | Smoke test from a shell, or stand up MCP | CLI |
 
-## Roadmap
+## Status
 
-1. **Worker loop** — `freecadcmd` subprocess, newline-delimited JSON RPC, a handful of handlers (`new_document`, `add_primitive`, `save`).
-2. **CLI skeleton** — `driftpin run`, `driftpin box`, `driftpin export`. Shakes out the worker protocol end-to-end.
-3. **MCP server** — wrap the same handlers as MCP tools. stdio transport.
-4. **FEM happy path** — port the cantilever tutorial into a single `fem_run_simple` tool; then decompose into primitives.
-5. **Sketches & PartDesign** — the real unlock for mechanical design; add once the basic shape flow is solid.
-6. **Result introspection** — return summarized results (max von Mises, max displacement, failing nodes) rather than dumping raw VTK.
+Phase 2 closed 2026-04-25. The core mechanical-design surface is in place:
+
+- **Worker + transport** — long-lived `freecadcmd` worker, newline-JSON over stdio with stdio hygiene (FreeCAD C++ chatter redirected off the protocol fd).
+- **CLI** — `ping`, `version`, `box`, `cylinder`, `export`, `run`, `mcp`, `fem cantilever`.
+- **MCP server** — FastMCP over stdio, ~72 typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), generic property reflection, mass properties, assembly, TechDraw, multi-view rendering, FEM (static + modal + buckling + thermal), and transactions.
+- **Selection layer** — `list_faces` / `list_edges` / `query_faces` / `resolve_*` produce stable geometric tags that survive edits; FEM constraints take tags directly.
+- **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer; `render_view` / `render_views` return PNGs as MCP `ImageContent`.
+- **Tests** — 70 tests across worker / MCP / CLI / render / determinism / edit stability / negative paths / perf, runnable via `tests/run_all.sh`. Reliability harness (Layer A: "can the agent see what it built?") is scaffolded behind `RUN_RELIABILITY=1`.
+
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and the "After Phase 2" backlog (FEM contact/spring/tie, async `fem_run`, dimensioned TechDraw, headless PDF/SVG export, `feature_tree` introspection, external solver integrations starting with the in-house optics pipeline).
 
 ## Open questions
 
-- **Error model**: FreeCAD raises plain Python exceptions from C++; worker needs to catch + serialize without losing stack context.
-- **Selection references**: FEM constraints use `(object, "Face1")` tuples. Face/edge indices are not stable across edits — we'll probably need a "tag + resolve" layer so an agent can refer to "the face with max +Z normal" instead of `Face2`.
-- **Concurrency**: one worker = one active document. Multi-doc workflows need either a pool or explicit document switching.
-- **macOS Gatekeeper / sandboxing**: `freecadcmd` launched from a non-interactive context may hit quarantine issues — verify early.
+- **Error model**: FreeCAD raises plain Python exceptions from C++; worker catches and serializes them, but stack context across the JSON boundary is still lossy.
+- **Async / concurrency**: one worker = one active document is no longer a hard limit (multi-doc shipped via `list_documents` / `set_active_document` / `close_document`), but long FEM solves still block the MCP channel — async `fem_run` is open.
+- **Headless TechDraw export**: PDF/SVG export lives in `TechDrawGui` and isn't reachable from `freecadcmd`. `export_drawing` raises `NotImplementedError` today; fix path is a separate GUI-launch helper or third-party page renderer.
+- **macOS Gatekeeper / sandboxing**: `freecadcmd` launched from a non-interactive context may hit quarantine issues — still worth verifying under MCP-host launch paths.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). Contributions
+submitted to this project are licensed under the same terms (Apache 2.0
+§5: inbound = outbound), which means contributors retain copyright but
+grant the project — and everyone downstream — a perpetual, irrevocable
+license to use their work, including a patent grant. The intent is to keep
+the project welcoming to contributors while ensuring nobody can later
+re-proprietize what they contributed.
 
 ## References
 
