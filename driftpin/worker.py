@@ -54,6 +54,71 @@ def _resolve(h):
     return _handles[h]
 
 
+def _set_visibility(obj, visible):
+    """Set an object's persistent Visibility (the App-level bool that's
+    serialized into Document.xml). The GUI reads it on re-open to decide
+    whether the object renders. Returns True if the flag was applied."""
+    if hasattr(obj, "Visibility"):
+        try:
+            obj.Visibility = bool(visible)
+            return True
+        except Exception:
+            return False
+    return False
+
+
+# Producer-input properties: if object A holds object B in one of these, B's
+# shape has been consumed into A and B should be hidden so re-opening the doc
+# doesn't double-render the input alongside the result.
+_INPUT_SINGLE_PROPS = ("Base", "Tool", "BaseFeature", "Profile", "Spine", "AuxiliarySpine")
+_INPUT_LIST_PROPS = ("Sections", "Originals")
+
+
+def _collect_consumed(doc):
+    """Walk doc.Objects and return the set of Names that have been subsumed
+    as a producer-input by another object."""
+    consumed = set()
+    for obj in doc.Objects:
+        for prop in _INPUT_SINGLE_PROPS:
+            if not hasattr(obj, prop):
+                continue
+            ref = getattr(obj, prop, None)
+            if ref is None:
+                continue
+            # PropertyLinkSub returns (object, [subnames]); plain PropertyLink
+            # returns the object directly.
+            if isinstance(ref, tuple) and ref and hasattr(ref[0], "Name"):
+                consumed.add(ref[0].Name)
+            elif hasattr(ref, "Name"):
+                consumed.add(ref.Name)
+        for prop in _INPUT_LIST_PROPS:
+            if not hasattr(obj, prop):
+                continue
+            for item in getattr(obj, prop, None) or []:
+                if isinstance(item, tuple) and item and hasattr(item[0], "Name"):
+                    consumed.add(item[0].Name)
+                elif hasattr(item, "Name"):
+                    consumed.add(item.Name)
+        # PartDesign Body: the Body's own shape mirrors its Tip feature's shape,
+        # so every feature inside the Body's Group is already rendered by the
+        # Body itself. Letting them stay visible double-renders.
+        if obj.isDerivedFrom("PartDesign::Body"):
+            for feat in obj.Group:
+                if hasattr(feat, "Name"):
+                    consumed.add(feat.Name)
+    return consumed
+
+
+def _apply_visibility_hygiene(doc):
+    """Hide every object that has been consumed as a producer-input. Final-
+    stage results (top-level booleans, the Body itself, standalone primitives
+    that aren't input to anything) keep Visibility=True. Idempotent."""
+    for name in _collect_consumed(doc):
+        obj = doc.getObject(name)
+        if obj is not None:
+            _set_visibility(obj, False)
+
+
 HANDLERS = {}
 
 
@@ -418,6 +483,8 @@ def _h_boolean_op(p):
     obj.Base = base
     obj.Tool = tool
     doc.recompute()
+    _set_visibility(base, False)
+    _set_visibility(tool, False)
     h = _register(op, obj)
     return {"handle": h, "volume": obj.Shape.Volume}
 
@@ -525,6 +592,8 @@ def _h_save_document(p):
     if doc is None:
         raise RuntimeError("no active document")
     path = p["path"]
+    if p.get("visibility_hygiene", True):
+        _apply_visibility_hygiene(doc)
     doc.saveAs(path)
 
     fitted = False
@@ -830,6 +899,256 @@ def _add_to_body_of_sketch(sketch, feature):
     raise RuntimeError("sketch is not inside a PartDesign::Body")
 
 
+def _body_volume(body):
+    shape = getattr(body, "Shape", None)
+    if shape is None or shape.isNull():
+        return 0.0
+    return shape.Volume
+
+
+def _orient_subtractive(feature, body, direction):
+    """Pick `feature.Reversed` so the cut goes in the requested direction
+    relative to the body's existing material:
+      'into_body'      : Reversed value that actually removes material.
+      'away_from_body' : Reversed value that removes none.
+
+    Hole and Pocket interpret the Reversed flag differently internally (Pocket
+    flips a Pad-style extrusion convention; Hole flips a cylindrical cutter
+    axis). A volume-delta probe translates intent → whichever flag value the
+    feature happens to need, without the caller having to reason about it.
+
+    Pre-condition: `feature` has already been added to `body`'s Group but the
+    document has not yet been recomputed for this feature."""
+    if direction not in ("into_body", "away_from_body"):
+        raise ValueError(
+            f"direction must be 'into_body' or 'away_from_body' (got {direction!r})"
+        )
+    doc = body.Document
+    pre = _body_volume(body)
+
+    feature.Reversed = False
+    doc.recompute()
+    post = feature.Shape.Volume if not feature.Shape.isNull() else pre
+    removed = pre - post
+
+    wants_removal = direction == "into_body"
+    # 1e-6 mm³ is the floor for "the cut actually removed material" — anything
+    # smaller is OCCT numerical noise on a no-op subtract.
+    matched = (removed > 1e-6) if wants_removal else (removed <= 1e-6)
+    if not matched:
+        feature.Reversed = True
+        doc.recompute()
+
+
+def _sketch_plane_world(sketch):
+    """Return (origin, normal) of the sketch's plane in world coords."""
+    pl = sketch.Placement
+    return pl.Base, pl.Rotation.multVec(App.Vector(0, 0, 1))
+
+
+def _sketch_world_centroid(sketch):
+    """A representative point on the sketch profile in world coords. Uses the
+    sketch shape's bounding-box center, which sits on the sketch plane and
+    is close to the centroid for the common single-profile case (circle,
+    rectangle, etc.)."""
+    shape = getattr(sketch, "Shape", None)
+    if shape is None or shape.isNull():
+        return sketch.Placement.Base
+    bb = shape.BoundBox
+    if not bb.isValid():
+        return sketch.Placement.Base
+    return App.Vector(
+        (bb.XMin + bb.XMax) / 2,
+        (bb.YMin + bb.YMax) / 2,
+        (bb.ZMin + bb.ZMax) / 2,
+    )
+
+
+def _sketch_sample_points(sketch):
+    """Return a list of world-coord sample points on the sketch profile:
+    bbox center plus quarter-points along each edge. Used by wall-depth to
+    probe the profile rather than relying on a single centroid — robust to
+    off-center sketches and curved sketches that span varying wall thickness."""
+    pts = [_sketch_world_centroid(sketch)]
+    shape = getattr(sketch, "Shape", None)
+    if shape is None or shape.isNull():
+        return pts
+    for edge in shape.Edges:
+        try:
+            t0, t1 = edge.ParameterRange
+            for frac in (0.0, 0.25, 0.5, 0.75):
+                pts.append(edge.valueAt(t0 + frac * (t1 - t0)))
+        except Exception:
+            continue
+    return pts
+
+
+def _into_body_direction(sketch, body):
+    """Unit vector in world coords pointing FROM the sketch plane INTO the
+    body's existing material. Decides between +normal and -normal by which
+    half-space contains the body's centroid. Used for wall-depth ray casting,
+    independent of any feature's Reversed convention."""
+    origin, normal = _sketch_plane_world(sketch)
+    n = App.Vector(normal).normalize()
+    shape = body.Shape
+    com = shape.CenterOfMass
+    to_body = com - origin
+    return n if to_body.dot(n) > 0 else App.Vector(-n.x, -n.y, -n.z)
+
+
+def _ray_hit_distances(shape, origin, direction, max_distance):
+    """Sorted distances along `direction` where a ray from `origin` crosses
+    the boundary of `shape`. Distances are in [0, max_distance]."""
+    d = App.Vector(direction).normalize()
+    end = App.Vector(origin) + d * max_distance
+    edge = Part.LineSegment(App.Vector(origin), end).toShape()
+    inter = shape.section(edge)
+    dists = []
+    for v in inter.Vertexes:
+        delta = v.Point - App.Vector(origin)
+        t = delta.dot(d)
+        if -1e-6 <= t <= max_distance + 1e-6:
+            dists.append(max(0.0, t))
+    dists.sort()
+    return dists
+
+
+def _first_wall_depth(body_shape, origin, direction):
+    """Distance from `origin` along `direction` to where the ray first exits
+    the body's material — i.e. the thickness of the first wall the cut would
+    encounter. Returns None if no exit is found.
+
+    If origin sits inside the body, the first ray-shape intersection is the
+    exit. Otherwise the first intersection is an entry and the second is the
+    exit. A solid body has one wall (entry+exit on the far side) so the depth
+    equals the body's full extent in that direction. A shelled body has the
+    outer-wall exit at distance ≈ wall_thickness."""
+    if body_shape.isNull():
+        return None
+    bb = body_shape.BoundBox
+    max_d = (bb.DiagonalLength or 1.0) * 2.0
+    d = App.Vector(direction).normalize()
+    # Nudge the probe a hair along the ray so a sketch sitting exactly on a
+    # face doesn't make isInside ambiguous at the boundary.
+    nudge = 1e-3
+    probe = App.Vector(origin) + d * nudge
+    dists = _ray_hit_distances(body_shape, probe, d, max_d)
+    if not dists:
+        return None
+    try:
+        inside = body_shape.isInside(probe, 1e-6, True)
+    except Exception:
+        inside = False
+    if inside:
+        return dists[0] + nudge
+    if len(dists) < 2:
+        return None
+    return dists[1] + nudge
+
+
+def _apply_through(feature, body, sketch, through):
+    """Configure a Pocket or Hole's depth from a semantic 'through' choice.
+    'wall' computes wall depth via ray cast and sets a Dimension-typed depth
+    just past the first wall. 'body' sets the feature's ThroughAll mode."""
+    if through == "body":
+        if feature.isDerivedFrom("PartDesign::Pocket"):
+            feature.Type = 1  # ThroughAll
+        elif feature.isDerivedFrom("PartDesign::Hole"):
+            feature.DepthType = "ThroughAll"
+        else:
+            raise TypeError(f"through= not supported for {feature.TypeId!r}")
+        return None
+    if through == "wall":
+        ray_dir = _into_body_direction(sketch, body)
+        depths = []
+        for p in _sketch_sample_points(sketch):
+            d = _first_wall_depth(body.Shape, p, ray_dir)
+            if d is not None and d > 1e-6:
+                depths.append(d)
+        if not depths:
+            raise RuntimeError(
+                "through='wall' couldn't measure a wall depth — no sampled "
+                "point on the sketch profile produced an exit boundary along "
+                "the cut direction. The sketch may be outside the body, aligned "
+                "grazingly with a face, or attached to a face the body doesn't "
+                "actually own."
+            )
+        # Max across samples = thickest part of the wall under the cut profile.
+        # Cutting to this depth ensures the hole emerges through the wall
+        # everywhere the profile overlaps material (curved walls vary in
+        # thickness across a hole's footprint; min would leave a ceiling).
+        # Samples that returned None (over empty space) don't constrain depth.
+        depth = max(depths)
+        # Tiny epsilon ensures the cut emerges cleanly through the wall
+        # without floating-point edge cases at the exit surface.
+        depth_with_eps = depth + 0.001
+        if feature.isDerivedFrom("PartDesign::Pocket"):
+            feature.Type = 0  # Dimension
+            feature.Length = depth_with_eps
+        elif feature.isDerivedFrom("PartDesign::Hole"):
+            feature.DepthType = "Dimension"
+            feature.Depth = depth_with_eps
+        else:
+            raise TypeError(f"through= not supported for {feature.TypeId!r}")
+        return depth
+    raise ValueError(
+        f"through must be 'wall' or 'body' (got {through!r})"
+    )
+
+
+def _revolve_axis_in_world(body, axis_name):
+    """Return (origin, direction) in world coords for one of a Body's origin
+    axes ('X'/'Y'/'Z'). Returns None for unrecognized names."""
+    dirs = {
+        "X": App.Vector(1, 0, 0),
+        "Y": App.Vector(0, 1, 0),
+        "Z": App.Vector(0, 0, 1),
+    }
+    if axis_name not in dirs:
+        return None
+    pl = body.Placement
+    return pl.Base, pl.Rotation.multVec(dirs[axis_name])
+
+
+def _point_axis_distance(point, axis_origin, axis_dir):
+    """Perpendicular distance from a 3D point to the infinite line defined by
+    (origin, direction)."""
+    p = App.Vector(point)
+    o = App.Vector(axis_origin)
+    d = App.Vector(axis_dir).normalize()
+    return p.distanceToLine(o, d)
+
+
+def _axis_coincident_edges(sketch, axis_origin, axis_dir, tol=1e-4):
+    """Return [(edge_index, length)] for edges that lie ON the revolution axis
+    (both endpoints AND midpoint within `tol` of the axis line). PartDesign
+    Revolution errors with 'shape is invalid' on such profiles — they sweep
+    to zero-thickness slivers that OCCT rejects."""
+    shape = getattr(sketch, "Shape", None)
+    if shape is None or shape.isNull():
+        return []
+    bad = []
+    for i, edge in enumerate(shape.Edges):
+        if len(edge.Vertexes) < 2:
+            continue  # closed-loop edge (full circle/ellipse) — skip
+        d0 = _point_axis_distance(edge.Vertexes[0].Point, axis_origin, axis_dir)
+        d1 = _point_axis_distance(edge.Vertexes[1].Point, axis_origin, axis_dir)
+        if d0 >= tol or d1 >= tol:
+            continue
+        # Both endpoints on the axis. Verify the rest of the edge is too —
+        # a curved edge from axis-point to axis-point could still bulge off
+        # the axis (and would be fine to revolve).
+        try:
+            t0, t1 = edge.ParameterRange
+            mid = edge.valueAt(0.5 * (t0 + t1))
+            if _point_axis_distance(mid, axis_origin, axis_dir) >= tol:
+                continue
+        except Exception:
+            pass
+        bad.append((i, edge.Length))
+    return bad
+
+
 @handler("pad")
 def _h_pad(p):
     """Pad a sketch by `length` mm. symmetric=True extrudes both directions."""
@@ -848,41 +1167,101 @@ def _h_pad(p):
 
 @handler("pocket")
 def _h_pocket(p):
-    """Pocket (subtract) a sketch from the body. through_all=True ignores length."""
+    """Pocket (subtract) a sketch from the body. through_all=True ignores length.
+
+    direction (preferred over `reversed`): 'into_body' picks the Reversed value
+    that actually removes material from the body's existing shape;
+    'away_from_body' picks the value that removes none. Solves the case where
+    Pocket and Hole disagree on which Reversed value drills inward.
+
+    through ('wall'|'body'): semantic depth override. 'wall' ray-casts to the
+    first exit boundary so the cut emerges cleanly through one wall (correct
+    for both solids and shelled bodies — on a solid, wall = full thickness).
+    'body' is the legacy ThroughAll behavior, which on a shelled body destroys
+    the cavity by cutting through every wall. Implies direction='into_body'."""
     doc = _active_doc()
     sketch = _resolve_sketch(p["sketch"])
     pocket = doc.addObject("PartDesign::Pocket", p.get("name", "Pocket"))
     pocket.Profile = sketch
+    body = _add_to_body_of_sketch(sketch, pocket)
+
+    through = p.get("through")
+    if through is not None:
+        if p.get("direction", "into_body") != "into_body":
+            raise ValueError(
+                "through= implies direction='into_body'; "
+                "explicit direction='away_from_body' is incompatible"
+            )
+        wall_depth = _apply_through(pocket, body, sketch, through)
+        _orient_subtractive(pocket, body, "into_body")
+        h = _register("pocket", pocket)
+        return {
+            "handle": h, "name": pocket.Name, "volume": pocket.Shape.Volume,
+            "through": through, "wall_depth_mm": wall_depth,
+        }
+
     if p.get("through_all"):
         pocket.Type = 1  # ThroughAll
     else:
         pocket.Length = float(p.get("length", 10.0))
-    pocket.Reversed = bool(p.get("reversed", False))
-    _add_to_body_of_sketch(sketch, pocket)
-    doc.recompute()
+    direction = p.get("direction")
+    if direction is not None:
+        _orient_subtractive(pocket, body, direction)
+    else:
+        pocket.Reversed = bool(p.get("reversed", False))
+        doc.recompute()
     h = _register("pocket", pocket)
     return {"handle": h, "name": pocket.Name, "volume": pocket.Shape.Volume}
 
 
 @handler("revolve")
 def _h_revolve(p):
-    """Revolve a sketch around a body-axis ('X','Y','Z') by `angle` degrees."""
+    """Revolve a sketch around a body-axis ('X','Y','Z') by `angle` degrees.
+
+    Pre-check: if the sketch profile has straight edges that lie ALONG the
+    revolution axis (zero distance from axis at both endpoints AND parallel
+    to it), Revolution fails with an opaque OCCT 'shape is invalid' error.
+    The pre-check surfaces the actual cause and suggests the
+    boolean-difference workaround."""
     doc = _active_doc()
     sketch = _resolve_sketch(p["sketch"])
-    body = _add_to_body_of_sketch(sketch, sketch)  # already in body; re-resolve
+    body = _body_of(sketch)
+    axis = p.get("axis", "Y").upper()
+
+    bad_edges = []
+    if axis in ("X", "Y", "Z"):
+        axis_geo = _revolve_axis_in_world(body, axis)
+        if axis_geo is not None:
+            bad_edges = _axis_coincident_edges(sketch, *axis_geo)
+    if bad_edges:
+        details = ", ".join(f"edge {i} (length {l:.2f} mm)" for i, l in bad_edges)
+        raise RuntimeError(
+            f"Revolution around {axis} axis would fail: the sketch has "
+            f"{len(bad_edges)} edge(s) lying along the axis itself "
+            f"({details}). PartDesign Revolution errors with 'shape is invalid' "
+            f"on such profiles — the axis-coincident edges sweep to zero-"
+            f"thickness slivers that OCCT rejects.\n"
+            f"Workaround: revolve a profile WITHOUT axis-coincident edges "
+            f"(e.g. revolve a full annulus to make a torus), then use "
+            f"boolean_op to subtract the unwanted material. Alternatively, "
+            f"trim the axis-coincident edges out of the sketch — they "
+            f"represent zero-volume boundaries in the revolved solid anyway."
+        )
+
     rev = doc.addObject("PartDesign::Revolution", p.get("name", "Revolution"))
     rev.Profile = sketch
-    axis = p.get("axis", "Y").upper()
-    axis_map = {"X": "X_Axis", "Y": "Y_Axis", "Z": "Z_Axis"}
-    if axis in axis_map:
-        for o in body.Origin.OriginFeatures:
-            if o.isDerivedFrom("App::Line") and axis_map[axis] in o.Label:
-                rev.ReferenceAxis = (o, [""])
-                break
+    if axis in ("X", "Y", "Z"):
+        rev.ReferenceAxis = (_origin_axis(body, axis), [""])
     rev.Angle = float(p.get("angle", 360.0))
     rev.Reversed = bool(p.get("reversed", False))
     body.addObject(rev)
     doc.recompute()
+    if rev.Shape.isNull():
+        raise RuntimeError(
+            f"Revolution recompute produced a null shape — sketch may be "
+            f"open, self-intersecting, or the axis/profile configuration is "
+            f"unsupported."
+        )
     h = _register("revolve", rev)
     return {"handle": h, "name": rev.Name, "volume": rev.Shape.Volume}
 
@@ -1030,6 +1409,9 @@ def _resolve_mirror_plane_ref(body, ref):
     raise ValueError(f"unrecognized mirror plane ref: {ref!r}")
 
 
+_INTENDED_FOR = ("print", "machine", "drawing")
+
+
 @handler("hole")
 def _h_hole(p):
     """Drill a parametric hole from a sketch containing one or more circles.
@@ -1039,25 +1421,56 @@ def _h_hole(p):
     depth: mm (used only when depth_type='Dimension').
     cut_type: 'None' | 'Counterbore' | 'Countersink' | 'Counterdrill'. Default 'None'.
     cut_diameter / cut_depth: mm (used when cut_type != 'None').
-    threaded: bool to enable tap (sets Threaded=True). Optional thread_type +
-    thread_size (must be valid enum values for the chosen thread_type)."""
+    threaded: bool to enable tap (sets Threaded=True).
+    thread_type + thread_size: COUPLED enums — valid thread_size values DEPEND
+    on thread_type ('M4' is valid for 'ISOMetricProfile' but not for 'UNC').
+    Call list_thread_options() to discover thread_type values, then
+    list_thread_options(thread_type=...) for that type's valid thread_sizes.
+    intended_for ('print'|'machine'|'drawing'): drives ModelThread when threaded
+    so the caller doesn't have to know what ModelThread means.
+      'print'   → ModelThread=True. The screw thread geometry is emitted in
+                  the model because a 3D printer can't tap a smooth pilot hole;
+                  the print emerges with the thread cut into it.
+      'machine' → ModelThread=False. The hole is a smooth pilot at the major
+                  diameter; CAM software reads the thread metadata and drives
+                  a physical tap. Modeling the thread bloats the file and
+                  fights with patterns/fillets.
+      'drawing' → ModelThread=False. Drawings annotate threads symbolically;
+                  the modeled geometry is cosmetic.
+    Explicit model_thread overrides intended_for.
+    direction (preferred over `reversed`): 'into_body' picks the Reversed value
+    that actually removes material; 'away_from_body' picks the value that
+    removes none.
+    through ('wall'|'body'): semantic depth override that takes precedence over
+    depth_type/depth. 'wall' ray-casts to the first exit boundary so the hole
+    emerges through exactly one wall — essential on shelled bodies where
+    'body' (ThroughAll) would punch through every wall and destroy the cavity.
+    Implies direction='into_body'."""
     doc = _active_doc()
     sketch = _resolve_sketch(p["sketch"])
     body = _body_of(sketch)
+
+    intended_for = p.get("intended_for")
+    if intended_for is not None and intended_for not in _INTENDED_FOR:
+        raise ValueError(
+            f"intended_for must be one of {_INTENDED_FOR!r} (got {intended_for!r})"
+        )
 
     hole = doc.addObject("PartDesign::Hole", p.get("name", "Hole"))
     body.addObject(hole)
     hole.Profile = sketch
     hole.Diameter = float(p.get("diameter", 5.0))
 
-    depth_type = p.get("depth_type", "ThroughAll")
-    if depth_type not in ("Dimension", "ThroughAll"):
-        raise ValueError(
-            f"depth_type must be 'Dimension' or 'ThroughAll' (got {depth_type!r})"
-        )
-    hole.DepthType = depth_type
-    if depth_type == "Dimension":
-        hole.Depth = float(p.get("depth", 10.0))
+    through = p.get("through")
+    if through is None:
+        depth_type = p.get("depth_type", "ThroughAll")
+        if depth_type not in ("Dimension", "ThroughAll"):
+            raise ValueError(
+                f"depth_type must be 'Dimension' or 'ThroughAll' (got {depth_type!r})"
+            )
+        hole.DepthType = depth_type
+        if depth_type == "Dimension":
+            hole.Depth = float(p.get("depth", 10.0))
 
     cut_type = p.get("cut_type", "None")
     if cut_type not in ("None", "Counterbore", "Countersink", "Counterdrill"):
@@ -1078,11 +1491,35 @@ def _h_hole(p):
             hole.ThreadType = p["thread_type"]
         if "thread_size" in p:
             hole.ThreadSize = p["thread_size"]
-        if p.get("model_thread"):
+        # ModelThread: explicit overrides intended_for; intended_for overrides
+        # the FreeCAD default of False.
+        if p.get("model_thread") is not None:
+            hole.ModelThread = bool(p["model_thread"])
+        elif intended_for == "print":
             hole.ModelThread = True
+        elif intended_for in ("machine", "drawing"):
+            hole.ModelThread = False
 
-    hole.Reversed = bool(p.get("reversed", False))
-    doc.recompute()
+    if through is not None:
+        if p.get("direction", "into_body") != "into_body":
+            raise ValueError(
+                "through= implies direction='into_body'; "
+                "explicit direction='away_from_body' is incompatible"
+            )
+        wall_depth = _apply_through(hole, body, sketch, through)
+        _orient_subtractive(hole, body, "into_body")
+        h = _register("hole", hole)
+        return {
+            "handle": h, "name": hole.Name, "volume": hole.Shape.Volume,
+            "through": through, "wall_depth_mm": wall_depth,
+        }
+
+    direction = p.get("direction")
+    if direction is not None:
+        _orient_subtractive(hole, body, direction)
+    else:
+        hole.Reversed = bool(p.get("reversed", False))
+        doc.recompute()
     h = _register("hole", hole)
     return {"handle": h, "name": hole.Name, "volume": hole.Shape.Volume}
 
@@ -1393,6 +1830,192 @@ def _h_set_property(p):
     return {"name": obj.Name, "property": name, "value": _coerce_property(getattr(obj, name))}
 
 
+@handler("set_visibility")
+def _h_set_visibility(p):
+    """Explicit override of an object's persistent Visibility flag. Use to
+    keep a reference part visible alongside a derived cut, or to manually hide
+    something the hygiene heuristic missed. A subsequent save_document re-runs
+    the hygiene pass by default — pass visibility_hygiene=False to save_document
+    to preserve your override."""
+    obj = _resolve(p["handle"])
+    visible = bool(p["visible"])
+    if not _set_visibility(obj, visible):
+        raise RuntimeError(f"object {obj.Name!r} has no Visibility property")
+    return {"handle": p["handle"], "name": obj.Name, "visible": visible}
+
+
+_VERIFY_UNSUPPORTED = object()
+
+
+def _previous_volume_of(obj):
+    """Return the volume an additive/subtractive feature's delta is measured
+    against. 0.0 if the feature is first in its Body (BaseFeature is None).
+    Returns the _VERIFY_UNSUPPORTED sentinel if the object type lacks a
+    well-defined 'before' (Part primitives, Part::Fuse, Part::Common, etc. —
+    those combine multiple operands and the caller should diff against an
+    explicit baseline)."""
+    if hasattr(obj, "BaseFeature"):
+        base = obj.BaseFeature
+        if base is None:
+            return 0.0
+        if hasattr(base, "Shape") and not base.Shape.isNull():
+            return base.Shape.Volume
+        return 0.0
+    if obj.isDerivedFrom("Part::Cut"):
+        base = getattr(obj, "Base", None)
+        if base is not None and hasattr(base, "Shape") and not base.Shape.isNull():
+            return base.Shape.Volume
+        return 0.0
+    return _VERIFY_UNSUPPORTED
+
+
+@handler("verify_feature")
+def _h_verify_feature(p):
+    """Compare a feature's actual volume change against an expected signed
+    delta. Catches silent failures: a Pocket on a curved surface that only
+    removes 17% of the expected material, a Hole that drilled outside the
+    body, a Cut whose Tool didn't intersect the Base.
+
+    handle: PartDesign feature (Pad/Pocket/Hole/Revolve/etc.) or Part::Cut.
+    expected_delta_mm3: signed expected change. Subtractive features should
+                        pass a NEGATIVE number; additive features POSITIVE.
+                        Wrong sign is itself a useful error.
+    tolerance: relative tolerance fraction (default 0.05 = 5%).
+    abs_tolerance: absolute tolerance in mm³ for tiny expected magnitudes
+                   (default 0.01). Pass if EITHER tolerance is satisfied.
+
+    Returns {handle, name, expected_delta_mm3, actual_delta_mm3, ratio,
+    passed, previous_volume_mm3, current_volume_mm3, message}. Does NOT
+    raise on mismatch — caller inspects `passed` and decides."""
+    obj = _resolve(p["handle"])
+    expected = float(p["expected_delta_mm3"])
+    rel_tol = float(p.get("tolerance", 0.05))
+    abs_tol = float(p.get("abs_tolerance", 0.01))
+
+    prev_vol = _previous_volume_of(obj)
+    if prev_vol is _VERIFY_UNSUPPORTED:
+        raise ValueError(
+            f"verify_feature: no 'previous shape' available for {obj.TypeId!r}. "
+            f"Supported: PartDesign features (via BaseFeature) and Part::Cut "
+            f"(via Base). For other types, diff against an explicit baseline."
+        )
+
+    if not hasattr(obj, "Shape") or obj.Shape.isNull():
+        raise RuntimeError(
+            f"feature {obj.Name!r} has null Shape — likely a recompute failure"
+        )
+    curr_vol = obj.Shape.Volume
+
+    actual = curr_vol - prev_vol
+    diff = actual - expected
+    abs_diff = abs(diff)
+    rel = (abs_diff / abs(expected)) if abs(expected) > 1e-12 else None
+
+    passed_rel = rel is not None and rel <= rel_tol
+    passed_abs = abs_diff <= abs_tol
+    passed = bool(passed_rel or passed_abs)
+
+    if passed:
+        if rel is not None:
+            message = (
+                f"OK: expected Δ={expected:+.3f} mm³, "
+                f"actual Δ={actual:+.3f} mm³ ({rel * 100:.2f}% diff)"
+            )
+        else:
+            message = (
+                f"OK: expected Δ={expected:+.3f} mm³, actual Δ={actual:+.3f} mm³ "
+                f"(within ±{abs_tol} mm³)"
+            )
+    else:
+        if rel is not None:
+            message = (
+                f"MISMATCH: expected Δ={expected:+.3f} mm³, "
+                f"actual Δ={actual:+.3f} mm³ "
+                f"({rel * 100:.1f}% off, tolerance {rel_tol * 100:.1f}%)"
+            )
+        else:
+            message = (
+                f"MISMATCH: expected Δ={expected:+.3f} mm³, "
+                f"actual Δ={actual:+.3f} mm³ "
+                f"(|diff|={abs_diff:.3f} mm³ exceeds abs_tolerance {abs_tol} mm³)"
+            )
+
+    return {
+        "handle": p["handle"],
+        "name": obj.Name,
+        "expected_delta_mm3": expected,
+        "actual_delta_mm3": actual,
+        "ratio": (actual / expected) if abs(expected) > 1e-12 else None,
+        "passed": passed,
+        "previous_volume_mm3": prev_vol,
+        "current_volume_mm3": curr_vol,
+        "message": message,
+    }
+
+
+@handler("list_thread_options")
+def _h_list_thread_options(p):
+    """Discover the COUPLED ThreadType / ThreadSize enums on PartDesign::Hole.
+    Call with no args to get valid thread_type values; pass thread_type=... to
+    get the valid thread_size values for that type (the coupling means
+    thread_size='M4' is valid for 'ISOMetricProfile' but not for 'UNC').
+
+    Implementation: spins up a hidden probe document, creates a temporary
+    Hole feature, reads the enumerations, and tears down. Doesn't touch the
+    user's active document."""
+    prev_active = App.ActiveDocument
+    probe = App.newDocument("_dp_thread_probe")
+    try:
+        hole = probe.addObject("PartDesign::Hole", "_probe")
+        thread_type = p.get("thread_type")
+        if thread_type is not None:
+            try:
+                hole.ThreadType = thread_type
+            except Exception as e:
+                types = list(hole.getEnumerationsOfProperty("ThreadType"))
+                raise ValueError(
+                    f"unknown thread_type {thread_type!r}; valid: {types}"
+                ) from e
+            sizes = list(hole.getEnumerationsOfProperty("ThreadSize"))
+            return {"thread_type": thread_type, "thread_sizes": sizes}
+        return {"thread_types": list(hole.getEnumerationsOfProperty("ThreadType"))}
+    finally:
+        App.closeDocument(probe.Name)
+        if prev_active is not None:
+            try:
+                App.setActiveDocument(prev_active.Name)
+            except Exception:
+                pass
+
+
+@handler("register_handle")
+def _h_register_handle(p):
+    """Register an existing FreeCAD object (by .Name) into the handle table.
+    Returns a fresh handle that the rest of the tool surface (render_view,
+    list_faces, fillet_edges, mass_properties, etc.) accepts.
+
+    Use cases:
+      - After run_script created objects in Python, bring them back into the
+        tool ecosystem instead of being stuck calling .Name-accepting tools.
+      - After open_document loaded a saved file, register objects whose handles
+        from the previous session are gone.
+
+    object: the FreeCAD object's .Name attribute.
+    prefix: handle prefix (default 'manual'). Each call returns a new handle
+            even if the same object was registered before — multiple aliases
+            for one object are allowed."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document")
+    name = p["object"]
+    obj = doc.getObject(name)
+    if obj is None:
+        raise KeyError(f"no object named {name!r} in active document")
+    prefix = p.get("prefix", "manual")
+    h = _register(prefix, obj)
+    return {"handle": h, "name": obj.Name, "type": obj.TypeId, "label": obj.Label}
+
+
 # --- script escape hatch ------------------------------------------------------
 
 _SCRIPT_GLOBALS = None
@@ -1404,6 +2027,12 @@ def _h_run_script(p):
 
     The script has App, Part, ObjectsFem, and the handle registry helpers in scope.
     It may set __result__ to a JSON-serializable value which is returned to the host.
+
+    Auto-registration: any new shape-bearing object created during execution is
+    automatically added to the handle table when auto_register=True (default).
+    The result includes a 'registered' list of {handle, name, type} entries so
+    the caller can use them in subsequent tool calls without a separate
+    register_handle round-trip.
     """
     global _SCRIPT_GLOBALS
     if _SCRIPT_GLOBALS is None:
@@ -1418,9 +2047,36 @@ def _h_run_script(p):
             "__name__": "__driftpin_script__",
         }
     code = p["code"]
+    auto_register = bool(p.get("auto_register", True))
+
+    pre_names = set()
+    if auto_register and App.ActiveDocument is not None:
+        pre_names = {o.Name for o in App.ActiveDocument.Objects}
+
     _SCRIPT_GLOBALS.pop("__result__", None)
     exec(compile(code, p.get("path", "<script>"), "exec"), _SCRIPT_GLOBALS)
-    return {"result": _SCRIPT_GLOBALS.get("__result__")}
+
+    registered = []
+    if auto_register and App.ActiveDocument is not None:
+        for obj in App.ActiveDocument.Objects:
+            if obj.Name in pre_names:
+                continue
+            if not hasattr(obj, "Shape"):
+                continue
+            try:
+                if obj.Shape.isNull():
+                    continue
+            except Exception:
+                continue
+            h = _register("script", obj)
+            registered.append(
+                {"handle": h, "name": obj.Name, "type": obj.TypeId}
+            )
+
+    return {
+        "result": _SCRIPT_GLOBALS.get("__result__"),
+        "registered": registered,
+    }
 
 
 # --- mass properties / assembly / drawings -----------------------------------

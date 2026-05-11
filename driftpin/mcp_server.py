@@ -93,9 +93,16 @@ def open_document(path: str) -> dict:
 
 
 @mcp.tool()
-def save_document(path: str) -> dict:
-    """Save the active document to the given .FCStd path."""
-    return _call("save_document", path=path)
+def save_document(path: str, visibility_hygiene: bool = True) -> dict:
+    """Save the active document to the given .FCStd path.
+
+    visibility_hygiene (default True): before saving, hide any object that has
+    been consumed as a producer-input (the Base/Tool of a Cut, the BaseFeature
+    of a Body, every feature inside a Body's Group, etc.). Without this the
+    re-opened doc double-renders intermediates on top of the final shape — a
+    failure mode that looks identical to broken geometry. Pass False to keep
+    explicit set_visibility overrides intact."""
+    return _call("save_document", path=path, visibility_hygiene=visibility_hygiene)
 
 
 @mcp.tool()
@@ -283,14 +290,33 @@ def pocket(
     sketch: str,
     length: float = 10.0,
     through_all: bool = False,
+    through: str | None = None,
+    direction: str | None = None,
     reversed: bool = False,
     name: str = "Pocket",
 ) -> dict:
-    """Subtract a pad of `length` mm from the body. through_all ignores length."""
-    return _call(
-        "pocket", sketch=sketch, length=length,
-        through_all=through_all, reversed=reversed, name=name,
-    )
+    """Subtract a pad of `length` mm from the body. through_all ignores length.
+
+    through ('wall'|'body'): preferred over through_all. 'wall' ray-casts the
+    body to find the first exit boundary and cuts exactly one wall thick —
+    correct for solids (one wall = full thickness) AND shelled bodies. 'body'
+    is the legacy ThroughAll; on a shelled body it punches through every wall
+    and ruins the cavity. Implies direction='into_body'. Result carries
+    wall_depth_mm so the caller can verify.
+    direction (preferred over `reversed`): 'into_body' makes the cut actually
+    remove material; 'away_from_body' extrudes outside the body. The tool
+    probes both Reversed values and picks the one matching intent.
+    reversed: legacy raw flag, used only if neither `through` nor `direction`
+    is set."""
+    params = {
+        "sketch": sketch, "length": length,
+        "through_all": through_all, "reversed": reversed, "name": name,
+    }
+    if direction is not None:
+        params["direction"] = direction
+    if through is not None:
+        params["through"] = through
+    return _call("pocket", **params)
 
 
 @mcp.tool()
@@ -343,7 +369,10 @@ def hole(
     threaded: bool = False,
     thread_type: str | None = None,
     thread_size: str | None = None,
-    model_thread: bool = False,
+    model_thread: bool | None = None,
+    intended_for: str | None = None,
+    through: str | None = None,
+    direction: str | None = None,
     reversed: bool = False,
     name: str = "Hole",
 ) -> dict:
@@ -353,15 +382,39 @@ def hole(
     depth_type: 'Dimension' (use `depth`) or 'ThroughAll'.
     cut_type: 'None' | 'Counterbore' | 'Countersink' | 'Counterdrill'.
               When non-None, cut_diameter (head clearance) and cut_depth apply.
-    threaded=True applies a tap. thread_type/thread_size are FreeCAD enum
-    values (e.g. 'ISOMetricProfile' / 'M5'); leave defaults if you only need
-    a plain hole.
+    threaded=True applies a tap. thread_type / thread_size are COUPLED enums —
+    valid thread_size values DEPEND on thread_type ('M4' fits 'ISOMetricProfile'
+    but not 'UNC'). Use list_thread_options() to discover thread_type values
+    and list_thread_options(thread_type=...) for that type's valid sizes.
+    intended_for ('print'|'machine'|'drawing'): drives ModelThread default when
+    threaded=True so the caller doesn't have to know what ModelThread means.
+      print   → ModelThread=True. Required for 3D-printed threaded holes —
+                the screw must engage the printed thread geometry; a smooth
+                pilot won't tap itself.
+      machine → ModelThread=False. CAM software reads thread metadata and
+                drives a physical tap. Modeling thread bloats files and
+                fights patterns/fillets.
+      drawing → ModelThread=False. Drawings annotate threads symbolically.
+    Explicit model_thread overrides intended_for.
+    through ('wall'|'body'): preferred over depth_type/depth. 'wall' ray-casts
+    to the first exit boundary and drills exactly one wall thick — critical on
+    shelled bodies where 'body' (ThroughAll) would destroy the cavity. Implies
+    direction='into_body'. Result carries wall_depth_mm.
+    direction (preferred over `reversed`): 'into_body' picks the Reversed value
+    that actually removes material; 'away_from_body' picks the value that
+    removes none. Hole and Pocket interpret the raw flag differently.
+    reversed: legacy raw flag, used only if neither `through` nor `direction`
+    is set.
     """
     params = {
         "sketch": sketch, "diameter": diameter, "depth_type": depth_type,
         "depth": depth, "cut_type": cut_type, "threaded": threaded,
-        "model_thread": model_thread, "reversed": reversed, "name": name,
+        "reversed": reversed, "name": name,
     }
+    if model_thread is not None:
+        params["model_thread"] = model_thread
+    if intended_for is not None:
+        params["intended_for"] = intended_for
     if cut_diameter is not None:
         params["cut_diameter"] = cut_diameter
     if cut_depth is not None:
@@ -370,7 +423,29 @@ def hole(
         params["thread_type"] = thread_type
     if thread_size is not None:
         params["thread_size"] = thread_size
+    if direction is not None:
+        params["direction"] = direction
+    if through is not None:
+        params["through"] = through
     return _call("hole", **params)
+
+
+@mcp.tool()
+def list_thread_options(thread_type: str | None = None) -> dict:
+    """Discover the COUPLED ThreadType / ThreadSize enums on the hole tool.
+
+    Call with no args to list valid thread_type values. Call with
+    thread_type=... to list the valid thread_size values for that type
+    (the coupling: thread_size='M4' is valid for 'ISOMetricProfile' but not
+    for 'UNC'). Use this BEFORE calling hole(threaded=True, thread_type=...,
+    thread_size=...) to avoid a failed enum-value call.
+
+    Returns either {thread_types: [...]} or {thread_type, thread_sizes: [...]}.
+    """
+    params = {}
+    if thread_type is not None:
+        params["thread_type"] = thread_type
+    return _call("list_thread_options", **params)
 
 
 @mcp.tool()
@@ -624,6 +699,50 @@ def set_property(handle: str, name: str, value: Any) -> dict:
 
 
 @mcp.tool()
+def verify_feature(
+    handle: str,
+    expected_delta_mm3: float,
+    tolerance: float = 0.05,
+    abs_tolerance: float = 0.01,
+) -> dict:
+    """Compare a feature's actual volume change against an expected signed
+    delta. Run after each subtractive/additive operation to catch silent
+    failures — Pocket on a curved surface that under-cut, Hole that drilled
+    outside the body, Cut whose Tool didn't intersect the Base.
+
+    handle: PartDesign feature (Pad/Pocket/Hole/Revolve/etc.) or Part::Cut.
+    expected_delta_mm3: SIGNED expected change. Subtractive → negative,
+                        additive → positive. Wrong sign is its own useful
+                        error.
+    tolerance: relative tolerance (default 0.05 = 5%).
+    abs_tolerance: absolute mm³ fallback for tiny expected magnitudes
+                   (default 0.01). Pass if EITHER tolerance is satisfied.
+
+    Returns {passed, message, actual_delta_mm3, expected_delta_mm3, ratio,
+    previous_volume_mm3, current_volume_mm3, handle, name}. Does NOT raise
+    on mismatch — inspect `passed` to decide whether to abort."""
+    return _call(
+        "verify_feature",
+        handle=handle,
+        expected_delta_mm3=expected_delta_mm3,
+        tolerance=tolerance,
+        abs_tolerance=abs_tolerance,
+    )
+
+
+@mcp.tool()
+def set_visibility(handle: str, visible: bool) -> dict:
+    """Override an object's persistent Visibility flag. By default save_document
+    auto-hides producer-inputs (the Base/Tool of a Cut, features inside a Body)
+    so the re-opened doc shows just the final composition. Use this to override —
+    e.g. to keep a reference primitive visible next to a derived part. Note
+    that the next save_document with visibility_hygiene=True (the default) may
+    re-hide it; pass visibility_hygiene=False to save_document to lock the
+    override in."""
+    return _call("set_visibility", handle=handle, visible=visible)
+
+
+@mcp.tool()
 def fillet_edges(handle: str, edges: list, radius: float = 1.0) -> dict:
     """Fillet edges of a shaped object. `edges` accepts tags (e_...) or 'EdgeN' strings.
 
@@ -656,13 +775,35 @@ def export_shape(
 
 
 @mcp.tool()
-def run_script(code: str) -> Any:
+def run_script(code: str, auto_register: bool = True) -> Any:
     """Escape hatch: execute Python in the worker with App/Part/ObjectsFem in scope.
 
     Set `__result__` in the script to return a JSON-serializable value.
-    Useful when a needed FreeCAD operation doesn't have a dedicated tool yet.
+
+    auto_register (default True): any new shape-bearing object the script
+    creates is automatically registered into the handle table. The result
+    includes a `registered` list of {handle, name, type} entries so the next
+    tool call (render_view, list_faces, fillet_edges, mass_properties, etc.)
+    can address script-created objects via handle without a separate
+    register_handle round-trip.
+
+    Returns {result, registered}.
     """
-    return _call("run_script", code=code)
+    return _call("run_script", code=code, auto_register=auto_register)
+
+
+@mcp.tool()
+def register_handle(object: str, prefix: str = "manual") -> dict:
+    """Register an existing FreeCAD object into the DriftPin handle table.
+    Use after run_script (when auto_register=False) or after open_document to
+    bring objects into the handle ecosystem so subsequent tool calls accept
+    them via handle.
+
+    object: the FreeCAD object's .Name (e.g. 'Helix001', 'Cut').
+    prefix: handle prefix (default 'manual'). Each call returns a fresh handle;
+            registering the same object twice produces two aliases.
+    Returns {handle, name, type, label}."""
+    return _call("register_handle", object=object, prefix=prefix)
 
 
 @mcp.tool()

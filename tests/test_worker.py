@@ -1514,6 +1514,1018 @@ def test_fem_decomposed_cantilever():
         )
 
 
+# --- revolve + axis-coincident pre-check -------------------------------------
+
+def _make_closed_polyline_sketch(w, body_h, plane, segments):
+    """Helper: place a sketch on `plane`, add `segments` as a chain of line
+    segments closed by Coincident constraints. Returns sketch handle."""
+    sk = w.call("make_sketch", body=body_h, plane=plane)
+    items = [{"type": "line", "start": s, "end": e} for (s, e) in segments]
+    g = w.call("add_sketch_geometry", sketch=sk["handle"], items=items)
+    idxs = g["indices"]
+    n = len(segments)
+    for i in range(n):
+        w.call(
+            "add_sketch_constraint",
+            sketch=sk["handle"], type="Coincident",
+            refs=[[idxs[i], 2], [idxs[(i + 1) % n], 1]],
+        )
+    return sk["handle"]
+
+
+def test_revolve_rectangle_off_axis_succeeds():
+    """Sanity baseline: a rectangle entirely on the +X side of the Y axis,
+    revolved 360° around Y, produces a hollow torus-ring. Volume = π·(R²−r²)·h.
+    This regresses the pre-existing bug where revolve set no ReferenceAxis
+    (Label 'Y-axis' vs Name 'Y_Axis' mismatch) and silently produced null."""
+    with Worker() as w:
+        w.call("new_document", name="rev_ok")
+        body = w.call("make_body")
+        sk = _make_closed_polyline_sketch(w, body["handle"], "XY", [
+            ([5, 1], [10, 1]),
+            ([10, 1], [10, 5]),
+            ([10, 5], [5, 5]),
+            ([5, 5], [5, 1]),
+        ])
+        r = w.call("revolve", sketch=sk, axis="Y", angle=360.0)
+        expected = 3.14159 * (100 - 25) * 4  # π·(R²−r²)·h
+        assert abs(r["volume"] - expected) / expected < 0.01, (
+            f"rectangle revolve: got {r['volume']:.1f}, expected ~{expected:.1f}"
+        )
+
+
+def test_revolve_axis_coincident_edge_diagnosed():
+    """A profile with an edge ALONG the revolution axis must error before
+    OCCT does, with a message naming the offending edges and the workaround.
+    Setup: triangle with one edge on the X axis, revolved around X."""
+    with Worker() as w:
+        w.call("new_document", name="rev_axis_bad")
+        body = w.call("make_body")
+        # Triangle: base (0,0)→(10,0) lies ON X axis. Revolving around X
+        # would sweep that segment to itself — zero-thickness sliver.
+        sk = _make_closed_polyline_sketch(w, body["handle"], "XY", [
+            ([0, 0], [10, 0]),    # ← coincident with X axis
+            ([10, 0], [0, 5]),
+            ([0, 5], [0, 0]),
+        ])
+        try:
+            w.call("revolve", sketch=sk, axis="X", angle=360.0)
+        except WorkerError as e:
+            msg = e.remote_message
+            assert "axis" in msg.lower(), f"error should name the axis: {msg}"
+            assert "boolean" in msg.lower() or "subtract" in msg.lower(), (
+                f"error should suggest the workaround: {msg}"
+            )
+            assert "edge 0" in msg, (
+                f"error should identify the offending edge index: {msg}"
+            )
+        else:
+            raise AssertionError(
+                "expected pre-check to reject axis-coincident profile"
+            )
+
+
+def test_revolve_half_annulus_around_axis_diagnosed():
+    """The user's actual failure case: half-annulus profile where both short
+    radial segments lie on the revolution axis. Pre-check must flag BOTH
+    bad edges in the error."""
+    with Worker() as w:
+        w.call("new_document", name="rev_crescent")
+        body = w.call("make_body")
+        # Half-annulus: two arcs + two radial segments on +X axis.
+        sk_h = w.call("make_sketch", body=body["handle"], plane="XY")
+        # Outer semicircle from (10,0) thru (0,10) to (-10,0).
+        # Inner semicircle from (5,0) thru (0,5) to (-5,0).
+        # Two segments: (-10,0)→(-5,0) and (5,0)→(10,0) — both ON X axis.
+        g = w.call(
+            "add_sketch_geometry",
+            sketch=sk_h["handle"],
+            items=[
+                {"type": "arc", "center": [0, 0], "radius": 10,
+                 "start_angle": 0, "end_angle": 180},
+                {"type": "arc", "center": [0, 0], "radius": 5,
+                 "start_angle": 0, "end_angle": 180},
+                {"type": "line", "start": [5, 0], "end": [10, 0]},
+                {"type": "line", "start": [-10, 0], "end": [-5, 0]},
+            ],
+        )
+        try:
+            w.call("revolve", sketch=sk_h["handle"], axis="X", angle=360.0)
+        except WorkerError as e:
+            msg = e.remote_message
+            # Both segments are axis-coincident; the diagnostic must count
+            # at least 2 bad edges.
+            import re
+            m = re.search(r"has (\d+) edge", msg)
+            assert m, f"error should report edge count: {msg}"
+            assert int(m.group(1)) >= 2, (
+                f"expected at least 2 axis-coincident edges flagged, got: {msg}"
+            )
+        else:
+            raise AssertionError("expected pre-check to reject crescent profile")
+
+
+def test_revolve_pre_check_allows_full_circle_profile():
+    """Pre-check must NOT flag closed-loop edges (circles, ellipses) — those
+    have no endpoints to test, and they're valid revolution profiles."""
+    with Worker() as w:
+        w.call("new_document", name="rev_circle")
+        body = w.call("make_body")
+        sk = w.call("make_sketch", body=body["handle"], plane="XY")
+        # Full circle centered on +X side; revolving around Y makes a torus.
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 0], "radius": 3}],
+        )
+        r = w.call("revolve", sketch=sk["handle"], axis="Y", angle=360.0)
+        # Torus volume = 2·π²·R·r² with R=10, r=3 → ~1776 mm³.
+        expected = 2 * 3.14159**2 * 10 * 9
+        assert abs(r["volume"] - expected) / expected < 0.01, (
+            f"torus revolve: got {r['volume']:.1f}, expected ~{expected:.1f}"
+        )
+
+
+# --- intent-driven defaults (ModelThread, coupled enums) ---------------------
+
+def test_list_thread_options_returns_thread_types():
+    """list_thread_options() with no args returns the available ThreadType
+    enum values. The list must be non-empty and contain ISOMetricProfile."""
+    with Worker() as w:
+        r = w.call("list_thread_options")
+        assert "thread_types" in r
+        types = r["thread_types"]
+        assert isinstance(types, list) and len(types) > 0
+        assert "ISOMetricProfile" in types, f"expected ISOMetricProfile in {types}"
+
+
+def test_list_thread_options_returns_sizes_for_type():
+    """Passing thread_type returns the coupled thread_size enum values for
+    that specific type. ISOMetricProfile uses 'M4x0.7' (with pitch), NOT
+    bare 'M4' — that's exactly the coupling the tool exists to surface."""
+    with Worker() as w:
+        r = w.call("list_thread_options", thread_type="ISOMetricProfile")
+        assert r["thread_type"] == "ISOMetricProfile"
+        sizes = r["thread_sizes"]
+        assert isinstance(sizes, list) and len(sizes) > 0
+        assert "M4x0.7" in sizes, f"expected M4x0.7 in {sizes}"
+        assert "M4" not in sizes, (
+            "ISOMetricProfile uses pitch-suffixed sizes; bare 'M4' should NOT "
+            "be valid — that's the coupling pitfall we're surfacing"
+        )
+
+
+def test_list_thread_options_bad_type_errors():
+    """An unknown thread_type errors with the list of valid types included."""
+    with Worker() as w:
+        try:
+            w.call("list_thread_options", thread_type="NotAThreadType")
+        except WorkerError as e:
+            msg = e.remote_message.lower()
+            assert "unknown thread_type" in msg
+            assert "valid" in msg, f"error should list valid types, got: {e.remote_message}"
+        else:
+            raise AssertionError("expected WorkerError for bad thread_type")
+
+
+def test_list_thread_options_does_not_pollute_active_document():
+    """The probe creates a temp doc to read enums. After the call, the user's
+    active document and its objects must be unchanged."""
+    with Worker() as w:
+        w.call("new_document", name="user_doc")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        objs_before = w.call("list_objects")
+        w.call("list_thread_options")
+        w.call("list_thread_options", thread_type="ISOMetricProfile")
+        objs_after = w.call("list_objects")
+        assert objs_before == objs_after, (
+            f"probe leaked into active doc:\nbefore={objs_before}\nafter={objs_after}"
+        )
+        # Active doc is restored and accepts further tool calls.
+        v = w.call("get_object", handle=box["handle"])
+        assert v["name"] == "Box"
+
+
+def _hole_with_intent(w, intended_for=None, model_thread=None):
+    """Build a 30×30×10 pad, sketch a circle on top, drill an M4 threaded hole.
+    Returns the resulting hole's full property dump."""
+    h = _build_20cube(w)
+    plane = _top_face_datum(w, h["pad"], h["body"])
+    sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+    w.call(
+        "add_sketch_geometry",
+        sketch=sk["handle"],
+        items=[{"type": "circle", "center": [10, 10], "radius": 2}],
+    )
+    params = dict(
+        sketch=sk["handle"], diameter=4.0, depth_type="Dimension", depth=5.0,
+        threaded=True, thread_type="ISOMetricProfile", thread_size="M4x0.7",
+        direction="into_body",
+    )
+    if intended_for is not None:
+        params["intended_for"] = intended_for
+    if model_thread is not None:
+        params["model_thread"] = model_thread
+    r = w.call("hole", **params)
+    return w.call("get_object", handle=r["handle"])
+
+
+def test_hole_intended_for_print_sets_model_thread_true():
+    """intended_for='print' on a threaded hole defaults ModelThread=True so
+    the printed screw threads have geometry the screw can actually engage."""
+    with Worker() as w:
+        w.call("new_document", name="hole_print")
+        obj = _hole_with_intent(w, intended_for="print")
+        assert obj["properties"]["ModelThread"] is True, (
+            "print intent must turn ModelThread ON (screw needs thread geometry)"
+        )
+
+
+def test_hole_intended_for_machine_sets_model_thread_false():
+    """intended_for='machine' leaves ModelThread=False so the model is a
+    smooth pilot — CAM drives the physical tap from the metadata."""
+    with Worker() as w:
+        w.call("new_document", name="hole_machine")
+        obj = _hole_with_intent(w, intended_for="machine")
+        assert obj["properties"]["ModelThread"] is False
+
+
+def test_hole_intended_for_drawing_sets_model_thread_false():
+    """intended_for='drawing' leaves ModelThread=False (cosmetic annotation)."""
+    with Worker() as w:
+        w.call("new_document", name="hole_drawing")
+        obj = _hole_with_intent(w, intended_for="drawing")
+        assert obj["properties"]["ModelThread"] is False
+
+
+def test_hole_explicit_model_thread_overrides_intent():
+    """An explicit model_thread value wins over the intended_for default —
+    the caller knows what they want."""
+    with Worker() as w:
+        w.call("new_document", name="hole_override")
+        # 'machine' would default to False; explicit True overrides.
+        obj = _hole_with_intent(w, intended_for="machine", model_thread=True)
+        assert obj["properties"]["ModelThread"] is True
+
+
+def test_hole_bad_intended_for_raises():
+    """An unrecognized intended_for value errors clearly."""
+    with Worker() as w:
+        w.call("new_document", name="hole_bad_intent")
+        h = _build_20cube(w)
+        plane = _top_face_datum(w, h["pad"], h["body"])
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 2}],
+        )
+        try:
+            w.call(
+                "hole", sketch=sk["handle"], diameter=4.0, threaded=True,
+                intended_for="prototype",
+            )
+        except WorkerError as e:
+            assert "intended_for" in e.remote_message.lower()
+        else:
+            raise AssertionError("expected WorkerError for bad intended_for")
+
+
+# --- handle table / run_script integration -----------------------------------
+
+def test_register_handle_round_trip():
+    """An object created via run_script (no auto-register) becomes addressable
+    by the rest of the tool surface after register_handle. The handle must
+    behave identically to one returned by add_primitive."""
+    with Worker() as w:
+        w.call("new_document", name="register")
+        # Create a box via raw Python — outside the handle ecosystem.
+        w.call(
+            "run_script",
+            auto_register=False,
+            code=(
+                "import FreeCAD as App\n"
+                "doc = App.ActiveDocument\n"
+                "b = doc.addObject('Part::Box', 'RawBox')\n"
+                "b.Length = 8; b.Width = 8; b.Height = 8\n"
+                "doc.recompute()\n"
+                "__result__ = b.Name\n"
+            ),
+        )
+        # Without a handle, list_faces can't reach it.
+        r = w.call("register_handle", object="RawBox")
+        assert r["handle"].startswith("manual_")
+        assert r["name"] == "RawBox"
+        assert r["type"] == "Part::Box"
+        # The handle works in downstream tools.
+        faces = w.call("list_faces", handle=r["handle"])
+        assert len(faces) == 6, f"box should have 6 faces, got {len(faces)}"
+        props = w.call("mass_properties", handle=r["handle"])
+        assert abs(props["volume_mm3"] - 512.0) < 1e-3
+
+
+def test_register_handle_missing_object_errors():
+    """A clean error when the object name isn't in the active document."""
+    with Worker() as w:
+        w.call("new_document", name="register_missing")
+        try:
+            w.call("register_handle", object="NoSuchObject")
+        except WorkerError as e:
+            assert "no object named" in e.remote_message.lower(), e.remote_message
+        else:
+            raise AssertionError("expected WorkerError for missing object")
+
+
+def test_run_script_auto_registers_new_shapes():
+    """run_script with auto_register=True (default) returns handles for any
+    new shape-bearing objects the script created — eliminating the
+    register_handle round-trip for the common case."""
+    with Worker() as w:
+        w.call("new_document", name="autoreg")
+        r = w.call(
+            "run_script",
+            code=(
+                "import FreeCAD as App\n"
+                "import Part\n"
+                "doc = App.ActiveDocument\n"
+                "a = doc.addObject('Part::Box', 'A')\n"
+                "a.Length = 5; a.Width = 5; a.Height = 5\n"
+                "b = doc.addObject('Part::Sphere', 'B')\n"
+                "b.Radius = 3\n"
+                "doc.recompute()\n"
+            ),
+        )
+        names = {entry["name"] for entry in r["registered"]}
+        assert names == {"A", "B"}, f"expected A,B in registered, got {names}"
+        # Each entry's handle resolves and the registered handle prefix is 'script'.
+        for entry in r["registered"]:
+            assert entry["handle"].startswith("script_")
+            obj = w.call("get_object", handle=entry["handle"])
+            assert obj["name"] == entry["name"]
+
+
+def test_run_script_auto_register_off_returns_empty():
+    """auto_register=False suppresses the auto-registration behavior — useful
+    when the script creates many intermediate objects you don't want polluting
+    the handle table."""
+    with Worker() as w:
+        w.call("new_document", name="autoreg_off")
+        r = w.call(
+            "run_script",
+            auto_register=False,
+            code=(
+                "import FreeCAD as App\n"
+                "doc = App.ActiveDocument\n"
+                "doc.addObject('Part::Box', 'Lonely')\n"
+                "doc.recompute()\n"
+            ),
+        )
+        assert r["registered"] == [], (
+            f"auto_register=False should yield empty registered list, got {r['registered']}"
+        )
+
+
+def test_run_script_auto_register_skips_pre_existing():
+    """Only NEW objects get auto-registered. Objects the script merely
+    inspects or modifies stay out of the registered list."""
+    with Worker() as w:
+        w.call("new_document", name="autoreg_pre")
+        # Pre-existing object created via the tool surface.
+        existing = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        r = w.call(
+            "run_script",
+            code=(
+                "import FreeCAD as App\n"
+                "doc = App.ActiveDocument\n"
+                "doc.Box.Length = 12\n"  # modify existing
+                "doc.addObject('Part::Sphere', 'Fresh')\n"
+                "doc.recompute()\n"
+            ),
+        )
+        names = {entry["name"] for entry in r["registered"]}
+        assert names == {"Fresh"}, (
+            f"only NEW object should be auto-registered, got {names}"
+        )
+
+
+# --- through='wall' on hollow shells -----------------------------------------
+
+def test_through_wall_solid_body_equivalent_to_full_depth():
+    """On a solid body, through='wall' should cut the full body thickness
+    (one wall = whole body). Verify by comparing to the ThroughAll equivalent."""
+    with Worker() as w:
+        w.call("new_document", name="thru_solid_wall")
+        h = _build_20cube(w)
+        plane = _top_face_datum(w, h["pad"], h["body"])
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 4}],
+        )
+        pkt = w.call("pocket", sketch=sk["handle"], through="wall")
+        # Body is 20mm thick, so the cylinder removed = π·16·20 ≈ 1005 mm³.
+        expected = 8000.0 - 3.14159 * 16 * 20
+        assert abs(pkt["volume"] - expected) / expected < 0.01, (
+            f"through='wall' on solid: got {pkt['volume']:.1f}, expected ~{expected:.1f}"
+        )
+        assert pkt["wall_depth_mm"] is not None
+        assert 19.0 < pkt["wall_depth_mm"] < 21.0, (
+            f"wall_depth_mm should be ~20mm for solid 20-cube, got {pkt['wall_depth_mm']}"
+        )
+
+
+def _build_open_topped_shell(w, side=30.0, height=30.0, wall=2.0):
+    """Build a shell: pad an `side`×`side`×`height` cube, then thickness it
+    with the +Z face removed to create a hollow shell of wall thickness `wall`.
+    Returns {body, shell} where `shell` is the Thickness feature (current Tip)."""
+    h = _build_pad_cube(w, side=side, height=height)
+    top = w.call(
+        "query_faces",
+        handle=h["pad"],
+        predicate={"type": "planar", "normal_dir": [0, 0, 1], "centroid_max": "z"},
+    )
+    thick = w.call(
+        "thickness", base=h["pad"],
+        open_faces=[{"handle": h["pad"], "tag": top[0]["tag"]}],
+        thickness=wall,
+    )
+    return {"body": h["body"], "shell": thick["handle"], "pad": h["pad"]}
+
+
+def _side_face_datum(w, body_h, shell_h, normal_dir, axis_letter):
+    """Datum plane attached to one of the shell's lateral faces (normal_dir
+    is e.g. [1,0,0]). axis_letter selects which side: '+X', '-X', '+Y', '-Y'
+    for centroid_max/min selection."""
+    pred_axis_map = {"+X": ("centroid_max", "x"), "-X": ("centroid_min", "x"),
+                     "+Y": ("centroid_max", "y"), "-Y": ("centroid_min", "y")}
+    key, val = pred_axis_map[axis_letter]
+    faces = w.call(
+        "query_faces",
+        handle=shell_h,
+        predicate={"type": "planar", "normal_dir": normal_dir, key: val},
+    )
+    assert faces, f"no {axis_letter} face on shell"
+    return w.call(
+        "make_datum_plane",
+        body=body_h,
+        base={"handle": shell_h, "tag": faces[0]["tag"]},
+    )
+
+
+def test_through_wall_hollow_shell_cuts_one_wall_only():
+    """The keystone test. On a hollow shell, through='wall' must cut through
+    exactly one wall and leave the opposite wall intact (cavity preserved).
+    Compare against through='body' which cuts through BOTH lateral walls."""
+    with Worker() as w_wall:
+        w_wall.call("new_document", name="shell_wall")
+        h = _build_open_topped_shell(w_wall, side=30.0, height=30.0, wall=2.0)
+        shell_vol = w_wall.call("get_object", handle=h["shell"])["volume"]
+        # Sketch on +X face, hole going -X into the shell.
+        plane = _side_face_datum(w_wall, h["body"], h["shell"], [1, 0, 0], "+X")
+        sk = w_wall.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w_wall.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            # Local (15,15) because the datum-plane attachment puts the
+            # sketch's origin at the face's bbox corner, not its center.
+            items=[{"type": "circle", "center": [15, 15], "radius": 4}],
+        )
+        r_wall = w_wall.call("pocket", sketch=sk["handle"], through="wall")
+        # +X wall is 2mm thick → cut removes ~π·16·2 ≈ 100 mm³ (plus tiny epsilon).
+        removed_wall = shell_vol - r_wall["volume"]
+        assert 80 < removed_wall < 130, (
+            f"through='wall' should remove ~100 mm³ (one 2mm wall), got {removed_wall:.1f}"
+        )
+        assert r_wall["wall_depth_mm"] is not None
+        assert 1.9 < r_wall["wall_depth_mm"] < 2.1, (
+            f"wall_depth_mm should be ~2.0, got {r_wall['wall_depth_mm']}"
+        )
+
+    with Worker() as w_body:
+        w_body.call("new_document", name="shell_body")
+        h = _build_open_topped_shell(w_body, side=30.0, height=30.0, wall=2.0)
+        shell_vol = w_body.call("get_object", handle=h["shell"])["volume"]
+        plane = _side_face_datum(w_body, h["body"], h["shell"], [1, 0, 0], "+X")
+        sk = w_body.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w_body.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [15, 15], "radius": 4}],
+        )
+        r_body = w_body.call("pocket", sketch=sk["handle"], through="body")
+        # ThroughAll cuts through +X wall AND -X wall → ~200 mm³ removed.
+        removed_body = shell_vol - r_body["volume"]
+        assert 180 < removed_body < 230, (
+            f"through='body' should remove ~200 mm³ (both walls), got {removed_body:.1f}"
+        )
+        # The key invariant: through='body' removes substantially more than
+        # through='wall' on a hollow shell — that's the bug class this fixes.
+        assert removed_body > 1.5 * 100, (
+            "through='body' must remove materially more than through='wall' "
+            "(both walls cut, not just one)"
+        )
+
+
+def test_through_wall_hole_on_shell_preserves_cavity():
+    """The M4 case in miniature: Hole + through='wall' on a shelled body must
+    drill exactly one wall, leaving the cavity sealed otherwise."""
+    with Worker() as w:
+        w.call("new_document", name="hole_shell")
+        h = _build_open_topped_shell(w, side=30.0, height=30.0, wall=2.0)
+        shell_vol = w.call("get_object", handle=h["shell"])["volume"]
+        plane = _side_face_datum(w, h["body"], h["shell"], [1, 0, 0], "+X")
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [15, 15], "radius": 2}],
+        )
+        r = w.call(
+            "hole", sketch=sk["handle"], diameter=4.0, through="wall",
+        )
+        # 4mm-dia hole through 2mm wall: cylinder ≈ π·4·2 = 25 mm³, plus drill
+        # point cone (~10% extra). Accept anywhere in [20, 40].
+        removed = shell_vol - r["volume"]
+        assert 18 < removed < 45, (
+            f"through='wall' hole should remove ~25 mm³, got {removed:.1f}"
+        )
+        assert 1.9 < r["wall_depth_mm"] < 2.1, r["wall_depth_mm"]
+
+
+def test_through_wall_incompatible_with_direction_away():
+    """through= implies direction='into_body'. Combining with
+    direction='away_from_body' is contradictory and must error."""
+    with Worker() as w:
+        w.call("new_document", name="through_conflict")
+        h = _build_20cube(w)
+        plane = _top_face_datum(w, h["pad"], h["body"])
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 4}],
+        )
+        try:
+            w.call(
+                "pocket", sketch=sk["handle"],
+                through="wall", direction="away_from_body",
+            )
+        except WorkerError as e:
+            assert "direction" in e.remote_message.lower()
+        else:
+            raise AssertionError("expected WorkerError for through+away conflict")
+
+
+def test_through_bad_value_raises():
+    """Invalid `through` value rejected clearly."""
+    with Worker() as w:
+        w.call("new_document", name="through_bad")
+        h = _build_20cube(w)
+        plane = _top_face_datum(w, h["pad"], h["body"])
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 4}],
+        )
+        try:
+            w.call("pocket", sketch=sk["handle"], through="diagonally")
+        except WorkerError as e:
+            assert "through" in e.remote_message.lower()
+        else:
+            raise AssertionError("expected WorkerError for bad through value")
+
+
+# --- verify_feature -----------------------------------------------------------
+
+def test_verify_feature_pad_passes():
+    """A Pad's actual delta = π·r²·h. With matching expected, passed=True
+    and the report carries the numbers for downstream introspection."""
+    with Worker() as w:
+        w.call("new_document", name="verify_pad")
+        body = w.call("make_body")
+        sk = w.call("make_sketch", body=body["handle"], plane="XY")
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [0, 0], "radius": 5}],
+        )
+        pad = w.call("pad", sketch=sk["handle"], length=10.0)
+        expected = 3.14159 * 25 * 10  # +785.4 (additive)
+        r = w.call("verify_feature", handle=pad["handle"], expected_delta_mm3=expected)
+        assert r["passed"] is True, r["message"]
+        assert r["previous_volume_mm3"] == 0.0
+        assert abs(r["actual_delta_mm3"] - expected) / expected < 0.01
+        assert "OK" in r["message"]
+
+
+def test_verify_feature_pocket_passes():
+    """A through-pocket on a 20mm cube subtracts π·r²·h. Expected delta is
+    negative; the helper handles the BaseFeature chain to compute actual."""
+    with Worker() as w:
+        w.call("new_document", name="verify_pocket")
+        h = _build_20cube(w)
+        plane = _top_face_datum(w, h["pad"], h["body"])
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 4}],
+        )
+        pkt = w.call(
+            "pocket", sketch=sk["handle"], through_all=True, direction="into_body",
+        )
+        expected = -3.14159 * 16 * 20  # ~-1005, NEGATIVE because subtractive
+        r = w.call("verify_feature", handle=pkt["handle"], expected_delta_mm3=expected)
+        assert r["passed"] is True, r["message"]
+        assert r["actual_delta_mm3"] < 0, "subtractive delta must be negative"
+        assert abs(r["previous_volume_mm3"] - 8000.0) < 1e-3
+
+
+def test_verify_feature_mismatch_reports_diagnostic():
+    """When actual delta differs from expected by more than tolerance, passed
+    is False and the message identifies the magnitude of the disagreement."""
+    with Worker() as w:
+        w.call("new_document", name="verify_mismatch")
+        body = w.call("make_body")
+        sk = w.call("make_sketch", body=body["handle"], plane="XY")
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [0, 0], "radius": 5}],
+        )
+        pad = w.call("pad", sketch=sk["handle"], length=10.0)
+        # Claim we expected a much smaller pad (50%) than we actually made.
+        r = w.call(
+            "verify_feature", handle=pad["handle"],
+            expected_delta_mm3=400.0,
+        )
+        assert r["passed"] is False, r["message"]
+        assert "MISMATCH" in r["message"]
+        # Ratio reports the directionality of the surprise.
+        assert r["ratio"] > 1.5, f"expected ~2x ratio, got {r['ratio']:.2f}"
+
+
+def test_verify_feature_wrong_sign_fails_loudly():
+    """A wrong sign on expected_delta is itself a useful failure — if the user
+    expected -8000 (subtraction) but the feature actually added 8000, the
+    relative error is 2x, well outside any reasonable tolerance."""
+    with Worker() as w:
+        w.call("new_document", name="verify_sign")
+        body = w.call("make_body")
+        sk = w.call("make_sketch", body=body["handle"], plane="XY")
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [0, 0], "radius": 5}],
+        )
+        pad = w.call("pad", sketch=sk["handle"], length=10.0)
+        # Pad added ~+785; user mistakenly said expected was -785 (subtraction).
+        r = w.call(
+            "verify_feature", handle=pad["handle"],
+            expected_delta_mm3=-785.4,
+        )
+        assert r["passed"] is False, r["message"]
+        # Diff is ~2 × |expected|, so ratio (actual/expected) is negative ~-1.
+        assert r["ratio"] < 0, f"sign error should produce negative ratio, got {r['ratio']}"
+
+
+def test_verify_feature_part_cut():
+    """Part::Cut isn't a PartDesign feature but exposes Base for the diff —
+    verify_feature must handle this path."""
+    with Worker() as w:
+        w.call("new_document", name="verify_cut")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        cyl = w.call(
+            "add_primitive", kind="cylinder", r=5, h=20, placement=[10, 10, 0],
+        )
+        cut = w.call("boolean_op", op="cut", base=box["handle"], tool=cyl["handle"])
+        expected = -3.14159 * 25 * 20  # cylinder volume removed
+        r = w.call("verify_feature", handle=cut["handle"], expected_delta_mm3=expected)
+        assert r["passed"] is True, r["message"]
+        assert abs(r["previous_volume_mm3"] - 8000.0) < 1e-3
+
+
+def test_verify_feature_tolerance_controls_pass_fail():
+    """Same actual delta, different tolerances. Tight tolerance fails;
+    loose tolerance passes. Confirms the tolerance knob is wired correctly."""
+    with Worker() as w:
+        w.call("new_document", name="verify_tol")
+        body = w.call("make_body")
+        sk = w.call("make_sketch", body=body["handle"], plane="XY")
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [0, 0], "radius": 5}],
+        )
+        pad = w.call("pad", sketch=sk["handle"], length=10.0)
+        # Actual ≈ 785.4. Claim expected = 800 → ~1.8% off.
+        tight = w.call(
+            "verify_feature", handle=pad["handle"],
+            expected_delta_mm3=800.0, tolerance=0.005,
+        )
+        assert tight["passed"] is False, tight["message"]
+        loose = w.call(
+            "verify_feature", handle=pad["handle"],
+            expected_delta_mm3=800.0, tolerance=0.05,
+        )
+        assert loose["passed"] is True, loose["message"]
+
+
+def test_verify_feature_abs_tolerance_for_tiny_expected():
+    """When expected_delta is tiny (or zero), relative tolerance is meaningless.
+    abs_tolerance must catch the case. Stress-test: expected=0, actual tiny
+    but within abs_tolerance, must pass."""
+    with Worker() as w:
+        w.call("new_document", name="verify_abs")
+        body = w.call("make_body")
+        sk = w.call("make_sketch", body=body["handle"], plane="XY")
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [0, 0], "radius": 5}],
+        )
+        pad = w.call("pad", sketch=sk["handle"], length=10.0)
+        # expected=0 should never match actual=785, regardless of abs_tolerance.
+        r = w.call(
+            "verify_feature", handle=pad["handle"],
+            expected_delta_mm3=0.0, abs_tolerance=0.01,
+        )
+        assert r["passed"] is False, r["message"]
+        assert r["ratio"] is None  # division by ~zero protected
+        # Now: expected exactly equals actual → trivially within abs_tol.
+        actual = r["actual_delta_mm3"]
+        r2 = w.call(
+            "verify_feature", handle=pad["handle"],
+            expected_delta_mm3=actual,
+        )
+        assert r2["passed"] is True
+
+
+def test_verify_feature_unsupported_type_errors():
+    """A primitive (Part::Box) has no BaseFeature and isn't Part::Cut, so
+    verify_feature has nothing to diff against — must error clearly rather
+    than silently treat previous_volume as 0 and report a phony positive delta."""
+    with Worker() as w:
+        w.call("new_document", name="verify_unsupp")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        try:
+            w.call("verify_feature", handle=box["handle"], expected_delta_mm3=1000.0)
+        except WorkerError as e:
+            assert "previous shape" in e.remote_message.lower(), e.remote_message
+        else:
+            raise AssertionError("expected WorkerError for unsupported feature type")
+
+
+# --- subtractive direction abstraction ---------------------------------------
+
+def _build_20cube(w):
+    """Helper: pad a 20×20×20 cube on XY in a fresh body. Returns {body, pad}."""
+    body = w.call("make_body")
+    sk = w.call("make_sketch", body=body["handle"], plane="XY")
+    g = w.call(
+        "add_sketch_geometry",
+        sketch=sk["handle"],
+        items=[
+            {"type": "line", "start": [0, 0], "end": [20, 0]},
+            {"type": "line", "start": [20, 0], "end": [20, 20]},
+            {"type": "line", "start": [20, 20], "end": [0, 20]},
+            {"type": "line", "start": [0, 20], "end": [0, 0]},
+        ],
+    )
+    idxs = g["indices"]
+    for i in range(4):
+        w.call(
+            "add_sketch_constraint",
+            sketch=sk["handle"], type="Coincident",
+            refs=[[idxs[i], 2], [idxs[(i + 1) % 4], 1]],
+        )
+    pad = w.call("pad", sketch=sk["handle"], length=20.0)
+    return {"body": body["handle"], "pad": pad["handle"]}
+
+
+def _top_face_datum(w, pad_handle, body_handle):
+    """Helper: make a datum plane attached to the +Z (top) face of `pad`."""
+    top = w.call(
+        "query_faces",
+        handle=pad_handle,
+        predicate={"type": "planar", "normal_dir": [0, 0, 1], "centroid_max": "z"},
+    )
+    return w.call(
+        "make_datum_plane",
+        body=body_handle,
+        base={"handle": pad_handle, "tag": top[0]["tag"]},
+    )
+
+
+def test_pocket_direction_into_body_top_face():
+    """direction='into_body' on a sketch sitting on the body's top-face datum
+    plane: Pocket's default (Reversed=False) already extrudes downward into the
+    body. Verify volume decreases by the expected cylinder volume."""
+    with Worker() as w:
+        w.call("new_document", name="pkt_into_top")
+        h = _build_20cube(w)
+        plane = _top_face_datum(w, h["pad"], h["body"])
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 4}],
+        )
+        pkt = w.call(
+            "pocket", sketch=sk["handle"], through_all=True, direction="into_body",
+        )
+        expected = 8000.0 - 3.14159 * 16 * 20
+        assert abs(pkt["volume"] - expected) / expected < 0.01, (
+            f"into_body pocket should cut through: got {pkt['volume']:.1f}, expected ~{expected:.1f}"
+        )
+
+
+def test_pocket_direction_away_from_body():
+    """direction='away_from_body' on the same setup: must NOT remove material,
+    even though the default Reversed=False would have."""
+    with Worker() as w:
+        w.call("new_document", name="pkt_away")
+        h = _build_20cube(w)
+        plane = _top_face_datum(w, h["pad"], h["body"])
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 4}],
+        )
+        pkt = w.call(
+            "pocket", sketch=sk["handle"], length=10.0, direction="away_from_body",
+        )
+        assert abs(pkt["volume"] - 8000.0) < 1e-3, (
+            f"away_from_body pocket should preserve volume: got {pkt['volume']:.1f}"
+        )
+
+
+def test_pocket_direction_auto_flips_when_default_wrong():
+    """User's actual failure mode: sketch sits on the body's BOTTOM face (XY
+    origin), so Pocket's default Reversed=False extrudes -Z — into empty space,
+    not into the body. The direction abstraction must auto-flip to Reversed=True
+    so the cut actually goes through the body. Confirm both the geometric
+    outcome AND that Reversed got flipped."""
+    with Worker() as w:
+        w.call("new_document", name="pkt_autoflip")
+        h = _build_20cube(w)
+        # Sketch on XY (the body's bottom face). Reversed=False extrudes -Z, away.
+        sk = w.call("make_sketch", body=h["body"], plane="XY")
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 4}],
+        )
+        pkt = w.call(
+            "pocket", sketch=sk["handle"], through_all=True, direction="into_body",
+        )
+        expected = 8000.0 - 3.14159 * 16 * 20
+        assert abs(pkt["volume"] - expected) / expected < 0.01, (
+            f"auto-flip pocket should cut through: got {pkt['volume']:.1f}, expected ~{expected:.1f}"
+        )
+        obj = w.call("get_object", handle=pkt["handle"])
+        assert obj["properties"]["Reversed"] is True, (
+            "Reversed must have flipped to True since default direction missed the body"
+        )
+
+
+def test_hole_direction_into_body_drills_through_top_face():
+    """The user's M4 case in miniature: Hole on a +Z-normal datum needs the
+    direction abstraction so the caller doesn't have to guess which Reversed
+    value Hole (vs Pocket) wants. Verify material was removed."""
+    with Worker() as w:
+        w.call("new_document", name="hole_into")
+        h = _build_20cube(w)
+        plane = _top_face_datum(w, h["pad"], h["body"])
+        sk = w.call("make_sketch", body=h["body"], plane=plane["handle"])
+        g = w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 2}],
+        )
+        w.call(
+            "add_sketch_constraint",
+            sketch=sk["handle"], type="Radius",
+            refs=[[g["indices"][0], 0]], value=2.0,
+        )
+        h_r = w.call(
+            "hole", sketch=sk["handle"], diameter=4.0,
+            depth_type="Dimension", depth=5.0, direction="into_body",
+        )
+        # Hole's default DrillPoint='Angled' adds a 118° conical tip beyond
+        # `depth`, so removed volume = cylinder (π·r²·h) + drill-point cone
+        # (~10% more). Accept anywhere in [cylinder, 1.3×cylinder].
+        cyl = 3.14159 * 4 * 5  # r=2, h=5
+        removed = 8000.0 - h_r["volume"]
+        assert cyl * 0.95 < removed < cyl * 1.3, (
+            f"into_body hole should remove ~{cyl:.1f}–{cyl * 1.3:.1f} mm³ "
+            f"(cylinder + drill-point cone), actual {removed:.1f} mm³"
+        )
+
+
+def test_pocket_direction_bad_value_raises():
+    """An invalid direction string must error clearly, not silently fall through."""
+    with Worker() as w:
+        w.call("new_document", name="pkt_bad_dir")
+        hb = _build_20cube(w)
+        plane = _top_face_datum(w, hb["pad"], hb["body"])
+        sk = w.call("make_sketch", body=hb["body"], plane=plane["handle"])
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [10, 10], "radius": 2}],
+        )
+        try:
+            w.call("pocket", sketch=sk["handle"], length=5.0, direction="sideways")
+        except WorkerError as e:
+            assert "direction" in e.remote_message.lower(), e.remote_message
+        else:
+            raise AssertionError("expected WorkerError for bad direction value")
+
+
+# --- visibility hygiene -------------------------------------------------------
+
+def _visibility_of(w, handle):
+    """Read the App-level Visibility flag through get_object."""
+    obj = w.call("get_object", handle=handle)
+    return obj["properties"].get("Visibility")
+
+
+def test_boolean_op_hides_inputs():
+    """A Part::Cut subsumes its Base and Tool; the inputs must be Visibility=False
+    so re-opening the doc doesn't ghost the uncut primitive on top of the result."""
+    with Worker() as w:
+        w.call("new_document", name="bool_viz")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        cyl = w.call("add_primitive", kind="cylinder", r=5, h=20, placement=[10, 10, 0])
+        cut = w.call("boolean_op", op="cut", base=box["handle"], tool=cyl["handle"])
+
+        assert _visibility_of(w, box["handle"]) is False, "box (Base) should be hidden"
+        assert _visibility_of(w, cyl["handle"]) is False, "cylinder (Tool) should be hidden"
+        assert _visibility_of(w, cut["handle"]) is True, "Cut result should stay visible"
+
+
+def test_save_visibility_hygiene_partdesign_body():
+    """A PartDesign Body's Group (sketch + pad) renders via the Body's own shape.
+    After save, every feature inside the Body must be Visibility=False; the Body
+    itself stays visible."""
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        w.call("new_document", name="body_viz")
+        body = w.call("make_body")
+        sk = w.call("make_sketch", body=body["handle"], plane="XY")
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk["handle"],
+            items=[{"type": "circle", "center": [0, 0], "radius": 5}],
+        )
+        pad = w.call("pad", sketch=sk["handle"], length=10.0)
+
+        path = os.path.join(tmp, "body.FCStd")
+        w.call("save_document", path=path)
+
+        assert _visibility_of(w, body["handle"]) is True, "Body must stay visible"
+        assert _visibility_of(w, sk["handle"]) is False, "sketch inside Body must be hidden"
+        assert _visibility_of(w, pad["handle"]) is False, "pad inside Body must be hidden"
+
+
+def test_save_hygiene_preserves_standalone_primitive():
+    """A primitive that isn't consumed by anything (no Base/Tool/Body group)
+    must keep Visibility=True after the hygiene pass — otherwise hygiene is
+    overzealous and would hide every standalone object."""
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        w.call("new_document", name="lone_box")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        path = os.path.join(tmp, "lone.FCStd")
+        w.call("save_document", path=path)
+        assert _visibility_of(w, box["handle"]) is True, "lone primitive must stay visible"
+
+
+def test_set_visibility_explicit_override():
+    """set_visibility flips the flag, and save_document with
+    visibility_hygiene=False preserves the override."""
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        w.call("new_document", name="vis_override")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        cyl = w.call("add_primitive", kind="cylinder", r=5, h=20, placement=[10, 10, 0])
+        w.call("boolean_op", op="cut", base=box["handle"], tool=cyl["handle"])
+        assert _visibility_of(w, box["handle"]) is False
+
+        # Explicitly re-show the Base.
+        r = w.call("set_visibility", handle=box["handle"], visible=True)
+        assert r["visible"] is True
+        assert _visibility_of(w, box["handle"]) is True
+
+        # Default save would re-hide it (hygiene runs); opt out to preserve.
+        path = os.path.join(tmp, "override.FCStd")
+        w.call("save_document", path=path, visibility_hygiene=False)
+        assert _visibility_of(w, box["handle"]) is True, (
+            "visibility_hygiene=False must not re-hide an explicit override"
+        )
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
