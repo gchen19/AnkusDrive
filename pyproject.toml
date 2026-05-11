@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "driftpin"
+# Version comes from driftpin/__init__.py — single source of truth. Bump
+# __version__ there and tag matching vX.Y.Z to release.
+dynamic = ["version"]
+description = "CLI + MCP server that drives FreeCAD's Python API for LLM-driven mechanical design and FEM."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "George Chen" },
+]
+keywords = [
+    "freecad",
+    "mcp",
+    "model-context-protocol",
+    "cad",
+    "fem",
+    "calculix",
+    "llm",
+    "mechanical-design",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "mcp>=1.0",
+    "Pillow>=10.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "anthropic>=0.40",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+driftpin = "driftpin.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/gchen19/DriftPin"
+Repository = "https://github.com/gchen19/DriftPin"
+Issues = "https://github.com/gchen19/DriftPin/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "driftpin.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["driftpin*"]
+exclude = ["tests*", "scratch*", "example*", "docs*"]
+
+[tool.setuptools.package-data]
+driftpin = ["worker.py"]

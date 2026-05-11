@@ -102,11 +102,20 @@ def cmd_fem_cantilever(args):
 
 
 def build_parser():
+    from . import __version__
     p = argparse.ArgumentParser(prog="driftpin", description="FreeCAD CLI over a live worker.")
+    p.add_argument(
+        "--version", action="version", version=f"driftpin {__version__}",
+        help="Print DriftPin's version and exit.",
+    )
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("ping", help="Boot a worker, ping it, tear it down.").set_defaults(func=cmd_ping)
-    sub.add_parser("version", help="Print FreeCAD + bundled Python versions.").set_defaults(func=cmd_version)
+    sub.add_parser(
+        "version",
+        help="Print FreeCAD + bundled Python versions of the worker. "
+             "For DriftPin's own version use --version.",
+    ).set_defaults(func=cmd_version)
 
     pb = sub.add_parser("box", help="Create a box and save as .FCStd.")
     pb.add_argument("--w", type=float, required=True, help="length (mm)")

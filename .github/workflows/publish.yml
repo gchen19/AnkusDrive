@@ -1,0 +1,125 @@
+name: Publish to PyPI
+
+# Builds the wheel + sdist on tag push, validates metadata, and publishes
+# to PyPI (or TestPyPI on manual dispatch) using OIDC trusted publishing —
+# no long-lived API tokens stored in the repo.
+#
+# One-time setup (outside this workflow):
+#   1. Reserve the `driftpin` name on PyPI and TestPyPI by registering the
+#      project (https://pypi.org/manage/account/publishing/).
+#   2. Add a "Trusted publisher" entry on each, pointing at:
+#        owner: gchen19
+#        repo:  DriftPin
+#        workflow filename: publish.yml
+#        environment: pypi  (and `testpypi` for the test repo)
+#   3. Create matching GitHub environments (`pypi`, `testpypi`) under
+#      Settings → Environments. Add required reviewers if you want a
+#      manual gate before each upload.
+#
+# Releasing:
+#   - Tag `vX.Y.Z` matching the version in pyproject.toml and push the tag.
+#     Tag push triggers the real PyPI upload.
+#   - Or run the workflow manually with target=testpypi to dry-run against
+#     TestPyPI without cutting a tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine
+
+      - name: Verify tag matches package version
+        # Version lives in driftpin/__init__.py (pyproject.toml reads it via
+        # setuptools dynamic). Grep the line directly so we don't need to
+        # import driftpin (which would require installing dependencies).
+        if: github.event_name == 'push'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkgver=$(grep -E '^__version__\s*=' driftpin/__init__.py | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$tag" != "$pkgver" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME (=> $tag) does not match driftpin/__init__.py __version__ $pkgver"
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Validate metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Smoke-test the wheel (no FreeCAD required)
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --upgrade pip
+          /tmp/smoke/bin/pip install dist/*.whl
+          # CLI parser builds and entry point resolves without importing
+          # the MCP server or booting a worker.
+          /tmp/smoke/bin/driftpin --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/driftpin/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/driftpin/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
