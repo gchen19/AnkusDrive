@@ -10,13 +10,33 @@ Usage:
 """
 import json
 import os
+import shutil
 import signal
 import subprocess
 import threading
 from pathlib import Path
 
 
-FREECADCMD = "/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd"
+_DEFAULT_FREECADCMD_CANDIDATES = (
+    "/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd",
+    "/usr/bin/freecadcmd",
+    "/usr/local/bin/freecadcmd",
+    "/snap/bin/freecad.cmd",
+)
+
+
+def _resolve_freecadcmd():
+    if env := os.environ.get("DRIFTPIN_FREECADCMD"):
+        return env
+    if found := shutil.which("freecadcmd"):
+        return found
+    for p in _DEFAULT_FREECADCMD_CANDIDATES:
+        if os.path.isfile(p):
+            return p
+    return _DEFAULT_FREECADCMD_CANDIDATES[0]
+
+
+FREECADCMD = _resolve_freecadcmd()
 WORKER_SCRIPT = str(Path(__file__).resolve().parent / "worker.py")
 
 

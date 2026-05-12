@@ -11,38 +11,50 @@ FreeCAD exposes almost everything it does through a Python API — create docume
 
 ## Target environment
 
-- FreeCAD 1.1.1 (tested path: `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`)
+- FreeCAD 1.1.x (default tested path: `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`; override via `$DRIFTPIN_FREECADCMD` or rely on PATH).
 - Bundled Python, `ccx` (CalculiX), and `gmsh` already ship inside the `.app` — no extra install needed for basic FEM.
-- Host-side rendering needs `Pillow` and `numpy` (in `.venv`); FreeCAD's bundled Python is left untouched.
+- Host-side rendering needs `Pillow` and `numpy`; both are installed by DriftPin as regular pip deps. FreeCAD's bundled Python is left untouched.
 
 ## Setup
 
-DriftPin isn't on PyPI yet — install from a clone. The MCP server runs in a
-host-side venv (the FastMCP loop, `Pillow`, `numpy`); `freecadcmd` is launched
-as a subprocess and uses its own bundled Python.
+DriftPin is a `pip`-installable package; FreeCAD itself is the only thing you
+install separately. The host-side dependencies (`mcp`, `Pillow`, `numpy`) come
+along with the install. `freecadcmd` is launched as a subprocess and uses its
+own bundled Python — DriftPin doesn't touch it.
 
 ```bash
-# 1. Install FreeCAD 1.1.1 from https://www.freecad.org/ (macOS: drag to /Applications)
-# 2. Clone and create a venv for DriftPin's host-side deps
-git clone https://github.com/<you>/DriftPin.git
-cd DriftPin
-python3 -m venv .venv
-.venv/bin/pip install mcp Pillow numpy
+# 1. Install FreeCAD 1.1.x from https://www.freecad.org/
+#    (macOS: drag to /Applications; Linux: distro package or AppImage)
+
+# 2. Install DriftPin. Pick one:
+pipx install git+https://github.com/gchen19/DriftPin.git    # isolated app, `driftpin` on PATH
+# or for development from a clone:
+git clone https://github.com/gchen19/DriftPin.git && cd DriftPin
+python3 -m venv .venv && .venv/bin/pip install -e .         # `.venv/bin/driftpin`
 
 # 3. Smoke-test that the worker can reach FreeCAD
-.venv/bin/python -m driftpin ping
-# → ping=pong freecad=1.1.1.xxxxx
+driftpin ping
+# → ping=pong freecad=1.1.1
 ```
 
-The path to `freecadcmd` is hard-coded to the macOS default
-(`/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`) in
-`driftpin/client.py`. On Linux/Windows or a non-default install, edit
-`FREECADCMD` there until env-var override lands.
+A PyPI release (`pipx install driftpin`) is staged behind v0.3.0 — see
+[`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md).
+
+### Telling DriftPin where FreeCAD lives
+
+DriftPin auto-discovers `freecadcmd` in this order: `$DRIFTPIN_FREECADCMD`,
+then `shutil.which("freecadcmd")` on PATH, then a small list of standard
+locations (macOS app bundle, `/usr/bin`, `/usr/local/bin`, snap). For
+non-default installs, set:
+
+```bash
+export DRIFTPIN_FREECADCMD=/path/to/freecadcmd
+```
 
 ### Wiring it into an MCP host
 
-The MCP server speaks stdio. Point your host at the venv's Python and let it
-run `-m driftpin mcp`.
+The MCP server speaks stdio. Point your host at the `driftpin` binary and
+let it run the `mcp` subcommand.
 
 **Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`
 (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
@@ -51,26 +63,30 @@ run `-m driftpin mcp`.
 {
   "mcpServers": {
     "driftpin": {
-      "command": "/absolute/path/to/DriftPin/.venv/bin/python",
-      "args": ["-m", "driftpin", "mcp"]
+      "command": "driftpin",
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-**Claude Code** — register from the repo root:
+If `driftpin` isn't on the host process's PATH, use an absolute path —
+e.g. `/Users/<you>/.local/bin/driftpin` (pipx default) or
+`/absolute/path/to/DriftPin/.venv/bin/driftpin` (clone+venv).
+
+**Claude Code** — register once:
 
 ```bash
-claude mcp add driftpin -- "$PWD/.venv/bin/python" -m driftpin mcp
+claude mcp add driftpin -- driftpin mcp
 ```
 
 **Other hosts (Cursor, Continue, custom MCP clients)** — same shape: stdio
-transport, command = venv Python, args = `["-m", "driftpin", "mcp"]`.
+transport, command = `driftpin`, args = `["mcp"]`.
 
-After restarting the host, you should see ~72 `driftpin__*` tools become
+After restarting the host, you should see ~76 `driftpin__*` tools become
 available. If startup hangs or the host reports a closed connection, run
-`.venv/bin/python -m driftpin ping` directly — that exercises the same worker
-boot path with cleaner error messages.
+`driftpin ping` directly — that exercises the same worker boot path with
+cleaner error messages.
 
 ## Architecture sketch
 
@@ -214,16 +230,22 @@ client.
 
 ## Status
 
-Phase 2 closed 2026-04-25. The core mechanical-design surface is in place:
+Phase 3 closed 2026-05-10 (v0.3.0). The core mechanical-design surface from
+Phase 2 (2026-04-25) is intact; Phase 3 layered intent-encoding APIs on top
+of it.
 
 - **Worker + transport** — long-lived `freecadcmd` worker, newline-JSON over stdio with stdio hygiene (FreeCAD C++ chatter redirected off the protocol fd).
-- **CLI** — `ping`, `version`, `box`, `cylinder`, `export`, `run`, `mcp`, `fem cantilever`.
-- **MCP server** — FastMCP over stdio, ~72 typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), generic property reflection, mass properties, assembly, TechDraw, multi-view rendering, FEM (static + modal + buckling + thermal), and transactions.
+- **CLI** — `ping`, `version`, `box`, `cylinder`, `export`, `run`, `mcp`, `fem cantilever`, plus top-level `--version`.
+- **MCP server** — FastMCP over stdio, ~76 typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), generic property reflection, mass properties, assembly, TechDraw, multi-view rendering, FEM (static + modal + buckling + thermal), and transactions.
+- **Phase 3 intent-encoding additions** — `direction='into_body'|'away_from_body'` and `through='wall'|'body'` on pocket/hole (ray-cast wall depth handles hollow shells correctly); `intended_for='print'|'machine'|'drawing'` on hole drives ModelThread; `verify_feature` diffs actual-vs-expected volume change to catch silent failures; visibility hygiene at save hides consumed inputs; `register_handle` + `run_script` auto_register close the escape-hatch one-way trapdoor; `list_thread_options` surfaces the coupled ThreadType/ThreadSize enums dynamically; revolve has an OCCT pre-check that flags axis-coincident edges with an actionable error.
 - **Selection layer** — `list_faces` / `list_edges` / `query_faces` / `resolve_*` produce stable geometric tags that survive edits; FEM constraints take tags directly.
 - **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer; `render_view` / `render_views` return PNGs as MCP `ImageContent`.
-- **Tests** — 70 tests across worker / MCP / CLI / render / determinism / edit stability / negative paths / perf, runnable via `tests/run_all.sh`. Reliability harness (Layer A: "can the agent see what it built?") is scaffolded behind `RUN_RELIABILITY=1`.
+- **Tests** — 90 worker tests + 22 across MCP / CLI / render / determinism / edit stability / negative paths / perf (112 total), runnable via `tests/run_all.sh`. Reliability harness (Layer A: "can the agent see what it built?") is scaffolded behind `RUN_RELIABILITY=1`.
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and the "After Phase 2" backlog (FEM contact/spring/tie, async `fem_run`, dimensioned TechDraw, headless PDF/SVG export, `feature_tree` introspection, external solver integrations starting with the in-house optics pipeline).
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and the
+"After Phase 2" backlog (FEM contact/spring/tie, async `fem_run`,
+dimensioned TechDraw, headless PDF/SVG export, `feature_tree` introspection,
+external solver integrations starting with the in-house optics pipeline).
 
 ## Open questions
 
