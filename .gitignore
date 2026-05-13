@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 *.FCBak
+*.egg-info/
 scratch/out/
 .venv/
 tests/reliability_cache/
