@@ -16,6 +16,9 @@ Companion to the README. The README describes what *is*; this file describes wha
   what's covered today and what's left, in priority order.
 - [`tests/RELIABILITY.md`](../tests/RELIABILITY.md) — Layer A/B/C reliability
   harness ("can the agent see what it built?").
+- [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) — RFC for agent *teams*: partition a
+  design into components/subassemblies, build in parallel, merge + verify the
+  whole. Thin tool-agnostic primitives; orchestration left to the host.
 
 ---
 

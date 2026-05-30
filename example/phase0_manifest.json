@@ -1,0 +1,29 @@
+{
+  "schema": "driftpin.manifest/0-phase0",
+  "name": "peg_plate_demo",
+  "root": "phase0_assembly.FCStd",
+  "_note": "Phase 0 manifest. The RFC (docs/MULTI_AGENT.md) defines a richer manifest with published interface frames and mate-by-frame. Phase 0 has no manifest tooling yet, so this file uses raw [x,y,z] placements and is consumed by phase0_walkthrough.py by hand to show where Phase 1 plugs in.",
+  "shared_parameters": {
+    "peg_diameter_mm": 16,
+    "plate_thickness_mm": 8
+  },
+  "components": {
+    "plate": {
+      "owner": "agent-plate",
+      "file": "phase0_plate.FCStd",
+      "build": { "kind": "box", "w": 60, "d": 60, "h": 8 },
+      "envelope": { "min": [0, 0, 0], "max": [60, 60, 8] }
+    },
+    "peg": {
+      "owner": "agent-peg",
+      "file": "phase0_peg.FCStd",
+      "build": { "kind": "cylinder", "r": 8, "h": 20 },
+      "envelope": { "min": [-8, -8, 0], "max": [8, 8, 20] }
+    }
+  },
+  "instances": [
+    { "component": "plate", "placement": [0, 0, 0] },
+    { "component": "peg",   "placement": [20, 30, 8] },
+    { "component": "peg",   "placement": [40, 30, 8] }
+  ]
+}
