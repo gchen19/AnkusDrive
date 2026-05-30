@@ -438,6 +438,27 @@ Big. ~1–2 weeks total, easy to slice further.
 - `generate_assembly_instructions` — pure LLM task once `feature_tree`
   introspection lands.
 
+**Known sharp edges (found 2026-05-30, building the multi-agent M1 toy suite —
+`tests/multiagent_toys.py`):**
+- **`add_part` mislinks consumed boolean inputs.** When a component `.FCStd` is
+  linked by path, `add_part` picks "the first `PartDesign::Body` or
+  `Part::Feature`" in the file. After an `add_primitive` + `boolean_op` chain the
+  consumed `Part::Box`/`Part::Cylinder` inputs remain in the document, so the
+  *un-holed solid* can get linked instead of the `Cut` result — silently, and
+  nondeterministically (object order decides). The toy suite works around it by
+  building each component as one clean `Part::Feature` (shape assigned via
+  `run_script`). Fix path: have `add_part` prefer the body tip / last shaped
+  feature, or skip objects that are consumed boolean inputs.
+- **`bom_extract` collides components by object name.** It groups by
+  `LinkedObject.Name`, but `add_primitive` names every box `"Box"` and every
+  cylinder `"Cylinder"` internally — so two distinct single-primitive components
+  merge into one BOM row with an inflated count. Fix path: group by a more stable
+  identity (source file path + object, or Label), not the bare internal `Name`.
+
+  Both are what the RFC's Phase 1 `merge_assembly` / `publish_interface` should
+  harden — see [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) and
+  [`tests/MULTI_AGENT_EVAL.md`](../tests/MULTI_AGENT_EVAL.md).
+
 ---
 
 ## Slice 6 — operational polish

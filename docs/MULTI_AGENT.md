@@ -17,6 +17,9 @@ a plan.
   sub-assemblies (recursion)*. This RFC is where those land.
 - [`tests/RELIABILITY.md`](../tests/RELIABILITY.md) — the "can the agent see what it
   built?" loop. The merged assembly has to pass it too.
+- [`tests/MULTI_AGENT_EVAL.md`](../tests/MULTI_AGENT_EVAL.md) — how we decide whether
+  this whole scheme works reliably: hard-oracle merge gates, a toy-problem ladder
+  with negative controls, and the metrics (false-pass rate, single-agent baseline).
 
 ---
 

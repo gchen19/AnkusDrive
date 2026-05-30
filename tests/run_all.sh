@@ -37,6 +37,10 @@ echo "== Negative paths =="
 $VENV_PY tests/test_negative_paths.py
 
 echo
+echo "== Multi-agent partition+merge (Layer M1) =="
+$VENV_PY tests/test_multiagent_m1.py
+
+echo
 if [[ "$RUN_PERF" == "1" ]]; then
     echo "== Perf baselines =="
     $VENV_PY tests/test_perf.py
