@@ -231,7 +231,7 @@ derivation is stated explicitly in each slice.
 
 ---
 
-## Proposed harder toys (designed, not yet run)
+## Harder toys (designed; nslot8 + tchain6 now run)
 
 To probe where partition and single actually diverge, these stress the two axes a
 two-part toy can't: **context load** (many components → one agent holds the whole
@@ -262,3 +262,50 @@ gate-judgeable with existing primitives.
 separates the conditions) and cheapest to sweep. #2 most valuable (the partition-loses
 case). Both are real spend and bigger per-trial (more components = more agent turns);
 a proper sweep is tens of dollars, not the ~$2 a two-part toy costs.
+
+---
+
+## Divergence results (Haiku 4.5, n=20/condition, ~$5.7)
+
+First runs of the extreme configs — **nslot8** (9 components) and **tchain6** (6).
+These are the first results where partition and single **diverge**, after twopin
+tied. In both, partition ≥ single, and the mechanism is the same: single's burden of
+holding the whole multi-part contract in one context is the failure source.
+
+| toy | condition | pass | built | note |
+|---|---|---|---|---|
+| nslot8 | partition | 0/20 | **12/20** | 8-distinct-pair contract too hard to *pass*… |
+| nslot8 | single | 0/20 | **4/20** | …but single completes far less often |
+| tchain6 | partition | **20/20** | 20/20 | each agent builds one 100/6 segment → exact |
+| tchain6 | single | **0/20** | 20/20 | every chain too long (102.7–113.3 mm) |
+
+**nslot8 — context load, seen in completion not pass.** Eight distinct slot↔peg
+pairings is past Haiku's cliff: neither condition produces a *passing* assembly. But
+`built` diverges as the context-load hypothesis predicts — partition (each peg agent
+sees one diameter) completes 12/20; single (tracking all 8 pairs in one conversation)
+only 4/20, mostly failing to even save all 9 parts. The pass-rate crossover the
+hypothesis wants is presumably at smaller k (nslot4/6, unrun); nslot8 saturates both.
+
+**tchain6 — a clean, decisive divergence, and it reversed the prediction.** Partition
+passed 20/20, single 0/20 — but the doc above predicted *partition* would lose here.
+The prediction was wrong, instructively: with **equal** segments, each partition agent
+independently builds the same correct 100/6 = 16.67 mm part, and identical rounding
+*cancels* (6 × 16.67 = 100.0) — there is no accumulation, because they aren't summing
+each other's errors. The drift came from **single**, which consistently built segments
+too long (avg 106.7 mm) — it appears to round 100/6 up and never reconcile the total.
+Seeing the whole chain made it worse, not better. Lesson: error accumulates when one
+agent juggles a running total and fumbles it, *not* across independent identical parts.
+
+**What this establishes (and doesn't).**
+- ✅ First measured evidence **partition ≥ single** — partition completes more
+  (nslot8) and passes where single can't (tchain6). After twopin's tie, this is the
+  result the easy toys couldn't give.
+- ✅ The cause in both is the context-load axis these toys target: single carrying the
+  whole contract is the failure source.
+- ❌ Still one model (Haiku), n=20, two configs. nslot8 is decided on `built`
+  (weaker than pass). tchain6's win rests on a prediction being wrong — worth a
+  confir--it-isn't-a-prompt-artifact rerun before leaning on it hard.
+- Open: the nslot **k-sweep** (k=4,6) to find the pass-rate crossover, and a tchain
+  variant with *unequal* required segments (where independent rounding genuinely
+  *would* accumulate — the original partition-loses case, which equal segments
+  accidentally dodged).
