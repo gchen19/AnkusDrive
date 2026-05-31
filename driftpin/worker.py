@@ -192,6 +192,54 @@ def _h_add_primitive(p):
     return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume}
 
 
+@handler("add_gear")
+def _h_add_gear(p):
+    """Involute spur gear via FreeCAD's core InvoluteGearFeature, extruded to a
+    solid. teeth, module (mm), height (mm), pressure_angle (deg, default 20),
+    external (bool). Returns the solid's handle plus pitch/tip/root radii so a
+    caller can space meshing gears (axes pitch_a + pitch_b apart)."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+    import InvoluteGearFeature as _IGF
+    teeth = int(p["teeth"])
+    if teeth < 3:
+        raise ValueError("teeth must be >= 3")
+    module = float(p["module"])
+    height = float(p.get("height", p.get("h", 6.0)))
+    pressure = float(p.get("pressure_angle", 20.0))
+    external = bool(p.get("external", True))
+
+    g = _IGF.makeInvoluteGear("_gear_profile_tmp")
+    g.NumberOfTeeth = teeth
+    g.Modules = "%g mm" % module
+    g.PressureAngle = "%g deg" % pressure
+    g.ExternalGear = external
+    doc.recompute()
+    # 2D involute profile -> extrude to a solid; the profile face normal is flipped,
+    # so a raw extrude yields a negative-volume (inside-out) solid — reverse it.
+    f = g.Shape.Faces[0] if g.Shape.Faces else Part.Face(g.Shape.Wires[0])
+    prism = f.extrude(App.Vector(0, 0, height))
+    sol = prism.Solids[0] if prism.Solids else Part.Solid(prism)
+    if sol.Volume < 0:
+        sol = sol.reversed()
+        sol = sol.Solids[0] if sol.Solids else Part.Solid(sol)
+    doc.removeObject(g.Name)  # drop the parametric helper; keep a static solid
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Gear"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("gear", obj)
+    rp = module * teeth / 2.0
+    return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume,
+            "pitch_radius": round(rp, 4), "tip_radius": round(rp + module, 4),
+            "root_radius": round(rp - 1.25 * module, 4),
+            "teeth": teeth, "module": module, "external": external}
+
+
 _TAG_DECIMALS = 3
 _TAG_NORMAL_DECIMALS = 4
 

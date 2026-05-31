@@ -78,6 +78,26 @@ def test_handles_chain():
         )
 
 
+def test_add_gear():
+    """Involute gear primitive: external + internal, valid solids, correct pitch.
+    m=2, N=12 -> pitch r 12, tip r 14; two gears mesh at rp_a + rp_b apart."""
+    with Worker() as w:
+        w.call("new_document", name="gears")
+        a = w.call("add_gear", teeth=12, module=2.0, height=6.0)
+        assert a["pitch_radius"] == 12.0, a["pitch_radius"]
+        assert a["tip_radius"] == 14.0, a["tip_radius"]
+        assert a["volume"] > 0, a["volume"]
+        assert a["handle"].startswith("gear_"), a["handle"]
+        b = w.call("add_gear", teeth=24, module=2.0, height=6.0,
+                   placement=[36, 0, 0])  # mesh distance = 12 + 24
+        assert b["pitch_radius"] == 24.0, b["pitch_radius"]
+        ring = w.call("add_gear", teeth=36, module=2.0, height=6.0,
+                      external=False, placement=[200, 0, 0])
+        assert ring["external"] is False
+        for h in (a["handle"], b["handle"], ring["handle"]):
+            assert w.call("mass_properties", handle=h)["volume_mm3"] > 0, h
+
+
 def test_save_document():
     with Worker() as w, tempfile.TemporaryDirectory() as tmp:
         w.call("new_document", name="saved")
