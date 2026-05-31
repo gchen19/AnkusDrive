@@ -195,3 +195,69 @@ def _report(ok, brief, rounds, usage, model, root):
     return {"ok": ok, "name": brief.get("name"), "rounds": len(rounds),
             "root": root, "trace": rounds, "usage": usage,
             "cost_usd": round(agentkit.cost_of(usage, model), 4)}
+
+
+# --- demo brief (shared by the dry run and the live runner) -------------------
+
+_BORE_D, _CLEAR, _PLATE, _CTR, _PEGLEN = 16.0, 0.4, (60, 60, 10), (30, 30), 20.0
+
+DEMO_BRIEF = {
+    "name": "peg_demo",
+    "root": "peg_demo.FCStd",
+    "components": {
+        "plate": {"file": "plate.FCStd",
+                  "task": (f"Build a {_PLATE[0]}x{_PLATE[1]}x{_PLATE[2]} mm plate with a "
+                           f"Ø{_BORE_D} through-hole at ({_CTR[0]},{_CTR[1]}), then "
+                           f"save_component.")},
+        "peg": {"file": "peg.FCStd",
+                "task": (f"Build a peg that slip-fits a Ø{_BORE_D} bore with {_CLEAR} mm "
+                         f"diametral clearance (compute the diameter), length {_PEGLEN} mm, "
+                         f"then save_component.")},
+    },
+    "instances": [
+        {"component": "plate", "name": "plate", "placement": [0, 0, 0]},
+        {"component": "peg", "name": "peg", "placement": [_CTR[0], _CTR[1], -5]},
+    ],
+}
+
+
+def _live_main():
+    """Billed: run the coordinator on DEMO_BRIEF with a real model. Gated behind
+    RUN_RELIABILITY=1 + ANTHROPIC_API_KEY. M2_MODEL selects the tier (default
+    haiku). Confirms the whole loop works with a real model, not just the stub."""
+    import os
+    import sys
+    import tempfile
+
+    if not os.environ.get("RUN_RELIABILITY"):
+        print("Gated behind RUN_RELIABILITY=1 (calls the Anthropic API, costs "
+              "credits). For a FREE end-to-end check run:  python -m orchestration.dryrun",
+              file=sys.stderr)
+        sys.exit(0)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("ERROR: ANTHROPIC_API_KEY not set. Run `anthropic-key` first.", file=sys.stderr)
+        sys.exit(1)
+
+    model = agentkit.MODELS.get(os.environ.get("M2_MODEL", "haiku"))
+    if model is None:
+        print(f"ERROR: M2_MODEL must be one of {sorted(agentkit.MODELS)}", file=sys.stderr)
+        sys.exit(1)
+
+    import anthropic
+    client = anthropic.Anthropic()
+    print(f"== coordinator live run — model={model} ==")
+    with tempfile.TemporaryDirectory() as td:
+        rep = orchestrate(client, model, DEMO_BRIEF, Path(td), max_rounds=3)
+    print(f"\n  ok={rep['ok']}  rounds={rep['rounds']}  cost=${rep['cost_usd']}")
+    for rd in rep["trace"]:
+        g = rd.get("gates", {})
+        detail = (f"interference={len(g.get('interference', []))} "
+                  f"envelope={len(g.get('envelope', []))} "
+                  f"align={len(g.get('interface_align', []))}") if "gates" in rd \
+            else rd.get("reason", "")
+        print(f"    round {rd['round']}: built={rd['built']} ok={rd['ok']}  {detail}")
+    sys.exit(0 if rep["ok"] else 1)
+
+
+if __name__ == "__main__":
+    _live_main()
