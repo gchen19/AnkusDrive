@@ -586,12 +586,60 @@ def _patch_fcstd_camera(path, cam_xml):
     shutil.move(tmp, path)
 
 
+_INTERCHANGE_EXT = {".step", ".stp", ".iges", ".igs", ".brep", ".stl"}
+
+
+def _export_doc_shape(doc, path, ext):
+    """Export the document's geometry to an interchange file. Compounds every
+    top-level shaped object (skipping consumed inputs) so a multi-feature doc
+    exports as one shape."""
+    import Part
+    shaped = [o for o in doc.Objects
+              if hasattr(o, "Shape") and not o.Shape.isNull() and not o.InList]
+    if not shaped:
+        shaped = [o for o in doc.Objects
+                  if hasattr(o, "Shape") and not o.Shape.isNull()]
+    if not shaped:
+        raise RuntimeError("no shaped object to export")
+    shape = shaped[0].Shape if len(shaped) == 1 \
+        else Part.makeCompound([o.Shape for o in shaped])
+    if ext in (".step", ".stp"):
+        shape.exportStep(path)
+    elif ext in (".iges", ".igs"):
+        shape.exportIges(path)
+    elif ext == ".brep":
+        shape.exportBrep(path)
+    elif ext == ".stl":
+        shape.exportStl(path)
+
+
 @handler("save_document")
 def _h_save_document(p):
     doc = App.ActiveDocument
     if doc is None:
         raise RuntimeError("no active document")
     path = p["path"]
+    ext = os.path.splitext(path)[1].lower()
+
+    # Route by extension. A FreeCAD *document* (.FCStd) is saved natively; a
+    # geometry-interchange extension exports the doc's shape instead. Anything
+    # else fails LOUDLY here, naming the supported formats — rather than letting
+    # doc.saveAs() raise a bare FileNotFoundError on an unsupported extension
+    # (the trap that bit the multi-agent coordinator when a decomposer named a
+    # component file ".step").
+    if ext in _INTERCHANGE_EXT:
+        if p.get("visibility_hygiene", True):
+            _apply_visibility_hygiene(doc)
+        _export_doc_shape(doc, path, ext)
+        return {"path": path, "size": os.path.getsize(path),
+                "format": ext, "camera_fit": False}
+    if ext not in ("", ".fcstd"):
+        raise ValueError(
+            f"save_document: unsupported extension {ext!r}; use .FCStd for a "
+            f"FreeCAD document, or one of {sorted(_INTERCHANGE_EXT)} to export "
+            f"geometry."
+        )
+
     if p.get("visibility_hygiene", True):
         _apply_visibility_hygiene(doc)
     doc.saveAs(path)
