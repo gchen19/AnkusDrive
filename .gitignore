@@ -5,3 +5,4 @@ __pycache__/
 scratch/out/
 .venv/
 tests/reliability_cache/
+tests/multiagent_cache/
