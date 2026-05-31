@@ -304,7 +304,7 @@ agent juggles a running total and fumbles it, *not* across independent identical
   whole contract is the failure source.
 - ❌ Still one model (Haiku), n=20, two configs. nslot8 is decided on `built`
   (weaker than pass). tchain6's win rests on a prediction being wrong — worth a
-  confir--it-isn't-a-prompt-artifact rerun before leaning on it hard.
+  rerun to confirm it isn't a prompt artifact before leaning on it hard.
 - Open: the nslot **k-sweep** (k=4,6) to find the pass-rate crossover, and a tchain
   variant with *unequal* required segments (where independent rounding genuinely
   *would* accumulate — the original partition-loses case, which equal segments
