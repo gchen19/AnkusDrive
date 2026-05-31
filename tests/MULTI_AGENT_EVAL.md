@@ -161,3 +161,265 @@ like Layer A/B/C and shares `reliability_cache` conventions.
 
 The order is deliberate: never measure agent reliability against an oracle you
 haven't first proven catches a wrong answer.
+
+---
+
+## M2 results so far (live agent runs)
+
+All runs use `tests/test_multiagent_m2.py`, gated behind `RUN_RELIABILITY=1` + a key
+(the `anthropic-key` shell helper). Each toy runs in two conditions — **partition**
+(one cold agent per component) and **single** (one agent builds every component in
+sequence) — judged by the deterministic merge gates. `built` = agent(s) produced +
+saved geometry; `pass` = the merged assembly cleared every gate.
+
+### Gate validity (free, no API)
+
+`M2_SELFTEST=1` shows every toy's gate **passes a scripted correct build AND catches
+each scripted negative**; `M2_DRYRUN=1` exercises the full agent loop with a stubbed
+model. Both green for every toy (selftest 18/18 across 9 toys) — so a passing agent genuinely built a fitting
+part and a failing one genuinely didn't. (The eval plan's non-negotiable: never
+measure agents against an oracle you haven't shown catches a wrong answer.)
+
+### Easy toys — at the ceiling (Haiku 4.5, n=5)
+
+| Toy | partition | single | shared contract |
+|---|---|---|---|
+| peg-in-hole | 5/5 | 5/5 | one dimension (bore Ø) |
+| bolted flange | 5/5 | 5/5 | a bolt circle |
+| bracket+housing | 5/5 | 5/5 | a keep-out size cap |
+
+**100% both conditions → the comparison is uninformative here.** A single shared
+*value* is easy enough that Haiku never misses, so there's no gap to attribute to
+partitioning. Negative-control runs (`M2_NEGATIVES=1`, n=3) confirmed agents
+faithfully build the *wrong* thing and the gate catches it 3/3 on every toy — the
+100% is real, not a rubber stamp.
+
+### Hard toy — off the ceiling (Haiku 4.5, n=30/condition, ~$2.0)
+
+`twopin` — two pins must seat into two holes simultaneously. Two-point alignment
+removes the rotational slack a single peg hides error in, and both agents must
+independently derive the same `x = center ± spacing/2`.
+
+| condition | pass | 95% CI (Wilson) |
+|---|---|---|
+| partition | 17/30 = **57%** | [39%, 73%] |
+| single | 18/30 = **60%** | [42%, 75%] |
+
+**diff = −3%, two-proportion z = −0.26, p = 0.79 → statistically indistinguishable.**
+`built` was 30/30 in both. Failure magnitudes near-identical across conditions:
+mostly small near-misses (151/603 mm³ — a pin grazing hole material) plus a few
+gross errors (~3k–12k mm³ — a part built fundamentally wrong), in both.
+
+**Reading.** Two-point alignment drops Haiku from 100% to ~58% (the toy works), but
+partition ≈ single: for a two-component product, how the work is divided doesn't
+change the pass rate. The matched failure distributions say the errors are intrinsic
+to Haiku building this part from the spec — single isn't context-overloaded holding
+both parts, and partition's slice-only view doesn't diverge because the shared
+derivation is stated explicitly in each slice.
+
+### What this does and doesn't establish
+
+- ✅ Gates discriminate; agents build a single-value contract reliably and a
+  two-point derived contract ~58% of the time.
+- ✅ Harder toys break the 100% ceiling, giving a measurable pass-rate.
+- ❌ Does **not** show partition beating single — they tie wherever measured. The
+  regime where partition *should* win (a contract too large for one agent's context)
+  needs a **many-component** product, not a two-part toy.
+- Pass-rate ignores partition's real edge — **parallel wall-clock** (its builders run
+  concurrently; single's are sequential). The harness records per-agent time; the
+  headline metric doesn't credit it.
+
+---
+
+## Harder toys (designed; nslot8 + tchain6 now run)
+
+To probe where partition and single actually diverge, these stress the two axes a
+two-part toy can't: **context load** (many components → one agent holds the whole
+contract) and **interface chains** (an error in one part propagates). All are
+gate-judgeable with existing primitives.
+
+1. **N-slot rail (context-load sweep).** One rail with *k* evenly-spaced slots, *k*
+   matching pegs (k = 2, 4, 8). As *k* grows, single must track all *k* positions in
+   one context while each partition agent still sees only its one slot. *Hypothesis:*
+   single's pass-rate decays with *k*, partition's holds — the first place the two
+   should separate. Gate: interference, every peg in its slot.
+2. **Tolerance-stack chain (error propagation).** A linear chain A–B–C–D, each part's
+   right face mating the next's left face, total length fixed by contract. Small
+   per-part errors accumulate. *Hypothesis:* partition (each agent blind to neighbors)
+   drifts out of total-length tolerance faster than single (which sees the running
+   sum). Gate: assembled length within tolerance + interference. **The case partition
+   should LOSE** — important to have, because it makes any partition *win* elsewhere
+   credible.
+3. **Hub-and-spokes (fan-out breadth).** A central hub with *n* ports; *n* arms each
+   mate to one port on a shared bolt pattern. *Hypothesis:* partition parallelizes the
+   arms cleanly; single's pass-rate drops as *n* grows. Tests breadth, not depth.
+4. **Two-interface bracket (per-part complexity).** One bracket mating to *two*
+   parents at once (a wall and a floor) — both interfaces must satisfy their contracts
+   simultaneously. A harder, tighter-tolerance variant of toy #5's structure. Gate:
+   `interface_align_check` on both + interference.
+
+**Sequencing.** #1 first — cleanest test of the core hypothesis (context load
+separates the conditions) and cheapest to sweep. #2 most valuable (the partition-loses
+case). Both are real spend and bigger per-trial (more components = more agent turns);
+a proper sweep is tens of dollars, not the ~$2 a two-part toy costs.
+
+---
+
+## Divergence results (Haiku 4.5, n=20/condition, ~$5.7)
+
+First runs of the extreme configs — **nslot8** (9 components) and **tchain6** (6).
+These are the first results where partition and single **diverge**, after twopin
+tied. In both, partition ≥ single, and the mechanism is the same: single's burden of
+holding the whole multi-part contract in one context is the failure source.
+
+| toy | condition | pass | built | note |
+|---|---|---|---|---|
+| nslot8 | partition | 0/20 | **12/20** | 8-distinct-pair contract too hard to *pass*… |
+| nslot8 | single | 0/20 | **4/20** | …but single completes far less often |
+| tchain6 | partition | **20/20** | 20/20 | each agent builds one 100/6 segment → exact |
+| tchain6 | single | **0/20** | 20/20 | every chain too long (102.7–113.3 mm) |
+
+**nslot8 — context load, seen in completion not pass.** Eight distinct slot↔peg
+pairings is past Haiku's cliff: neither condition produces a *passing* assembly. But
+`built` diverges as the context-load hypothesis predicts — partition (each peg agent
+sees one diameter) completes 12/20; single (tracking all 8 pairs in one conversation)
+only 4/20, mostly failing to even save all 9 parts. The pass-rate crossover the
+hypothesis wants is presumably at smaller k (nslot4/6, unrun); nslot8 saturates both.
+
+**tchain6 — a clean, decisive divergence, and it reversed the prediction.** Partition
+passed 20/20, single 0/20 — but the doc above predicted *partition* would lose here.
+The prediction was wrong, instructively: with **equal** segments, each partition agent
+independently builds the same correct 100/6 = 16.67 mm part, and identical rounding
+*cancels* (6 × 16.67 = 100.0) — there is no accumulation, because they aren't summing
+each other's errors. The drift came from **single**, which consistently built segments
+too long (avg 106.7 mm) — it appears to round 100/6 up and never reconcile the total.
+Seeing the whole chain made it worse, not better. Lesson: error accumulates when one
+agent juggles a running total and fumbles it, *not* across independent identical parts.
+
+**What this establishes (and doesn't).**
+- ✅ First measured evidence **partition ≥ single** — partition completes more
+  (nslot8) and passes where single can't (tchain6). After twopin's tie, this is the
+  result the easy toys couldn't give.
+- ✅ The cause in both is the context-load axis these toys target: single carrying the
+  whole contract is the failure source.
+- ❌ Still one model (Haiku), n=20, two configs. nslot8 is decided on `built`
+  (weaker than pass). tchain6's win rests on a prediction being wrong — worth a
+  rerun to confirm it isn't a prompt artifact before leaning on it hard.
+- Open: the nslot **k-sweep** (k=4,6) to find the pass-rate crossover, and a tchain
+  variant with *unequal* required segments (where independent rounding genuinely
+  *would* accumulate — the original partition-loses case, which equal segments
+  accidentally dodged).
+
+---
+
+## Free probe results — gate-value layer (2026-05-31, no API)
+
+Before spending the key on the open follow-ups, ran cheap **MCP-driven probes**
+(local FreeCAD worker, $0, Opus-as-builder under the Max plan) to decide *which*
+billed experiments are worth running and whether any contract / worker-loop change
+should precede them. Each probe gates a decision; the takeaway is **no contract or
+worker-loop refactor is warranted — the probes cleared two experiments and killed
+one candidate workstream.**
+
+| Probe | What it checked | Result |
+|---|---|---|
+| **A — gate boundary** | interference gate at Ø15.6 / 16.0 / 16.4 in a Ø16 hole | Boundary is exactly where claimed. Clearance +0.4 **and exact-touch (0.0) report no interference** (zero-volume contact isn't flagged — the "ambiguous touch" risk doesn't materialise); −0.2 caught at 101.8 mm³ (= hand-calc π(8.2²−8²)·10). Gates trustworthy. |
+| **C — unequal-tchain separability** | can an unequal/grid chain make partition lose? | **Separates.** The lever is a **coarse manufacturing grid**: with no grid each agent builds an exact float and the chain sums to T (why tchain6 partition passed 20/20); force whole-mm stock and local rounding can't reconcile a *global* total. Nominals chosen so all six round up → partition 102 mm (drift 2.0) vs single 100 mm (drift 0), tol 0.8 → **2.5× margin**. MCP-verified FreeCAD reproduces mandated lengths exactly (bbox X = 12.6 / 16.6667 to the digit), so `_part_x_length` measures the real choice. |
+| **D — nslot k=6 oracle** | do both gate checks fire at k=6 | **Sound.** Cylinder bbox X = diameter exactly (r=4.8→9.6, r=6.8→13.6); slot diameters [10,14,18,22,12,16] → targets differ ≥2 mm ≫ 0.6 threshold, so wrong-slot (Δ=4.0) always caught; oversized caught by interference (Probe A). k-sweep oracle is billable. |
+| **B — contract clarity** | is wording the confound? | nslot task strings already battle-tested at k=4/8. The one real risk is the **new unequal-tchain single-task**: it must make reconciliation salient ("segments need not be equal — choose them so the total is exactly 100 on the mm grid") or single repeats its equal-case failure (rounds each up, never reconciles) and the conditions tie at *both-lose* instead of single-wins. Wording done accordingly. |
+| **E — self-verify preview** | would verify-before-save help? | **No (for this axis).** tchain error is reconciliation / structural blindness, not a measurable per-part defect: a partition agent building one grid-snapped segment *can't* see the total is wrong, so verify-before-save can't help it; it would only help *single*, **narrowing** the very divergence we want to surface. Skip the generic loop tweak — it's a contract-wording issue, not a worker-loop one. |
+
+**Toy added:** `tchainu` (toy 7) — UNEQUAL tolerance chain on a whole-mm grid, the
+**real partition-LOSES case** the equal-segment toy dodged. Reuses the `_tchain_gate`
+length-sum oracle. Selftest two-sided valid (reconciled build → pass; un-reconciled
+round-up 102 mm → caught). The "partition loses" result hinges on single reconciling,
+so it's also a clean test of whether single uses its whole-chain view at all.
+
+**Billed experiments the probes unlock** (Haiku n=20, decide ceiling when scheduling):
+1. **nslot k-sweep (k=4,6)** — find the pass-rate crossover nslot8 missed (~$6–10).
+2. **`tchainu`** — the partition-loses credibility case (~$5).
+3. *(cheap, optional)* **tchain6 rerun** — confirm the 20/0 win isn't a prompt artifact (~$3).
+
+Total ≈ **$12–15**, in line with the prior ~$5.7 round but covering more ground.
+
+---
+
+## Toys added 2026-05-31 — exact constraint + GD&T (free; selftest 28/28, 14 toys)
+
+Five new toys plus a builder-surface change, all gate-validated for free:
+
+**Toy 8 — `pinslot` (pin-and-slot exact constraint).** The textbook way to lock the
+three in-plane DOF: a **round hole** (locks x,y) + an **oriented slot** (locks rotation
+θ, frees the spacing axis). Distinct from `twopin`, which uses *two round holes* — an
+*over-constrained* scheme that jams on any spacing error. Functional two-assembly gate:
+both parts seat at nominal **and** a reference carrier with pin 2 shifted along the slot
+axis must *still* seat. The over-constrained design (round hole at P2) passes nominal
+but is caught by the perturbed assembly (106 mm³ jam) — exactly the failure the slot
+exists to prevent.
+
+**Toys 9–11 — GD&T LOCATION family.** The first gates that **measure a feature against
+a tolerance zone** (via `run_script` reading the as-built axis) rather than testing fit
+by interference: `gdt_position` (hole true position within a Ø0.4 zone off datums A/B),
+`gdt_concentric` (bore coaxial with its boss), `gdt_symmetry` (hole pair about the
+median plane). Two *independent* parts per toy with different nominals (context load for
+single). Each negative displaces a feature 0.5 mm and is caught at the 0.2 mm zone edge.
+
+**Toy 12 — `gdt_angularity` + the `rotate` builder tool.** GD&T **coverage is bounded by
+the builder surface**: form (flatness/straightness/circularity/cylindricity), profile,
+and runout have **no agent-controllable deviation** — perfect primitives can't be made
+imperfect — so they're not testable. Orientation needed a real tilt, so the agent tool
+surface gained a **`rotate`** tool (rotate a solid about an axis through its centroid;
+kept test-local via `run_script`, worker untouched). `gdt_angularity` makes a slender
+post stand at a called-out angle from Z within ±1°; the gate reads the as-built long
+axis (least-inertia principal axis). **Caveat for comparability:** adding `rotate`
+changes the tool surface every toy sees, so post-change pass-rates are not a clean
+baseline against the earlier Haiku numbers — re-baseline if mixing.
+
+GD&T coverage map: **Location ✅** (position, concentricity, symmetry — clean fits);
+**Orientation ⚠️** (angularity/perpendicularity/parallelism — reachable now via `rotate`);
+**Form / Profile / Runout ❌** (no deviation possible with exact primitives).
+
+---
+
+## Kinematic mechanisms added 2026-05-31 (free; selftest 48/48, 20 toys)
+
+Seven mechanism toys — gear trains, linkages, and moving assemblies — a different
+class from the static-fit toys. Two new gate capabilities back them:
+
+- **Gear geometry** via a new first-class DriftPin primitive **`add_gear`** (FreeCAD's
+  core involute generator, extruded to a solid; external + internal/ring). Committed
+  separately (`feat(worker): add_gear`). The agent builder surface gains `add_gear`
+  too (gears can't be built from box/cylinder). Pitch radius is read back from the
+  as-built tip radius (`rp = tip − module`; internal ring from inner-tip + module).
+- **Swept-motion interference** (`_sweep_clear`): the gate poses every part at each
+  motion step via forward kinematics it encodes, then interference-checks. Proven on
+  the slider-crank (a too-wide piston jams the bore at 3180 mm³ mid-stroke).
+
+| Toy | Class | Gate checks |
+|---|---|---|
+| `kin_gearbox6` / `kin_gearbox3` | gear geometry | every input+output pair meshes at one shared centre distance C; each ratio hits target (shared-constraint partition gem; 6-speed = 12 gears) |
+| `kin_planetary` | gear geometry | Nring = Nsun + 2·Nplanet (measured pitch radii); carrier's n planets equally spaced at the sun-planet centre distance; equal-spacing assembly condition |
+| `kin_ackermann` | linkage (static) | each steering arm's kingpin→tie-rod line aims at the rear-axle midpoint; catches parallel-arm steering |
+| `kin_slidercrank` | moving | closure L>R (no bind), stroke = 2R, rod swing < 20°, **posed-interference sweep** of the piston through its stroke in the bore |
+| `kin_geneva` | moving | drive-pin radius = C·sin(π/n) (tangency, no jam); n slots equally spaced → 1/n index |
+| `kin_sarrus` | moving | the two leaves' hinge axes are perpendicular (X⊥Y) → 1-DOF straight-line motion; catches parallel hinges |
+| `kin_wishbone` | moving | SLA geometry (upper arm shorter than lower → camber gain); upright length closes the four-bar loop |
+
+**Honest finding on motion gates.** For these mechanisms the *robust discriminator*
+is **measured geometric relations + analytic forward-kinematics over the motion
+range**, not posed-solid interference. Posed interference (`_sweep_clear`) is the
+right test only for **collision-type** failures (slider-crank piston-in-bore) — for
+ratio/closure/tangency/aiming failures it either doesn't discriminate (an idealised
+pose keeps parts on their kinematic path regardless of size) or risks false failures
+from posing math. So the suite uses analytic kinematics for correctness and the posed
+sweep where a collision is the natural failure.
+
+**Abstractions (kept honest, like pitch-cylinders earlier).** Gears use *real*
+involute teeth (`add_gear`); Geneva slots are abstracted as n equally-spaced
+engagement holes (captures the index ratio + tangency, not slot-sliding); Sarrus is
+reduced to its defining perpendicular-hinge-axes property; wishbone to SLA + four-bar
+loop closure (camber gain implied by upper<lower).
+
+**Comparability caveat (again):** `add_gear` and `rotate` enlarge the agent tool
+surface, so kinematic-era pass-rates are not a clean baseline against the original
+static-toy Haiku numbers — re-baseline before mixing.

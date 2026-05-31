@@ -142,6 +142,14 @@ def decompose(client, model, spec, log=print):
     if not calls:
         raise ValueError("decompose: model did not call emit_brief")
     brief = dict(calls[0].input)
+    # The harness — not the model — owns the on-disk format: a component file is a
+    # FreeCAD document, and save_document only writes .FCStd. Models tend to pick
+    # ".step"/".stp" (the interchange format they associate with CAD parts), whose
+    # save then fails. Force the extension so the builder's save_component succeeds.
+    for spec in brief.get("components", {}).values():
+        f = spec.get("file")
+        if isinstance(f, str) and f:
+            spec["file"] = f.rsplit(".", 1)[0] + ".FCStd" if "." in f else f + ".FCStd"
     problems = validate_brief(brief)
     log(f"  decomposed into {len(brief.get('components', {}))} components: "
         f"{sorted(brief.get('components', {}))}")

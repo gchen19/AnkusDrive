@@ -134,6 +134,34 @@ def add_primitive(
 
 
 @mcp.tool()
+def add_gear(
+    teeth: int,
+    module: float,
+    height: float = 6.0,
+    pressure_angle: float = 20.0,
+    external: bool = True,
+    placement: list | None = None,
+    name: str = "Gear",
+) -> dict:
+    """Add an involute spur gear (FreeCAD's core involute generator), extruded to a solid.
+
+    teeth: tooth count (>= 3). module: mm (pitch diameter = module * teeth).
+    height: extrusion thickness mm. pressure_angle: deg (default 20).
+    external: True for an external gear; False for an internal/ring tooth profile.
+    placement: optional [x, y, z] mm translation.
+    Returns {handle, name, volume, pitch_radius, tip_radius, root_radius, teeth,
+    module, external}. Two external gears MESH when their axes are spaced
+    (pitch_radius_a + pitch_radius_b) apart; phase one by half a tooth to avoid
+    tooth-on-tooth interference.
+    """
+    params = {"teeth": teeth, "module": module, "height": height,
+              "pressure_angle": pressure_angle, "external": external, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_gear", **params)
+
+
+@mcp.tool()
 def list_faces(handle: str) -> list:
     """List all faces of a shaped object with stable tags + geometric descriptors.
 
