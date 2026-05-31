@@ -1085,6 +1085,65 @@ __result__ = uniq
 GDT_ZONE_R = 0.2  # all callouts are Ø0.4 tolerance zones -> 0.2 mm allowed deviation
 
 
+# --- structural FEM gate helper (CalculiX via the FreeCAD FEM stack) ----------
+# The reusable physics oracle for the strength/stiffness toys (and the structural
+# half of the thermo-structural capstone). Opens a saved part, fixes the support
+# face and presses on the load face (a PRESSURE constraint acts along the face
+# normal — no edge-picking, so it generalises to arbitrary geometry), meshes,
+# solves with CalculiX, and returns max von Mises (MPa) + max displacement (mm).
+#
+# IMPORTANT — gate RELATIVE, not absolute. CalculiX-through-the-worker magnitudes
+# depend on mesh + setup and are not certified stress; they ARE monotonic and
+# discriminating (thinner/weaker part -> higher von Mises + displacement, verified).
+# So the FEM toys compare the agent's part against a scripted reference build under
+# the SAME setup (agent must be within a margin of, or stiffer than, the reference)
+# — any consistent solver offset cancels. Built on the existing FreeCAD FEM tools;
+# heavier per call (mesh + solve) but free. Future dedicated tooling: docs/SIMULATION_TOOLS.md.
+
+_FEM_STEEL = {"Name": "Steel-Generic", "YoungsModulus": "210000 MPa",
+              "PoissonRatio": "0.30", "Density": "7900 kg/m^3"}
+
+
+def _fem_stress(path, fix_normal, load_normal, force_n,
+                material=None, char_length=5.0):
+    """Cantilever-style structural FEM on a saved part. Fixes the largest planar
+    face whose normal ~ `fix_normal`, applies `force_n` (N) as pressure over the
+    largest planar face whose normal ~ `load_normal`, solves. Returns
+    {vm_mpa, disp_mm, load_area_mm2}. Face selection is deterministic (area_desc)
+    so notched/multi-face parts pick the main support/load face."""
+    material = material or _FEM_STEEL
+    with Worker() as w:
+        w.call("open_document", path=str(path))
+        nm = w.call("run_script", code='''
+objs=[o for o in App.ActiveDocument.Objects if hasattr(o,"Shape") and not o.Shape.isNull() and not o.InList]
+if not objs:
+    objs=[o for o in App.ActiveDocument.Objects if hasattr(o,"Shape") and not o.Shape.isNull()]
+__result__ = objs[0].Name
+''')["result"]
+        body = w.call("register_handle", object=nm)["handle"]
+        an = w.call("fem_new_analysis", name="A")["handle"]
+        w.call("fem_set_solver", analysis=an, kind="ccx")
+        w.call("fem_set_material", analysis=an, body=body, material=material)
+        fix = w.call("query_faces", handle=body, predicate={
+            "type": "planar", "normal_dir": fix_normal, "order": "area_desc"})
+        load = w.call("query_faces", handle=body, predicate={
+            "type": "planar", "normal_dir": load_normal, "order": "area_desc"})
+        if not fix or not load:
+            raise RuntimeError(
+                f"FEM gate: faces not found (fix={len(fix)}, load={len(load)})")
+        w.call("fem_add_constraint", analysis=an, kind="fixed",
+               refs=[{"handle": body, "tag": fix[0]["tag"]}])
+        area = load[0]["area"]
+        w.call("fem_add_constraint", analysis=an, kind="pressure",
+               pressure=force_n / area,
+               refs=[{"handle": body, "tag": load[0]["tag"]}])
+        w.call("fem_mesh", analysis=an, body=body, char_length=char_length)
+        w.call("fem_run", analysis=an)
+        res = w.call("fem_results", analysis=an)
+    return {"vm_mpa": res["max_vonmises_mpa"],
+            "disp_mm": res["max_displacement_mm"], "load_area_mm2": area}
+
+
 # --- toy 9: true position ----------------------------------------------------
 POS_PLATE = (50.0, 50.0, 8.0)
 POS_HOLE_R = 6.0  # Ø12 hole
