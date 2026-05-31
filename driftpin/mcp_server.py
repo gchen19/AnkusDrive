@@ -861,13 +861,48 @@ def interference_check(assembly: str) -> list:
 
 
 @mcp.tool()
-def bom_extract(assembly: str, density: float | None = None) -> list:
+def bom_extract(
+    assembly: str, density: float | None = None, recursive: bool = True
+) -> list:
     """Walk an assembly and return [{part, count, total_volume_mm3, total_mass_kg?}, ...]
-    grouped by linked-object name. density (kg/mm³) is optional."""
-    params = {"assembly": assembly}
+    grouped by source (component file + object), NOT the bare object name, so two
+    distinct components both named "Box" don't collapse into one row. density
+    (kg/mm³) is optional.
+
+    recursive (default True): descend into linked subassemblies (App::Part) so the
+    BOM flattens to leaf parts. False counts each subassembly as one line."""
+    params = {"assembly": assembly, "recursive": recursive}
     if density is not None:
         params["density"] = density
     return _call("bom_extract", **params)
+
+
+@mcp.tool()
+def envelope_check(assembly: str, envelopes: dict) -> list:
+    """Keep-out gate: assert each named part's world bounding box stays inside its
+    declared envelope. envelopes maps a part's link name (or label) to
+    {"min": [x,y,z], "max": [x,y,z]} in the assembly frame. Returns violations
+    [{part, axis, got, allowed}, ...]; empty means everything is within its box."""
+    return _call("envelope_check", assembly=assembly, envelopes=envelopes)
+
+
+@mcp.tool()
+def merge_assembly(manifest: str) -> dict:
+    """Construct-up an assembly from a manifest JSON (the coordinator's one call):
+    create the doc, link each component by file path, place it, recompute, and run
+    the gates. Component files resolve relative to the manifest's directory; links
+    auto-reload, so re-running picks up updated components (deterministic,
+    idempotent).
+
+    manifest shape:
+      { "name": "gearbox", "root": "gearbox.FCStd",
+        "components": {"<id>": {"file": "rel/part.FCStd", "object": "<name>"?,
+                                "envelope": {"min":[...],"max":[...]}?}},
+        "instances": [{"component":"<id>", "name":"<instance>"?,
+                       "placement": [x,y,z] | {position,axis,angle_deg}}] }
+
+    Returns {assembly, doc, root, placed, gates:{interference, bom, envelope}, ok}."""
+    return _call("merge_assembly", manifest=manifest)
 
 
 @mcp.tool()
