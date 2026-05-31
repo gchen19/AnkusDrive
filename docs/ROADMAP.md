@@ -514,48 +514,13 @@ canonical example in this house is the `~/diffuser` project: FreeCAD held the
 `.FCStd` files, but the actual physics — 2D Snell/TIR ray tracing, moldability
 scoring, BSpline parameter sweep — lived in a separate Python pipeline that
 *imported* FreeCAD just for geometry extraction. That's the right pattern for
-any domain FreeCAD doesn't natively cover.
+any domain FreeCAD doesn't natively cover: a thin MCP tool that takes a DriftPin
+handle (or its exported STEP/STL/mesh) and returns structured results.
 
-### Pattern
-
-Keep DriftPin focused on FreeCAD geometry + FEM. For each external solver, add
-a thin MCP tool that takes a DriftPin handle (or its exported STEP/STL/mesh)
-and returns structured results. The MCP server hosts both: `driftpin_*` tools
-for FreeCAD, `optics_*` / `cfd_*` / `slicer_*` tools that feed off DriftPin
-outputs.
-
-### Domains worth integrating
-
-| Domain | Tooling | Notes |
-|---|---|---|
-| **Optics** | `~/diffuser` pipeline (in-house), `rayoptics`, `optiland` | High value — already exists, ties to real work. Wrap the diffuser pipeline as MCP tools first. |
-| **CFD** | OpenFOAM (via CfdOF or directly), SU2 | Elmer covers basics; OpenFOAM for serious work. |
-| **Transient thermal / radiation** | Elmer, OpenFOAM `chtMultiRegionFoam` | CCX is steady-state only. |
-| **Multibody dynamics / IK** | MuJoCo, PyBullet, pinocchio | Critical for anything that *moves*. Assembly4 has constraints but no dynamics. |
-| **Tolerance stack-up / GD&T** | gdt-tools, tolstack, in-house Monte Carlo | Big agent unlock — "tighten this dim to ±0.05, assembly fits 99.7%". |
-| **Injection molding** | Commercial only at quality (Moldex3D-class); open-source is thin | Diffuser project's heuristic moldability scoring is the pragmatic move. |
-| **Machining** | FreeCAD Path workbench, pycam, kiri:moto | Toolpaths from geometry. |
-| **3D-print slicing** | PrusaSlicer / OrcaSlicer CLI, CuraEngine | Slicer-as-tool is huge: print time, support volume, layer count back to the agent. |
-| **Topology optimization** | FreeCAD-fenics, topopt, solidspy | Generate optimal geometry from load cases. |
-| **Electromagnetics** | Elmer (basic), OpenEMS / FEniCSx (RF), FEMM (2D motors) | |
-| **Acoustics** | Elmer, pyfar, acoular | |
-| **Mass properties / inertia / CG** | FreeCAD native (`Shape.Mass`, `MatrixOfInertia`, `CenterOfMass`) | Already there — just expose. Drives a lot of agent decisions. |
-
-### First external integration to ship
-
-The `~/diffuser` optics pipeline is the natural first one — it already imports
-FreeCAD, runs under DriftPin's worker today, and wraps existing in-house code.
-Concrete tools:
-
-- `optics_raytrace(model_path, source_config, n_refractive, n_rays)` →
-  `{exit_distribution, leakage_fraction, hotspot_locations}`
-- `optics_moldability_check(model_path, pull_axis)` →
-  `{undercut_faces, draft_violations, wall_thickness_stats}`
-- `optics_optimize(baseline_path, target_metrics, parameter_space)` →
-  `{best_candidate_path, score_breakdown}`
-
-This validates the "DriftPin-as-geometry-substrate, external-tool-as-physics"
-pattern before generalizing it to CFD / MBD / etc.
+**Expanded into [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md)** — the full tool-family
+catalog (tolerance/GD&T, materials, wear/fatigue/fracture, thermal, fluids, optics,
+multibody, Design-for-X), the pure-Python vs. external-solver split, a prioritized
+P0/P1/P2 rollout, and a build-ready scaffold for the first family (Tolerance/GD&T).
 
 ---
 
