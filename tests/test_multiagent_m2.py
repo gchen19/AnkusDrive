@@ -264,6 +264,18 @@ def _ref_box_holes(w, path, name, sx, sy, sz, hole_r, centers):
     w.call("save_document", path=str(path))
 
 
+def _ref_pinned_plate(w, path, name, sx, sy, sz, pin_r, pin_h, centers):
+    """A plate with cylindrical pins standing UP from its top face, fused into one
+    solid (the harder build: place + fuse N pins at exact positions)."""
+    w.call("new_document", name=name)
+    cur = w.call("add_primitive", kind="box", w=sx, d=sy, h=sz, name=name)
+    for cx, cy in centers:
+        pin = w.call("add_primitive", kind="cylinder", r=pin_r, h=pin_h,
+                     placement=[cx, cy, sz], name="pin")
+        cur = w.call("boolean_op", op="fuse", base=cur["handle"], tool=pin["handle"])
+    w.call("save_document", path=str(path))
+
+
 # =============================================================================
 # Toy registry. Each toy:
 #   components : {name: build_task}        — one agent per component (partition)
@@ -438,7 +450,80 @@ TOY3 = Toy(
 )
 
 
-TOYS = {t.key: t for t in (TOY1, TOY2, TOY3)}
+# --- toy 4: two-pin link (HARDER) --------------------------------------------
+# Two pins must seat into two holes SIMULTANEOUSLY. Unlike a single peg (which
+# tolerates small error because one round pin in a round hole has rotational
+# slack), two-point alignment pins down both spacing AND orientation — every pin
+# must clear. Stresses the shared contract three ways the easy toys don't:
+#   (a) two-point constraint (no rotational slack to hide a spacing error),
+#   (b) a DERIVED shared value — pins/holes are symmetric about center, so both
+#       agents must compute the same x = center ± spacing/2 independently,
+#       which is exactly where partition (slice-only view) can diverge from single,
+#   (c) more build steps (plate + 2 fused pins; bar + 2 cuts) = more failure surface.
+T4_PLATE = (60.0, 40.0, 10.0)       # base plate w,d,h
+T4_PIN_R, T4_PIN_H = 4.0, 12.0      # pins Ø8, 12 tall
+T4_SPACING = 30.0                   # pin spacing along x, symmetric about center
+T4_BAR_T = 6.0                      # link bar thickness
+T4_HOLE_R = 4.2                     # holes Ø8.4 -> 0.4 mm diametral clearance
+_T4_CX = T4_PLATE[0] / 2.0          # 30
+_T4_CY = T4_PLATE[1] / 2.0          # 20
+
+
+def _t4_centers(spacing):
+    return [(_T4_CX - spacing / 2.0, _T4_CY), (_T4_CX + spacing / 2.0, _T4_CY)]
+
+
+def _t4_gate(tmp, files):
+    # base at origin (pins point up from z=10); link laid on top at z=10. Each pin
+    # must pass through its hole — a spacing/position mismatch clips bar material.
+    return _merge_check(tmp, [
+        (files["base"], [0, 0, 0], "base"),
+        (files["link"], [0, 0, T4_PLATE[2]], "link")])
+
+
+_T4_GEOM = (f"on a {T4_PLATE[0]}x{T4_PLATE[1]} mm plate, positioned symmetrically "
+            f"about the plate center, {T4_SPACING} mm apart along the long (X) axis, "
+            f"both on the Y centerline")
+
+TOY4 = Toy(
+    "twopin", "Two-pin link (dual-point alignment, derived spacing)",
+    components={
+        "base": (f"Build a BASE: a {T4_PLATE[0]}x{T4_PLATE[1]}x{T4_PLATE[2]} mm plate "
+                 f"with TWO cylindrical pins Ø{2*T4_PIN_R} mm, {T4_PIN_H} mm tall, "
+                 f"standing up from the top face, {_T4_GEOM}. Fuse the pins to the "
+                 f"plate so it is one solid. Then save_component."),
+        "link": (f"Build a LINK bar: {T4_PLATE[0]}x{T4_PLATE[1]}x{T4_BAR_T} mm, with "
+                 f"TWO vertical through-holes Ø{2*T4_HOLE_R} mm, {_T4_GEOM}. The holes "
+                 f"must match a mating part's two pins. Then save_component."),
+    },
+    single_task=(f"You will build two mating parts, one at a time. They share a "
+                 f"two-pin pattern: two locations {_T4_GEOM}.\n"
+                 f"BASE: {T4_PLATE[0]}x{T4_PLATE[1]}x{T4_PLATE[2]} mm plate with two "
+                 f"Ø{2*T4_PIN_R} mm pins {T4_PIN_H} mm tall fused on top at those "
+                 f"locations.\nLINK: {T4_PLATE[0]}x{T4_PLATE[1]}x{T4_BAR_T} mm bar with "
+                 f"two Ø{2*T4_HOLE_R} mm through-holes at the SAME two locations."),
+    gate=_t4_gate,
+    reference=lambda w, name, path: (
+        _ref_pinned_plate(w, path, "base", *T4_PLATE, T4_PIN_R, T4_PIN_H,
+                          _t4_centers(T4_SPACING)) if name == "base"
+        else _ref_box_holes(w, path, "link", T4_PLATE[0], T4_PLATE[1], T4_BAR_T,
+                            T4_HOLE_R, _t4_centers(T4_SPACING))),
+    negatives=[
+        # Link holes at the WRONG spacing (20 mm not 30): seat the bar over the
+        # pins and the pins clip bar material -> interference.
+        Neg("wrong_spacing", "interference",
+            agent={"link": (f"Build a LINK bar {T4_PLATE[0]}x{T4_PLATE[1]}x{T4_BAR_T} mm "
+                            f"with two vertical through-holes Ø{2*T4_HOLE_R} mm, "
+                            f"symmetric about the plate center but only 20 mm apart "
+                            f"along X (use 20, not any other value). Then save_component.")},
+            ref={"link": lambda w, p: _ref_box_holes(
+                w, p, "link", T4_PLATE[0], T4_PLATE[1], T4_BAR_T, T4_HOLE_R,
+                _t4_centers(20.0))}),
+    ],
+)
+
+
+TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4)}
 
 
 # --- conditions --------------------------------------------------------------
