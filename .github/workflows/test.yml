@@ -29,7 +29,7 @@ jobs:
     name: Test suite (FreeCAD 1.1, self-hosted)
     runs-on: [self-hosted, driftpin]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Wire local FreeCAD (no download; reuses installed AppImage)
         run: |
