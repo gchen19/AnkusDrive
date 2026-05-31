@@ -523,7 +523,227 @@ TOY4 = Toy(
 )
 
 
-TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4)}
+# --- measurement helper (for gates that read a saved part's real geometry) ----
+
+def _part_x_length(path):
+    """X-extent (mm) of the first top-level shaped object in a saved component."""
+    with Worker() as w:
+        w.call("open_document", path=str(path))
+        r = w.call("run_script", code="""
+objs = [o for o in App.ActiveDocument.Objects
+        if hasattr(o, "Shape") and not o.Shape.isNull() and not o.InList]
+if not objs:
+    objs = [o for o in App.ActiveDocument.Objects
+            if hasattr(o, "Shape") and not o.Shape.isNull()]
+bb = objs[0].Shape.BoundBox
+__result__ = bb.XMax - bb.XMin
+""")
+    return r["result"]
+
+
+# =============================================================================
+# toy 5: N-slot board (CONTEXT-LOAD sweep — designed, see MULTI_AGENT_EVAL.md)
+# A plate with k holes of DISTINCT diameters, and k pegs each sized to one slot.
+# The point: in partition each peg agent is told ONE diameter; in single, one
+# agent must keep all k distinct (diameter -> slot) pairs straight in a single
+# growing conversation. Hypothesis: single's pass-rate decays as k grows while
+# partition's holds. Registered at k=4 and k=8 (shared builder) to sweep the axis.
+# Gate is direction-complete: interference catches a peg too BIG, a per-peg
+# diameter check catches one too SMALL / assigned to the wrong slot.
+# =============================================================================
+
+NSLOT_HOLE_D = [10.0, 14.0, 18.0, 22.0, 12.0, 16.0, 20.0, 24.0]  # distinct, shuffled
+NSLOT_CLEAR = 0.4
+NSLOT_PITCH = 30.0
+NSLOT_Y = 15.0
+NSLOT_PLATE_D = 30.0
+NSLOT_PLATE_H = 10.0
+NSLOT_PEG_H = 20.0
+
+
+def _nslot_centers(k):
+    return [(15.0 + i * NSLOT_PITCH, NSLOT_Y) for i in range(k)]
+
+
+def _nslot_plate_w(k):
+    return k * NSLOT_PITCH
+
+
+def _nslot_gate(k):
+    def gate(tmp, files):
+        centers = _nslot_centers(k)
+        placed = [(files["plate"], [0, 0, 0], "plate")]
+        for i in range(k):
+            cx, cy = centers[i]
+            placed.append((files[f"peg{i}"], [cx, cy, -5], f"peg{i}"))
+        res = _merge_check(tmp, placed)            # interference => a peg too big
+        if not res["ok"]:
+            return res
+        for i in range(k):                          # diameter check => too small / wrong slot
+            d = _part_x_length(files[f"peg{i}"])
+            target = NSLOT_HOLE_D[i] - NSLOT_CLEAR
+            if abs(d - target) > 0.6:               # slots differ by >=2mm; 0.6 = clearance slop
+                return {"ok": False,
+                        "reason": f"peg{i} Ø{d:.1f} != slot target Ø{target:.1f}"}
+        return {"ok": True, "reason": f"all {k} pegs fit their slots"}
+    return gate
+
+
+def _nslot_plate_task(k):
+    holes = "; ".join(f"slot {i} at x={15.0 + i*NSLOT_PITCH:.0f} y={NSLOT_Y:.0f} "
+                      f"diameter {NSLOT_HOLE_D[i]:.0f} mm" for i in range(k))
+    return (f"Build a BASEPLATE {_nslot_plate_w(k):.0f} x {NSLOT_PLATE_D:.0f} x "
+            f"{NSLOT_PLATE_H:.0f} mm with {k} vertical through-holes, each a "
+            f"DIFFERENT diameter: {holes}. Cut each hole through. Then save_component.")
+
+
+def _nslot_peg_task(i):
+    target = NSLOT_HOLE_D[i] - NSLOT_CLEAR
+    return (f"Build a cylindrical PEG of diameter {target:.1f} mm "
+            f"(it slip-fits a {NSLOT_HOLE_D[i]:.0f} mm hole with {NSLOT_CLEAR} mm "
+            f"clearance), {NSLOT_PEG_H:.0f} mm long. Then save_component.")
+
+
+def _nslot_single_task(k):
+    pegs = "; ".join(f"peg {i}: Ø{NSLOT_HOLE_D[i]-NSLOT_CLEAR:.1f} mm" for i in range(k))
+    return (f"You will build a baseplate and {k} pegs, one at a time. The plate has "
+            f"{k} holes of distinct diameters and each peg fits one specific hole "
+            f"with {NSLOT_CLEAR} mm clearance. Peg diameters: {pegs}. "
+            f"Keep each peg matched to its hole.")
+
+
+def _nslot_ref(k):
+    centers = _nslot_centers(k)
+    def ref(w, name, path):
+        if name == "plate":
+            radii = [(centers[i][0], centers[i][1]) for i in range(k)]
+            # holes of differing radius — build directly (helper assumes one radius)
+            w.call("new_document", name="plate")
+            cur = w.call("add_primitive", kind="box", w=_nslot_plate_w(k),
+                         d=NSLOT_PLATE_D, h=NSLOT_PLATE_H, name="plate")
+            for i in range(k):
+                cx, cy = centers[i]
+                tool = w.call("add_primitive", kind="cylinder",
+                              r=NSLOT_HOLE_D[i] / 2.0, h=NSLOT_PLATE_H * 3,
+                              placement=[cx, cy, -NSLOT_PLATE_H], name="hole")
+                cur = w.call("boolean_op", op="cut", base=cur["handle"],
+                             tool=tool["handle"])
+            w.call("save_document", path=str(path))
+        else:
+            i = int(name[3:])  # "pegN"
+            _ref_cyl(w, path, name, (NSLOT_HOLE_D[i] - NSLOT_CLEAR) / 2.0, NSLOT_PEG_H)
+    return ref
+
+
+def _make_nslot(k):
+    comps = {"plate": _nslot_plate_task(k)}
+    comps.update({f"peg{i}": _nslot_peg_task(i) for i in range(k)})
+    return Toy(
+        f"nslot{k}", f"N-slot board, k={k} (context load: {k} distinct slot↔peg pairs)",
+        components=comps,
+        single_task=_nslot_single_task(k),
+        gate=_nslot_gate(k),
+        reference=_nslot_ref(k),
+        negatives=[
+            # peg0 built to slot-1's diameter (wrong-slot swap) -> diameter check fires.
+            Neg("peg0_wrong_slot", "interference",   # expect is informational here
+                agent={"peg0": (f"Build a cylindrical peg of diameter "
+                                f"{NSLOT_HOLE_D[1]-NSLOT_CLEAR:.1f} mm, "
+                                f"{NSLOT_PEG_H:.0f} mm long. Then save_component.")},
+                ref={"peg0": lambda w, p: _ref_cyl(
+                    w, p, "peg0", (NSLOT_HOLE_D[1] - NSLOT_CLEAR) / 2.0, NSLOT_PEG_H)}),
+        ],
+    )
+
+
+TOY5_NSLOT4 = _make_nslot(4)
+TOY5_NSLOT8 = _make_nslot(8)
+
+
+# =============================================================================
+# toy 6: tolerance-stack chain (ERROR PROPAGATION — the case partition should LOSE)
+# n equal segments butted end to end must total exactly T mm. Each agent must
+# DERIVE T/n (non-integer) and any rounding accumulates. In single, one agent
+# sees the whole chain and can make the segments sum to T (e.g. the last absorbs
+# the remainder); in partition each agent rounds T/n blind to the others, so the
+# sum drifts. Gate: measure each segment's actual X-length, sum, require
+# |sum - T| <= tol. Pure cumulative-drift test (segments are butted at their
+# ACTUAL ends, so there's no interference to conflate it with).
+# =============================================================================
+
+TCHAIN_TOTAL = 100.0
+TCHAIN_TOL = 0.8
+TCHAIN_SEG_D = 20.0
+TCHAIN_SEG_H = 10.0
+
+
+def _tchain_gate(n):
+    def gate(tmp, files):
+        lengths = [_part_x_length(files[f"seg{i}"]) for i in range(n)]
+        total = sum(lengths)
+        drift = abs(total - TCHAIN_TOTAL)
+        if drift > TCHAIN_TOL:
+            return {"ok": False,
+                    "reason": f"chain {total:.1f}mm vs {TCHAIN_TOTAL:.0f} "
+                              f"(drift {drift:.1f} > {TCHAIN_TOL})"}
+        return {"ok": True, "reason": f"chain {total:.1f}mm within {TCHAIN_TOL}mm"}
+    return gate
+
+
+def _tchain_seg_task(n):
+    return (f"A chain of {n} EQUAL segments butted end to end must total exactly "
+            f"{TCHAIN_TOTAL:.0f} mm. Build ONE segment: a block "
+            f"{TCHAIN_TOTAL:.0f}/{n} mm long along X, {TCHAIN_SEG_D:.0f} mm wide, "
+            f"{TCHAIN_SEG_H:.0f} mm tall. Compute the length precisely. "
+            f"Then save_component.")
+
+
+def _tchain_single_task(n):
+    return (f"You will build {n} segments of a chain, one at a time. Butted end to "
+            f"end they must total EXACTLY {TCHAIN_TOTAL:.0f} mm. Each is "
+            f"{TCHAIN_SEG_D:.0f} mm wide and {TCHAIN_SEG_H:.0f} mm tall; choose each "
+            f"segment's length so the {n} lengths sum to exactly {TCHAIN_TOTAL:.0f} mm "
+            f"(they should be equal, but make the total exact).")
+
+
+def _tchain_ref(n):
+    # reference distributes the remainder so the exact sum is T (what single can do)
+    base = round(TCHAIN_TOTAL / n, 1)
+    lengths = [base] * n
+    lengths[-1] = round(TCHAIN_TOTAL - base * (n - 1), 4)
+    def ref(w, name, path):
+        i = int(name[3:])  # "segN"
+        _ref_box(w, path, name, lengths[i], TCHAIN_SEG_D, TCHAIN_SEG_H)
+    return ref
+
+
+def _make_tchain(n):
+    comps = {f"seg{i}": _tchain_seg_task(n) for i in range(n)}
+    return Toy(
+        f"tchain{n}", f"Tolerance chain, n={n} (cumulative drift; partition should lose)",
+        components=comps,
+        single_task=_tchain_single_task(n),
+        gate=_tchain_gate(n),
+        reference=_tchain_ref(n),
+        negatives=[
+            # one segment a full 2mm short -> total drifts past tol.
+            Neg("seg0_short", "interference",  # expect informational; gate is length
+                agent={"seg0": (f"Build a block {TCHAIN_TOTAL/n - 2.0:.2f} mm long "
+                                f"along X, {TCHAIN_SEG_D:.0f} wide, {TCHAIN_SEG_H:.0f} "
+                                f"tall. Then save_component.")},
+                ref={"seg0": lambda w, p: _ref_box(
+                    w, p, "seg0", TCHAIN_TOTAL / n - 2.0, TCHAIN_SEG_D, TCHAIN_SEG_H)}),
+        ],
+    )
+
+
+TOY6_TCHAIN3 = _make_tchain(3)
+TOY6_TCHAIN6 = _make_tchain(6)
+
+
+TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
+                           TOY5_NSLOT4, TOY5_NSLOT8,
+                           TOY6_TCHAIN3, TOY6_TCHAIN6)}
 
 
 # --- conditions --------------------------------------------------------------
