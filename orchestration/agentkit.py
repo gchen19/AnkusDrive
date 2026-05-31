@@ -130,7 +130,6 @@ def run_builder(client, model, task, save_path, system=BUILDER_SYSTEM):
     sys_blocks = _cached_system(system)
     saved = False
     turn = 0
-    nudges = 0
     with Worker() as w:
         messages = [{"role": "user", "content": task}]
         for turn in range(MAX_TURNS):
@@ -146,18 +145,7 @@ def run_builder(client, model, task, save_path, system=BUILDER_SYSTEM):
 
             tool_uses = [b for b in resp.content if b.type == "tool_use"]
             if not tool_uses:
-                # The model stopped calling tools. If it already saved, it's done.
-                # If not, it likely just narrated its next step ("now let me ...")
-                # and yielded — a chatty pause, not completion. Nudge it to act,
-                # rather than treating the pause as "finished" (which silently drops
-                # an unbuilt component). Bounded so a truly-stuck agent still exits.
-                if saved or nudges >= 2:
-                    break
-                nudges += 1
-                messages.append({"role": "user", "content":
-                                 "Continue building by calling the next tool. When the "
-                                 "geometry is complete, call save_component."})
-                continue
+                break
             results = []
             for tu in tool_uses:
                 try:
