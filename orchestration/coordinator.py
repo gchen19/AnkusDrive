@@ -25,6 +25,131 @@ from driftpin import Worker
 from . import agentkit
 
 
+# --- decompose: free-text spec -> brief (RFC Appendix A, step 1) ---------------
+#
+# The coordinator's first role: turn a design brief in prose into the structured
+# brief orchestrate() consumes (components with build tasks, instances, mates).
+# We force a tool call so the model returns valid JSON, then validate it before it
+# can reach the build loop — a malformed decomposition should fail loudly here, not
+# halfway through a billed fan-out.
+
+DECOMPOSE_SYSTEM = (
+    "You are the COORDINATOR in a multi-agent mechanical-design system. Given a "
+    "design spec, decompose it into independent components that separate builder "
+    "agents will each construct in their own file, then be merged into one assembly.\n"
+    "Rules:\n"
+    "- One component per part that can be built independently (a plate, a peg, a "
+    "housing, a bracket).\n"
+    "- Each component's `task` is a complete, self-contained build instruction in "
+    "millimetres for a builder agent that sees ONLY that task — restate every "
+    "dimension it needs; do not refer to other components. End each task by telling "
+    "the agent to call save_component.\n"
+    "- Put any value two components must agree on (a bore diameter, a bolt circle, a "
+    "mating face height) explicitly in BOTH their tasks — that shared contract is the "
+    "only thing keeping them compatible.\n"
+    "- `instances` place each component in the assembly: give an explicit "
+    "[x, y, z] placement in mm. One instance per component unless the spec asks for "
+    "repeats.\n"
+    "Call emit_brief exactly once with the decomposition."
+)
+
+_BRIEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "components": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "file": {"type": "string"},
+                    "task": {"type": "string"},
+                },
+                "required": ["file", "task"],
+            },
+        },
+        "instances": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "component": {"type": "string"},
+                    "name": {"type": "string"},
+                    "placement": {"type": "array", "items": {"type": "number"}},
+                },
+                "required": ["component", "placement"],
+            },
+        },
+    },
+    "required": ["name", "components", "instances"],
+}
+
+_EMIT_TOOL = {
+    "name": "emit_brief",
+    "description": "Emit the structured decomposition of the design spec.",
+    "input_schema": _BRIEF_SCHEMA,
+}
+
+
+def validate_brief(brief):
+    """Cheap structural validation independent of the JSON schema (which the API
+    enforces on emit). Returns a list of human-readable problems; empty == valid.
+    Catches the cross-reference errors a schema can't: an instance pointing at a
+    missing component, duplicate files, an empty decomposition."""
+    problems = []
+    comps = brief.get("components") or {}
+    insts = brief.get("instances") or []
+    if not comps:
+        problems.append("no components")
+    if not insts:
+        problems.append("no instances")
+    files = {}
+    for cid, spec in comps.items():
+        f = spec.get("file")
+        if not f:
+            problems.append(f"component {cid!r} has no file")
+        else:
+            files.setdefault(f, []).append(cid)
+        if not (spec.get("task") or "").strip():
+            problems.append(f"component {cid!r} has an empty task")
+    for f, owners in files.items():
+        if len(owners) > 1:
+            problems.append(f"file {f!r} claimed by {owners} (one writer per file)")
+    for i, inst in enumerate(insts):
+        c = inst.get("component")
+        if c not in comps:
+            problems.append(f"instance {i} references unknown component {c!r}")
+    # every component should be placed at least once
+    placed = {inst.get("component") for inst in insts}
+    for cid in comps:
+        if cid not in placed:
+            problems.append(f"component {cid!r} is never placed by an instance")
+    return problems
+
+
+def decompose(client, model, spec, log=print):
+    """Free-text spec -> validated brief via a forced emit_brief tool call.
+    Returns (brief, usage). Raises ValueError if the emitted brief fails validation."""
+    resp = client.messages.create(
+        model=model, max_tokens=2048, system=DECOMPOSE_SYSTEM,
+        tools=[_EMIT_TOOL], tool_choice={"type": "tool", "name": "emit_brief"},
+        messages=[{"role": "user", "content": spec}],
+    )
+    usage = {"in_tokens": resp.usage.input_tokens, "out_tokens": resp.usage.output_tokens,
+             "cache_read": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+             "cache_write": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0}
+    calls = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
+    if not calls:
+        raise ValueError("decompose: model did not call emit_brief")
+    brief = dict(calls[0].input)
+    problems = validate_brief(brief)
+    log(f"  decomposed into {len(brief.get('components', {}))} components: "
+        f"{sorted(brief.get('components', {}))}")
+    if problems:
+        raise ValueError(f"decompose produced an invalid brief: {problems}")
+    return brief, usage
+
+
 # --- brief schema -------------------------------------------------------------
 #
 # A brief is a manifest plus the natural-language build task per component. We keep
@@ -197,6 +322,21 @@ def _report(ok, brief, rounds, usage, model, root):
             "cost_usd": round(agentkit.cost_of(usage, model), 4)}
 
 
+def design_from_spec(client, model, spec, workdir, max_rounds=3, log=print):
+    """Full Appendix A pipeline: free-text spec -> decompose -> orchestrate.
+    Returns the orchestrate report with decompose cost folded in and the brief
+    attached. Decomposition is billed on top of the build, so the report's
+    cost_usd covers the whole design."""
+    log("decompose: spec -> brief")
+    brief, dcost = decompose(client, model, spec, log=log)
+    rep = orchestrate(client, model, brief, workdir, max_rounds=max_rounds, log=log)
+    for k, v in dcost.items():
+        rep["usage"][k] = rep["usage"].get(k, 0) + v
+    rep["cost_usd"] = round(agentkit.cost_of(rep["usage"], model), 4)
+    rep["brief"] = brief
+    return rep
+
+
 # --- demo brief (shared by the dry run and the live runner) -------------------
 
 _BORE_D, _CLEAR, _PLATE, _CTR, _PEGLEN = 16.0, 0.4, (60, 60, 10), (30, 30), 20.0
@@ -245,9 +385,17 @@ def _live_main():
 
     import anthropic
     client = anthropic.Anthropic()
-    print(f"== coordinator live run — model={model} ==")
+    spec = os.environ.get("M2_SPEC")
     with tempfile.TemporaryDirectory() as td:
-        rep = orchestrate(client, model, DEMO_BRIEF, Path(td), max_rounds=3)
+        if spec:
+            # full pipeline: free-text spec -> decompose -> build
+            print(f"== coordinator live run (spec -> decompose -> build) — model={model} ==")
+            rep = design_from_spec(client, model, spec, Path(td), max_rounds=3)
+            comps = sorted((rep.get("brief") or {}).get("components", {}))
+            print(f"  brief: {rep['brief']['name']} -> {comps}")
+        else:
+            print(f"== coordinator live run (DEMO_BRIEF) — model={model} ==")
+            rep = orchestrate(client, model, DEMO_BRIEF, Path(td), max_rounds=3)
     print(f"\n  ok={rep['ok']}  rounds={rep['rounds']}  cost=${rep['cost_usd']}")
     for rd in rep["trace"]:
         g = rd.get("gates", {})
