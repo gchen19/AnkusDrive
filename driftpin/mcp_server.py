@@ -830,18 +830,25 @@ def add_part(
     source: dict,
     placement: list | dict | None = None,
     name: str = "Part",
+    mate: dict | None = None,
 ) -> dict:
     """Add a part to an assembly via App::Link.
 
     source is one of:
       {"handle": "<handle>"}                          — link an in-doc body
-      {"path": "/path/to/part.FCStd"}                 — link first body in file
+      {"path": "/path/to/part.FCStd"}                 — link first body / subassembly
       {"path": "/path/to/part.FCStd", "object": "X"}  — link named object
     placement: [x, y, z] or {position: [...], axis: [...], angle_deg: ...}.
+    mate: place by aligning this part's published interface frame to an
+      already-placed parent's, instead of (or after) a raw placement:
+      {"child_iface": "<name>", "parent": "<link-name|handle>",
+       "parent_iface": "<name>"}. Frames come from publish_interface.
     """
     params = {"assembly": assembly, "source": source, "name": name}
     if placement is not None:
         params["placement"] = placement
+    if mate is not None:
+        params["mate"] = mate
     return _call("add_part", **params)
 
 
@@ -887,6 +894,35 @@ def envelope_check(assembly: str, envelopes: dict) -> list:
 
 
 @mcp.tool()
+def publish_interface(handle: str, name: str, frame: dict) -> dict:
+    """Record a named interface frame on a component so other parts can mate to it
+    — the published "here is where you bolt to me, and how it's oriented".
+
+    handle: the component's shaped object.
+    name: interface name (e.g. "lid_seat", "bolt_circle", "bore_axis").
+    frame: {origin:[x,y,z], z_axis:[...]?, x_axis:[...]?}. z_axis defaults +Z,
+      x_axis +X. Extra keys (e.g. bolt-circle metadata) are stored verbatim.
+
+    Persists in the component's .FCStd as a JSON property bag, so merge_assembly
+    can mate against it later. Returns {handle, name, frame, interfaces}."""
+    return _call("publish_interface", handle=handle, name=name, frame=frame)
+
+
+@mcp.tool()
+def interface_align_check(assembly: str, pairs: list, tol_mm: float = 1e-3) -> list:
+    """Gate: verify declared interface pairs coincide in world space — the
+    "do the OTHER interfaces line up?" check for multi-interface mates. After the
+    primary mate seats a part, this confirms its secondary interfaces (a second
+    bolt pattern, a bore axis) actually meet the parent's.
+
+    pairs: [{child, child_iface, parent, parent_iface}, ...] (child/parent are
+    link names in the assembly). Returns misaligned pairs [{..., gap_mm}], empty
+    if every pair coincides within tol_mm."""
+    return _call("interface_align_check", assembly=assembly, pairs=pairs,
+                 tol_mm=tol_mm)
+
+
+@mcp.tool()
 def merge_assembly(manifest: str) -> dict:
     """Construct-up an assembly from a manifest JSON (the coordinator's one call):
     create the doc, link each component by file path, place it, recompute, and run
@@ -899,9 +935,16 @@ def merge_assembly(manifest: str) -> dict:
         "components": {"<id>": {"file": "rel/part.FCStd", "object": "<name>"?,
                                 "envelope": {"min":[...],"max":[...]}?}},
         "instances": [{"component":"<id>", "name":"<instance>"?,
-                       "placement": [x,y,z] | {position,axis,angle_deg}}] }
+                       "placement": [x,y,z] | {position,axis,angle_deg},
+                       "mate": {"child_iface","parent","parent_iface",
+                                "verify_align":{"child_iface","parent_iface"}?}?}],
+        "mates": [{"child","parent","child_iface","parent_iface",
+                   "verify_align":{...}?}]? }
 
-    Returns {assembly, doc, root, placed, gates:{interference, bom, envelope}, ok}."""
+    Placement positions anchors; mate-by-frame positions everything else by
+    aligning published interface frames (see publish_interface). Returns
+    {assembly, doc, root, placed, gates:{interference, bom, envelope,
+    interface_align?}, ok}."""
     return _call("merge_assembly", manifest=manifest)
 
 

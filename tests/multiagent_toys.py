@@ -32,7 +32,7 @@ class Variant:
     def __init__(self, name, kind, gate=None, note=""):
         assert kind in ("fit", "fail")
         if kind == "fail":
-            assert gate in ("interference", "envelope", "bom")
+            assert gate in ("interference", "envelope", "bom", "interface_align")
         self.name = name
         self.kind = kind
         self.gate = gate
@@ -110,15 +110,20 @@ def _doc_subassembly(w, path, name, parts):
     w.call("save_document", path=str(path))
 
 
-def run_gates(w, asm_handle, envelopes=None):
+def run_gates(w, asm_handle, envelopes=None, align_pairs=None):
     """All gate readings for an assembly — the oracle. interference and bom are
-    recursive (flatten through subassemblies); envelope is the keep-out tool."""
-    return {
+    recursive (flatten through subassemblies); envelope is the keep-out tool;
+    interface_align (when align_pairs given) verifies mated frames coincide."""
+    gates = {
         "interference": w.call("interference_check", assembly=asm_handle),
         "bom": w.call("bom_extract", assembly=asm_handle),  # recursive by default
         "envelope": w.call("envelope_check", assembly=asm_handle,
                            envelopes=envelopes or {}),
     }
+    if align_pairs:
+        gates["interface_align"] = w.call(
+            "interface_align_check", assembly=asm_handle, pairs=align_pairs)
+    return gates
 
 
 # =============================================================================
@@ -316,11 +321,88 @@ def toy4_build(w, tmp, variant):
     return res["assembly"]
 
 
+# =============================================================================
+# Toy 5 — enclosure (lid mates to housing). Isolates MATE-BY-FRAME with MULTIPLE
+# interfaces per part: the lid is placed by aligning its "seat" frame to the
+# housing's, and a second "pin" interface must independently line up. Tests that
+# the primary mate seats the part AND the secondary interface is satisfied — the
+# multi-interface case raw placement can't express.
+# =============================================================================
+
+TOY5_MANIFEST = {
+    "schema": "driftpin.manifest/0-phase0",
+    "name": "enclosure",
+    "components": {
+        "housing": {"file": "t5_housing.FCStd"},
+        "lid": {"file": "t5_lid.FCStd"},
+    },
+    "mates": [{"child": "lid", "parent": "housing",
+               "child_iface": "seat", "parent_iface": "seat",
+               "verify_align": {"child_iface": "pin", "parent_iface": "pin"}}],
+}
+
+TOY5_VARIANTS = [
+    Variant("reference", "fit", note="lid seats on housing; both seat & pin align"),
+    Variant("pin_offset", "fail", "interface_align", "lid pin 10mm off — seat mates, pin doesn't"),
+    Variant("seat_dug_in", "fail", "interference",
+            "lid's frames sit 6mm into its body, so mating pulls the lid down "
+            "into the housing — frames still coincide, but the solids overlap"),
+]
+TOY5_BOM = {"housing": 1, "lid": 1}
+TOY5_ALIGN = [{"child": "lid", "parent": "housing",
+               "child_iface": "pin", "parent_iface": "pin"}]
+
+
+def _doc_iface_box(w, path, name, sx, sy, sz, interfaces):
+    """A box component that publishes named interface frames.
+    interfaces: {name: {origin, z_axis?, x_axis?}}."""
+    w.call("new_document", name=name)
+    b = w.call("add_primitive", kind="box", w=sx, d=sy, h=sz, name=name)
+    for iname, frame in interfaces.items():
+        w.call("publish_interface", handle=b["handle"], name=iname, frame=frame)
+    w.call("save_document", path=str(path))
+
+
+def toy5_build(w, tmp, variant):
+    p = f"t5_{variant}"
+    house_f, lid_f = tmp / f"{p}_housing.FCStd", tmp / f"{p}_lid.FCStd"
+    # housing: seat on top face center; pin offset on top face
+    _doc_iface_box(w, house_f, f"{p}_housing", 80, 80, 40, {
+        "seat": {"origin": [40, 40, 40], "z_axis": [0, 0, 1]},
+        "pin": {"origin": [60, 40, 40], "z_axis": [0, 0, 1]},
+    })
+    # lid: seat at its bottom (z=0) facing up so the body sits above; pin matching.
+    lid_pin_x = 50 if variant == "pin_offset" else 60       # 10mm off
+    # For seat_dug_in, lift BOTH frames 6mm into the lid body: the mate then pulls
+    # the whole lid 6mm down (frames still coincide → align passes) so the lid
+    # solid digs into the housing → interference. Moving only the seat would just
+    # drop the pin and trip the align gate, not interference.
+    fz = 6 if variant == "seat_dug_in" else 0
+    _doc_iface_box(w, lid_f, f"{p}_lid", 80, 80, 8, {
+        "seat": {"origin": [40, 40, fz], "z_axis": [0, 0, 1]},
+        "pin": {"origin": [lid_pin_x, 40, fz], "z_axis": [0, 0, 1]},
+    })
+    manifest = {
+        "name": f"{p}_enc", "root": f"{p}_enc.FCStd",
+        "components": {"housing": {"file": house_f.name},
+                       "lid": {"file": lid_f.name}},
+        "instances": [
+            {"component": "housing", "name": "housing", "placement": [0, 0, 0]},
+            {"component": "lid", "name": "lid",
+             "mate": {"child_iface": "seat", "parent": "housing",
+                      "parent_iface": "seat"}}],
+    }
+    mpath = tmp / f"{p}_manifest.json"
+    mpath.write_text(json.dumps(manifest))
+    res = w.call("merge_assembly", manifest=str(mpath))
+    return res["assembly"]
+
+
 # --- registry ----------------------------------------------------------------
 
 class Toy:
     def __init__(self, key, title, manifest, variants, build, bom,
-                 envelopes=None):
+                 envelopes=None, align_pairs=None):
         self.key = key
         self.title = title
         self.manifest = manifest
@@ -328,6 +410,7 @@ class Toy:
         self.build = build          # (w, tmp, variant_name) -> asm_handle
         self.bom = bom              # expected {instance_or_component: count}
         self.envelopes = envelopes  # {instance_name: env} for the envelope gate
+        self.align_pairs = align_pairs  # pairs for the interface_align gate
 
 
 def _t3_envelopes():
@@ -345,4 +428,7 @@ TOYS = [
     Toy("toy4_nested_subassembly",
         "Nested subassembly (recursive BOM + cross-level interference)",
         TOY4_MANIFEST, TOY4_VARIANTS, toy4_build, TOY4_BOM),
+    Toy("toy5_enclosure", "Enclosure (mate-by-frame, multi-interface)",
+        TOY5_MANIFEST, TOY5_VARIANTS, toy5_build, TOY5_BOM,
+        align_pairs=TOY5_ALIGN),
 ]

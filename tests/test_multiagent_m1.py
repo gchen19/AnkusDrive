@@ -35,6 +35,9 @@ def _assert_fit(toy, variant, gates):
         f"{toy.key}/{variant.name}: unexpected interference {gates['interference']}")
     assert gates["envelope"] == [], (
         f"{toy.key}/{variant.name}: unexpected envelope violation {gates['envelope']}")
+    assert gates.get("interface_align", []) == [], (
+        f"{toy.key}/{variant.name}: unexpected interface misalignment "
+        f"{gates.get('interface_align')}")
     want = sorted(toy.bom.values())
     got = _counts_multiset(gates["bom"])
     assert got == want, (
@@ -58,7 +61,8 @@ def test_toy_gates():
             line = []
             for v in toy.variants:
                 asm = toy.build(w, tmp, v.name)
-                gates = run_gates(w, asm, envelopes=toy.envelopes)
+                gates = run_gates(w, asm, envelopes=toy.envelopes,
+                                  align_pairs=toy.align_pairs)
                 if v.kind == "fit":
                     _assert_fit(toy, v, gates)
                     line.append(f"{v.name}=PASS")
@@ -66,8 +70,12 @@ def test_toy_gates():
                     _assert_caught(toy, v, gates)
                     worst = max((c["interference_mm3"]
                                  for c in gates["interference"]), default=0.0)
-                    detail = (f"{len(gates['envelope'])} env"
-                              if v.gate == "envelope" else f"{worst:.0f}mm³")
+                    if v.gate == "envelope":
+                        detail = f"{len(gates['envelope'])} env"
+                    elif v.gate == "interface_align":
+                        detail = f"{len(gates['interface_align'])} align"
+                    else:
+                        detail = f"{worst:.0f}mm³"
                     line.append(f"{v.name}=CAUGHT({detail})")
             print(f"    {toy.title}\n      " + "  ".join(line))
 

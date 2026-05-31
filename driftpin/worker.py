@@ -2130,6 +2130,141 @@ def _h_make_assembly(p):
     return {"handle": h, "name": asm.Name}
 
 
+# --- interface frames (mate-by-named-frame) ----------------------------------
+#
+# A component publishes named "interface frames" — local coordinate systems at the
+# places other parts mate to it (a mounting face, a bolt circle, a bore axis).
+# Frames are content, not raw numbers: merge places a child by ALIGNING its frame
+# to a parent's, so placement is derived from the contract and can't drift from it.
+# The mate math is  Pc = Pp · Fp · Fc⁻¹  (child placement makes the child's frame
+# coincide in world space with the parent's).
+#
+# Frames persist in the component file as a JSON property bag (DP_Interfaces) on
+# the top-level shaped object. We deliberately do NOT add a separate datum object
+# for them: a PartDesign::CoordinateSystem derives from Part::Feature, so it would
+# pollute add_part's candidate set and get linked instead of the real solid.
+
+_IFACE_PROP = "DP_Interfaces"
+
+
+def _frame_to_placement(frame):
+    """frame {origin:[x,y,z], z_axis:[...]?, x_axis:[...]?} -> App.Placement.
+    z_axis defaults +Z, x_axis +X; both re-orthonormalized."""
+    origin = App.Vector(*frame.get("origin", [0, 0, 0]))
+    z = App.Vector(*frame.get("z_axis", [0, 0, 1]))
+    x = App.Vector(*frame.get("x_axis", [1, 0, 0]))
+    if z.Length < 1e-9:
+        z = App.Vector(0, 0, 1)
+    z.normalize()
+    if x.Length < 1e-9 or abs(x.dot(z)) > 1 - 1e-9:
+        x = App.Vector(1, 0, 0) if abs(z.x) < 0.9 else App.Vector(0, 1, 0)
+    y = z.cross(x)
+    y.normalize()
+    x = y.cross(z)
+    x.normalize()
+    m = App.Matrix(x.x, y.x, z.x, origin.x,
+                   x.y, y.y, z.y, origin.y,
+                   x.z, y.z, z.z, origin.z,
+                   0, 0, 0, 1)
+    return App.Placement(m)
+
+
+def _shaped_top(obj):
+    """The shaped object that carries a component's interfaces: the linked target
+    if obj is a link, else obj itself."""
+    if obj.isDerivedFrom("App::Link") and obj.LinkedObject is not None:
+        return obj.LinkedObject
+    return obj
+
+
+def _read_interfaces(obj):
+    """Published interface dict for a component object ({} if none)."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _IFACE_PROP in base.PropertiesList:
+        try:
+            return _json.loads(getattr(base, _IFACE_PROP) or "{}")
+        except Exception:
+            return {}
+    return {}
+
+
+@handler("publish_interface")
+def _h_publish_interface(p):
+    """Record a named interface frame on a component so other parts can mate to it
+    — the published "here is where you bolt to me, and how it's oriented".
+
+    handle: the component's shaped object.
+    name: interface name (e.g. "lid_seat", "bolt_circle", "bore_axis").
+    frame: {origin:[x,y,z], z_axis:[...]?, x_axis:[...]?}. Extra keys (e.g.
+        bolt-circle metadata) are stored verbatim alongside the frame.
+
+    Persists in the component's .FCStd as a JSON property bag, so merge_assembly
+    can mate against it later. Returns {handle, name, frame, interfaces}."""
+    import json as _json
+    obj = _resolve(p["handle"])
+    base = _shaped_top(obj)
+    name = p["name"]
+    frame = dict(p["frame"])
+    ifaces = _read_interfaces(obj)
+    ifaces[name] = frame
+    if _IFACE_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _IFACE_PROP, "DriftPin",
+                         "published interface frames (JSON)")
+    setattr(base, _IFACE_PROP, _json.dumps(ifaces))
+    base.Document.recompute()
+    return {"handle": p["handle"], "name": name, "frame": frame,
+            "interfaces": sorted(ifaces.keys())}
+
+
+def _apply_mate(link, parent_link, child_iface, parent_iface):
+    """Place `link` so its child_iface frame coincides with parent_link's
+    parent_iface frame in world space: LinkPlacement = Pp · Fp · Fc⁻¹."""
+    cif = _read_interfaces(link)
+    pif = _read_interfaces(parent_link)
+    if child_iface not in cif:
+        raise KeyError(f"child has no published interface {child_iface!r} "
+                       f"(has {sorted(cif)})")
+    if parent_iface not in pif:
+        raise KeyError(f"parent has no published interface {parent_iface!r} "
+                       f"(has {sorted(pif)})")
+    Fc = _frame_to_placement(cif[child_iface])
+    Fp = _frame_to_placement(pif[parent_iface])
+    Pp = parent_link.LinkPlacement
+    link.LinkPlacement = Pp.multiply(Fp).multiply(Fc.inverse())
+
+
+@handler("interface_align_check")
+def _h_interface_align_check(p):
+    """Gate: verify declared interface pairs actually coincide in world space —
+    the "do the OTHER interfaces line up?" check for multi-interface mates.
+
+    pairs: [{child, child_iface, parent, parent_iface}, ...] where child/parent
+    are link Names in the assembly. tol_mm (default 1e-3). Returns the list of
+    misaligned pairs [{..., gap_mm}], empty if every pair coincides."""
+    asm = _resolve(p["assembly"])
+    tol = float(p.get("tol_mm", 1e-3))
+    by_name = {o.Name: o for o in asm.Group}
+    out = []
+    for pr in p.get("pairs", []):
+        c = by_name.get(pr["child"])
+        pa = by_name.get(pr["parent"])
+        if c is None or pa is None:
+            out.append({**pr, "error": "link not found"})
+            continue
+        cif = _read_interfaces(c)
+        pif = _read_interfaces(pa)
+        if pr["child_iface"] not in cif or pr["parent_iface"] not in pif:
+            out.append({**pr, "error": "interface not published"})
+            continue
+        cw = c.LinkPlacement.multiply(_frame_to_placement(cif[pr["child_iface"]]))
+        pw = pa.LinkPlacement.multiply(_frame_to_placement(pif[pr["parent_iface"]]))
+        gap = (cw.Base - pw.Base).Length
+        if gap > tol:
+            out.append({**pr, "gap_mm": gap})
+    return out
+
+
 @handler("add_part")
 def _h_add_part(p):
     """Add a part to an assembly. Source can be:
@@ -2157,6 +2292,7 @@ def _h_add_part(p):
                 if (o.isDerivedFrom("PartDesign::Body")
                     or o.isDerivedFrom("Part::Feature")
                     or o.isDerivedFrom("App::Part"))  # subassembly container
+                and not o.isDerivedFrom("Part::Datum")  # skip datum planes/LCS
                 and hasattr(o, "Shape") and not o.Shape.isNull()
             ]
             if not candidates:
@@ -2192,6 +2328,19 @@ def _h_add_part(p):
             # .Placement back to the origin. LinkPlacement is the link's own frame
             # and survives recompute; for flat assemblies it's equivalent.
             link.LinkPlacement = pl
+
+    # mate-by-frame: place this part by aligning its published interface frame to
+    # an already-placed parent's, instead of (or after) a raw placement.
+    mate = p.get("mate")
+    if mate is not None:
+        parent_ref = mate["parent"]
+        try:
+            parent_link = _resolve(parent_ref)
+        except Exception:
+            parent_link = doc.getObject(parent_ref)
+        if parent_link is None:
+            raise KeyError(f"mate parent {parent_ref!r} not found")
+        _apply_mate(link, parent_link, mate["child_iface"], mate["parent_iface"])
 
     doc.recompute()
     h = _register("link", link)
@@ -2394,6 +2543,7 @@ def _h_merge_assembly(p):
 
     placed = []
     envelopes = {}
+    links_by_inst = {}
     for inst in man.get("instances", []):
         cid = inst["component"]
         spec = comps[cid]
@@ -2407,19 +2557,50 @@ def _h_merge_assembly(p):
             "assembly": asm_h, "source": src,
             "placement": inst.get("placement"), "name": iname,
         })
+        links_by_inst[iname] = link["name"]
         placed.append({"instance": iname, "component": cid,
                        "linked": link["linked"]})
         if spec.get("envelope"):
             envelopes[link["name"]] = spec["envelope"]
 
+    # mate-by-frame: align each child instance's published frame to an already-
+    # placed parent's. Mates come from a top-level "mates" list and/or per-instance
+    # "mate" keys. Anchors get raw placements above; everything else is positioned
+    # by contract here. A parent must be linked before its children (manifest order).
+    asm_obj = _resolve(asm_h)
+    by_name = {o.Name: o for o in asm_obj.Group}
+    mates = list(man.get("mates", []))
+    for inst in man.get("instances", []):
+        if inst.get("mate"):
+            m = dict(inst["mate"])
+            m["child"] = inst.get("name", inst["component"])
+            mates.append(m)
+    for m in mates:
+        child = by_name[links_by_inst[m["child"]]]
+        parent = by_name[links_by_inst[m["parent"]]]
+        _apply_mate(child, parent, m["child_iface"], m["parent_iface"])
+    if mates:
+        asm_obj.Document.recompute()
+
+    align_pairs = [m for m in mates if m.get("verify_align")]
     gates = {
         "interference": HANDLERS["interference_check"]({"assembly": asm_h}),
         "bom": HANDLERS["bom_extract"]({"assembly": asm_h, "recursive": True}),
         "envelope": HANDLERS["envelope_check"]({"assembly": asm_h,
                                                 "envelopes": envelopes}),
     }
+    if align_pairs:
+        gates["interface_align"] = HANDLERS["interface_align_check"]({
+            "assembly": asm_h,
+            "pairs": [{"child": links_by_inst[m["child"]],
+                       "parent": links_by_inst[m["parent"]],
+                       "child_iface": m["verify_align"]["child_iface"],
+                       "parent_iface": m["verify_align"]["parent_iface"]}
+                      for m in align_pairs],
+        })
     HANDLERS["save_document"]({"path": root_path})
-    ok = (not gates["interference"]) and (not gates["envelope"])
+    ok = (not gates["interference"]) and (not gates["envelope"]) \
+        and (not gates.get("interface_align"))
     return {"assembly": asm_h, "doc": name, "root": root_path,
             "placed": placed, "gates": gates, "ok": ok}
 

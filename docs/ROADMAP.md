@@ -420,9 +420,16 @@ Big. ~1–2 weeks total, easy to slice further.
   drawing page constructed + persists across save/reopen.
 
 **Deferred:**
-- Mating constraints (planar, axial, distance) — needs the Assembly
-  workbench's `JCS` machinery; deferred until there's a use case beyond
-  manual `placement` arguments.
+- ~~Mating constraints (planar, axial, distance) — needs the Assembly
+  workbench's `JCS` machinery.~~ ✓ shipped 2026-05-30 (multi-agent Phase 1
+  slice 3): mate-by-named-frame instead of the JCS solver. `publish_interface`
+  records named interface frames on a component (a JSON property bag in its
+  `.FCStd`); `add_part(mate=...)` and `merge_assembly` `mates` place a child by
+  aligning its frame to a parent's (`Pc = Pp·Fp·Fc⁻¹`); `interface_align_check`
+  verifies secondary interfaces coincide. Simple, deterministic frame alignment;
+  the full joint solver remains an option if motion/DOF is ever needed. Toy #5
+  (multi-interface enclosure) proves it in Layer M1. See
+  [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) §4.
 - Dimension annotations on TechDraw pages (`add_dimension(page, kind, refs)`
   with face/edge tags from Slice 1) — the agent-friendly form. Currently
   only multi-view projection is supported.
