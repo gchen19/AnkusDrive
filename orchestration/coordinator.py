@@ -209,30 +209,53 @@ def _link_to_component(placed):
 
 def _implicated(brief, gates, placed):
     """Components a coordinator should re-dispatch given the failing gates. Maps gate
-    findings (which name LINKS / instances) back to component ids. Falls back to all
-    components if a finding can't be resolved (better to rebuild than silently skip)."""
+    findings (which name LINKS / instances) back to component ids, blaming the part
+    that actually violated its contract where the gates let us tell.
+
+    Falls back to all components if a finding can't be resolved (better to rebuild
+    than silently skip)."""
     inst2comp = _instance_to_component(brief)
-    # link Name -> instance name: merge names links after the instance, so the link
-    # Name usually equals the instance name; fall back to instance list order.
+    # link Name -> instance name: add_part names the link after the instance, so in
+    # a fresh merge doc with unique instance names the link Name equals the instance
+    # name; that's the key the gates report parts under.
     impl = set()
-    # interference: pairs of link names a, b
-    for row in gates.get("interference", []):
-        for key in ("a", "b"):
-            nm = row.get(key, "")
-            comp = inst2comp.get(nm)
-            if comp:
-                impl.add(comp)
-    # envelope: each violation names a part (link name)
+
+    # Envelope is unambiguous: the named part grew past its declared keep-out box,
+    # so it is the culprit. Collect these first — they disambiguate interference.
+    envelope_culprits = set()
     for v in gates.get("envelope", []):
         comp = inst2comp.get(v.get("part", ""))
         if comp:
+            envelope_culprits.add(comp)
             impl.add(comp)
-    # interface alignment: child/parent are link names
+
+    # Interference is a RELATIONSHIP — a clash names two parts (a, b) and geometry
+    # alone can't say which is wrong. But if exactly one party also busts its own
+    # envelope, that one grew into its neighbor: blame only it. If both or neither
+    # have an envelope signal, we genuinely can't tell, so blame both.
+    for row in gates.get("interference", []):
+        pair = [inst2comp.get(row.get(k, "")) for k in ("a", "b")]
+        pair = [c for c in pair if c]
+        guilty = [c for c in pair if c in envelope_culprits]
+        impl.update(guilty if len(guilty) == 1 else pair)
+
+    # Interface alignment names child/parent. The child is the part being mated onto
+    # the parent; if the parent is an anchor (placed by raw placement, not itself
+    # mated) it's fixed ground truth, so blame the child. If the parent is also
+    # mated, either frame could be off — blame both.
+    mated_children = {m.get("child") for m in brief.get("mates", [])}
+    for inst in brief.get("instances", []):
+        if inst.get("mate"):
+            mated_children.add(inst.get("name", inst["component"]))
     for v in gates.get("interface_align", []):
-        for key in ("child", "parent"):
-            comp = inst2comp.get(v.get(key, ""))
-            if comp:
-                impl.add(comp)
+        child = inst2comp.get(v.get("child", ""))
+        parent_inst = v.get("parent", "")
+        parent = inst2comp.get(parent_inst)
+        if child:
+            impl.add(child)
+        if parent and parent_inst in mated_children:
+            impl.add(parent)
+
     if not impl:
         impl = set(brief["components"])
     return impl
