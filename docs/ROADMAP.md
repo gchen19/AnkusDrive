@@ -472,6 +472,20 @@ Big. ~1–2 weeks total, easy to slice further.
   harden — see [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) and
   [`tests/MULTI_AGENT_EVAL.md`](../tests/MULTI_AGENT_EVAL.md).
 
+**Known sharp edge (found 2026-05-31, wiring the multi-agent design coordinator —
+`orchestration/`):**
+- **`save_document` only writes `.FCStd`, and fails opaquely otherwise.** It calls
+  `doc.saveAs(path)`, which infers the format from the extension; a non-`.FCStd`
+  path (e.g. `.step`, `.stp`) raises a bare `FileNotFoundError` rather than a clear
+  "unsupported format" error. This bit the coordinator: an LLM decomposer, asked to
+  name component files, naturally picked `.step` (the interchange format models
+  associate with CAD parts), so every builder's `save_component` failed with a
+  confusing errno-2. The orchestration layer works around it by forcing component
+  filenames to `.FCStd` after decompose. Fix paths in DriftPin itself: (a) validate
+  the extension and raise a clear error naming the supported formats, and/or (b)
+  route known interchange extensions (`.step`/`.stp`/`.iges`/`.stl`/`.brep`) to
+  `export_shape` so `save_document` "just works" for any reasonable path.
+
 ---
 
 ## Slice 6 — operational polish
