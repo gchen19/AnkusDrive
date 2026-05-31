@@ -17,6 +17,9 @@ subassembly nesting, mate-by-frame, lockfiles — which M1 already covers as
 deterministic checks; there is no "did the LLM build it" question there.
 
 Usage:
+    # free: exercise the full agent loop with a stubbed model, no API
+    M2_DRYRUN=1 .venv/bin/python3 tests/test_multiagent_m2.py
+
     # free: validate every toy's gate against scripted reference builders, no API
     M2_SELFTEST=1 .venv/bin/python3 tests/test_multiagent_m2.py
 
@@ -33,6 +36,7 @@ import sys
 import tempfile
 import time
 import traceback
+import types
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -450,6 +454,88 @@ def selftest(toys):
     print("\n== all toy gates pass a correct build; ready for agent runs ==")
 
 
+# --- dry run (no API): stub the LLM, exercise the full agent loop ------------
+#
+# Proves the run_agent loop + run_partition/run_single + gate + aggregation wiring
+# with canned tool-use turns instead of API calls. The FreeCAD worker is real —
+# only the model is stubbed — so it builds a genuine correct peg+plate and the gate
+# must PASS. Catches loop/dispatch/save-detection regressions for free.
+
+class _DryUsage:
+    input_tokens = 5
+    output_tokens = 20
+    cache_read_input_tokens = 100
+    cache_creation_input_tokens = 50
+
+
+class _DryBlock:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def _du(tid, name, inp):
+    return _DryBlock(type="tool_use", id=tid, name=name, input=inp)
+
+
+class _DryMessages:
+    """Scripted responses for the peg toy, keyed by turn count. Routes by the
+    explicit single-agent suffix FIRST (single_task names both parts, so keyword
+    sniffing alone is ambiguous)."""
+    def create(self, model, max_tokens, system, tools, messages):
+        first = messages[0]["content"]
+        t = (first if isinstance(first, str) else str(first)).lower()
+        turns = sum(1 for m in messages if m["role"] == "assistant")
+        steps = self._script(t)
+        content = steps[turns] if turns < len(steps) else [_DryBlock(type="text", text="done")]
+        return types.SimpleNamespace(content=content, usage=_DryUsage())
+
+    def _script(self, t):
+        if "build the plate" in t:
+            return self._plate()
+        if "build the peg" in t:
+            return self._peg()
+        if "peg" in t and "plate" not in t:
+            return self._peg()
+        if "plate" in t and "through-hole" in t and "mating" not in t:
+            return self._plate()
+        return [[_du("a", "new_document", {"name": "x"})], [_du("z", "save_component", {})]]
+
+    def _peg(self):
+        return [[_du("a", "new_document", {"name": "peg"})],
+                [_du("b", "add_primitive", {"kind": "cylinder", "r": 7.8, "h": 20, "name": "peg"})],
+                [_du("c", "save_component", {})]]
+
+    def _plate(self):
+        return [[_du("a", "new_document", {"name": "plate"})],
+                [_du("b", "add_primitive", {"kind": "box", "w": 60, "d": 60, "h": 10, "name": "plate"})],
+                [_du("c", "add_primitive", {"kind": "cylinder", "r": 8, "h": 30,
+                                            "placement": [30, 30, -10], "name": "bore"})],
+                [_du("d", "boolean_op", {"op": "cut", "base": "box_1", "tool": "cylinder_1"})],
+                [_du("e", "save_component", {})]]
+
+
+class _DryClient:
+    def __init__(self):
+        self.messages = _DryMessages()
+
+
+def dryrun():
+    client = _DryClient()
+    toy = TOYS["peg"]
+    model = MODELS["haiku"]
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        part = run_partition(client, model, toy, tmp)
+        sing = run_single(client, model, toy, tmp)
+    print("== M2 dry run — full agent loop with a stubbed model (no API) ==")
+    for label, r in (("partition", part), ("single", sing)):
+        print(f"  {label:9s} built={r['built']} passed={r['passed']} "
+              f"reason={r['reason']!r} cache_read={r['cache_read']} out_tok={r['out_tokens']}")
+    ok = all(r["built"] and r["passed"] for r in (part, sing))
+    print("\n== WIRING OK ==" if ok else "\n== WIRING BROKEN ==")
+    sys.exit(0 if ok else 1)
+
+
 # --- main --------------------------------------------------------------------
 
 def _selected_toys():
@@ -462,6 +548,10 @@ def _selected_toys():
 
 def main():
     toys = _selected_toys()
+
+    if os.environ.get("M2_DRYRUN"):
+        dryrun()
+        return
 
     if os.environ.get("M2_SELFTEST"):
         selftest(toys)
