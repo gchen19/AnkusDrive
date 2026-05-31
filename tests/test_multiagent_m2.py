@@ -1144,6 +1144,35 @@ __result__ = objs[0].Name
             "disp_mm": res["max_displacement_mm"], "load_area_mm2": area}
 
 
+_FEM_DENSITY = 7.9e-6   # steel, kg/mm^3 (for mass budgets)
+_FEM_REF_CACHE = {}     # toy:component -> reference {vm_mpa, disp_mm}, computed once
+
+
+def _part_volume(path):
+    """Total solid volume (mm^3) of the top-level shaped objects in a saved part."""
+    with Worker() as w:
+        w.call("open_document", path=str(path))
+        r = w.call("run_script", code='''
+objs=[o for o in App.ActiveDocument.Objects if hasattr(o,"Shape") and not o.Shape.isNull() and not o.InList]
+if not objs:
+    objs=[o for o in App.ActiveDocument.Objects if hasattr(o,"Shape") and not o.Shape.isNull()]
+__result__ = sum(o.Shape.Volume for o in objs)
+''')
+    return r["result"]
+
+
+def _fem_ref(key, build_ref, fem_kwargs):
+    """Reference yardstick for a relative FEM gate: build the scripted-correct part
+    once, run _fem_stress on it, cache. build_ref(path) writes the reference part."""
+    if key not in _FEM_REF_CACHE:
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as td:
+            refp = Path(td) / "ref.FCStd"
+            build_ref(refp)
+            _FEM_REF_CACHE[key] = _fem_stress(refp, **fem_kwargs)
+    return _FEM_REF_CACHE[key]
+
+
 # --- toy 9: true position ----------------------------------------------------
 POS_PLATE = (50.0, 50.0, 8.0)
 POS_HOLE_R = 6.0  # Ø12 hole
@@ -2218,6 +2247,170 @@ TOY20_WISHBONE = Toy(
 )
 
 
+# =============================================================================
+# toys 21-22: PHYSICS / FEM-gated (family A) — strength & stiffness
+# The first toys with a PHYSICS oracle. The agent just builds geometry (existing
+# tools); the gate runs structural FEM (_fem_stress) and judges. Each is a sizing
+# problem with a WINDOW: too thin over-stresses / over-deflects, too thick blows a
+# mass budget — so "just max it out" fails. Gated RELATIVE to a scripted reference
+# under identical FEM setup (CalculiX-through-worker numbers are discriminating but
+# not certified absolute), plus an absolute mass budget the agent is given.
+# =============================================================================
+
+def _box_file(path, name, sx, sy, sz):
+    with Worker() as w:
+        _ref_box(w, path, name, sx, sy, sz)
+
+
+# --- toy 21: fem_bracket (strength: von Mises within a mass budget) ----------
+FB_W, FB_LOAD = 30.0, 3000.0
+FB = {"bracketA": {"L": 60.0, "h_ref": 12.0},
+      "bracketB": {"L": 90.0, "h_ref": 16.0}}
+FB_FEM = {"fix_normal": [-1, 0, 0], "load_normal": [0, 0, 1], "force_n": FB_LOAD}
+FB_VM_MARGIN, FB_MASS_MARGIN = 1.6, 1.25
+
+
+def _fb_budget_g(spec):
+    return spec["L"] * FB_W * spec["h_ref"] * _FEM_DENSITY * FB_MASS_MARGIN * 1000.0
+
+
+def _fb_gate(tmp, files):
+    for name, spec in FB.items():
+        ref = _fem_ref(f"fem_bracket:{name}",
+                       lambda p, s=spec, n=name: _box_file(p, n, s["L"], FB_W, s["h_ref"]),
+                       FB_FEM)
+        res = _fem_stress(files[name], **FB_FEM)
+        mass_g = _part_volume(files[name]) * _FEM_DENSITY * 1000.0
+        if res["vm_mpa"] > ref["vm_mpa"] * FB_VM_MARGIN:
+            return {"ok": False, "interference": [], "envelope": [],
+                    "reason": f"{name}: von Mises {res['vm_mpa']:.3f} > "
+                              f"{ref['vm_mpa']*FB_VM_MARGIN:.3f} MPa — too weak (thin)"}
+        if mass_g > _fb_budget_g(spec):
+            return {"ok": False, "interference": [], "envelope": [],
+                    "reason": f"{name}: mass {mass_g:.0f} g > budget "
+                              f"{_fb_budget_g(spec):.0f} g — over-built"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": "both brackets strong enough within their mass budgets"}
+
+
+def _fb_task(name):
+    spec = FB[name]
+    return (f"Build a load-bearing SHELF: a flat steel plate {spec['L']:.0f} mm long "
+            f"(X) by {FB_W:.0f} mm wide (Y), fixed at the wall (its x=0 end face) and "
+            f"carrying a {FB_LOAD:.0f} N downward load on its top face. Choose the plate "
+            f"THICKNESS (Z height) so the peak bending stress stays low — a thicker "
+            f"plate bends and stresses less — BUT keep the mass at or below "
+            f"{_fb_budget_g(spec):.0f} g (you cannot just make it maximally thick). "
+            f"Build the box at your chosen thickness, then save_component.")
+
+
+TOY21_FEM_BRACKET = Toy(
+    "fem_bracket", "FEM strength: load bracket sized within a mass budget",
+    components={"bracketA": _fb_task("bracketA"), "bracketB": _fb_task("bracketB")},
+    single_task=(
+        f"You will build two steel load shelves, one at a time, each fixed at its x=0 "
+        f"end and loaded with {FB_LOAD:.0f} N on top. Size each plate's THICKNESS so "
+        f"bending stress stays low while staying under its mass budget:\n"
+        f"bracketA: {FB['bracketA']['L']:.0f}x{FB_W:.0f} mm, "
+        f"mass <= {_fb_budget_g(FB['bracketA']):.0f} g\n"
+        f"bracketB: {FB['bracketB']['L']:.0f}x{FB_W:.0f} mm, "
+        f"mass <= {_fb_budget_g(FB['bracketB']):.0f} g"),
+    gate=_fb_gate,
+    reference=lambda w, name, path: _ref_box(
+        w, path, name, FB[name]["L"], FB_W, FB[name]["h_ref"]),
+    negatives=[
+        # bracketA too thin (5 mm) -> bending stress blows past the limit.
+        Neg("bracketA_too_thin", "interference",
+            agent={"bracketA": (f"Build a {FB['bracketA']['L']:.0f}x{FB_W:.0f}x5 mm "
+                                f"steel plate. Then save_component.")},
+            ref={"bracketA": lambda w, p: _ref_box(w, p, "bracketA",
+                                                   FB["bracketA"]["L"], FB_W, 5.0)}),
+        # bracketA too thick (22 mm) -> passes stress but busts the mass budget.
+        Neg("bracketA_too_thick", "interference",
+            agent={"bracketA": (f"Build a {FB['bracketA']['L']:.0f}x{FB_W:.0f}x22 mm "
+                                f"steel plate. Then save_component.")},
+            ref={"bracketA": lambda w, p: _ref_box(w, p, "bracketA",
+                                                   FB["bracketA"]["L"], FB_W, 22.0)}),
+    ],
+)
+
+
+# --- toy 22: fem_beam_stiffness (deflection within a mass budget) ------------
+# Same FEM machinery, but the design driver is STIFFNESS, not strength: a longer,
+# slimmer cantilever whose tip must not sag past a deflection limit. Deflection goes
+# as ~1/thickness^3, so a slightly-too-thin beam fails hard — a different sensitivity
+# than the stress toy. Window: too thin -> over-deflects, too thick -> over mass.
+FBM_W, FBM_LOAD = 25.0, 1200.0
+FBM = {"beamA": {"L": 120.0, "h_ref": 10.0},
+       "beamB": {"L": 160.0, "h_ref": 12.0}}
+FBM_FEM = {"fix_normal": [-1, 0, 0], "load_normal": [0, 0, 1], "force_n": FBM_LOAD}
+FBM_DISP_MARGIN, FBM_MASS_MARGIN = 1.6, 1.25
+
+
+def _fbm_budget_g(spec):
+    return spec["L"] * FBM_W * spec["h_ref"] * _FEM_DENSITY * FBM_MASS_MARGIN * 1000.0
+
+
+def _fbm_gate(tmp, files):
+    for name, spec in FBM.items():
+        ref = _fem_ref(f"fem_beam:{name}",
+                       lambda p, s=spec, n=name: _box_file(p, n, s["L"], FBM_W, s["h_ref"]),
+                       FBM_FEM)
+        res = _fem_stress(files[name], **FBM_FEM)
+        mass_g = _part_volume(files[name]) * _FEM_DENSITY * 1000.0
+        if res["disp_mm"] > ref["disp_mm"] * FBM_DISP_MARGIN:
+            return {"ok": False, "interference": [], "envelope": [],
+                    "reason": f"{name}: tip deflection {res['disp_mm']:.4f} > "
+                              f"{ref['disp_mm']*FBM_DISP_MARGIN:.4f} mm — too flexible (thin)"}
+        if mass_g > _fbm_budget_g(spec):
+            return {"ok": False, "interference": [], "envelope": [],
+                    "reason": f"{name}: mass {mass_g:.0f} g > budget "
+                              f"{_fbm_budget_g(spec):.0f} g — over-built"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": "both beams stiff enough within their mass budgets"}
+
+
+def _fbm_task(name):
+    spec = FBM[name]
+    return (f"Build a cantilever BEAM/shelf: a steel plate {spec['L']:.0f} mm long (X) "
+            f"by {FBM_W:.0f} mm wide (Y), fixed at its x=0 end, carrying {FBM_LOAD:.0f} N "
+            f"on its top face. Choose the THICKNESS (Z) so the TIP does not sag too far "
+            f"— stiffness rises steeply with thickness (deflection ~ 1/thickness^3) — "
+            f"while keeping mass at or below {_fbm_budget_g(spec):.0f} g. Build the box "
+            f"at your chosen thickness, then save_component.")
+
+
+TOY22_FEM_BEAM = Toy(
+    "fem_beam_stiffness", "FEM stiffness: cantilever beam deflection within a mass budget",
+    components={"beamA": _fbm_task("beamA"), "beamB": _fbm_task("beamB")},
+    single_task=(
+        f"You will build two steel cantilever beams, one at a time, each fixed at x=0 "
+        f"and loaded {FBM_LOAD:.0f} N on top. Size each THICKNESS so the tip stays stiff "
+        f"(deflection ~ 1/thickness^3) within its mass budget:\n"
+        f"beamA: {FBM['beamA']['L']:.0f}x{FBM_W:.0f} mm, "
+        f"mass <= {_fbm_budget_g(FBM['beamA']):.0f} g\n"
+        f"beamB: {FBM['beamB']['L']:.0f}x{FBM_W:.0f} mm, "
+        f"mass <= {_fbm_budget_g(FBM['beamB']):.0f} g"),
+    gate=_fbm_gate,
+    reference=lambda w, name, path: _ref_box(
+        w, path, name, FBM[name]["L"], FBM_W, FBM[name]["h_ref"]),
+    negatives=[
+        # beamA too thin (4 mm) -> tip deflection explodes (~1/h^3).
+        Neg("beamA_too_thin", "interference",
+            agent={"beamA": (f"Build a {FBM['beamA']['L']:.0f}x{FBM_W:.0f}x4 mm steel "
+                             f"plate. Then save_component.")},
+            ref={"beamA": lambda w, p: _ref_box(w, p, "beamA",
+                                                FBM["beamA"]["L"], FBM_W, 4.0)}),
+        # beamA too thick (20 mm) -> stiff but over the mass budget.
+        Neg("beamA_too_thick", "interference",
+            agent={"beamA": (f"Build a {FBM['beamA']['L']:.0f}x{FBM_W:.0f}x20 mm steel "
+                             f"plate. Then save_component.")},
+            ref={"beamA": lambda w, p: _ref_box(w, p, "beamA",
+                                                FBM["beamA"]["L"], FBM_W, 20.0)}),
+    ],
+)
+
+
 TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
                            TOY5_NSLOT4, TOY5_NSLOT8,
                            TOY6_TCHAIN3, TOY6_TCHAIN6,
@@ -2226,7 +2419,8 @@ TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
                            TOY12_ANGULARITY,
                            TOY13_GEARBOX6, TOY14_GEARBOX3, TOY15_PLANETARY,
                            TOY16_ACKERMANN, TOY17_SLIDERCRANK,
-                           TOY18_GENEVA, TOY19_SARRUS, TOY20_WISHBONE)}
+                           TOY18_GENEVA, TOY19_SARRUS, TOY20_WISHBONE,
+                           TOY21_FEM_BRACKET, TOY22_FEM_BEAM)}
 
 
 # --- conditions --------------------------------------------------------------
