@@ -580,11 +580,16 @@ def main():
     rows = []
     t0 = time.time()
     with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
+        root = Path(td)
         for toy in toys:
             for cond_name, fn in (("partition", run_partition), ("single", run_single)):
                 trial_results = []
                 for i in range(trials):
+                    # Per-trial dir: no cross-trial file reuse, so FreeCAD's
+                    # path-keyed open-document cache can't serve stale geometry to
+                    # a later trial's gate. Each trial is fully independent.
+                    tmp = root / f"{toy.key}_{cond_name}_{i}"
+                    tmp.mkdir(parents=True, exist_ok=True)
                     try:
                         r = fn(client, model, toy, tmp)
                     except Exception:
