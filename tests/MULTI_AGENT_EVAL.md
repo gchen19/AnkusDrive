@@ -423,3 +423,46 @@ loop closure (camber gain implied by upper<lower).
 **Comparability caveat (again):** `add_gear` and `rotate` enlarge the agent tool
 surface, so kinematic-era pass-rates are not a clean baseline against the original
 static-toy Haiku numbers — re-baseline before mixing.
+
+---
+
+## Physics, mass, fastening & multi-physics added 2026-05-31 (families A/B/C/D/F)
+
+Nine more toys taking the suite from geometric/kinematic oracles into **physics**.
+Two new gate capabilities, both on the existing FreeCAD FEM stack (CalculiX), plus a
+mass oracle. Selftest two-sided valid for every toy. **FEM toys are slower per trial
+(mesh+solve) but free.**
+
+New gate capabilities (`tests/test_multiagent_m2.py`):
+- **`_fem_stress`** — structural FEM: fix the support face, pressure on the load face
+  (normal-aligned, no edge-picking), mesh, CalculiX, returns max von Mises + tip
+  displacement.
+- **`_fem_thermal`** — steady-state thermal FEM: heat flux into one face, convection
+  on the rest, returns max temperature.
+- **`_part_volume` / `_part_bbox`** — mass (volume·density) and extents.
+- FEM gates are **RELATIVE**: the agent's part is compared to a scripted reference
+  built and solved under the SAME setup (cached in `_FEM_REF_CACHE`). CalculiX-through-
+  worker magnitudes are monotonic/discriminating but not certified absolute stress, so
+  any consistent offset cancels; plus an absolute mass budget the agent is given.
+
+| Toy | Family | Oracle | Window / failure modes caught |
+|---|---|---|---|
+| `fem_bracket` | A physics | structural FEM | too thin → von Mises over limit; too thick → over mass budget |
+| `fem_beam_stiffness` | A physics | structural FEM | too thin → tip deflection over limit (~1/t³); too thick → over mass |
+| `cg_target` | B mass | assembly centre of mass | counterweight height must balance the lever about the pivot (coupling) |
+| `press_fit` | C fastening | measured Ø | interference in a holding band — too loose slips, too tight cracks |
+| `thread_engagement` | C fastening | measured Ø + depth | tap-drill must match thread minor Ø (not clearance); engagement ≥ 0.8·D |
+| `rack_pinion` | D kinematics | gear + spacing | rack tooth pitch = pinion circular pitch (π·module) |
+| `fourbar_crankrocker` | D kinematics | link lengths | Grashof condition + the crank is the shortest link |
+| `cam_follower` | D kinematics | eccentric lift | cam lift (2·offset) = follower travel |
+| `thermo_structural` | F capstone | **thermal + structural FEM + mass** | too thin → runs hot AND over-stresses; too thick → over mass |
+
+**Capstone note.** `thermo_structural` runs *both* solvers on the agent's geometry —
+a real coupled multi-physics gate (proven: a too-thin sink caught at 357 > 289 °C; a
+too-thick one at 341 > 213 g). Here both physics favour more material and the mass
+budget is the opposing constraint; a genuine thermal-vs-structural *shape* tradeoff
+(thin tall fins cool but flex, stubby is strong but hot) is the natural next extension.
+
+**Suite status:** 29 toys, selftest two-sided green throughout, dryrun OK. Dedicated
+simulation tooling (promoting these gate helpers to typed tools) follows
+`docs/SIMULATION_TOOLS.md`.
