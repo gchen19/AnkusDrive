@@ -270,16 +270,37 @@ def _ref_box_holes(w, path, name, sx, sy, sz, hole_r, centers):
 #   single_task: overview for the baseline (one agent builds all, prompted per comp)
 #   gate(tmp, files)  -> {ok, reason}      — deterministic merge + check
 #   reference(w, name, path)               — scripted correct build (for selftest)
+#   negatives : [Neg, ...]                 — deliberately-wrong variants the gate
+#                                            MUST catch (proves the gate measures
+#                                            the build, isn't always-passing)
 # =============================================================================
 
+class Neg:
+    """A negative control: a wrong build the gate must reject.
+
+    expect       : which gate should fire ("interference" | "envelope")
+    agent        : {component: wrong_task}  — overrides for the billed agent run;
+                   unlisted components use the toy's normal (correct) task.
+    ref          : {component: fn(w, path)} — scripted wrong build for the FREE
+                   selftest; unlisted components use the toy's reference.
+    """
+    def __init__(self, name, expect, agent, ref):
+        self.name = name
+        self.expect = expect
+        self.agent = agent
+        self.ref = ref
+
+
 class Toy:
-    def __init__(self, key, title, components, single_task, gate, reference):
+    def __init__(self, key, title, components, single_task, gate, reference,
+                 negatives=()):
         self.key = key
         self.title = title
         self.components = components      # dict name -> task text
         self.single_task = single_task
         self.gate = gate                 # (tmp, {name: path}) -> {ok, reason}
         self.reference = reference        # (w, name, path) -> builds file
+        self.negatives = list(negatives)
 
 
 # --- toy 1: peg-in-hole ------------------------------------------------------
@@ -308,6 +329,14 @@ TOY1 = Toy(
         _ref_box_holes(w, path, "plate", *T1_PLATE, T1_BORE_D / 2, [T1_CTR])
         if name == "plate" else
         _ref_cyl(w, path, "peg", (T1_BORE_D - T1_CLEAR) / 2, T1_PEGLEN)),
+    negatives=[
+        # Peg deliberately too fat (Ø20 into Ø16 bore) -> must interfere.
+        Neg("peg_too_fat", "interference",
+            agent={"peg": ("Build a solid cylinder EXACTLY 20 mm in diameter "
+                           "(radius 10 mm), 20 mm long. Use these exact dimensions; "
+                           "do not adjust. Then save_component.")},
+            ref={"peg": lambda w, p: _ref_cyl(w, p, "peg", 10.0, T1_PEGLEN)}),
+    ],
 )
 
 
@@ -352,6 +381,17 @@ TOY2 = Toy(
     gate=_t2_gate,
     reference=lambda w, name, path: _ref_box_holes(
         w, path, name, T2_SIZE, T2_SIZE, T2_T, T2_HOLE_R, _t2_circle()),
+    negatives=[
+        # plateB on the wrong bolt circle (R28, not R20): bolts placed at the
+        # nominal R20 hit plateB's solid material -> interference.
+        Neg("wrong_circle", "interference",
+            agent={"plateB": (f"Build a {T2_SIZE}x{T2_SIZE}x{T2_T} mm square plate with "
+                              f"{T2_N} through-holes of diameter {2*T2_HOLE_R} mm on a bolt "
+                              f"circle of radius 28 mm (use 28, not 20) centered on the "
+                              f"plate ({T2_SIZE/2},{T2_SIZE/2}). Then save_component.")},
+            ref={"plateB": lambda w, p: _ref_box_holes(
+                w, p, "plateB", T2_SIZE, T2_SIZE, T2_T, T2_HOLE_R, _t2_circle(R=28.0))}),
+    ],
 )
 
 
@@ -387,6 +427,14 @@ TOY3 = Toy(
     reference=lambda w, name, path: (
         _ref_box(w, path, "housing", *T3_HOUSE) if name == "housing"
         else _ref_box(w, path, "bracket", 30, 30, 10)),
+    negatives=[
+        # Bracket 50 mm tall: seated at z=40 it tops out at z=90, far past the
+        # envelope's z-max of 52 -> envelope keep-out violation.
+        Neg("bracket_too_tall", "envelope",
+            agent={"bracket": ("Build a box EXACTLY 30 x 30 x 50 mm. Use these exact "
+                               "dimensions; do not shrink it. Then save_component.")},
+            ref={"bracket": lambda w, p: _ref_box(w, p, "bracket", 30, 30, 50)}),
+    ],
 )
 
 
@@ -429,29 +477,70 @@ def run_single(client, model, toy, tmp):
             "reason": gate["reason"], **_agg(*agents.values())}
 
 
-# --- selftest (no API): run each toy's gate against scripted reference builds --
+def run_negative(client, model, toy, neg, tmp):
+    """Partition build where the named components get neg.agent's WRONG task; the
+    rest stay correct. A good run: every agent builds (faithfully wrong) AND the
+    gate REJECTS it. caught=True means the gate did its job on real agent output."""
+    files, agents = {}, {}
+    for name in toy.components:
+        files[name] = tmp / f"neg_{toy.key}_{neg.name}_{name}.FCStd"
+        task = neg.agent.get(name, toy.components[name])
+        agents[name] = run_agent(client, model, SYSTEM, task, files[name])
+    built = all(a["ok_built"] for a in agents.values()) and all(p.exists() for p in files.values())
+    gate = toy.gate(tmp, files) if built else {"ok": True, "reason": "an agent did not save"}
+    caught = built and not gate["ok"]   # built the wrong thing AND gate flagged it
+    return {"condition": f"neg/{neg.name}", "built": built, "caught": caught,
+            "expect": neg.expect, "reason": gate["reason"], **_agg(*agents.values())}
+
+
+# --- selftest (no API): scripted builds prove the gate DISCRIMINATES -----------
+
+def _build_scripted(tmp, toy, prefix, ref_overrides=None):
+    """Build every component with scripted builders (ref_overrides[name] wins,
+    else toy.reference). Returns {name: path}."""
+    ref_overrides = ref_overrides or {}
+    files = {}
+    for name in toy.components:
+        files[name] = tmp / f"{prefix}_{toy.key}_{name}.FCStd"
+        with Worker() as w:
+            if name in ref_overrides:
+                ref_overrides[name](w, files[name])
+            else:
+                toy.reference(w, name, files[name])
+    return files
+
 
 def selftest(toys):
-    """Prove every toy's gate passes a correct (scripted) build — the M1 discipline
-    applied to M2's gates, so the widened plumbing is validated before any spend."""
-    print("== M2 selftest — gates vs. scripted reference builds (no API) ==")
+    """Two-sided gate validation, no API: every toy's gate must PASS a correct
+    scripted build AND FAIL each scripted negative control. A gate that can't do
+    both isn't measuring anything — this is the prerequisite for trusting agent
+    pass-rates (the M1 discipline, applied to M2's gates)."""
+    print("== M2 selftest — gate discrimination on scripted builds (no API) ==")
     failures = 0
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         for toy in toys:
-            files = {}
-            for name in toy.components:
-                files[name] = tmp / f"ref_{toy.key}_{name}.FCStd"
-                with Worker() as w:
-                    toy.reference(w, name, files[name])
-            gate = toy.gate(tmp, files)
-            ok = gate["ok"]
+            # positive: correct build must pass
+            files = _build_scripted(tmp, toy, "pos")
+            g = toy.gate(tmp, files)
+            ok = g["ok"]
             failures += 0 if ok else 1
-            print(f"  {'PASS' if ok else 'FAIL'}  {toy.title:42s}  {gate['reason']}")
+            print(f"  {'PASS' if ok else 'FAIL'}  {toy.title:42s} correct build -> "
+                  f"{'clean' if ok else g['reason']}")
+            # negatives: each wrong build must be caught
+            for neg in toy.negatives:
+                nf = _build_scripted(tmp, toy, f"neg_{neg.name}", neg.ref)
+                ng = toy.gate(tmp, nf)
+                caught = not ng["ok"]
+                failures += 0 if caught else 1
+                print(f"  {'PASS' if caught else 'FAIL'}  {toy.title:42s} "
+                      f"neg/{neg.name} -> "
+                      f"{'caught: ' + ng['reason'] if caught else 'SLIPPED THROUGH'}")
     if failures:
-        print(f"\n== {failures} toy gate(s) FAILED on a correct build — fix before agents ==")
+        print(f"\n== {failures} gate check(s) FAILED — fix before agents ==")
         sys.exit(1)
-    print("\n== all toy gates pass a correct build; ready for agent runs ==")
+    print("\n== gates pass correct builds AND catch every negative; "
+          "ready for agent runs ==")
 
 
 # --- dry run (no API): stub the LLM, exercise the full agent loop ------------
@@ -576,18 +665,52 @@ def main():
     client = anthropic.Anthropic()
     CACHE_DIR.mkdir(exist_ok=True)
 
-    print(f"== Layer M2 — model={model}  trials={trials}  toys={[t.key for t in toys]} ==")
+    negatives_only = bool(os.environ.get("M2_NEGATIVES"))
+    print(f"== Layer M2 — model={model}  trials={trials}  toys={[t.key for t in toys]}"
+          f"{'  [NEGATIVES]' if negatives_only else ''} ==")
     rows = []
     t0 = time.time()
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         for toy in toys:
+            # Per-trial dir: no cross-trial file reuse, so FreeCAD's path-keyed
+            # open-document cache can't serve stale geometry to a later trial's
+            # gate. Each trial is fully independent.
+            if negatives_only:
+                # agent-driven negative controls: build WRONG, gate must catch.
+                for neg in toy.negatives:
+                    trial_results = []
+                    for i in range(trials):
+                        tmp = root / f"{toy.key}_{neg.name}_{i}"
+                        tmp.mkdir(parents=True, exist_ok=True)
+                        try:
+                            r = run_negative(client, model, toy, neg, tmp)
+                        except Exception:
+                            r = {"condition": f"neg/{neg.name}", "built": False,
+                                 "caught": False, "reason": "harness error",
+                                 "error": traceback.format_exc()}
+                        r["cost_usd"] = round(cost_of(r, model), 4)
+                        trial_results.append(r)
+                    n = len(trial_results)
+                    built = sum(1 for r in trial_results if r.get("built"))
+                    caught = sum(1 for r in trial_results if r.get("caught"))
+                    mean_cost = sum(r["cost_usd"] for r in trial_results) / n
+                    rows.append({"toy": toy.key, "condition": f"neg/{neg.name}",
+                                 "trials": n, "built": built, "caught": caught,
+                                 "caught_rate": caught / n, "expect": neg.expect,
+                                 "mean_cost_usd": round(mean_cost, 4),
+                                 "results": trial_results})
+                    print(f"  {toy.key:8s} neg/{neg.name:14s}  built {built}/{n}  "
+                          f"caught {caught}/{n}  (expect {neg.expect})  "
+                          f"${mean_cost:.4f}/trial")
+                    err = next((r.get("error") for r in trial_results if r.get("error")), None)
+                    if err:
+                        print(err)
+                continue
+
             for cond_name, fn in (("partition", run_partition), ("single", run_single)):
                 trial_results = []
                 for i in range(trials):
-                    # Per-trial dir: no cross-trial file reuse, so FreeCAD's
-                    # path-keyed open-document cache can't serve stale geometry to
-                    # a later trial's gate. Each trial is fully independent.
                     tmp = root / f"{toy.key}_{cond_name}_{i}"
                     tmp.mkdir(parents=True, exist_ok=True)
                     try:
