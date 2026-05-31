@@ -161,3 +161,104 @@ like Layer A/B/C and shares `reliability_cache` conventions.
 
 The order is deliberate: never measure agent reliability against an oracle you
 haven't first proven catches a wrong answer.
+
+---
+
+## M2 results so far (live agent runs)
+
+All runs use `tests/test_multiagent_m2.py`, gated behind `RUN_RELIABILITY=1` + a key
+(the `anthropic-key` shell helper). Each toy runs in two conditions — **partition**
+(one cold agent per component) and **single** (one agent builds every component in
+sequence) — judged by the deterministic merge gates. `built` = agent(s) produced +
+saved geometry; `pass` = the merged assembly cleared every gate.
+
+### Gate validity (free, no API)
+
+`M2_SELFTEST=1` shows every toy's gate **passes a scripted correct build AND catches
+each scripted negative**; `M2_DRYRUN=1` exercises the full agent loop with a stubbed
+model. Both green for all four toys — so a passing agent genuinely built a fitting
+part and a failing one genuinely didn't. (The eval plan's non-negotiable: never
+measure agents against an oracle you haven't shown catches a wrong answer.)
+
+### Easy toys — at the ceiling (Haiku 4.5, n=5)
+
+| Toy | partition | single | shared contract |
+|---|---|---|---|
+| peg-in-hole | 5/5 | 5/5 | one dimension (bore Ø) |
+| bolted flange | 5/5 | 5/5 | a bolt circle |
+| bracket+housing | 5/5 | 5/5 | a keep-out size cap |
+
+**100% both conditions → the comparison is uninformative here.** A single shared
+*value* is easy enough that Haiku never misses, so there's no gap to attribute to
+partitioning. Negative-control runs (`M2_NEGATIVES=1`, n=3) confirmed agents
+faithfully build the *wrong* thing and the gate catches it 3/3 on every toy — the
+100% is real, not a rubber stamp.
+
+### Hard toy — off the ceiling (Haiku 4.5, n=30/condition, ~$2.0)
+
+`twopin` — two pins must seat into two holes simultaneously. Two-point alignment
+removes the rotational slack a single peg hides error in, and both agents must
+independently derive the same `x = center ± spacing/2`.
+
+| condition | pass | 95% CI (Wilson) |
+|---|---|---|
+| partition | 17/30 = **57%** | [39%, 73%] |
+| single | 18/30 = **60%** | [42%, 75%] |
+
+**diff = −3%, two-proportion z = −0.26, p = 0.79 → statistically indistinguishable.**
+`built` was 30/30 in both. Failure magnitudes near-identical across conditions:
+mostly small near-misses (151/603 mm³ — a pin grazing hole material) plus a few
+gross errors (~3k–12k mm³ — a part built fundamentally wrong), in both.
+
+**Reading.** Two-point alignment drops Haiku from 100% to ~58% (the toy works), but
+partition ≈ single: for a two-component product, how the work is divided doesn't
+change the pass rate. The matched failure distributions say the errors are intrinsic
+to Haiku building this part from the spec — single isn't context-overloaded holding
+both parts, and partition's slice-only view doesn't diverge because the shared
+derivation is stated explicitly in each slice.
+
+### What this does and doesn't establish
+
+- ✅ Gates discriminate; agents build a single-value contract reliably and a
+  two-point derived contract ~58% of the time.
+- ✅ Harder toys break the 100% ceiling, giving a measurable pass-rate.
+- ❌ Does **not** show partition beating single — they tie wherever measured. The
+  regime where partition *should* win (a contract too large for one agent's context)
+  needs a **many-component** product, not a two-part toy.
+- Pass-rate ignores partition's real edge — **parallel wall-clock** (its builders run
+  concurrently; single's are sequential). The harness records per-agent time; the
+  headline metric doesn't credit it.
+
+---
+
+## Proposed harder toys (designed, not yet run)
+
+To probe where partition and single actually diverge, these stress the two axes a
+two-part toy can't: **context load** (many components → one agent holds the whole
+contract) and **interface chains** (an error in one part propagates). All are
+gate-judgeable with existing primitives.
+
+1. **N-slot rail (context-load sweep).** One rail with *k* evenly-spaced slots, *k*
+   matching pegs (k = 2, 4, 8). As *k* grows, single must track all *k* positions in
+   one context while each partition agent still sees only its one slot. *Hypothesis:*
+   single's pass-rate decays with *k*, partition's holds — the first place the two
+   should separate. Gate: interference, every peg in its slot.
+2. **Tolerance-stack chain (error propagation).** A linear chain A–B–C–D, each part's
+   right face mating the next's left face, total length fixed by contract. Small
+   per-part errors accumulate. *Hypothesis:* partition (each agent blind to neighbors)
+   drifts out of total-length tolerance faster than single (which sees the running
+   sum). Gate: assembled length within tolerance + interference. **The case partition
+   should LOSE** — important to have, because it makes any partition *win* elsewhere
+   credible.
+3. **Hub-and-spokes (fan-out breadth).** A central hub with *n* ports; *n* arms each
+   mate to one port on a shared bolt pattern. *Hypothesis:* partition parallelizes the
+   arms cleanly; single's pass-rate drops as *n* grows. Tests breadth, not depth.
+4. **Two-interface bracket (per-part complexity).** One bracket mating to *two*
+   parents at once (a wall and a floor) — both interfaces must satisfy their contracts
+   simultaneously. A harder, tighter-tolerance variant of toy #5's structure. Gate:
+   `interface_align_check` on both + interference.
+
+**Sequencing.** #1 first — cleanest test of the core hypothesis (context load
+separates the conditions) and cheapest to sweep. #2 most valuable (the partition-loses
+case). Both are real spend and bigger per-trial (more components = more agent turns);
+a proper sweep is tens of dollars, not the ~$2 a two-part toy costs.
