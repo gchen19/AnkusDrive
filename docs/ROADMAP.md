@@ -451,25 +451,31 @@ Big. ~1–2 weeks total, easy to slice further.
 - `generate_assembly_instructions` — pure LLM task once `feature_tree`
   introspection lands.
 
-**Known sharp edges (found 2026-05-30, building the multi-agent M1 toy suite —
-`tests/multiagent_toys.py`):**
-- **`add_part` mislinks consumed boolean inputs.** When a component `.FCStd` is
-  linked by path, `add_part` picks "the first `PartDesign::Body` or
-  `Part::Feature`" in the file. After an `add_primitive` + `boolean_op` chain the
-  consumed `Part::Box`/`Part::Cylinder` inputs remain in the document, so the
-  *un-holed solid* can get linked instead of the `Cut` result — silently, and
-  nondeterministically (object order decides). The toy suite works around it by
-  building each component as one clean `Part::Feature` (shape assigned via
-  `run_script`). Fix path: have `add_part` prefer the body tip / last shaped
-  feature, or skip objects that are consumed boolean inputs.
-- **`bom_extract` collides components by object name.** It groups by
-  `LinkedObject.Name`, but `add_primitive` names every box `"Box"` and every
-  cylinder `"Cylinder"` internally — so two distinct single-primitive components
-  merge into one BOM row with an inflated count. Fix path: group by a more stable
-  identity (source file path + object, or Label), not the bare internal `Name`.
+**Sharp edges found + fixed in the multi-agent work (all resolved in the
+primitive, not just worked around):**
+- ✓ **`add_part` mislinked consumed boolean inputs** (fixed 2026-05-30, `140dbe8`).
+  After an `add_primitive` + `boolean_op` chain the consumed `Part::Box`/
+  `Part::Cylinder` inputs remained in the file, and `add_part`'s "first
+  `Part::Feature`" pick could link the *un-holed solid* instead of the `Cut` —
+  silently, nondeterministically. Now links the top-level result (empty `InList`)
+  and skips `Part::Datum` objects.
+- ✓ **`bom_extract` collided components by object name** (fixed 2026-05-30,
+  `140dbe8`). It grouped by `LinkedObject.Name`, but `add_primitive` names every
+  box `"Box"`, so two distinct components merged into one inflated BOM row. Now
+  keys by source (component file + object), displays the file stem.
+- ✓ **`save_document` only wrote `.FCStd` and failed opaquely otherwise** (fixed
+  2026-05-31, hardening branch). `doc.saveAs(path)` infers format from the
+  extension; a non-`.FCStd` path raised a bare `FileNotFoundError`. This bit the
+  design coordinator — an LLM decomposer naming component files picked `.step`
+  (the interchange format models associate with CAD parts), so every builder's
+  `save_component` failed with a confusing errno-2. Now `save_document` routes by
+  extension: `.FCStd` saves natively; `.step`/`.stp`/`.iges`/`.igs`/`.brep`/`.stl`
+  export the doc's shape; anything else raises a clear error naming the supported
+  formats. (The orchestration layer also normalizes component filenames to
+  `.FCStd` as defense in depth.)
 
-  Both are what the RFC's Phase 1 `merge_assembly` / `publish_interface` should
-  harden — see [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) and
+  These hardened the substrate the RFC's `merge_assembly` / `publish_interface`
+  build on — see [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) and
   [`tests/MULTI_AGENT_EVAL.md`](../tests/MULTI_AGENT_EVAL.md).
 
 ---
