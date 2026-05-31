@@ -1161,16 +1161,64 @@ __result__ = sum(o.Shape.Volume for o in objs)
     return r["result"]
 
 
-def _fem_ref(key, build_ref, fem_kwargs):
+def _fem_ref(key, build_ref, fem_kwargs, fn=None):
     """Reference yardstick for a relative FEM gate: build the scripted-correct part
-    once, run _fem_stress on it, cache. build_ref(path) writes the reference part."""
+    once, run the analysis (fn defaults to _fem_stress), cache. build_ref(path)
+    writes the reference part."""
+    fn = fn or _fem_stress
     if key not in _FEM_REF_CACHE:
         import tempfile as _tf
         with _tf.TemporaryDirectory() as td:
             refp = Path(td) / "ref.FCStd"
             build_ref(refp)
-            _FEM_REF_CACHE[key] = _fem_stress(refp, **fem_kwargs)
+            _FEM_REF_CACHE[key] = fn(refp, **fem_kwargs)
     return _FEM_REF_CACHE[key]
+
+
+# --- steady-state thermal FEM gate helper (heat flux in + convection out) -----
+_FEM_STEEL_THERMAL = dict(_FEM_STEEL, Name="Steel-Thermal",
+                          ThermalConductivity="43 W/m/K", SpecificHeat="500 J/kg/K",
+                          ThermalExpansionCoefficient="12 um/m/K")
+
+
+def _fem_thermal(path, heat_normal, flux_w_m2, ambient_c=20.0, film=30.0,
+                 char_length=6.0):
+    """Steady-state thermal FEM: a fixed heat flux into the `heat_normal` face,
+    convection (ambient_c, film) on every other planar face. Returns
+    {max_temp_c, mean_temp_c}. Used by the thermo-structural capstone; gated
+    RELATIVE to a reference (same caveat as _fem_stress)."""
+    with Worker() as w:
+        w.call("open_document", path=str(path))
+        nm = w.call("run_script", code='''
+objs=[o for o in App.ActiveDocument.Objects if hasattr(o,"Shape") and not o.Shape.isNull() and not o.InList]
+if not objs:
+    objs=[o for o in App.ActiveDocument.Objects if hasattr(o,"Shape") and not o.Shape.isNull()]
+__result__ = objs[0].Name''')["result"]
+        body = w.call("register_handle", object=nm)["handle"]
+        an = w.call("fem_new_analysis", name="T")["handle"]
+        w.call("fem_set_solver", analysis=an, kind="ccx",
+               tunables={"ThermoMechSteadyState": True, "AnalysisType": "thermomech"})
+        w.call("fem_set_material", analysis=an, body=body, material=_FEM_STEEL_THERMAL)
+        heat = w.call("query_faces", handle=body, predicate={
+            "type": "planar", "normal_dir": heat_normal, "order": "area_desc"})
+        cool = []
+        for nd in ([1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]):
+            if nd == list(heat_normal):
+                continue
+            cool += w.call("query_faces", handle=body, predicate={
+                "type": "planar", "normal_dir": nd, "order": "area_desc"})
+        w.call("fem_add_constraint", analysis=an, kind="heatflux", flux_type="DFlux",
+               flux=flux_w_m2, refs=[{"handle": body, "tag": heat[0]["tag"]}])
+        w.call("fem_add_constraint", analysis=an, kind="heatflux", flux_type="Convection",
+               ambient_temp=ambient_c, film_coef=film,
+               refs=[{"handle": body, "tag": c["tag"]} for c in cool])
+        w.call("fem_add_constraint", analysis=an, kind="initial_temperature",
+               temperature=ambient_c, refs=[{"handle": body, "tag": heat[0]["tag"]}])
+        w.call("fem_mesh", analysis=an, body=body, char_length=char_length)
+        w.call("fem_run", analysis=an)
+        res = w.call("fem_thermal_results", analysis=an)
+    return {"max_temp_c": res["temperatures_c"]["max"],
+            "mean_temp_c": res["temperatures_c"]["mean"]}
 
 
 # --- toy 9: true position ----------------------------------------------------
@@ -2411,6 +2459,466 @@ TOY22_FEM_BEAM = Toy(
 )
 
 
+# =============================================================================
+# toy 23: cg_target (family B) — mass / balance. New oracle: assembly centre of
+# mass. Three blocks on a lever at fixed arms must balance about x=0; two are given,
+# the third's height must be DERIVED so sum(V_i * x_i) = 0. Only the WHOLE balances —
+# a pure coupling test (single sees all arms; a partition agent must derive from the
+# shared geometry). Gate computes CG from measured block volumes + known arms.
+# =============================================================================
+CG_S = 20.0                                   # square block cross-section (mm)
+CG_POS = {"w_a": -60.0, "w_b": -20.0, "w_c": 50.0}   # lever arm positions (x, mm)
+CG_H = {"w_a": 20.0, "w_b": 20.0, "w_c": 32.0}       # heights that balance about 0
+CG_TOL = 2.0                                  # allowed |CG_x| (mm)
+
+
+def _cg_gate(tmp, files):
+    num = den = 0.0
+    for name, x in CG_POS.items():
+        h = _part_volume(files[name]) / (CG_S * CG_S)
+        num += h * x
+        den += h
+    cg_x = num / den if den else 1e9
+    if abs(cg_x) > CG_TOL:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"assembly CG_x {cg_x:.1f} mm off balance (> {CG_TOL} mm)"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": f"balanced: CG_x {cg_x:.2f} mm"}
+
+
+TOY23_CG = Toy(
+    "cg_target", "Mass balance: lever blocks whose CG must sit on the pivot",
+    components={
+        "w_a": (f"Build weight A: a {CG_S:.0f}x{CG_S:.0f}x{CG_H['w_a']:.0f} mm block. "
+                f"Then save_component."),
+        "w_b": (f"Build weight B: a {CG_S:.0f}x{CG_S:.0f}x{CG_H['w_b']:.0f} mm block. "
+                f"Then save_component."),
+        "w_c": (f"Build weight C, the balancing counterweight, with a "
+                f"{CG_S:.0f}x{CG_S:.0f} mm square base. The three weights sit on a lever "
+                f"at arms x: A={CG_POS['w_a']:.0f}, B={CG_POS['w_b']:.0f}, "
+                f"C=+{CG_POS['w_c']:.0f} mm, and the assembly must BALANCE about x=0 "
+                f"(centre of mass at the pivot). A and B are "
+                f"{CG_S:.0f}x{CG_S:.0f}x{CG_H['w_a']:.0f} mm. All blocks share the same "
+                f"square base, so mass is proportional to height — compute your block's "
+                f"HEIGHT so sum(height*arm) = 0, then build it and save_component."),
+    },
+    single_task=(
+        f"You will build three lever weights (same {CG_S:.0f}x{CG_S:.0f} mm base), one "
+        f"at a time, that must BALANCE about x=0 (CG at the pivot). Arms: "
+        f"A={CG_POS['w_a']:.0f}, B={CG_POS['w_b']:.0f}, C=+{CG_POS['w_c']:.0f} mm. A and "
+        f"B are {CG_H['w_a']:.0f} mm tall; choose C's height so sum(height*arm)=0."),
+    gate=_cg_gate,
+    reference=lambda w, name, path: _ref_box(w, path, name, CG_S, CG_S, CG_H[name]),
+    negatives=[
+        # counterweight built the same as A/B (forgot to balance) -> CG off the pivot.
+        Neg("w_c_unbalanced", "interference",
+            agent={"w_c": (f"Build a {CG_S:.0f}x{CG_S:.0f}x{CG_H['w_a']:.0f} mm block. "
+                           f"Then save_component.")},
+            ref={"w_c": lambda w, p: _ref_box(w, p, "w_c", CG_S, CG_S, CG_H["w_a"])}),
+    ],
+)
+
+
+# =============================================================================
+# toys 24-25: fastening (family C) — measured-geometry fit gates.
+# press_fit: a shaft that must be slightly LARGER than its bore (interference in a
+#   holding band) — the inverse of the clearance peg; too loose slips, too tight cracks.
+# thread_engagement: a bolt + tapped plate where the tap-drill bore must match the
+#   thread's minor diameter (a clearance-sized hole won't grip) and the engagement
+#   length must be >= 0.8*D.
+# =============================================================================
+
+def _part_bbox(path):
+    """Bounding-box extents (dx, dy, dz) mm of the top-level solid in a saved part."""
+    with Worker() as w:
+        w.call("open_document", path=str(path))
+        r = w.call("run_script", code='''
+objs=[o for o in App.ActiveDocument.Objects if hasattr(o,"Shape") and not o.Shape.isNull() and not o.InList]
+if not objs:
+    objs=[o for o in App.ActiveDocument.Objects if hasattr(o,"Shape") and not o.Shape.isNull()]
+bb=objs[0].Shape.BoundBox
+__result__=[round(bb.XLength,4),round(bb.YLength,4),round(bb.ZLength,4)]
+''')
+    return r["result"]
+
+
+# --- toy 24: press_fit (interference in a holding band) ----------------------
+PF_NOM, PF_LO, PF_HI = 20.0, 0.02, 0.06       # nominal Ø; interference band (mm)
+PF_SHAFT_D, PF_BORE_D = 20.04, 20.00          # reference: 0.04 mm interference
+
+
+def _pf_gate(tmp, files):
+    rs = max(_cyl_faces(files["shaft"]), key=lambda c: c["r"])["r"]
+    rb = min(_cyl_faces(files["hub"]), key=lambda c: c["r"])["r"]
+    interf = 2 * (rs - rb)                      # shaft Ø - bore Ø
+    if interf < PF_LO:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"interference {interf:.3f} mm < {PF_LO} — loose, will slip"}
+    if interf > PF_HI:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"interference {interf:.3f} mm > {PF_HI} — too tight, hub cracks"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": f"press fit: {interf:.3f} mm interference (in {PF_LO}-{PF_HI} band)"}
+
+
+TOY24_PRESSFIT = Toy(
+    "press_fit", "Press fit: shaft interference in a holding band",
+    components={
+        "shaft": (f"Build a cylindrical SHAFT for a PRESS fit into a Ø{PF_NOM:.0f} mm "
+                  f"bore. A press fit needs the shaft slightly LARGER than the bore: "
+                  f"target interference {PF_LO}-{PF_HI} mm on diameter, so make the "
+                  f"shaft about Ø{PF_SHAFT_D:.2f} mm, 30 mm long. Then save_component."),
+        "hub": (f"Build a HUB: a 40x40x20 mm block with a Ø{PF_BORE_D:.2f} mm bore "
+                f"through it (the nominal Ø{PF_NOM:.0f} bore the shaft presses into). "
+                f"Then save_component."),
+    },
+    single_task=(
+        f"You will build a SHAFT and a HUB for a PRESS fit, one at a time. The hub bore "
+        f"is Ø{PF_BORE_D:.2f} mm; the shaft must be larger by {PF_LO}-{PF_HI} mm "
+        f"(interference) so it presses in and grips — about Ø{PF_SHAFT_D:.2f} mm shaft, "
+        f"30 mm long; hub 40x40x20 mm."),
+    gate=_pf_gate,
+    reference=lambda w, name, path: (
+        _ref_cyl(w, path, "shaft", PF_SHAFT_D / 2, 30.0) if name == "shaft"
+        else _ref_box_holes(w, path, "hub", 40, 40, 20, PF_BORE_D / 2, [(20, 20)])),
+    negatives=[
+        # shaft undersized -> clearance, not interference (slips out).
+        Neg("shaft_loose", "interference",
+            agent={"shaft": (f"Build a Ø{PF_NOM-0.04:.2f} mm shaft, 30 mm long. Then "
+                             f"save_component.")},
+            ref={"shaft": lambda w, p: _ref_cyl(w, p, "shaft", (PF_NOM - 0.04) / 2, 30.0)}),
+        # shaft way oversize -> excessive interference (cracks the hub).
+        Neg("shaft_too_tight", "interference",
+            agent={"shaft": (f"Build a Ø{PF_NOM+0.2:.2f} mm shaft, 30 mm long. Then "
+                             f"save_component.")},
+            ref={"shaft": lambda w, p: _ref_cyl(w, p, "shaft", (PF_NOM + 0.2) / 2, 30.0)}),
+    ],
+)
+
+
+# --- toy 25: thread_engagement (tap-drill match + engagement length) ---------
+TE_D, TE_PITCH = 8.0, 1.25                     # M8 x 1.25
+TE_MINOR = round(TE_D - 1.0825 * TE_PITCH, 2)  # thread minor ~ tap-drill Ø (6.65)
+TE_MIN_ENGAGE = 0.8 * TE_D                      # 6.4 mm minimum thread engagement
+
+
+def _te_gate(tmp, files):
+    bolt_d = 2 * max(_cyl_faces(files["bolt"]), key=lambda c: c["r"])["r"]
+    hole_d = 2 * min(_cyl_faces(files["plate"]), key=lambda c: c["r"])["r"]
+    engage = _part_bbox(files["plate"])[2]      # tapped depth = plate thickness
+    if abs(bolt_d - TE_D) > 0.3:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"bolt Ø{bolt_d:.2f} != M{TE_D:.0f} major"}
+    if abs(hole_d - TE_MINOR) > 0.5:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"tapped hole Ø{hole_d:.2f} != minor Ø{TE_MINOR:.2f} "
+                          f"(a clearance-sized hole won't grip threads)"}
+    if engage < TE_MIN_ENGAGE - 0.1:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"engagement {engage:.1f} mm < {TE_MIN_ENGAGE:.1f} (0.8*D)"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": f"M{TE_D:.0f} bolt grips tap-drill Ø{hole_d:.1f} over {engage:.0f} mm"}
+
+
+TOY25_THREAD = Toy(
+    "thread_engagement", "Thread engagement: tap-drill match + engagement length",
+    components={
+        "bolt": (f"Build a BOLT shank for an M{TE_D:.0f}x{TE_PITCH} thread: a cylinder "
+                 f"Ø{TE_D:.0f} mm (the major/nominal diameter), 16 mm long. Then "
+                 f"save_component."),
+        "plate": (f"Build a TAPPED PLATE: a 30x30x10 mm block with a hole drilled "
+                  f"through for an M{TE_D:.0f}x{TE_PITCH} thread. The tap-drill hole "
+                  f"must equal the thread MINOR diameter (~Ø{TE_MINOR:.2f} mm) so the "
+                  f"threads grip — NOT a clearance hole. Then save_component."),
+    },
+    single_task=(
+        f"You will build a BOLT and a TAPPED PLATE for an M{TE_D:.0f}x{TE_PITCH} thread, "
+        f"one at a time. Bolt: Ø{TE_D:.0f} mm shank, 16 mm. Plate: 30x30x10 mm with a "
+        f"tap-drill hole at the thread minor Ø (~{TE_MINOR:.2f} mm, not a clearance "
+        f"hole); engagement (plate thickness) must be >= {TE_MIN_ENGAGE:.1f} mm."),
+    gate=_te_gate,
+    reference=lambda w, name, path: (
+        _ref_cyl(w, path, "bolt", TE_D / 2, 16.0) if name == "bolt"
+        else _ref_box_holes(w, path, "plate", 30, 30, 10, TE_MINOR / 2, [(15, 15)])),
+    negatives=[
+        # plate drilled to clearance Ø instead of tap-drill -> threads can't grip.
+        Neg("clearance_hole", "interference",
+            agent={"plate": (f"Build a 30x30x10 mm block with a Ø{TE_D+1:.1f} mm "
+                             f"clearance hole through it. Then save_component.")},
+            ref={"plate": lambda w, p: _ref_box_holes(
+                w, p, "plate", 30, 30, 10, (TE_D + 1) / 2, [(15, 15)])}),
+        # plate too thin -> not enough thread engagement.
+        Neg("too_shallow", "interference",
+            agent={"plate": (f"Build a 30x30x4 mm block with a Ø{TE_MINOR:.2f} mm "
+                             f"tap-drill hole through it. Then save_component.")},
+            ref={"plate": lambda w, p: _ref_box_holes(
+                w, p, "plate", 30, 30, 4, TE_MINOR / 2, [(15, 15)])}),
+    ],
+)
+
+
+# =============================================================================
+# toys 26-28: advanced kinematics (family D).
+# rack_pinion: rack linear tooth pitch must equal the pinion circular pitch (pi*m).
+# fourbar_crankrocker: Grashof condition + the crank (input) is the shortest link.
+# cam_follower: eccentric cam lift (2*offset) must match the follower's travel.
+# =============================================================================
+import math as _m2  # noqa: E402
+
+
+# --- toy 26: rack_pinion (mesh: rack pitch = pinion circular pitch) ----------
+RP_M, RP_N = 2.5, 20
+RP_CP = _m2.pi * RP_M                          # circular pitch ~ 7.854 mm
+
+
+def _rp_gate(tmp, files):
+    rp_pitch_r = _gear_tip_radius(files["pinion"]) - RP_M
+    if abs(rp_pitch_r - RP_M * RP_N / 2) > 0.6:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"pinion pitch r {rp_pitch_r:.1f} != {RP_M*RP_N/2:.1f} mm"}
+    xs = sorted(c["cx"] for c in _cyl_faces(files["rack"]))
+    if len(xs) < 2:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": "rack has < 2 teeth to measure pitch"}
+    pitch = sum(xs[i + 1] - xs[i] for i in range(len(xs) - 1)) / (len(xs) - 1)
+    if abs(pitch - RP_CP) > 0.3:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"rack pitch {pitch:.2f} != pinion circular pitch "
+                          f"pi*m {RP_CP:.2f} mm (won't mesh)"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": f"rack pitch {pitch:.2f} = pi*m, meshes the {RP_N}T pinion"}
+
+
+def _ref_rack(w, path, name, pitch, n=5):
+    centers = [(10.0 + i * pitch, 10.0) for i in range(n)]
+    _ref_box_holes(w, path, name, 10.0 + n * pitch + 10, 20.0, 10.0, 2.0, centers)
+
+
+TOY26_RACKPINION = Toy(
+    "rack_pinion", "Rack and pinion (rack pitch = pinion circular pitch)",
+    components={
+        "pinion": (f"Build the PINION: an involute gear, module {RP_M:g} mm, {RP_N} "
+                   f"teeth. add_gear(teeth={RP_N}, module={RP_M:g}, height=6). Then "
+                   f"save_component."),
+        "rack": (f"Build the RACK: a flat toothed bar. Its tooth PITCH must equal the "
+                 f"pinion's circular pitch = pi*module = pi*{RP_M:g} = {RP_CP:.3f} mm so "
+                 f"they mesh. Model the teeth as a row of markers Ø4 mm spaced "
+                 f"{RP_CP:.3f} mm apart along the bar. Then save_component."),
+    },
+    single_task=(
+        f"You will build a rack and pinion (module {RP_M:g} mm), one part at a time. "
+        f"PINION: {RP_N}-tooth involute gear (add_gear). RACK: a bar whose tooth pitch "
+        f"equals the pinion circular pitch pi*module = {RP_CP:.3f} mm (model teeth as Ø4 "
+        f"markers at that spacing). They mesh only if the pitches match."),
+    gate=_rp_gate,
+    reference=lambda w, name, path: (
+        _ref_gear(w, path, "pinion", RP_N, module=RP_M) if name == "pinion"
+        else _ref_rack(w, path, "rack", RP_CP)),
+    negatives=[
+        # rack pitch doesn't match the pinion -> teeth bind / skip.
+        Neg("rack_wrong_pitch", "interference",
+            agent={"rack": "Build a bar with Ø4 markers spaced 6.0 mm apart. Then save_component."},
+            ref={"rack": lambda w, p: _ref_rack(w, p, "rack", 6.0)}),
+    ],
+)
+
+
+# --- toy 27: fourbar_crankrocker (Grashof + crank is shortest) ---------------
+FOURBAR = {"ground": 100.0, "crank": 30.0, "coupler": 90.0, "rocker": 80.0}
+
+
+def _fourbar_lengths(files):
+    out = {}
+    for name in FOURBAR:
+        h = _cyl_faces(files[name])
+        out[name] = _m2.hypot(h[0]["cx"] - h[1]["cx"], h[0]["cy"] - h[1]["cy"])
+    return out
+
+
+def _fourbar_gate(tmp, files):
+    L = _fourbar_lengths(files)
+    vals = sorted(L.values())
+    s, l = vals[0], vals[-1]
+    if s + l > vals[1] + vals[2] + 0.5:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"not Grashof: shortest+longest {s+l:.0f} > other two "
+                          f"{vals[1]+vals[2]:.0f} (no continuous rotation)"}
+    if abs(L["crank"] - s) > 0.5:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"crank {L['crank']:.0f} is not the shortest link {s:.0f} "
+                          f"(won't be a crank-rocker)"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": f"Grashof crank-rocker (crank {L['crank']:.0f} = shortest)"}
+
+
+TOY27_FOURBAR = Toy(
+    "fourbar_crankrocker", "Four-bar crank-rocker (Grashof + crank shortest)",
+    components={n: (f"Build the {n.upper()} link of a four-bar linkage: a flat bar with "
+                    f"two pivot holes (radius 4 mm) {int(L)} mm apart. Then save_component.")
+                for n, L in FOURBAR.items()},
+    single_task=(
+        "You will build the four links of a crank-rocker four-bar, one at a time, each a "
+        "bar with two pivot holes at the stated spacing: "
+        + ", ".join(f"{n}={int(L)} mm" for n, L in FOURBAR.items())
+        + ". For a crank-rocker the CRANK must be the shortest link and the set must "
+          "satisfy Grashof (shortest+longest <= other two)."),
+    gate=_fourbar_gate,
+    reference=lambda w, name, path: _ref_two_hole_bar(w, path, name, FOURBAR[name]),
+    negatives=[
+        # crank made longest -> breaks Grashof and isn't the shortest link.
+        Neg("crank_too_long", "interference",
+            agent={"crank": "Build a bar with two holes (radius 4 mm) 120 mm apart. Then save_component."},
+            ref={"crank": lambda w, p: _ref_two_hole_bar(w, p, "crank", 120.0)}),
+    ],
+)
+
+
+# --- toy 28: cam_follower (eccentric cam lift matches follower travel) -------
+CAM_R, CAM_E = 30.0, 8.0                        # cam radius, eccentricity -> lift 2e
+CAM_LIFT = 2 * CAM_E
+
+
+def _ref_cam(w, path, name, R=CAM_R, e=CAM_E, bore_r=5.0, h=10.0):
+    w.call("new_document", name=name)
+    disk = w.call("add_primitive", kind="cylinder", r=R, h=h, name=name)
+    bore = w.call("add_primitive", kind="cylinder", r=bore_r, h=h * 3,
+                  placement=[e, 0, -h], name="bore")
+    w.call("boolean_op", op="cut", base=disk["handle"], tool=bore["handle"])
+    w.call("save_document", path=str(path))
+
+
+def _cam_gate(tmp, files):
+    cf = _cyl_faces(files["cam"])
+    outer = max(cf, key=lambda c: c["r"])
+    bore = min(cf, key=lambda c: c["r"])
+    e = _m2.hypot(outer["cx"] - bore["cx"], outer["cy"] - bore["cy"])
+    lift = 2 * e
+    fh = _cyl_faces(files["follower"])
+    travel = _m2.hypot(fh[0]["cx"] - fh[1]["cx"], fh[0]["cy"] - fh[1]["cy"])
+    if abs(lift - CAM_LIFT) > 0.6:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"cam lift {lift:.1f} != target {CAM_LIFT:.0f} mm (eccentricity off)"}
+    if abs(travel - lift) > 0.8:
+        return {"ok": False, "interference": [], "envelope": [],
+                "reason": f"follower travel {travel:.1f} != cam lift {lift:.1f} mm"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": f"cam lift {lift:.0f} mm matches follower travel {travel:.0f} mm"}
+
+
+TOY28_CAM = Toy(
+    "cam_follower", "Cam-follower (eccentric cam lift matches follower travel)",
+    components={
+        "cam": (f"Build a CAM: a disk radius {CAM_R:g} mm, 10 mm thick, with its bore "
+                f"(rotation axis, radius 5 mm) offset {CAM_E:g} mm from the disk centre. "
+                f"Rotating it gives a follower lift of 2*offset = {CAM_LIFT:g} mm. Then "
+                f"save_component."),
+        "follower": (f"Build a FOLLOWER guide: a bar with two holes (radius 4 mm) marking "
+                     f"the follower's travel limits, spaced by the cam's lift = "
+                     f"{CAM_LIFT:g} mm. Then save_component."),
+    },
+    single_task=(
+        f"You will build a cam and its follower guide, one at a time. CAM: disk radius "
+        f"{CAM_R:g} mm with the bore offset {CAM_E:g} mm from centre (lift = 2*offset = "
+        f"{CAM_LIFT:g} mm). FOLLOWER: a bar with two travel-limit holes spaced by that "
+        f"lift ({CAM_LIFT:g} mm). They must agree."),
+    gate=_cam_gate,
+    reference=lambda w, name, path: (
+        _ref_cam(w, path, "cam") if name == "cam"
+        else _ref_two_hole_bar(w, path, "follower", CAM_LIFT)),
+    negatives=[
+        # cam eccentricity wrong -> lift no longer matches the follower travel.
+        Neg("cam_wrong_lift", "interference",
+            agent={"cam": "Build a disk radius 30 mm, 10 mm thick, with the bore offset 4 mm from centre. Then save_component."},
+            ref={"cam": lambda w, p: _ref_cam(w, p, "cam", e=4.0)}),
+    ],
+)
+
+
+# =============================================================================
+# toy 29: thermo_structural (capstone, family F) — coupled multi-physics.
+# A heat-sink bracket carrying a hot component (fixed heat flux on top) AND a
+# mechanical load must BOTH stay below a temperature limit (thermal FEM) AND below a
+# stress limit (structural FEM), within a mass budget. Sizing the thickness couples
+# all three: too thin -> runs hot AND over-stresses; too thick -> over the mass
+# budget. Runs both solvers on the same agent geometry, gated relative to a reference.
+# (Genuine thermal-vs-structural shape tradeoffs — fins — are a noted extension.)
+# =============================================================================
+TS_W, TS_LOAD, TS_FLUX = 30.0, 2000.0, 15000.0
+TS = {"sinkA": {"L": 60.0, "h_ref": 12.0}, "sinkB": {"L": 80.0, "h_ref": 14.0}}
+TS_FEM_S = {"fix_normal": [-1, 0, 0], "load_normal": [0, 0, 1], "force_n": TS_LOAD}
+TS_FEM_T = {"heat_normal": [0, 0, 1], "flux_w_m2": TS_FLUX}
+TS_TEMP_MARGIN, TS_VM_MARGIN, TS_MASS_MARGIN = 1.15, 1.6, 1.25
+
+
+def _ts_budget_g(spec):
+    return spec["L"] * TS_W * spec["h_ref"] * _FEM_DENSITY * TS_MASS_MARGIN * 1000.0
+
+
+def _ts_gate(tmp, files):
+    for name, spec in TS.items():
+        bref = lambda p, s=spec, n=name: _box_file(p, n, s["L"], TS_W, s["h_ref"])
+        s_ref = _fem_ref(f"ts_s:{name}", bref, TS_FEM_S)
+        t_ref = _fem_ref(f"ts_t:{name}", bref, TS_FEM_T, fn=_fem_thermal)
+        s = _fem_stress(files[name], **TS_FEM_S)
+        t = _fem_thermal(files[name], **TS_FEM_T)
+        mass_g = _part_volume(files[name]) * _FEM_DENSITY * 1000.0
+        if t["max_temp_c"] > t_ref["max_temp_c"] * TS_TEMP_MARGIN:
+            return {"ok": False, "interference": [], "envelope": [],
+                    "reason": f"{name}: runs hot, {t['max_temp_c']:.0f} > "
+                              f"{t_ref['max_temp_c']*TS_TEMP_MARGIN:.0f} °C (too thin to conduct)"}
+        if s["vm_mpa"] > s_ref["vm_mpa"] * TS_VM_MARGIN:
+            return {"ok": False, "interference": [], "envelope": [],
+                    "reason": f"{name}: over-stressed, {s['vm_mpa']:.3f} > "
+                              f"{s_ref['vm_mpa']*TS_VM_MARGIN:.3f} MPa"}
+        if mass_g > _ts_budget_g(spec):
+            return {"ok": False, "interference": [], "envelope": [],
+                    "reason": f"{name}: mass {mass_g:.0f} g > budget {_ts_budget_g(spec):.0f} g"}
+    return {"ok": True, "interference": [], "envelope": [],
+            "reason": "both heat-sinks cool enough and strong enough within mass budget"}
+
+
+def _ts_task(name):
+    spec = TS[name]
+    return (f"Build a HEAT-SINK BRACKET: a steel plate {spec['L']:.0f} mm long (X) by "
+            f"{TS_W:.0f} mm wide (Y), fixed at the wall (x=0 face). It carries a hot "
+            f"component on top (steady heat into the top face) AND a {TS_LOAD:.0f} N "
+            f"mechanical load on top. Choose the THICKNESS (Z) so it BOTH stays cool "
+            f"(a thicker plate conducts heat away and runs cooler) AND is strong enough "
+            f"(thicker bends/stresses less) — while keeping mass at or below "
+            f"{_ts_budget_g(spec):.0f} g. Build the box at your thickness, then "
+            f"save_component.")
+
+
+TOY29_THERMO_STRUCT = Toy(
+    "thermo_structural", "Coupled thermo-structural heat-sink (cool + strong + mass budget)",
+    components={"sinkA": _ts_task("sinkA"), "sinkB": _ts_task("sinkB")},
+    single_task=(
+        f"You will build two heat-sink brackets, one at a time, each fixed at x=0, with "
+        f"a hot component + {TS_LOAD:.0f} N load on top. Size each THICKNESS so it stays "
+        f"cool (thicker conducts heat away) AND strong (thicker stresses less) within "
+        f"its mass budget:\n"
+        f"sinkA: {TS['sinkA']['L']:.0f}x{TS_W:.0f} mm, mass <= {_ts_budget_g(TS['sinkA']):.0f} g\n"
+        f"sinkB: {TS['sinkB']['L']:.0f}x{TS_W:.0f} mm, mass <= {_ts_budget_g(TS['sinkB']):.0f} g"),
+    gate=_ts_gate,
+    reference=lambda w, name, path: _ref_box(
+        w, path, name, TS[name]["L"], TS_W, TS[name]["h_ref"]),
+    negatives=[
+        # too thin -> runs hot AND over-stresses (fails the physics).
+        Neg("sinkA_too_thin", "interference",
+            agent={"sinkA": (f"Build a {TS['sinkA']['L']:.0f}x{TS_W:.0f}x5 mm steel "
+                             f"plate. Then save_component.")},
+            ref={"sinkA": lambda w, p: _ref_box(w, p, "sinkA",
+                                                TS["sinkA"]["L"], TS_W, 5.0)}),
+        # too thick -> cool and strong but over the mass budget.
+        Neg("sinkA_too_thick", "interference",
+            agent={"sinkA": (f"Build a {TS['sinkA']['L']:.0f}x{TS_W:.0f}x24 mm steel "
+                             f"plate. Then save_component.")},
+            ref={"sinkA": lambda w, p: _ref_box(w, p, "sinkA",
+                                                TS["sinkA"]["L"], TS_W, 24.0)}),
+    ],
+)
+
+
 TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
                            TOY5_NSLOT4, TOY5_NSLOT8,
                            TOY6_TCHAIN3, TOY6_TCHAIN6,
@@ -2420,7 +2928,10 @@ TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
                            TOY13_GEARBOX6, TOY14_GEARBOX3, TOY15_PLANETARY,
                            TOY16_ACKERMANN, TOY17_SLIDERCRANK,
                            TOY18_GENEVA, TOY19_SARRUS, TOY20_WISHBONE,
-                           TOY21_FEM_BRACKET, TOY22_FEM_BEAM)}
+                           TOY21_FEM_BRACKET, TOY22_FEM_BEAM,
+                           TOY23_CG, TOY24_PRESSFIT, TOY25_THREAD,
+                           TOY26_RACKPINION, TOY27_FOURBAR, TOY28_CAM,
+                           TOY29_THERMO_STRUCT)}
 
 
 # --- conditions --------------------------------------------------------------
