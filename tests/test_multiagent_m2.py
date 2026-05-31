@@ -107,21 +107,66 @@ def _dispatch(w, save_path, name, args):
     return w.call(name, **args)
 
 
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def _cached_tools():
+    """TOOLS with a cache_control breakpoint on the last tool. Tools come first in
+    the canonical prompt, so this caches the whole (static) tool block — re-read at
+    ~0.1x input cost on every turn after the first instead of re-billed in full."""
+    cached = [dict(t) for t in TOOLS]
+    cached[-1] = {**cached[-1], "cache_control": _EPHEMERAL}
+    return cached
+
+
+def _cached_system(system):
+    """System prompt as a cached text block (static per condition)."""
+    return [{"type": "text", "text": system, "cache_control": _EPHEMERAL}]
+
+
+def _mark_conversation_cache(messages):
+    """Move a cache breakpoint to the last block of the most recent USER message,
+    clearing any earlier one — caches the growing conversation prefix turn over
+    turn. Only user messages are annotated (assistant content is SDK objects we
+    don't mutate); at create() time the last message is always a user turn."""
+    # strip prior conversation breakpoints
+    for m in messages:
+        if m["role"] == "user" and isinstance(m["content"], list):
+            for blk in m["content"]:
+                if isinstance(blk, dict):
+                    blk.pop("cache_control", None)
+    last = messages[-1]
+    if last["role"] != "user":
+        return
+    if isinstance(last["content"], str):
+        last["content"] = [{"type": "text", "text": last["content"],
+                            "cache_control": _EPHEMERAL}]
+    elif isinstance(last["content"], list) and last["content"]:
+        tail = last["content"][-1]
+        if isinstance(tail, dict):
+            tail["cache_control"] = _EPHEMERAL
+
+
 def run_agent(client, system, task, save_path):
     """Drive one component-builder agent through a tool-use loop in its own Worker.
-    Returns {ok_built, turns, in_tokens, out_tokens, error}."""
+    Returns {ok_built, turns, in_tokens, out_tokens, cache_read, cache_write}."""
     import anthropic  # noqa: F401
-    in_tok = out_tok = 0
+    in_tok = out_tok = cache_read = cache_write = 0
+    tools = _cached_tools()
+    sys_blocks = _cached_system(system)
     saved = False
     with Worker() as w:
         messages = [{"role": "user", "content": task}]
         for turn in range(MAX_TURNS):
+            _mark_conversation_cache(messages)
             resp = client.messages.create(
-                model=MODEL, max_tokens=1024, system=system,
-                tools=TOOLS, messages=messages,
+                model=MODEL, max_tokens=1024, system=sys_blocks,
+                tools=tools, messages=messages,
             )
             in_tok += resp.usage.input_tokens
             out_tok += resp.usage.output_tokens
+            cache_read += getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+            cache_write += getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
             messages.append({"role": "assistant", "content": resp.content})
 
             tool_uses = [b for b in resp.content if b.type == "tool_use"]
@@ -147,7 +192,8 @@ def run_agent(client, system, task, save_path):
             if saved:
                 break
     return {"ok_built": saved, "turns": turn + 1,
-            "in_tokens": in_tok, "out_tokens": out_tok}
+            "in_tokens": in_tok, "out_tokens": out_tok,
+            "cache_read": cache_read, "cache_write": cache_write}
 
 
 # --- toy #1 peg-in-hole: contract, agent tasks, and the deterministic gate ----
@@ -225,6 +271,8 @@ def run_partition(client, tmp):
         "reason": gate["reason"],
         "in_tokens": a["in_tokens"] + b["in_tokens"],
         "out_tokens": a["out_tokens"] + b["out_tokens"],
+        "cache_read": a["cache_read"] + b["cache_read"],
+        "cache_write": a["cache_write"] + b["cache_write"],
         "agents": {"plate": a, "peg": b},
     }
 
@@ -234,7 +282,7 @@ def run_single(client, tmp):
     import anthropic  # noqa: F401
     plate_f = tmp / "single_plate.FCStd"
     peg_f = tmp / "single_peg.FCStd"
-    in_tok = out_tok = 0
+    in_tok = out_tok = cache_read = cache_write = 0
     saved = {"plate": False, "peg": False}
     # Build sequentially in ONE conversation, each in its own Worker/file.
     for comp, fpath, prompt in (
@@ -244,6 +292,8 @@ def run_single(client, tmp):
         r = run_agent(client, SYSTEM, SINGLE_TASK + "\n\n" + prompt, fpath)
         in_tok += r["in_tokens"]
         out_tok += r["out_tokens"]
+        cache_read += r["cache_read"]
+        cache_write += r["cache_write"]
         saved[comp] = r["ok_built"]
     built = all(saved.values()) and plate_f.exists() and peg_f.exists()
     gate = gate_peg_in_hole(tmp, plate_f, peg_f) if built else {
@@ -251,6 +301,7 @@ def run_single(client, tmp):
     return {
         "condition": "single", "built": built, "passed": gate["ok"],
         "reason": gate["reason"], "in_tokens": in_tok, "out_tokens": out_tok,
+        "cache_read": cache_read, "cache_write": cache_write,
     }
 
 
@@ -284,10 +335,11 @@ def main():
             r["seconds"] = round(time.time() - ts, 1)
             results.append(r)
             tok = r.get("in_tokens", 0) + r.get("out_tokens", 0)
+            cr = r.get("cache_read", 0)
             verdict = "PASS" if r.get("passed") else ("BUILT-but-FAILED-gate"
                                                        if r.get("built") else "DID-NOT-BUILD")
             print(f"  {cond_name:9s}  {verdict:22s}  {r['reason']:40s}  "
-                  f"{tok} tok  {r['seconds']}s")
+                  f"{tok} tok ({cr} cached)  {r['seconds']}s")
             if r.get("error"):
                 print(r["error"])
 
