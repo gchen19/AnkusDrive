@@ -1,17 +1,19 @@
 name: Tests
 
-# Run the DriftPin test suite on every push to main and every PR. Gates the
-# publish.yml release path — tagging from a non-green commit shouldn't ship.
+# Run the DriftPin test suite on every push to main and every PR — on a
+# SELF-HOSTED runner. This project's test CI does NOT use GitHub-hosted
+# runners; it runs on a machine that already has FreeCAD 1.1 installed.
 #
-# FreeCAD comes from conda-forge so we get 1.1.x reliably; Ubuntu apt lags
-# well behind. The same env supplies Pillow/numpy, so the two-interpreter
-# split in tests/run_all.sh (system python3 for FreeCAD-loading tests, .venv
-# for tests needing Pillow+numpy) collapses to one env — we symlink the
-# conda env's bin/ as .venv/bin so both paths resolve to the same Python.
+# Because FreeCAD is already present, we don't download it via conda. Instead
+# tests/setup_local.sh reuses the installed AppImage: it puts `freecadcmd` on
+# PATH (so driftpin's worker resolves it via shutil.which) and points
+# .venv/bin/python3 at FreeCAD's bundled python, which already ships numpy +
+# Pillow. That feeds run_all.sh's two-interpreter split (system python3 for
+# the worker tests, .venv python3 for the numpy/Pillow tests).
 #
 # Perf and reliability suites are gated behind env vars in run_all.sh and
-# intentionally NOT run here (perf is noisy on CI runners, reliability costs
-# Anthropic API credits).
+# intentionally NOT run here (perf is noisy, reliability costs Anthropic
+# API credits).
 
 on:
   push:
@@ -24,34 +26,19 @@ permissions:
 
 jobs:
   test:
-    name: Test suite (FreeCAD 1.1 via conda-forge)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash -el {0}  # -e for fail-fast, -l so micromamba activate works
+    name: Test suite (FreeCAD 1.1, self-hosted)
+    runs-on: [self-hosted, driftpin]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Install FreeCAD + Python deps via micromamba
-        uses: mamba-org/setup-micromamba@v1
-        with:
-          environment-name: driftpin
-          create-args: >-
-            python=3.11
-            freecad=1.1.*
-            pillow
-            numpy
-          cache-environment: true
-          init-shell: bash
-
-      - name: Symlink conda env as .venv (so tests/run_all.sh finds VENV_PY)
+      - name: Wire local FreeCAD (no download; reuses installed AppImage)
         run: |
-          mkdir -p .venv
-          ln -sfn "$CONDA_PREFIX/bin" .venv/bin
+          bash tests/setup_local.sh
+          # expose freecadcmd to subsequent steps
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Sanity check — FreeCAD + freecadcmd reachable
+      - name: Sanity check — freecadcmd reachable
         run: |
-          python -c "import FreeCAD; print('FreeCAD', FreeCAD.Version())"
           which freecadcmd
           freecadcmd --version 2>&1 | head -1 || true
 
