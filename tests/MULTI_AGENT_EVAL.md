@@ -378,3 +378,48 @@ baseline against the earlier Haiku numbers — re-baseline if mixing.
 GD&T coverage map: **Location ✅** (position, concentricity, symmetry — clean fits);
 **Orientation ⚠️** (angularity/perpendicularity/parallelism — reachable now via `rotate`);
 **Form / Profile / Runout ❌** (no deviation possible with exact primitives).
+
+---
+
+## Kinematic mechanisms added 2026-05-31 (free; selftest 48/48, 20 toys)
+
+Seven mechanism toys — gear trains, linkages, and moving assemblies — a different
+class from the static-fit toys. Two new gate capabilities back them:
+
+- **Gear geometry** via a new first-class DriftPin primitive **`add_gear`** (FreeCAD's
+  core involute generator, extruded to a solid; external + internal/ring). Committed
+  separately (`feat(worker): add_gear`). The agent builder surface gains `add_gear`
+  too (gears can't be built from box/cylinder). Pitch radius is read back from the
+  as-built tip radius (`rp = tip − module`; internal ring from inner-tip + module).
+- **Swept-motion interference** (`_sweep_clear`): the gate poses every part at each
+  motion step via forward kinematics it encodes, then interference-checks. Proven on
+  the slider-crank (a too-wide piston jams the bore at 3180 mm³ mid-stroke).
+
+| Toy | Class | Gate checks |
+|---|---|---|
+| `kin_gearbox6` / `kin_gearbox3` | gear geometry | every input+output pair meshes at one shared centre distance C; each ratio hits target (shared-constraint partition gem; 6-speed = 12 gears) |
+| `kin_planetary` | gear geometry | Nring = Nsun + 2·Nplanet (measured pitch radii); carrier's n planets equally spaced at the sun-planet centre distance; equal-spacing assembly condition |
+| `kin_ackermann` | linkage (static) | each steering arm's kingpin→tie-rod line aims at the rear-axle midpoint; catches parallel-arm steering |
+| `kin_slidercrank` | moving | closure L>R (no bind), stroke = 2R, rod swing < 20°, **posed-interference sweep** of the piston through its stroke in the bore |
+| `kin_geneva` | moving | drive-pin radius = C·sin(π/n) (tangency, no jam); n slots equally spaced → 1/n index |
+| `kin_sarrus` | moving | the two leaves' hinge axes are perpendicular (X⊥Y) → 1-DOF straight-line motion; catches parallel hinges |
+| `kin_wishbone` | moving | SLA geometry (upper arm shorter than lower → camber gain); upright length closes the four-bar loop |
+
+**Honest finding on motion gates.** For these mechanisms the *robust discriminator*
+is **measured geometric relations + analytic forward-kinematics over the motion
+range**, not posed-solid interference. Posed interference (`_sweep_clear`) is the
+right test only for **collision-type** failures (slider-crank piston-in-bore) — for
+ratio/closure/tangency/aiming failures it either doesn't discriminate (an idealised
+pose keeps parts on their kinematic path regardless of size) or risks false failures
+from posing math. So the suite uses analytic kinematics for correctness and the posed
+sweep where a collision is the natural failure.
+
+**Abstractions (kept honest, like pitch-cylinders earlier).** Gears use *real*
+involute teeth (`add_gear`); Geneva slots are abstracted as n equally-spaced
+engagement holes (captures the index ratio + tangency, not slot-sliding); Sarrus is
+reduced to its defining perpendicular-hinge-axes property; wishbone to SLA + four-bar
+loop closure (camber gain implied by upper<lower).
+
+**Comparability caveat (again):** `add_gear` and `rotate` enlarge the agent tool
+surface, so kinematic-era pass-rates are not a clean baseline against the original
+static-toy Haiku numbers — re-baseline before mixing.
