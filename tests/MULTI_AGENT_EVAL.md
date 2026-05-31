@@ -94,22 +94,27 @@ Reported per toy and in aggregate.
 
 ## The toy ladder
 
-Each isolates one failure mode and has a deterministic oracle. Ordered by
-difficulty; build them in order, stop adding when pass-rates plateau.
+Each isolates one failure mode and has a deterministic oracle. **All six are built
+and green** in Layer M1 (`tests/multiagent_toys.py` + `tests/test_multiagent_m1.py`),
+exercising the real tools (`merge_assembly`, `publish_interface` + mate-by-frame,
+recursive BOM/interference, `envelope_check`, `interface_align_check`,
+`assembly_lock`/`assembly_lock_check`).
 
-| # | Toy | Isolates | Oracle |
-|---|-----|----------|--------|
-| 1 | **Peg-in-hole** (clearance fit) | a shared *dimension* contract | clearance > 0, axes collinear, no interference |
-| 2 | **Bolted flange** (bolt circle) | a shared *parametric* interface | every hole in A aligns to one in B within tol |
-| 3 | **Bracket → housing face + keep-out** | mating face + **envelope gate** | faces coplanar, holes align, bracket bbox ⊂ envelope |
-| 4 | **3-part stack** as nested subassembly | fan-in nesting + recursive BOM | BOM counts correct, no cross-level interference |
-| 5 | **Enclosure: lid + shaft bore** | *multiple* interfaces per part | all interfaces satisfied at once |
-| 6 | **Move a bolt circle mid-design** | **change propagation** (RFC §9) | only affected neighbors re-dispatch; re-converges |
+| # | Toy | Isolates | Oracle | ✓ |
+|---|-----|----------|--------|---|
+| 1 | **Peg-in-hole** (clearance fit) | a shared *dimension* contract | clearance > 0, no interference | ✓ |
+| 2 | **Bolted flange** (bolt circle) | a shared *parametric* interface | every bolt clears both plates | ✓ |
+| 3 | **Bracket → housing face + keep-out** | mating face + **envelope gate** | bracket bbox ⊂ envelope, no interference | ✓ |
+| 4 | **Nested subassembly** (A+B under C) | fan-in nesting + recursive BOM | BOM flattens to leaves, no cross-level interference | ✓ |
+| 5 | **Enclosure: lid mates to housing** | *multiple* interfaces per part | both interfaces coincide (mate + align gate) | ✓ |
+| 6 | **Move an interface mid-design** | **change propagation** (RFC §9) | lockfile flags only the stale neighbors | ✓ |
 
-We have **#1 already** in skeletal form: `example/phase0_walkthrough.py` is a
-peg-*on*-plate with its embedded-peg clash as a first negative control. Toy #1
-proper tightens it to a clearance fit with a *shared diameter* in the manifest (so
-a builder that mis-reads the contract produces a real interference).
+Toy #6 is the odd one: it's about file *versions over time*, not one merged
+assembly's gates, so it has its own driver (`toy6_*`) and `test_change_propagation`
+rather than the Variant/`run_gates` shape. Its ancestor is
+`example/phase0_walkthrough.py` — a peg-*on*-plate with an embedded-peg clash as a
+first negative control; toy #1 proper tightens it to a clearance fit with a
+*shared diameter* contract.
 
 ### Negative controls per toy (the actual work)
 
@@ -118,7 +123,7 @@ a builder that mis-reads the contract produces a real interference).
 - **#3** bracket exceeds envelope; mating face at wrong Z; bolt pattern offset.
 - **#4** middle part flipped; BOM count off by one; cross-level overlap.
 - **#5** lid bore smaller than shaft; one of two interfaces satisfied but not the other.
-- **#6** neighbor *not* re-dispatched after an interface move → stale component slips through (lockfile must catch via `built_against`).
+- **#6** neighbor *not* re-dispatched after an interface move → stale component slips through (lockfile catches it: file hash + interface-frame hash + mate deps → `stale`).
 
 A toy is "done" when its gates pass **only** the reference solution and catch
 **every** negative control. Until then its agent numbers are meaningless.
