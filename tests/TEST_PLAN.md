@@ -426,8 +426,9 @@ minimal. If/when we cross 100 tests this assumption flips.
 **Running the full suite (today):**
 
 ```bash
+bash tests/setup_local.sh   # one-time: wire freecadcmd + .venv to local FreeCAD
 bash tests/run_all.sh
-# 51 tests in ~12s. Reliability gated; set RUN_RELIABILITY=1 to enable.
+# ~115 tests in ~35s. Reliability gated; set RUN_RELIABILITY=1 to enable.
 ```
 
 Or per-file (each is independently runnable):
@@ -446,11 +447,18 @@ RUN_RELIABILITY=1 .venv/bin/python3 tests/test_reliability.py  # gated
 file. Keep the `_discover()` + `main()` pattern. Don't introduce a test
 framework dependency without a real reason.
 
-**CI plan (when it lands):** run `test_worker.py` + `test_render.py` on
-every PR. Run `test_integration.py` + `test_determinism.py` +
-`test_edit_stability.py` + `test_negative_paths.py` on PRs touching
-`worker.py` / `mcp_server.py` / `render.py`. Run perf and reliability
-suites weekly. Cache the Anthropic API responses so re-runs are free.
+**CI runs on a self-hosted runner.** `test.yml` runs the suite on every push
+to `main` and every PR — but on a **self-hosted** GitHub Actions runner, not a
+GitHub-hosted `ubuntu-latest` one. The runner machine already has FreeCAD 1.1
+installed, so CI reuses it instead of downloading FreeCAD via conda:
+`tests/setup_local.sh` symlinks `freecadcmd` onto PATH (so driftpin's worker
+resolves it via `shutil.which`) and points `.venv/bin/python3` at FreeCAD's
+bundled python, which already ships numpy + Pillow. That feeds `run_all.sh`'s
+two-interpreter split — system `python3` for the worker tests, `.venv` python3
+for the numpy/Pillow tests — with no second install. Perf and reliability stay
+gated behind `RUN_PERF=1` / `RUN_RELIABILITY=1`. The same `setup_local.sh` is
+what makes any machine a runner host; see it for the one-time wiring.
+(Publishing still runs on a GitHub-hosted runner via `publish.yml`.)
 
 ---
 
