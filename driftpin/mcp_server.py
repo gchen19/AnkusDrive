@@ -949,6 +949,29 @@ def merge_assembly(manifest: str) -> dict:
 
 
 @mcp.tool()
+def assembly_lock(manifest: str, lockfile: str | None = None) -> dict:
+    """Write a lockfile recording each component's content hash, published-
+    interface hash, and mate dependencies — the provenance baseline a coordinator
+    uses to detect drift across a team. Call after a clean merge. lockfile
+    defaults to <manifest>.lock.json. Returns {lockfile, components}."""
+    return _call("assembly_lock", manifest=manifest, lockfile=lockfile)
+
+
+@mcp.tool()
+def assembly_lock_check(manifest: str, lockfile: str | None = None) -> dict:
+    """Compare current component files to a lockfile and classify drift (change
+    propagation, RFC §9):
+      modified          — file changed since lock
+      interface_changed — published interface frames moved (subset of modified)
+      stale             — mates to an interface_changed component and was NOT
+                          itself rebuilt: a neighbor that needs re-dispatch
+      new / removed     — components added to / dropped from the manifest
+    ok = nothing stale and no new/removed (safe to re-merge without re-dispatch).
+    Returns {modified, interface_changed, stale, new, removed, ok}."""
+    return _call("assembly_lock_check", manifest=manifest, lockfile=lockfile)
+
+
+@mcp.tool()
 def make_drawing_page(name: str = "Page", template: str | None = None) -> dict:
     """Create a TechDraw page using a built-in A4 landscape template by default.
     template: optional absolute path to a .svg template."""

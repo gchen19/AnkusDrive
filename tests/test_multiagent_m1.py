@@ -22,7 +22,10 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from driftpin import Worker  # noqa: E402
-from tests.multiagent_toys import TOYS, toy1_build, run_gates  # noqa: E402
+from tests.multiagent_toys import (  # noqa: E402
+    TOYS, toy1_build, run_gates,
+    toy6_setup, toy6_internal_change, toy6_interface_change,
+)
 
 
 def _counts_multiset(bom):
@@ -93,6 +96,36 @@ def test_gate_determinism():
         assert a["interference"] == b["interference"] == [], (a, b)
         assert _counts_multiset(a["bom"]) == _counts_multiset(b["bom"])
         print("    toy1 reference: identical gate readings across two workers")
+
+
+def test_change_propagation():
+    """Toy #6 (RFC §9): the lockfile distinguishes an internal change (safe to
+    re-merge) from an interface change (neighbors stale), and CATCHES a neighbor
+    that wasn't re-dispatched after an interface moved."""
+    with tempfile.TemporaryDirectory() as td, Worker() as w:
+        tmp = Path(td)
+        s = toy6_setup(w, tmp)
+        man, lock = s["manifest"], s["lockfile"]
+
+        fresh = w.call("assembly_lock_check", manifest=man, lockfile=lock)
+        assert fresh["ok"] and not fresh["modified"] and not fresh["stale"], fresh
+
+        # internal change: file differs, interfaces intact -> safe, no neighbor hit
+        toy6_internal_change(w, tmp)
+        ic = w.call("assembly_lock_check", manifest=man, lockfile=lock)
+        assert "housing" in ic["modified"], ic
+        assert "housing" not in ic["interface_changed"], ic
+        assert ic["stale"] == [] and ic["ok"], ic
+
+        # re-lock to the new baseline, then move an interface, leaving lid stale
+        w.call("assembly_lock", manifest=man, lockfile=lock)
+        toy6_interface_change(w, tmp)
+        xc = w.call("assembly_lock_check", manifest=man, lockfile=lock)
+        assert "housing" in xc["interface_changed"], xc
+        assert "lid" in xc["stale"], xc          # the catch: neighbor not re-dispatched
+        assert not xc["ok"], xc
+        print("    change propagation: internal change safe; "
+              "interface move flags stale neighbor 'lid' (re-dispatch needed)")
 
 
 # --- runner (same shape as test_integration.py) ------------------------------

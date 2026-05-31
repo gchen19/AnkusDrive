@@ -2265,6 +2265,161 @@ def _h_interface_align_check(p):
     return out
 
 
+# --- change propagation + lockfile (RFC §9) ----------------------------------
+#
+# A lockfile is the provenance record that lets a coordinator detect drift across
+# a team without reading geometry: per component, a content hash of its file plus
+# a hash of its published interface frames, and which other components it mates to
+# (depends on). On re-check we distinguish:
+#   internal change  — file changed, interfaces unchanged  -> just re-merge
+#   interface change — published frames moved              -> every neighbor that
+#                       mates to it is STALE and must be re-dispatched.
+# This is exactly the "neighbor not re-dispatched after an interface move" failure
+# toy #6 guards against.
+
+
+def _hash_file_bytes(path):
+    """blake2b digest of a file's bytes — detects any change to the component."""
+    import hashlib
+    h = hashlib.blake2b(digest_size=12)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _interfaces_of_file(path):
+    """Published interface frames read FROM DISK. Closes any stale in-memory copy
+    of the file first (and the freshly-opened one after) so the read reflects what
+    is actually on disk. Run on quiescent files — not while a file is linked into
+    a live assembly in this same worker."""
+    import os as _os
+    for d in list(App.listDocuments().values()):
+        try:
+            if d.FileName and _os.path.exists(d.FileName) \
+                    and _os.path.samefile(d.FileName, path):
+                App.closeDocument(d.Name)
+        except Exception:
+            pass
+    doc = App.openDocument(path, True)
+    try:
+        for o in doc.Objects:
+            if _IFACE_PROP in o.PropertiesList:
+                import json as _json
+                try:
+                    return _json.loads(getattr(o, _IFACE_PROP) or "{}")
+                except Exception:
+                    return {}
+        return {}
+    finally:
+        try:
+            App.closeDocument(doc.Name)
+        except Exception:
+            pass
+
+
+def _lock_state(manifest, base_dir):
+    """Per-component lock state: {id: {file, file_hash, interfaces_hash,
+    depends_on}}. depends_on lists the components this one mates to."""
+    import os as _os
+    import json as _json
+    import hashlib
+    comps = manifest.get("components", {})
+    inst_comp = {inst.get("name", inst["component"]): inst["component"]
+                 for inst in manifest.get("instances", [])}
+    deps = {cid: set() for cid in comps}
+    mates = list(manifest.get("mates", []))
+    for inst in manifest.get("instances", []):
+        if inst.get("mate"):
+            m = dict(inst["mate"])
+            m["child"] = inst.get("name", inst["component"])
+            mates.append(m)
+    for m in mates:
+        cc = inst_comp.get(m["child"], m["child"])
+        pc = inst_comp.get(m["parent"], m["parent"])
+        if cc in deps and pc in comps:
+            deps[cc].add(pc)
+    state = {}
+    for cid, spec in comps.items():
+        cfile = spec["file"]
+        cfile = cfile if _os.path.isabs(cfile) else _os.path.join(base_dir, cfile)
+        ifaces = _interfaces_of_file(cfile)
+        ih = hashlib.blake2b(
+            _json.dumps(ifaces, sort_keys=True).encode(), digest_size=12).hexdigest()
+        state[cid] = {"file": spec["file"], "file_hash": _hash_file_bytes(cfile),
+                      "interfaces_hash": ih, "depends_on": sorted(deps[cid])}
+    return state
+
+
+@handler("assembly_lock")
+def _h_assembly_lock(p):
+    """Write a lockfile recording each component's content hash, interface hash,
+    and mate dependencies — the provenance baseline for change detection. Call
+    after a clean merge. lockfile defaults to <manifest>.lock.json. Returns
+    {lockfile, components}."""
+    import os as _os
+    import json as _json
+    manifest_path = p["manifest"]
+    with open(manifest_path) as f:
+        man = _json.load(f)
+    base_dir = _os.path.dirname(_os.path.abspath(manifest_path))
+    lockfile = p.get("lockfile") or (
+        _os.path.splitext(manifest_path)[0] + ".lock.json")
+    state = _lock_state(man, base_dir)
+    lock = {"manifest": _os.path.basename(manifest_path), "components": state}
+    with open(lockfile, "w") as f:
+        _json.dump(lock, f, indent=2, sort_keys=True)
+    return {"lockfile": lockfile, "components": state}
+
+
+@handler("assembly_lock_check")
+def _h_assembly_lock_check(p):
+    """Compare current component files to a lockfile and classify drift (RFC §9):
+      modified          — file changed since lock
+      interface_changed — published interface frames moved (subset of modified)
+      stale             — mates to an interface_changed component and was NOT
+                          itself rebuilt -> a neighbor that needs re-dispatch
+      new / removed     — components added to / dropped from the manifest
+    ok = nothing stale and no new/removed: safe to re-merge without re-dispatch.
+    An interface change with no un-rebuilt dependents is still ok (links reload)."""
+    import os as _os
+    import json as _json
+    manifest_path = p["manifest"]
+    with open(manifest_path) as f:
+        man = _json.load(f)
+    base_dir = _os.path.dirname(_os.path.abspath(manifest_path))
+    lockfile = p.get("lockfile") or (
+        _os.path.splitext(manifest_path)[0] + ".lock.json")
+    with open(lockfile) as f:
+        locked = _json.load(f).get("components", {})
+    current = _lock_state(man, base_dir)
+
+    modified, interface_changed = [], []
+    for cid, cur in current.items():
+        old = locked.get(cid)
+        if old is None:
+            continue
+        if cur["file_hash"] != old["file_hash"]:
+            modified.append(cid)
+        if cur["interfaces_hash"] != old["interfaces_hash"]:
+            interface_changed.append(cid)
+    new = [cid for cid in current if cid not in locked]
+    removed = [cid for cid in locked if cid not in current]
+
+    iface_set = set(interface_changed)
+    modified_set = set(modified)
+    stale = [
+        cid for cid, cur in current.items()
+        if cid not in iface_set and cid not in modified_set
+        and any(dep in iface_set for dep in cur["depends_on"])
+    ]
+    ok = not stale and not new and not removed
+    return {"modified": sorted(modified),
+            "interface_changed": sorted(interface_changed),
+            "stale": sorted(stale), "new": sorted(new),
+            "removed": sorted(removed), "ok": ok}
+
+
 @handler("add_part")
 def _h_add_part(p):
     """Add a part to an assembly. Source can be:

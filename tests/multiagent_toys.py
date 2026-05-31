@@ -398,6 +398,66 @@ def toy5_build(w, tmp, variant):
     return res["assembly"]
 
 
+# =============================================================================
+# Toy 6 — change propagation (RFC §9). Isolates the lockfile's ability to tell an
+# internal change (safe to re-merge) from an interface change (neighbors stale).
+# This one is about file VERSIONS over time, not one merged assembly's gates, so
+# it has its own driver (toy6_*) and test (test_change_propagation), not the
+# Variant/run_gates shape.
+# =============================================================================
+
+def _iface_box_with_pocket(w, path, name, sx, sy, sz, interfaces, pocket=False):
+    """An interface-publishing box; optionally cut an internal pocket so the file
+    changes WITHOUT touching its published interfaces."""
+    w.call("new_document", name=name)
+    box = w.call("add_primitive", kind="box", w=sx, d=sy, h=sz, name=name)
+    top = box
+    if pocket:
+        tool = w.call("add_primitive", kind="cylinder", r=5, h=sz,
+                      placement=[sx / 2, sy / 2, sz / 2], name="cavity")
+        top = w.call("boolean_op", op="cut", base=box["handle"], tool=tool["handle"])
+    for iname, frame in interfaces.items():
+        w.call("publish_interface", handle=top["handle"], name=iname, frame=frame)
+    w.call("save_document", path=str(path))
+
+
+def toy6_setup(w, tmp):
+    """Build housing+lid, write the manifest, write the initial lockfile.
+    Returns dict with manifest + lockfile paths."""
+    house = tmp / "t6_housing.FCStd"
+    lid = tmp / "t6_lid.FCStd"
+    _iface_box_with_pocket(w, house, "t6_housing", 80, 80, 40,
+                           {"seat": {"origin": [40, 40, 40], "z_axis": [0, 0, 1]}})
+    _iface_box_with_pocket(w, lid, "t6_lid", 80, 80, 8,
+                           {"seat": {"origin": [40, 40, 0], "z_axis": [0, 0, 1]}})
+    man = {"name": "t6_enc", "root": "t6_enc.FCStd",
+           "components": {"housing": {"file": "t6_housing.FCStd"},
+                          "lid": {"file": "t6_lid.FCStd"}},
+           "instances": [
+               {"component": "housing", "name": "housing", "placement": [0, 0, 0]},
+               {"component": "lid", "name": "lid",
+                "mate": {"child_iface": "seat", "parent": "housing",
+                         "parent_iface": "seat"}}]}
+    mpath = tmp / "t6_manifest.json"
+    mpath.write_text(json.dumps(man))
+    lock = w.call("assembly_lock", manifest=str(mpath))
+    return {"manifest": str(mpath), "lockfile": lock["lockfile"], "tmp": tmp}
+
+
+def toy6_internal_change(w, tmp):
+    """Rebuild the housing with an internal pocket — same published interfaces."""
+    _iface_box_with_pocket(w, tmp / "t6_housing.FCStd", "t6_housing", 80, 80, 40,
+                           {"seat": {"origin": [40, 40, 40], "z_axis": [0, 0, 1]}},
+                           pocket=True)
+
+
+def toy6_interface_change(w, tmp):
+    """Rebuild the housing with its seat frame MOVED — an interface change. The lid
+    (which mates to that seat) is deliberately NOT rebuilt."""
+    _iface_box_with_pocket(w, tmp / "t6_housing.FCStd", "t6_housing", 80, 80, 40,
+                           {"seat": {"origin": [20, 20, 40], "z_axis": [0, 0, 1]}})
+
+
 # --- registry ----------------------------------------------------------------
 
 class Toy:
