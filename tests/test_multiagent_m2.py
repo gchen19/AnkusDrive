@@ -124,6 +124,22 @@ TOOLS = [
                          "required": ["handle"]},
     },
     {
+        "name": "rotate",
+        "description": ("Rotate an existing solid (by handle) about an axis through its "
+                        "own centroid by angle_deg degrees. axis is [x,y,z] — e.g. "
+                        "[0,1,0] is the Y axis. Use to TILT a feature to a required "
+                        "orientation. Returns {rotated, angle_deg}."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string"},
+                "axis": {"type": "array", "items": {"type": "number"}},
+                "angle_deg": {"type": "number"},
+            },
+            "required": ["handle", "axis", "angle_deg"],
+        },
+    },
+    {
         "name": "save_component",
         "description": ("Save the finished component to its file. Call this LAST, once the "
                         "geometry is complete. Takes no path — the harness supplies it."),
@@ -132,9 +148,36 @@ TOOLS = [
 ]
 
 
+def _apply_rotation(w, objname, axis, angle_deg, center=None):
+    """Rotate a doc object in place about `center` (default its centroid) by angle_deg
+    about `axis`. Worker add_primitive only translates, so rotation goes through
+    run_script — shared by the agent `rotate` tool and the reference builders."""
+    ax = list(axis)
+    cexpr = (f"App.Vector({center[0]},{center[1]},{center[2]})"
+             if center is not None else "o.Shape.CenterOfMass")
+    w.call("run_script", code=f"""
+import FreeCAD as F
+o = App.ActiveDocument.getObject({objname!r})
+c = {cexpr}
+o.Placement = F.Placement(F.Vector(0,0,0),
+                          F.Rotation(F.Vector({ax[0]},{ax[1]},{ax[2]}), {float(angle_deg)}),
+                          c).multiply(o.Placement)
+App.ActiveDocument.recompute()
+__result__ = "ok"
+""")
+
+
 def _dispatch(w, save_path, name, args):
     if name == "save_component":
         return w.call("save_document", path=str(save_path))
+    if name == "rotate":
+        handles = w.call("list_handles")
+        h = args["handle"]
+        if h not in handles:
+            raise KeyError(f"unknown handle: {h!r}")
+        _apply_rotation(w, handles[h]["name"], args.get("axis", [0, 1, 0]),
+                        args["angle_deg"], args.get("center"))
+        return {"rotated": h, "angle_deg": args["angle_deg"]}
     return w.call(name, **args)
 
 
@@ -741,9 +784,576 @@ TOY6_TCHAIN3 = _make_tchain(3)
 TOY6_TCHAIN6 = _make_tchain(6)
 
 
+# =============================================================================
+# toy 7: UNEQUAL tolerance chain on a manufacturing grid — the REAL partition-LOSES
+# case (equal segments dodged it: identical rounding cancels, so tchain6 partition
+# passed 20/20). The lever is a coarse grid: with no grid each agent builds an exact
+# float and the chain sums to T; force whole-mm stock and local rounding can no longer
+# reconcile a GLOBAL total. The nominals are chosen so every segment rounds UP, so the
+# errors ACCUMULATE instead of cancel:
+#   nominals  [12.6,14.6,16.6,18.6,18.7,18.9] sum 100.0  -> each rounds to whole mm
+#   partition each agent rounds its own -> [13,15,17,19,19,19] = 102 (drift 2.0, FAIL)
+#   single    sees the whole chain -> picks 6 whole-mm lengths summing to 100 (PASS)
+# Probe C (free, MCP-verified 2026-05-31): partition drift 2.0mm vs single 0.0, tol 0.8
+# -> separates with 2.5x margin; FreeCAD reproduces mandated lengths exactly so the
+# gate measures the real choice. The result hinges on SINGLE actually reconciling
+# (in the no-grid equal case single failed to and drifted long) — the single_task
+# makes that explicit. Gate is the same length-sum oracle as tchain (reused).
+# =============================================================================
+
+TCHAINU_NOMINALS = [12.6, 14.6, 16.6, 18.6, 18.7, 18.9]  # sum 100.0, each rounds UP
+TCHAINU_N = len(TCHAINU_NOMINALS)
+TCHAINU_GRID = 1.0  # whole-millimetre manufacturing stock
+
+
+def _tchainu_rounded():
+    """What each partition agent independently produces (round nominal to grid)."""
+    return [round(x) for x in TCHAINU_NOMINALS]  # [13,15,17,19,19,19] = 102
+
+
+def _tchainu_reconciled():
+    """What a correct GLOBAL build (single / reference) achieves: whole-mm lengths
+    summing to exactly T, by trimming the excess off the trailing segments."""
+    ints = _tchainu_rounded()
+    excess = int(round(sum(ints) - TCHAIN_TOTAL))  # 2
+    i = len(ints) - 1
+    while excess > 0:
+        ints[i] -= 1
+        excess -= 1
+        i -= 1
+    return ints  # [13,15,17,19,18,18] = 100
+
+
+def _tchainu_seg_task(i):
+    return (f"You are building ONE segment of a chain of {TCHAINU_N} segments that, "
+            f"butted end to end, must total exactly {TCHAIN_TOTAL:.0f} mm. Your "
+            f"segment's nominal length is {TCHAINU_NOMINALS[i]:.1f} mm along X. "
+            f"MANUFACTURING CONSTRAINT: segments are cut from whole-millimetre stock, "
+            f"so the finished length MUST be a whole number of millimetres — round "
+            f"your nominal to the nearest whole mm. Width {TCHAIN_SEG_D:.0f} mm, "
+            f"height {TCHAIN_SEG_H:.0f} mm. Build the block at the rounded length, "
+            f"then save_component.")
+
+
+def _tchainu_single_task():
+    noms = ", ".join(f"{x:.1f}" for x in TCHAINU_NOMINALS)
+    return (f"You will build all {TCHAINU_N} segments of a chain, one at a time. "
+            f"Butted end to end they must total EXACTLY {TCHAIN_TOTAL:.0f} mm. "
+            f"MANUFACTURING CONSTRAINT: each finished segment must be a whole number "
+            f"of millimetres. The nominal lengths are {noms} mm — but you MAY adjust "
+            f"each to a nearby whole mm; what matters is that the {TCHAINU_N} whole-mm "
+            f"lengths SUM TO EXACTLY {TCHAIN_TOTAL:.0f} mm. Each is {TCHAIN_SEG_D:.0f} "
+            f"mm wide and {TCHAIN_SEG_H:.0f} mm tall. Choose the {TCHAINU_N} integer "
+            f"lengths now so they total {TCHAIN_TOTAL:.0f}, then build each.")
+
+
+def _tchainu_ref(name):
+    """Reference = the reconciled whole-mm chain that sums to T (what single can do)."""
+    lengths = _tchainu_reconciled()
+    i = int(name[3:])  # "segN"
+    return lambda w, path: _ref_box(w, path, name, lengths[i],
+                                    TCHAIN_SEG_D, TCHAIN_SEG_H)
+
+
+def _make_tchain_unequal():
+    comps = {f"seg{i}": _tchainu_seg_task(i) for i in range(TCHAINU_N)}
+    rounded = _tchainu_rounded()
+    return Toy(
+        "tchainu", f"Tolerance chain, UNEQUAL on whole-mm grid (partition LOSES, n={TCHAINU_N})",
+        components=comps,
+        single_task=_tchainu_single_task(),
+        gate=_tchain_gate(TCHAINU_N),  # same length-sum oracle, tol TCHAIN_TOL
+        reference=lambda w, name, path: _tchainu_ref(name)(w, path),
+        negatives=[
+            # The un-reconciled round-up — exactly what partition produces. Sums to
+            # 102, must be caught (drift 2.0 > 0.8). Overrides every segment.
+            Neg("unreconciled_roundup", "interference",  # expect informational; gate is length
+                agent={f"seg{i}": (f"Build a block EXACTLY {rounded[i]} mm long along "
+                                   f"X, {TCHAIN_SEG_D:.0f} wide, {TCHAIN_SEG_H:.0f} "
+                                   f"tall. Use this exact length. Then save_component.")
+                       for i in range(TCHAINU_N)},
+                ref={f"seg{i}": (lambda w, p, L=rounded[i], nm=f"seg{i}":
+                                 _ref_box(w, p, nm, L, TCHAIN_SEG_D, TCHAIN_SEG_H))
+                     for i in range(TCHAINU_N)}),
+        ],
+    )
+
+
+TOY7_TCHAINU = _make_tchain_unequal()
+
+
+# =============================================================================
+# toy 8: pin-and-SLOT exact constraint (lock the in-plane DOF correctly)
+# Locating one part on another in a plane removes 3 DOF: translation x, translation
+# y, and rotation θ. The textbook EXACT-CONSTRAINT scheme uses a round hole + a slot,
+# NOT two round holes (that's what twopin does — it's over-constrained and jams on any
+# pin-spacing error). Here:
+#   - a ROUND hole on pin 1 locks x and y (the locating datum),
+#   - a SLOT on pin 2, long axis ALONG the pin1->pin2 line, locks rotation θ while
+#     FREEING the spacing direction — so a small pin-spacing error still assembles.
+# The contract the two agents must share: pin Ø, both positions, AND the slot's
+# orientation (derived from the line between the two pins) + its length/width. Richer
+# derived state than twopin. Gate is FUNCTIONAL, in two assemblies:
+#   (1) agent carrier + agent fixture at NOMINAL must seat (both pins clear), and
+#   (2) a reference carrier with pin 2 shifted along the slot axis must STILL seat —
+#       a round hole at P2 (the over-constrained mistake) or a perpendicular slot
+#       JAMS here, so this is the check that distinguishes a real slot.
+# =============================================================================
+
+PS_PLATE = (60.0, 40.0, 10.0)       # carrier plate w,d,h
+PS_FIX_T = 6.0                      # fixture thickness
+PS_PIN_R, PS_PIN_H = 4.0, 12.0      # pins Ø8, 12 tall
+PS_SPACING = 30.0                   # pin spacing along X, symmetric about center
+PS_HOLE_R = 4.2                     # round hole Ø8.4 -> 0.4 clearance; locks x,y
+PS_SLOT_W = 8.4                     # slot narrow dim (Y) = pin Ø + clearance; locks θ
+PS_SLOT_L = 14.0                    # slot long dim (X) along pin axis; frees spacing
+PS_PROBE_DX = 2.5                   # perturbed pin-2 shift: < slot slack 2.8, > hole slack 0.2
+_PS_CX, _PS_CY = PS_PLATE[0] / 2.0, PS_PLATE[1] / 2.0
+
+
+def _ps_centers(spacing):
+    return [(_PS_CX - spacing / 2.0, _PS_CY), (_PS_CX + spacing / 2.0, _PS_CY)]
+
+
+def _ref_hole_slot(w, path, name, sx, sy, sz, hole_r, slot_w, slot_l, centers):
+    """Fixture: a round hole at centers[0] (locates x,y) + a rectangular slot at
+    centers[1] with long axis along X (frees spacing, locks rotation)."""
+    w.call("new_document", name=name)
+    cur = w.call("add_primitive", kind="box", w=sx, d=sy, h=sz, name=name)
+    c0x, c0y = centers[0]
+    h0 = w.call("add_primitive", kind="cylinder", r=hole_r, h=sz * 3,
+                placement=[c0x, c0y, -sz], name="hole")
+    cur = w.call("boolean_op", op="cut", base=cur["handle"], tool=h0["handle"])
+    c1x, c1y = centers[1]
+    slot = w.call("add_primitive", kind="box", w=slot_l, d=slot_w, h=sz * 3,
+                  placement=[c1x - slot_l / 2.0, c1y - slot_w / 2.0, -sz], name="slot")
+    cur = w.call("boolean_op", op="cut", base=cur["handle"], tool=slot["handle"])
+    w.call("save_document", path=str(path))
+
+
+def _ps_gate(tmp, files):
+    centers = _ps_centers(PS_SPACING)
+    # (1) nominal: both agent parts seat together.
+    a1 = _merge_check(tmp, [
+        (files["carrier"], [0, 0, 0], "carrier"),
+        (files["fixture"], [0, 0, PS_PLATE[2]], "fixture")])
+    if not a1["ok"]:
+        return {"ok": False, "reason": f"nominal seat failed ({a1['reason']})",
+                "interference": a1.get("interference", []), "envelope": []}
+    # (2) probe the slot: reference carrier with pin 2 shifted +PROBE_DX along the
+    # slot axis must STILL seat in the agent fixture. Round-hole/perpendicular jams.
+    probe = tmp / "ps_probe_carrier.FCStd"
+    pcent = [centers[0], (centers[1][0] + PS_PROBE_DX, centers[1][1])]
+    with Worker() as w:
+        _ref_pinned_plate(w, probe, "carrier", *PS_PLATE, PS_PIN_R, PS_PIN_H, pcent)
+    a2 = _merge_check(tmp, [
+        (probe, [0, 0, 0], "carrier"),
+        (files["fixture"], [0, 0, PS_PLATE[2]], "fixture")])
+    if not a2["ok"]:
+        return {"ok": False,
+                "reason": f"slot did not free the spacing axis — over-constrained "
+                          f"(round hole) or mis-oriented slot ({a2['reason']})",
+                "interference": a2.get("interference", []), "envelope": []}
+    return {"ok": True, "reason": "round hole locates x,y; slot frees spacing & locks θ",
+            "interference": [], "envelope": []}
+
+
+_PS_POS = (f"on the Y centerline of a {PS_PLATE[0]:.0f}x{PS_PLATE[1]:.0f} mm plate, "
+           f"{PS_SPACING:.0f} mm apart along X, symmetric about the plate center")
+
+TOY8_PINSLOT = Toy(
+    "pinslot", "Pin-and-slot exact constraint (round hole + oriented slot)",
+    components={
+        "carrier": (f"Build a CARRIER: a {PS_PLATE[0]:.0f}x{PS_PLATE[1]:.0f}x"
+                    f"{PS_PLATE[2]:.0f} mm plate with TWO cylindrical pins Ø"
+                    f"{2*PS_PIN_R:.0f} mm, {PS_PIN_H:.0f} mm tall, standing up from the "
+                    f"top face, {_PS_POS}. Fuse the pins to the plate so it is one "
+                    f"solid. Then save_component."),
+        "fixture": (f"Build a FIXTURE: a {PS_PLATE[0]:.0f}x{PS_PLATE[1]:.0f}x"
+                    f"{PS_FIX_T:.0f} mm plate that locates onto a mating part's two "
+                    f"pins by the EXACT-CONSTRAINT scheme — a ROUND through-hole Ø"
+                    f"{2*PS_HOLE_R:.1f} mm at the FIRST pin position (this locates X "
+                    f"and Y), and a SLOT at the SECOND pin position whose LONG axis "
+                    f"runs along the line joining the two pins (the X direction), "
+                    f"{PS_SLOT_L:.0f} mm long by {PS_SLOT_W:.1f} mm wide (so it locks "
+                    f"rotation but allows for pin-spacing tolerance along X). Both "
+                    f"features {_PS_POS}. Cut both through. Then save_component."),
+    },
+    single_task=(f"You will build two mating parts that locate by an EXACT-CONSTRAINT "
+                 f"pin-and-slot scheme, one at a time. Two pin positions {_PS_POS}.\n"
+                 f"CARRIER: {PS_PLATE[0]:.0f}x{PS_PLATE[1]:.0f}x{PS_PLATE[2]:.0f} mm "
+                 f"plate with two Ø{2*PS_PIN_R:.0f} mm pins {PS_PIN_H:.0f} mm tall "
+                 f"fused on top at both positions.\nFIXTURE: {PS_PLATE[0]:.0f}x"
+                 f"{PS_PLATE[1]:.0f}x{PS_FIX_T:.0f} mm plate with a ROUND hole Ø"
+                 f"{2*PS_HOLE_R:.1f} mm at the FIRST position (locates x,y) and a SLOT "
+                 f"{PS_SLOT_L:.0f}x{PS_SLOT_W:.1f} mm, long axis along X, at the SECOND "
+                 f"(locks rotation, frees spacing). A round hole at BOTH positions "
+                 f"would over-constrain and jam on any spacing error — use a slot."),
+    gate=_ps_gate,
+    reference=lambda w, name, path: (
+        _ref_pinned_plate(w, path, "carrier", *PS_PLATE, PS_PIN_R, PS_PIN_H,
+                          _ps_centers(PS_SPACING)) if name == "carrier"
+        else _ref_hole_slot(w, path, "fixture", PS_PLATE[0], PS_PLATE[1], PS_FIX_T,
+                            PS_HOLE_R, PS_SLOT_W, PS_SLOT_L, _ps_centers(PS_SPACING))),
+    negatives=[
+        # Over-constrained: a ROUND hole at BOTH positions (the twopin mistake). Seats
+        # at nominal but JAMS when pin 2 shifts -> only assembly (2) catches it.
+        Neg("round_hole_at_p2", "interference",
+            agent={"fixture": (f"Build a FIXTURE plate {PS_PLATE[0]:.0f}x"
+                               f"{PS_PLATE[1]:.0f}x{PS_FIX_T:.0f} mm with TWO ROUND "
+                               f"through-holes Ø{2*PS_HOLE_R:.1f} mm (no slot), "
+                               f"{_PS_POS}. Then save_component.")},
+            ref={"fixture": lambda w, p: _ref_box_holes(
+                w, p, "fixture", PS_PLATE[0], PS_PLATE[1], PS_FIX_T, PS_HOLE_R,
+                _ps_centers(PS_SPACING))}),
+        # Carrier pins at the WRONG spacing (20 not 30): misses both fixture features
+        # at nominal -> assembly (1) catches it.
+        Neg("wrong_spacing", "interference",
+            agent={"carrier": (f"Build a CARRIER plate {PS_PLATE[0]:.0f}x"
+                               f"{PS_PLATE[1]:.0f}x{PS_PLATE[2]:.0f} mm with two Ø"
+                               f"{2*PS_PIN_R:.0f} mm pins {PS_PIN_H:.0f} mm tall fused "
+                               f"on top, symmetric about center but only 20 mm apart "
+                               f"along X. Then save_component.")},
+            ref={"carrier": lambda w, p: _ref_pinned_plate(
+                w, p, "carrier", *PS_PLATE, PS_PIN_R, PS_PIN_H, _ps_centers(20.0))}),
+    ],
+)
+
+
+# =============================================================================
+# toys 9-11: GD&T LOCATION family (position, concentricity, symmetry)
+# The first toys whose gate MEASURES a feature against a tolerance ZONE rather than
+# testing fit by interference. The thin builder surface (axis-aligned primitives,
+# translate-only) can't introduce form/orientation error, but the agent fully
+# controls feature PLACEMENT — so the location controls are a clean fit: the agent
+# fails by mis-placing, and a run_script gate reads the as-built feature axis and
+# checks deviation from true position. Two independent parts per toy with DIFFERENT
+# nominals (context load for single); each must satisfy its callout.
+# =============================================================================
+
+def _cyl_faces(path):
+    """Unique cylindrical faces of the first shaped object in a saved part, as
+    [{cx, cy, r}] sorted by descending radius. Used to read as-built hole / boss /
+    bore axes for the GD&T location gates."""
+    with Worker() as w:
+        w.call("open_document", path=str(path))
+        r = w.call("run_script", code="""
+objs = [o for o in App.ActiveDocument.Objects
+        if hasattr(o, "Shape") and not o.Shape.isNull() and not o.InList]
+if not objs:
+    objs = [o for o in App.ActiveDocument.Objects
+            if hasattr(o, "Shape") and not o.Shape.isNull()]
+sh = objs[0].Shape
+seen = []; uniq = []
+for f in sh.Faces:
+    s = f.Surface
+    if s.__class__.__name__ == "Cylinder":
+        c = s.Center
+        k = (round(c.x, 3), round(c.y, 3), round(s.Radius, 3))
+        if k not in seen:
+            seen.append(k)
+            uniq.append({"cx": round(c.x, 4), "cy": round(c.y, 4),
+                         "r": round(s.Radius, 4)})
+uniq.sort(key=lambda d: -d["r"])
+__result__ = uniq
+""")
+    return r["result"]
+
+
+GDT_ZONE_R = 0.2  # all callouts are Ø0.4 tolerance zones -> 0.2 mm allowed deviation
+
+
+# --- toy 9: true position ----------------------------------------------------
+POS_PLATE = (50.0, 50.0, 8.0)
+POS_HOLE_R = 6.0  # Ø12 hole
+POS_NOM = {"plateA": (18.0, 32.0), "plateB": (34.0, 14.0)}  # true position per part
+
+
+def _pos_gate(tmp, files):
+    for name, (nx, ny) in POS_NOM.items():
+        cy = _cyl_faces(files[name])
+        if len(cy) != 1:
+            return {"ok": False, "reason": f"{name}: expected 1 hole, found {len(cy)}",
+                    "interference": [], "envelope": []}
+        dev = ((cy[0]["cx"] - nx) ** 2 + (cy[0]["cy"] - ny) ** 2) ** 0.5
+        if dev > GDT_ZONE_R:
+            return {"ok": False,
+                    "reason": f"{name}: true-position dev {dev:.3f} > {GDT_ZONE_R} mm",
+                    "interference": [], "envelope": []}
+    return {"ok": True, "reason": "all holes within their Ø0.4 position zones",
+            "interference": [], "envelope": []}
+
+
+def _pos_task(name):
+    nx, ny = POS_NOM[name]
+    return (f"Build a {POS_PLATE[0]:.0f}x{POS_PLATE[1]:.0f}x{POS_PLATE[2]:.0f} mm PLATE "
+            f"with one vertical THROUGH-HOLE Ø{2*POS_HOLE_R:.0f} mm. GD&T callout: the "
+            f"hole's TRUE POSITION is X={nx:.0f} mm from datum B (the x=0 edge) and "
+            f"Y={ny:.0f} mm from datum A (the y=0 edge), within a Ø0.4 mm tolerance "
+            f"zone (the axis must land within 0.2 mm of true position). Place the bore "
+            f"accordingly, cut it through, then save_component.")
+
+
+TOY9_POSITION = Toy(
+    "gdt_position", "GD&T true position (hole vs Ø0.4 zone off datums)",
+    components={"plateA": _pos_task("plateA"), "plateB": _pos_task("plateB")},
+    single_task=("You will build two plates, one at a time. Each is "
+                 f"{POS_PLATE[0]:.0f}x{POS_PLATE[1]:.0f}x{POS_PLATE[2]:.0f} mm with one "
+                 f"Ø{2*POS_HOLE_R:.0f} mm through-hole at a TRUE POSITION (within a Ø0.4 "
+                 f"mm zone, i.e. axis within 0.2 mm) measured from datum B (x=0 edge) "
+                 f"and datum A (y=0 edge):\nplateA: X={POS_NOM['plateA'][0]:.0f}, "
+                 f"Y={POS_NOM['plateA'][1]:.0f}\nplateB: X={POS_NOM['plateB'][0]:.0f}, "
+                 f"Y={POS_NOM['plateB'][1]:.0f}"),
+    gate=_pos_gate,
+    reference=lambda w, name, path: _ref_box_holes(
+        w, path, name, *POS_PLATE, POS_HOLE_R, [POS_NOM[name]]),
+    negatives=[
+        # plateA hole displaced 0.5 mm (out of the 0.2 mm zone).
+        Neg("plateA_off_position", "interference",
+            agent={"plateA": (f"Build a {POS_PLATE[0]:.0f}x{POS_PLATE[1]:.0f}x"
+                              f"{POS_PLATE[2]:.0f} mm plate with a Ø{2*POS_HOLE_R:.0f} "
+                              f"mm through-hole whose axis is at X="
+                              f"{POS_NOM['plateA'][0]+0.5:.1f}, "
+                              f"Y={POS_NOM['plateA'][1]:.0f} (use these exact "
+                              f"coordinates). Then save_component.")},
+            ref={"plateA": lambda w, p: _ref_box_holes(
+                w, p, "plateA", *POS_PLATE, POS_HOLE_R,
+                [(POS_NOM["plateA"][0] + 0.5, POS_NOM["plateA"][1])])}),
+    ],
+)
+
+
+# --- toy 10: concentricity / coaxiality --------------------------------------
+def _ref_boss_bore(w, path, name, outer_r, bore_r, h, bore_center):
+    """A cylindrical boss (Ø outer) with a through-bore (Ø bore) at bore_center."""
+    w.call("new_document", name=name)
+    boss = w.call("add_primitive", kind="cylinder", r=outer_r, h=h, name=name)
+    bx, by = bore_center
+    bore = w.call("add_primitive", kind="cylinder", r=bore_r, h=h * 3,
+                  placement=[bx, by, -h], name="bore")
+    w.call("boolean_op", op="cut", base=boss["handle"], tool=bore["handle"])
+    w.call("save_document", path=str(path))
+
+
+CONC = {"bossA": {"outer_r": 15.0, "bore_r": 6.0, "h": 12.0},
+        "bossB": {"outer_r": 20.0, "bore_r": 8.0, "h": 12.0}}
+
+
+def _conc_gate(tmp, files):
+    for name in CONC:
+        cy = _cyl_faces(files[name])
+        if len(cy) < 2:
+            return {"ok": False, "reason": f"{name}: need boss+bore faces, found {len(cy)}",
+                    "interference": [], "envelope": []}
+        outer, inner = cy[0], cy[-1]
+        off = ((outer["cx"] - inner["cx"]) ** 2 + (outer["cy"] - inner["cy"]) ** 2) ** 0.5
+        if off > GDT_ZONE_R:
+            return {"ok": False,
+                    "reason": f"{name}: bore axis off boss axis {off:.3f} > {GDT_ZONE_R} mm",
+                    "interference": [], "envelope": []}
+    return {"ok": True, "reason": "all bores coaxial within Ø0.4",
+            "interference": [], "envelope": []}
+
+
+def _conc_task(name):
+    c = CONC[name]
+    return (f"Build a cylindrical BOSS Ø{2*c['outer_r']:.0f} mm, {c['h']:.0f} mm tall, "
+            f"with a concentric THROUGH-BORE Ø{2*c['bore_r']:.0f} mm. GD&T callout: the "
+            f"bore axis must be COAXIAL with the boss axis within Ø0.4 mm (axes within "
+            f"0.2 mm). Center the bore on the boss axis, then save_component.")
+
+
+TOY10_CONCENTRIC = Toy(
+    "gdt_concentric", "GD&T concentricity (bore coaxial with boss)",
+    components={"bossA": _conc_task("bossA"), "bossB": _conc_task("bossB")},
+    single_task=("You will build two cylindrical bosses, one at a time, each with a "
+                 "concentric through-bore COAXIAL to the boss axis within Ø0.4 mm "
+                 "(axes within 0.2 mm):\n"
+                 f"bossA: boss Ø{2*CONC['bossA']['outer_r']:.0f}, bore "
+                 f"Ø{2*CONC['bossA']['bore_r']:.0f}, {CONC['bossA']['h']:.0f} tall\n"
+                 f"bossB: boss Ø{2*CONC['bossB']['outer_r']:.0f}, bore "
+                 f"Ø{2*CONC['bossB']['bore_r']:.0f}, {CONC['bossB']['h']:.0f} tall"),
+    gate=_conc_gate,
+    reference=lambda w, name, path: _ref_boss_bore(
+        w, path, name, CONC[name]["outer_r"], CONC[name]["bore_r"], CONC[name]["h"],
+        (0.0, 0.0)),
+    negatives=[
+        # bossA bore offset 0.5 mm from the boss axis.
+        Neg("bossA_eccentric", "interference",
+            agent={"bossA": (f"Build a Ø{2*CONC['bossA']['outer_r']:.0f} mm boss "
+                             f"{CONC['bossA']['h']:.0f} mm tall with a "
+                             f"Ø{2*CONC['bossA']['bore_r']:.0f} mm through-bore whose "
+                             f"axis is offset 0.5 mm from the boss axis. Then "
+                             f"save_component.")},
+            ref={"bossA": lambda w, p: _ref_boss_bore(
+                w, p, "bossA", CONC["bossA"]["outer_r"], CONC["bossA"]["bore_r"],
+                CONC["bossA"]["h"], (0.5, 0.0))}),
+    ],
+)
+
+
+# --- toy 11: symmetry --------------------------------------------------------
+SYM_PLATE = (60.0, 40.0, 8.0)
+SYM_HOLE_R = 5.0
+SYM_MEDIAN_Y = SYM_PLATE[1] / 2.0  # datum median plane (y = 20)
+# two holes that must straddle the median plane symmetrically; X & spread differ/part
+SYM_NOM = {"plateA": {"x": 20.0, "ys": (8.0, 32.0)},   # spread 24, midpoint 20
+           "plateB": {"x": 38.0, "ys": (12.0, 28.0)}}  # spread 16, midpoint 20
+
+
+def _sym_centers(name):
+    s = SYM_NOM[name]
+    return [(s["x"], s["ys"][0]), (s["x"], s["ys"][1])]
+
+
+def _sym_gate(tmp, files):
+    for name in SYM_NOM:
+        cy = _cyl_faces(files[name])
+        if len(cy) != 2:
+            return {"ok": False, "reason": f"{name}: expected 2 holes, found {len(cy)}",
+                    "interference": [], "envelope": []}
+        midy = (cy[0]["cy"] + cy[1]["cy"]) / 2.0
+        dev = abs(midy - SYM_MEDIAN_Y)
+        if dev > GDT_ZONE_R:
+            return {"ok": False,
+                    "reason": f"{name}: holes' midplane off datum by {dev:.3f} > {GDT_ZONE_R} mm",
+                    "interference": [], "envelope": []}
+    return {"ok": True, "reason": "hole pairs symmetric about the median plane within Ø0.4",
+            "interference": [], "envelope": []}
+
+
+def _sym_task(name):
+    s = SYM_NOM[name]
+    return (f"Build a {SYM_PLATE[0]:.0f}x{SYM_PLATE[1]:.0f}x{SYM_PLATE[2]:.0f} mm PLATE "
+            f"with TWO vertical through-holes Ø{2*SYM_HOLE_R:.0f} mm, both at x="
+            f"{s['x']:.0f} mm, at y={s['ys'][0]:.0f} and y={s['ys'][1]:.0f} mm. GD&T "
+            f"callout: the two holes must be SYMMETRIC about the plate's median plane "
+            f"(y={SYM_MEDIAN_Y:.0f} mm, the datum) within Ø0.4 mm — their midpoint must "
+            f"lie within 0.2 mm of y={SYM_MEDIAN_Y:.0f}. Cut both through, then "
+            f"save_component.")
+
+
+TOY11_SYMMETRY = Toy(
+    "gdt_symmetry", "GD&T symmetry (hole pair about median plane)",
+    components={"plateA": _sym_task("plateA"), "plateB": _sym_task("plateB")},
+    single_task=("You will build two plates, one at a time, each "
+                 f"{SYM_PLATE[0]:.0f}x{SYM_PLATE[1]:.0f}x{SYM_PLATE[2]:.0f} mm with two "
+                 f"Ø{2*SYM_HOLE_R:.0f} mm through-holes that must be SYMMETRIC about the "
+                 f"median plane y={SYM_MEDIAN_Y:.0f} (midpoint within 0.2 mm):\n"
+                 f"plateA: x={SYM_NOM['plateA']['x']:.0f}, y="
+                 f"{SYM_NOM['plateA']['ys'][0]:.0f} & {SYM_NOM['plateA']['ys'][1]:.0f}\n"
+                 f"plateB: x={SYM_NOM['plateB']['x']:.0f}, y="
+                 f"{SYM_NOM['plateB']['ys'][0]:.0f} & {SYM_NOM['plateB']['ys'][1]:.0f}"),
+    gate=_sym_gate,
+    reference=lambda w, name, path: _ref_box_holes(
+        w, path, name, *SYM_PLATE, SYM_HOLE_R, _sym_centers(name)),
+    negatives=[
+        # plateA: one hole shifted so the pair's midplane is 0.5 mm off the datum.
+        Neg("plateA_asymmetric", "interference",
+            agent={"plateA": (f"Build a {SYM_PLATE[0]:.0f}x{SYM_PLATE[1]:.0f}x"
+                              f"{SYM_PLATE[2]:.0f} mm plate with two "
+                              f"Ø{2*SYM_HOLE_R:.0f} mm through-holes at x="
+                              f"{SYM_NOM['plateA']['x']:.0f}, y="
+                              f"{SYM_NOM['plateA']['ys'][0]+1.0:.0f} and y="
+                              f"{SYM_NOM['plateA']['ys'][1]:.0f}. Then save_component.")},
+            ref={"plateA": lambda w, p: _ref_box_holes(
+                w, p, "plateA", *SYM_PLATE, SYM_HOLE_R,
+                [(SYM_NOM["plateA"]["x"], SYM_NOM["plateA"]["ys"][0] + 1.0),
+                 (SYM_NOM["plateA"]["x"], SYM_NOM["plateA"]["ys"][1])])}),
+    ],
+)
+
+
+# =============================================================================
+# toy 12: GD&T ORIENTATION — angularity of an axis (uses the rotate tool)
+# Orientation tolerances need a real tilt, which the translate-only surface couldn't
+# do — so this toy exercises the added `rotate` tool. A slender post must stand at a
+# nominal angle from vertical (the Z datum) within ±1°. The agent builds the post and
+# tilts it; the gate reads the as-built long axis (least-inertia principal axis) and
+# checks its angle to Z. Agent fails by tilting the wrong amount (or not at all).
+# =============================================================================
+
+ANG_POST = (8.0, 8.0, 40.0)            # slender post w,d,h (long axis = h)
+ANG_NOM = {"postA": 30.0, "postB": 20.0}  # tilt from vertical (Z), degrees
+ANG_TOL = 1.0
+
+
+def _post_axis_angle(path):
+    """Angle (deg) between a slender part's long axis (least-inertia principal axis)
+    and global Z — the angularity measurement."""
+    with Worker() as w:
+        w.call("open_document", path=str(path))
+        r = w.call("run_script", code="""
+import math
+objs = [o for o in App.ActiveDocument.Objects
+        if hasattr(o, "Shape") and not o.Shape.isNull() and not o.InList]
+if not objs:
+    objs = [o for o in App.ActiveDocument.Objects
+            if hasattr(o, "Shape") and not o.Shape.isNull()]
+pp = objs[0].Shape.PrincipalProperties
+moms = list(pp["Moments"])
+axes = [pp["FirstAxisOfInertia"], pp["SecondAxisOfInertia"], pp["ThirdAxisOfInertia"]]
+v = App.Vector(axes[moms.index(min(moms))]); v.normalize()
+__result__ = round(math.degrees(math.acos(min(1.0, abs(v.z)))), 4)
+""")
+    return r["result"]
+
+
+def _ref_tilted_post(w, path, name, tilt_deg):
+    w.call("new_document", name=name)
+    b = w.call("add_primitive", kind="box", w=ANG_POST[0], d=ANG_POST[1],
+               h=ANG_POST[2], name=name)
+    _apply_rotation(w, b["name"], [0, 1, 0], tilt_deg)  # tilt from vertical about Y
+    w.call("save_document", path=str(path))
+
+
+def _ang_gate(tmp, files):
+    for name, nom in ANG_NOM.items():
+        a = _post_axis_angle(files[name])
+        if abs(a - nom) > ANG_TOL:
+            return {"ok": False,
+                    "reason": f"{name}: axis at {a:.2f}° vs {nom:.0f}° (> ±{ANG_TOL}°)",
+                    "interference": [], "envelope": []}
+    return {"ok": True, "reason": "posts within ±1° of nominal angularity",
+            "interference": [], "envelope": []}
+
+
+def _ang_task(name):
+    nom = ANG_NOM[name]
+    return (f"Build a slender POST {ANG_POST[0]:.0f}x{ANG_POST[1]:.0f}x{ANG_POST[2]:.0f} "
+            f"mm (long axis starts vertical, along Z). GD&T callout: ANGULARITY — its "
+            f"long axis must sit at {nom:.0f}° from vertical (from the Z axis) within "
+            f"±{ANG_TOL:.0f}°. Use the rotate tool to tilt it {nom:.0f}° about the Y "
+            f"axis, then save_component.")
+
+
+TOY12_ANGULARITY = Toy(
+    "gdt_angularity", "GD&T angularity (post axis vs Z datum, ±1°)",
+    components={"postA": _ang_task("postA"), "postB": _ang_task("postB")},
+    single_task=("You will build two slender posts, one at a time, each "
+                 f"{ANG_POST[0]:.0f}x{ANG_POST[1]:.0f}x{ANG_POST[2]:.0f} mm, then TILT "
+                 f"each (rotate about Y) so its long axis is at the called-out angle "
+                 f"from vertical (Z) within ±{ANG_TOL:.0f}°:\n"
+                 f"postA: {ANG_NOM['postA']:.0f}°\npostB: {ANG_NOM['postB']:.0f}°"),
+    gate=_ang_gate,
+    reference=lambda w, name, path: _ref_tilted_post(w, path, name, ANG_NOM[name]),
+    negatives=[
+        # postA tilted 35° (5° past the ±1° band).
+        Neg("postA_wrong_angle", "interference",
+            agent={"postA": (f"Build an {ANG_POST[0]:.0f}x{ANG_POST[1]:.0f}x"
+                             f"{ANG_POST[2]:.0f} mm post and tilt it 35° from vertical "
+                             f"about the Y axis (use 35). Then save_component.")},
+            ref={"postA": lambda w, p: _ref_tilted_post(w, p, "postA", 35.0)}),
+    ],
+)
+
+
 TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
                            TOY5_NSLOT4, TOY5_NSLOT8,
-                           TOY6_TCHAIN3, TOY6_TCHAIN6)}
+                           TOY6_TCHAIN3, TOY6_TCHAIN6,
+                           TOY7_TCHAINU, TOY8_PINSLOT,
+                           TOY9_POSITION, TOY10_CONCENTRIC, TOY11_SYMMETRY,
+                           TOY12_ANGULARITY)}
 
 
 # --- conditions --------------------------------------------------------------

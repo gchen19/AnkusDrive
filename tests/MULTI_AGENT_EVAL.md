@@ -176,7 +176,7 @@ saved geometry; `pass` = the merged assembly cleared every gate.
 
 `M2_SELFTEST=1` shows every toy's gate **passes a scripted correct build AND catches
 each scripted negative**; `M2_DRYRUN=1` exercises the full agent loop with a stubbed
-model. Both green for all four toys — so a passing agent genuinely built a fitting
+model. Both green for every toy (selftest 18/18 across 9 toys) — so a passing agent genuinely built a fitting
 part and a failing one genuinely didn't. (The eval plan's non-negotiable: never
 measure agents against an oracle you haven't shown catches a wrong answer.)
 
@@ -309,3 +309,72 @@ agent juggles a running total and fumbles it, *not* across independent identical
   variant with *unequal* required segments (where independent rounding genuinely
   *would* accumulate — the original partition-loses case, which equal segments
   accidentally dodged).
+
+---
+
+## Free probe results — gate-value layer (2026-05-31, no API)
+
+Before spending the key on the open follow-ups, ran cheap **MCP-driven probes**
+(local FreeCAD worker, $0, Opus-as-builder under the Max plan) to decide *which*
+billed experiments are worth running and whether any contract / worker-loop change
+should precede them. Each probe gates a decision; the takeaway is **no contract or
+worker-loop refactor is warranted — the probes cleared two experiments and killed
+one candidate workstream.**
+
+| Probe | What it checked | Result |
+|---|---|---|
+| **A — gate boundary** | interference gate at Ø15.6 / 16.0 / 16.4 in a Ø16 hole | Boundary is exactly where claimed. Clearance +0.4 **and exact-touch (0.0) report no interference** (zero-volume contact isn't flagged — the "ambiguous touch" risk doesn't materialise); −0.2 caught at 101.8 mm³ (= hand-calc π(8.2²−8²)·10). Gates trustworthy. |
+| **C — unequal-tchain separability** | can an unequal/grid chain make partition lose? | **Separates.** The lever is a **coarse manufacturing grid**: with no grid each agent builds an exact float and the chain sums to T (why tchain6 partition passed 20/20); force whole-mm stock and local rounding can't reconcile a *global* total. Nominals chosen so all six round up → partition 102 mm (drift 2.0) vs single 100 mm (drift 0), tol 0.8 → **2.5× margin**. MCP-verified FreeCAD reproduces mandated lengths exactly (bbox X = 12.6 / 16.6667 to the digit), so `_part_x_length` measures the real choice. |
+| **D — nslot k=6 oracle** | do both gate checks fire at k=6 | **Sound.** Cylinder bbox X = diameter exactly (r=4.8→9.6, r=6.8→13.6); slot diameters [10,14,18,22,12,16] → targets differ ≥2 mm ≫ 0.6 threshold, so wrong-slot (Δ=4.0) always caught; oversized caught by interference (Probe A). k-sweep oracle is billable. |
+| **B — contract clarity** | is wording the confound? | nslot task strings already battle-tested at k=4/8. The one real risk is the **new unequal-tchain single-task**: it must make reconciliation salient ("segments need not be equal — choose them so the total is exactly 100 on the mm grid") or single repeats its equal-case failure (rounds each up, never reconciles) and the conditions tie at *both-lose* instead of single-wins. Wording done accordingly. |
+| **E — self-verify preview** | would verify-before-save help? | **No (for this axis).** tchain error is reconciliation / structural blindness, not a measurable per-part defect: a partition agent building one grid-snapped segment *can't* see the total is wrong, so verify-before-save can't help it; it would only help *single*, **narrowing** the very divergence we want to surface. Skip the generic loop tweak — it's a contract-wording issue, not a worker-loop one. |
+
+**Toy added:** `tchainu` (toy 7) — UNEQUAL tolerance chain on a whole-mm grid, the
+**real partition-LOSES case** the equal-segment toy dodged. Reuses the `_tchain_gate`
+length-sum oracle. Selftest two-sided valid (reconciled build → pass; un-reconciled
+round-up 102 mm → caught). The "partition loses" result hinges on single reconciling,
+so it's also a clean test of whether single uses its whole-chain view at all.
+
+**Billed experiments the probes unlock** (Haiku n=20, decide ceiling when scheduling):
+1. **nslot k-sweep (k=4,6)** — find the pass-rate crossover nslot8 missed (~$6–10).
+2. **`tchainu`** — the partition-loses credibility case (~$5).
+3. *(cheap, optional)* **tchain6 rerun** — confirm the 20/0 win isn't a prompt artifact (~$3).
+
+Total ≈ **$12–15**, in line with the prior ~$5.7 round but covering more ground.
+
+---
+
+## Toys added 2026-05-31 — exact constraint + GD&T (free; selftest 28/28, 14 toys)
+
+Five new toys plus a builder-surface change, all gate-validated for free:
+
+**Toy 8 — `pinslot` (pin-and-slot exact constraint).** The textbook way to lock the
+three in-plane DOF: a **round hole** (locks x,y) + an **oriented slot** (locks rotation
+θ, frees the spacing axis). Distinct from `twopin`, which uses *two round holes* — an
+*over-constrained* scheme that jams on any spacing error. Functional two-assembly gate:
+both parts seat at nominal **and** a reference carrier with pin 2 shifted along the slot
+axis must *still* seat. The over-constrained design (round hole at P2) passes nominal
+but is caught by the perturbed assembly (106 mm³ jam) — exactly the failure the slot
+exists to prevent.
+
+**Toys 9–11 — GD&T LOCATION family.** The first gates that **measure a feature against
+a tolerance zone** (via `run_script` reading the as-built axis) rather than testing fit
+by interference: `gdt_position` (hole true position within a Ø0.4 zone off datums A/B),
+`gdt_concentric` (bore coaxial with its boss), `gdt_symmetry` (hole pair about the
+median plane). Two *independent* parts per toy with different nominals (context load for
+single). Each negative displaces a feature 0.5 mm and is caught at the 0.2 mm zone edge.
+
+**Toy 12 — `gdt_angularity` + the `rotate` builder tool.** GD&T **coverage is bounded by
+the builder surface**: form (flatness/straightness/circularity/cylindricity), profile,
+and runout have **no agent-controllable deviation** — perfect primitives can't be made
+imperfect — so they're not testable. Orientation needed a real tilt, so the agent tool
+surface gained a **`rotate`** tool (rotate a solid about an axis through its centroid;
+kept test-local via `run_script`, worker untouched). `gdt_angularity` makes a slender
+post stand at a called-out angle from Z within ±1°; the gate reads the as-built long
+axis (least-inertia principal axis). **Caveat for comparability:** adding `rotate`
+changes the tool surface every toy sees, so post-change pass-rates are not a clean
+baseline against the earlier Haiku numbers — re-baseline if mixing.
+
+GD&T coverage map: **Location ✅** (position, concentricity, symmetry — clean fits);
+**Orientation ⚠️** (angularity/perpendicularity/parallelism — reachable now via `rotate`);
+**Form / Profile / Runout ❌** (no deviation possible with exact primitives).
