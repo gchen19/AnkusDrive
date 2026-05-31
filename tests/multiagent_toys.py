@@ -44,53 +44,33 @@ class Variant:
 
 # --- geometry helpers (each builds one component .FCStd) ----------------------
 
-# Name each component's single Part::Feature uniquely. add_primitive names its
-# object "Box"/"Cylinder" internally, and bom_extract groups by linked-object
-# Name — so two add_primitive boxes from different files would collide into one
-# BOM row. A uniquely-named feature per component keeps the BOM honest.
-_PRIM_SRC = """
-import Part
-obj = App.ActiveDocument.addObject("Part::Feature", {name!r})
-obj.Shape = {maker}
-App.ActiveDocument.recompute()
-"""
-
+# Components are built the way an agent would: plain add_primitive / boolean_op,
+# one component per file. This exercises the real assembly path — add_part now
+# links the top-level result (not a consumed boolean input) and bom_extract keys
+# parts by source file (not the bare "Box"/"Cylinder" name add_primitive assigns).
 
 def _doc_box(w, path, sx, sy, sz, name="part"):
     w.call("new_document", name=name)
-    w.call("run_script", code=_PRIM_SRC.format(
-        name=name, maker=f"Part.makeBox({sx}, {sy}, {sz})"))
+    w.call("add_primitive", kind="box", w=sx, d=sy, h=sz, name=name)
     w.call("save_document", path=str(path))
 
 
 def _doc_cyl(w, path, r, h, name="part"):
     w.call("new_document", name=name)
-    w.call("run_script", code=_PRIM_SRC.format(
-        name=name, maker=f"Part.makeCylinder({r}, {h})"))
+    w.call("add_primitive", kind="cylinder", r=r, h=h, name=name)
     w.call("save_document", path=str(path))
 
 
-# Build the holed box as ONE clean Part::Feature. A chain of add_primitive +
-# boolean_op leaves the consumed box/cylinders in the document, and add_part's
-# "link the first Part::Feature" heuristic then mislinks the un-holed solid —
-# silently and nondeterministically (object order decides). One feature, no
-# leftovers, no ambiguity.
-_HOLED_BOX_SRC = """
-import Part
-shape = Part.makeBox({sx}, {sy}, {sz})
-for cx, cy in {centers}:
-    shape = shape.cut(Part.makeCylinder({hole_r}, {sz} * 3, App.Vector(cx, cy, -{sz})))
-obj = App.ActiveDocument.addObject("Part::Feature", {name!r})
-obj.Shape = shape
-App.ActiveDocument.recompute()
-"""
-
-
 def _doc_box_with_holes(w, path, sx, sy, sz, hole_r, centers, name="part"):
-    """Box with one vertical through-hole per (cx, cy) in `centers`."""
+    """Box with one vertical through-hole per (cx, cy) in `centers` — the natural
+    add_primitive + boolean_op path. Leaves consumed inputs in the doc; add_part
+    must link the final Cut, not them (the bug this toy guards against)."""
     w.call("new_document", name=name)
-    w.call("run_script", code=_HOLED_BOX_SRC.format(
-        sx=sx, sy=sy, sz=sz, hole_r=hole_r, centers=list(centers), name=name))
+    cur = w.call("add_primitive", kind="box", w=sx, d=sy, h=sz, name=name)
+    for cx, cy in centers:
+        tool = w.call("add_primitive", kind="cylinder", r=hole_r, h=sz * 3,
+                      placement=[cx, cy, -sz], name="hole")
+        cur = w.call("boolean_op", op="cut", base=cur["handle"], tool=tool["handle"])
     w.call("save_document", path=str(path))
 
 

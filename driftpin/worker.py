@@ -2152,12 +2152,19 @@ def _h_add_part(p):
             if target is None:
                 raise KeyError(f"no object {wanted!r} in {source['path']}")
         else:
-            for o in ext_doc.Objects:
-                if o.isDerivedFrom("PartDesign::Body") or o.isDerivedFrom("Part::Feature"):
-                    target = o
-                    break
-            else:
+            candidates = [
+                o for o in ext_doc.Objects
+                if (o.isDerivedFrom("PartDesign::Body")
+                    or o.isDerivedFrom("Part::Feature"))
+                and hasattr(o, "Shape") and not o.Shape.isNull()
+            ]
+            if not candidates:
                 raise RuntimeError(f"no shaped object in {source['path']}")
+            # Prefer a top-level result (nothing in the file consumes it) over a
+            # consumed input: link the Cut, not the Box it was cut from. A boolean's
+            # inputs carry the result in their InList; the result's InList is empty.
+            toplevel = [o for o in candidates if not o.InList]
+            target = (toplevel or candidates)[-1]
         App.setActiveDocument(doc.Name)
     else:
         raise ValueError(f"source must have 'handle' or 'path': {source!r}")
@@ -2247,22 +2254,34 @@ def _h_interference_check(p):
 
 @handler("bom_extract")
 def _h_bom_extract(p):
-    """Walk an assembly, group its parts by linked object name, return a BOM:
+    """Walk an assembly, group its parts, return a BOM:
     [{part, count, total_volume_mm3, total_mass_kg?}, ...]. density is
-    optional kg/mm³; if given, each row's mass is computed."""
+    optional kg/mm³; if given, each row's mass is computed.
+
+    Identity is the source (component file + object), NOT the bare object Name —
+    two distinct components both named "Box" (add_primitive's default) must not
+    collapse into one row. The displayed `part` is the component file's stem when
+    the part is an external link, else the object's Label/Name."""
+    import os as _os
     asm = _resolve(p["assembly"])
     density = float(p["density"]) if "density" in p else None
     counts = {}
     for o in asm.Group:
         if o.isDerivedFrom("App::Link") and o.LinkedObject is not None:
             base = o.LinkedObject
-            key = base.Name
         else:
-            key = o.Name
+            base = o
+        fname = getattr(getattr(base, "Document", None), "FileName", "") or ""
+        if fname:
+            key = (fname, base.Name)
+            part = _os.path.splitext(_os.path.basename(fname))[0]
+        else:
+            key = (None, base.Name)
+            part = base.Label or base.Name
         s = _world_shape(o)
         v = s.Volume if s is not None else 0.0
         if key not in counts:
-            counts[key] = {"part": key, "count": 0, "total_volume_mm3": 0.0}
+            counts[key] = {"part": part, "count": 0, "total_volume_mm3": 0.0}
         counts[key]["count"] += 1
         counts[key]["total_volume_mm3"] += v
     rows = list(counts.values())
