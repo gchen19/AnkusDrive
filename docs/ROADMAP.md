@@ -426,7 +426,13 @@ Big. ~1–2 weeks total, easy to slice further.
 - Dimension annotations on TechDraw pages (`add_dimension(page, kind, refs)`
   with face/edge tags from Slice 1) — the agent-friendly form. Currently
   only multi-view projection is supported.
-- BOM extraction across nested sub-assemblies (recursion).
+- ~~BOM extraction across nested sub-assemblies (recursion).~~ ✓ shipped
+  2026-05-30 (multi-agent Phase 1 slice 2): `bom_extract(recursive=True)` and
+  `interference_check` both flatten through linked `App::Part` subassemblies;
+  `add_part` now links subassemblies and uses `LinkPlacement` (a plain
+  `.Placement` is reset to origin by recompute when an `App::Part` sibling
+  exists). New: `merge_assembly(manifest)` (manifest-driven construct-up + gates)
+  and `envelope_check`. See [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) Phase 1.
 - **PDF/SVG export of TechDraw pages**: not possible from headless
   `freecadcmd` in FreeCAD 1.1. The export functions live in `TechDrawGui`,
   which can't be imported headless. `export_drawing` raises

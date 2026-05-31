@@ -19,6 +19,7 @@ control. test_multiagent_m1.py drives that assertion.
 These helpers take a live Worker (driftpin.client.Worker) and a tmp dir; the
 runner owns the worker lifecycle so the whole suite shares one freecadcmd process.
 """
+import json
 import math
 from pathlib import Path
 
@@ -97,50 +98,26 @@ def _merge(w, asm_name, tmp, parts):
     return asm["handle"]
 
 
-_WORLD_BBOX_SRC = """
-asm = _resolve({asm!r})
-out = {{}}
-for o in asm.Group:
-    lo = getattr(o, "LinkedObject", None)
-    base = lo if lo is not None else o
-    if hasattr(base, "Shape") and not base.Shape.isNull():
-        bb = base.Shape.transformed(o.Placement.Matrix).BoundBox
-        out[o.Name] = [bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax]
-__result__ = out
-"""
-
-
-def world_bboxes(w, asm_handle):
-    """Measured world-space bbox per assembly part (name -> [xmin..zmax])."""
-    res = w.call("run_script", code=_WORLD_BBOX_SRC.format(asm=asm_handle))
-    return res["result"]
-
-
-def envelope_violations(w, asm_handle, envelopes):
-    """envelopes: {instance_name: {"min":[...], "max":[...]}} in assembly frame.
-    Returns list of {part, axis, ...} for any part escaping its declared box."""
-    bboxes = world_bboxes(w, asm_handle)
-    out = []
-    eps = 1e-6
-    for name, bb in bboxes.items():
-        env = envelopes.get(name)
-        if env is None:
-            continue
-        bmin, bmax = bb[:3], bb[3:]
-        for i, ax in enumerate("xyz"):
-            if bmin[i] < env["min"][i] - eps or bmax[i] > env["max"][i] + eps:
-                out.append({"part": name, "axis": ax,
-                            "got": [bmin[i], bmax[i]],
-                            "allowed": [env["min"][i], env["max"][i]]})
-    return out
+def _doc_subassembly(w, path, name, parts):
+    """A subassembly component file: an App::Part holding linked leaf parts.
+    parts: list of (file_path, placement, instance_name)."""
+    w.call("new_document", name=name)
+    asm = w.call("make_assembly", name=name + "_asm")
+    w.call("save_document", path=str(path))  # owner on disk before cross-doc links
+    for f, pl, iname in parts:
+        w.call("add_part", assembly=asm["handle"],
+               source={"path": str(f)}, placement=pl, name=iname)
+    w.call("save_document", path=str(path))
 
 
 def run_gates(w, asm_handle, envelopes=None):
-    """All gate readings for an assembly. The oracle."""
+    """All gate readings for an assembly — the oracle. interference and bom are
+    recursive (flatten through subassemblies); envelope is the keep-out tool."""
     return {
         "interference": w.call("interference_check", assembly=asm_handle),
-        "bom": w.call("bom_extract", assembly=asm_handle),
-        "envelope": envelope_violations(w, asm_handle, envelopes or {}),
+        "bom": w.call("bom_extract", assembly=asm_handle),  # recursive by default
+        "envelope": w.call("envelope_check", assembly=asm_handle,
+                           envelopes=envelopes or {}),
     }
 
 
@@ -286,6 +263,59 @@ def toy3_build(w, tmp, variant):
     ])
 
 
+# =============================================================================
+# Toy 4 — nested subassembly. Isolates fan-in NESTING + recursive BOM, and
+# cross-level interference. A+B form subassembly S; S + C form the top, built by
+# merge_assembly from a manifest. Recursive BOM must flatten to A,B,C; interference
+# must catch a clash whether it's cross-level (C into S) or inside S (A vs B).
+# =============================================================================
+
+TOY4_MANIFEST = {
+    "schema": "driftpin.manifest/0-phase0",
+    "name": "nested_stack",
+    "components": {
+        "sub": {"file": "<subassembly S: A+B>"},
+        "C": {"file": "C.FCStd"},
+    },
+    "instances": [
+        {"component": "sub", "placement": [0, 0, 0]},
+        {"component": "C", "placement": [0, 0, 20]},
+    ],
+}
+
+TOY4_VARIANTS = [
+    Variant("reference", "fit", note="A+B subassembly under C; recursive BOM = 3 leaves"),
+    Variant("cross_level", "fail", "interference", "C seated 5mm into the subassembly"),
+    Variant("subasm_internal", "fail", "interference", "B overlaps A inside the subassembly"),
+]
+TOY4_BOM = {"A": 1, "B": 1, "C": 1}  # leaves, flattened
+
+
+def toy4_build(w, tmp, variant):
+    p = f"t4_{variant}"
+    A, B, C = tmp / f"{p}_A.FCStd", tmp / f"{p}_B.FCStd", tmp / f"{p}_C.FCStd"
+    S = tmp / f"{p}_S.FCStd"
+    _doc_box(w, A, 20, 20, 10, name=f"{p}_A")
+    _doc_box(w, B, 20, 20, 10, name=f"{p}_B")
+    _doc_box(w, C, 20, 20, 10, name=f"{p}_C")
+    bz = 5.0 if variant == "subasm_internal" else 10.0   # B's z within S
+    _doc_subassembly(w, S, f"{p}_S", [(A, [0, 0, 0], "A"), (B, [0, 0, bz], "B")])
+    cz = 15.0 if variant == "cross_level" else 20.0      # C's z in the top
+    manifest = {
+        "name": f"{p}_top",
+        "root": f"{p}_top.FCStd",
+        "components": {"sub": {"file": S.name}, "C": {"file": C.name}},
+        "instances": [
+            {"component": "sub", "name": "sub", "placement": [0, 0, 0]},
+            {"component": "C", "name": "C", "placement": [0, 0, cz]},
+        ],
+    }
+    mpath = tmp / f"{p}_manifest.json"
+    mpath.write_text(json.dumps(manifest))
+    res = w.call("merge_assembly", manifest=str(mpath))
+    return res["assembly"]
+
+
 # --- registry ----------------------------------------------------------------
 
 class Toy:
@@ -312,4 +342,7 @@ TOYS = [
     Toy("toy3_bracket_housing", "Bracket on housing (envelope keep-out)",
         TOY3_MANIFEST, TOY3_VARIANTS, toy3_build, TOY3_BOM,
         envelopes=_t3_envelopes()),
+    Toy("toy4_nested_subassembly",
+        "Nested subassembly (recursive BOM + cross-level interference)",
+        TOY4_MANIFEST, TOY4_VARIANTS, toy4_build, TOY4_BOM),
 ]

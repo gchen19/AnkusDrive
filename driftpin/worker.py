@@ -2155,14 +2155,16 @@ def _h_add_part(p):
             candidates = [
                 o for o in ext_doc.Objects
                 if (o.isDerivedFrom("PartDesign::Body")
-                    or o.isDerivedFrom("Part::Feature"))
+                    or o.isDerivedFrom("Part::Feature")
+                    or o.isDerivedFrom("App::Part"))  # subassembly container
                 and hasattr(o, "Shape") and not o.Shape.isNull()
             ]
             if not candidates:
                 raise RuntimeError(f"no shaped object in {source['path']}")
             # Prefer a top-level result (nothing in the file consumes it) over a
-            # consumed input: link the Cut, not the Box it was cut from. A boolean's
-            # inputs carry the result in their InList; the result's InList is empty.
+            # consumed input: link the Cut, not the Box it was cut from; link the
+            # subassembly App::Part, not the parts inside it. A boolean's inputs (and
+            # a Part's members) carry the parent in their InList; the top's is empty.
             toplevel = [o for o in candidates if not o.InList]
             target = (toplevel or candidates)[-1]
         App.setActiveDocument(doc.Name)
@@ -2176,14 +2178,20 @@ def _h_add_part(p):
     placement = p.get("placement")
     if placement is not None:
         if isinstance(placement, list) and len(placement) == 3:
-            link.Placement = App.Placement(
-                App.Vector(*placement), App.Rotation()
-            )
+            pl = App.Placement(App.Vector(*placement), App.Rotation())
         elif isinstance(placement, dict):
             pos = App.Vector(*placement.get("position", [0, 0, 0]))
             axis = App.Vector(*placement.get("axis", [0, 0, 1]))
             angle = float(placement.get("angle_deg", 0))
-            link.Placement = App.Placement(pos, App.Rotation(axis, angle))
+            pl = App.Placement(pos, App.Rotation(axis, angle))
+        else:
+            pl = None
+        if pl is not None:
+            # Set LinkPlacement, not Placement: when a link sits in an App::Part
+            # alongside a linked subassembly (App::Part), recompute resets a plain
+            # .Placement back to the origin. LinkPlacement is the link's own frame
+            # and survives recompute; for flat assemblies it's equivalent.
+            link.LinkPlacement = pl
 
     doc.recompute()
     h = _register("link", link)
@@ -2219,18 +2227,31 @@ def _world_shape(obj):
     return None
 
 
+def _leaf_world_shapes(group, parent_matrix, acc, prefix=""):
+    """Flatten an assembly to leaf (name, world-shape) pairs, descending through
+    linked subassemblies (App::Part) and composing the placement chain. So a
+    subassembly is checked leaf-by-leaf — intra-subassembly clashes count too,
+    not just the merged compound."""
+    for o in group:
+        m = parent_matrix.multiply(o.Placement.Matrix)
+        base = (o.LinkedObject if (o.isDerivedFrom("App::Link")
+                                   and o.LinkedObject is not None) else o)
+        label = prefix + o.Name
+        if base.isDerivedFrom("App::Part"):
+            _leaf_world_shapes(base.Group, m.multiply(base.Placement.Matrix),
+                               acc, prefix=label + "/")
+        elif hasattr(base, "Shape") and not base.Shape.isNull():
+            acc.append((label, base.Shape.transformed(m)))
+
+
 @handler("interference_check")
 def _h_interference_check(p):
-    """Pairwise interference: compute volume of intersection between every
-    pair of parts in the assembly. Returns list of overlapping pairs, ordered
-    by descending interference volume."""
+    """Pairwise interference: compute volume of intersection between every pair of
+    parts in the assembly (flattened to leaves through any subassemblies). Returns
+    overlapping pairs ordered by descending interference volume."""
     asm = _resolve(p["assembly"])
-    parts = list(asm.Group)
     shapes = []
-    for o in parts:
-        s = _world_shape(o)
-        if s is not None:
-            shapes.append((o.Name, s))
+    _leaf_world_shapes(asm.Group, App.Matrix(), shapes)
 
     overlaps = []
     for i in range(len(shapes)):
@@ -2261,16 +2282,17 @@ def _h_bom_extract(p):
     Identity is the source (component file + object), NOT the bare object Name —
     two distinct components both named "Box" (add_primitive's default) must not
     collapse into one row. The displayed `part` is the component file's stem when
-    the part is an external link, else the object's Label/Name."""
+    the part is an external link, else the object's Label/Name.
+
+    recursive (default True): descend into linked subassemblies (App::Part) so the
+    BOM flattens to leaf parts. False counts a subassembly as a single line."""
     import os as _os
     asm = _resolve(p["assembly"])
     density = float(p["density"]) if "density" in p else None
+    recursive = p.get("recursive", True)
     counts = {}
-    for o in asm.Group:
-        if o.isDerivedFrom("App::Link") and o.LinkedObject is not None:
-            base = o.LinkedObject
-        else:
-            base = o
+
+    def _add(base):
         fname = getattr(getattr(base, "Document", None), "FileName", "") or ""
         if fname:
             key = (fname, base.Name)
@@ -2278,18 +2300,128 @@ def _h_bom_extract(p):
         else:
             key = (None, base.Name)
             part = base.Label or base.Name
-        s = _world_shape(o)
+        # volume is invariant under the placement chain, so the local shape is fine
+        s = base.Shape if (hasattr(base, "Shape") and not base.Shape.isNull()) else None
         v = s.Volume if s is not None else 0.0
-        if key not in counts:
-            counts[key] = {"part": part, "count": 0, "total_volume_mm3": 0.0}
-        counts[key]["count"] += 1
-        counts[key]["total_volume_mm3"] += v
+        row = counts.get(key)
+        if row is None:
+            counts[key] = {"part": part, "count": 1, "total_volume_mm3": v}
+        else:
+            row["count"] += 1
+            row["total_volume_mm3"] += v
+
+    def _walk(group):
+        for o in group:
+            base = (o.LinkedObject if (o.isDerivedFrom("App::Link")
+                                       and o.LinkedObject is not None) else o)
+            if recursive and base.isDerivedFrom("App::Part"):
+                _walk(base.Group)
+            else:
+                _add(base)
+
+    _walk(asm.Group)
     rows = list(counts.values())
     if density is not None:
         for r in rows:
             r["total_mass_kg"] = r["total_volume_mm3"] * density
     rows.sort(key=lambda r: -r["count"])
     return rows
+
+
+@handler("envelope_check")
+def _h_envelope_check(p):
+    """Keep-out gate: assert each named part's world-space bounding box stays
+    inside its declared envelope. envelopes maps a part's link Name (or Label) to
+    {"min": [x,y,z], "max": [x,y,z]} in the assembly frame. Returns a list of
+    violations [{part, axis, got: [min,max], allowed: [min,max]}, ...] — empty
+    means every declared part is within its box."""
+    asm = _resolve(p["assembly"])
+    envelopes = p.get("envelopes") or {}
+    eps = 1e-6
+    out = []
+    for o in asm.Group:
+        env = envelopes.get(o.Name) or envelopes.get(getattr(o, "Label", None))
+        if not env:
+            continue
+        s = _world_shape(o)
+        if s is None:
+            continue
+        bb = s.BoundBox
+        bmin = [bb.XMin, bb.YMin, bb.ZMin]
+        bmax = [bb.XMax, bb.YMax, bb.ZMax]
+        for i, ax in enumerate("xyz"):
+            if bmin[i] < env["min"][i] - eps or bmax[i] > env["max"][i] + eps:
+                out.append({"part": o.Name, "axis": ax,
+                            "got": [bmin[i], bmax[i]],
+                            "allowed": [env["min"][i], env["max"][i]]})
+    return out
+
+
+@handler("merge_assembly")
+def _h_merge_assembly(p):
+    """Construct-up an assembly from a manifest (the coordinator's one call).
+
+    manifest (path to JSON) shape:
+      { "name": "gearbox",
+        "root": "gearbox.FCStd",                       # optional output path (rel)
+        "components": { "<id>": { "file": "rel/part.FCStd",
+                                  "object": "<name>",   # optional explicit target
+                                  "envelope": {"min":[...],"max":[...]} } },  # optional
+        "instances": [ { "component": "<id>",
+                         "name": "<instance>",          # optional, defaults to id
+                         "placement": [x,y,z] | {position,axis,angle_deg} } ] }
+
+    Component files are resolved relative to the manifest's directory. Links
+    auto-reload from those files, so re-running picks up updated components.
+    Runs the gates (interference, recursive BOM, envelope) and returns a report.
+    Deterministic and idempotent."""
+    import json as _json
+    import os as _os
+    manifest_path = p["manifest"]
+    with open(manifest_path) as f:
+        man = _json.load(f)
+    base_dir = _os.path.dirname(_os.path.abspath(manifest_path))
+    comps = man.get("components", {})
+
+    name = man.get("name", "merged")
+    HANDLERS["new_document"]({"name": name})
+    asm = HANDLERS["make_assembly"]({"name": man.get("assembly_name", "Assembly")})
+    asm_h = asm["handle"]
+
+    root = man.get("root") or (name + ".FCStd")
+    root_path = root if _os.path.isabs(root) else _os.path.join(base_dir, root)
+    HANDLERS["save_document"]({"path": root_path})  # owner needs a path to link
+
+    placed = []
+    envelopes = {}
+    for inst in man.get("instances", []):
+        cid = inst["component"]
+        spec = comps[cid]
+        iname = inst.get("name", cid)
+        cfile = spec["file"]
+        cfile = cfile if _os.path.isabs(cfile) else _os.path.join(base_dir, cfile)
+        src = {"path": cfile}
+        if spec.get("object"):
+            src["object"] = spec["object"]
+        link = HANDLERS["add_part"]({
+            "assembly": asm_h, "source": src,
+            "placement": inst.get("placement"), "name": iname,
+        })
+        placed.append({"instance": iname, "component": cid,
+                       "linked": link["linked"]})
+        if spec.get("envelope"):
+            envelopes[link["name"]] = spec["envelope"]
+
+    gates = {
+        "interference": HANDLERS["interference_check"]({"assembly": asm_h}),
+        "bom": HANDLERS["bom_extract"]({"assembly": asm_h, "recursive": True}),
+        "envelope": HANDLERS["envelope_check"]({"assembly": asm_h,
+                                                "envelopes": envelopes}),
+    }
+    HANDLERS["save_document"]({"path": root_path})
+    ok = (not gates["interference"]) and (not gates["envelope"])
+    return {"assembly": asm_h, "doc": name, "root": root_path,
+            "placed": placed, "gates": gates, "ok": ok}
 
 
 @handler("make_drawing_page")
