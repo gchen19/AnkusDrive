@@ -133,7 +133,120 @@ def render_photoreal(handle, renderer="Povray", view="iso", width=800, height=60
                  view=view, width=width, height=height)
 ```
 
-## 6. Prerequisites (none present in dev env today)
+## 6. PNG output — two channels
+
+`Project.render()` writes an image file to disk (POV-Ray / LuxCore / etc. all emit
+PNG) and returns its path. The worker reads those bytes, so every render is
+available **both** ways:
+
+- **`png_base64`** — inline, same shape as today's `render_view`, so the agent can
+  *see* the result in-loop (and the `show-in-vscode` skill can open it).
+- **`png_path`** — when the caller passes `output_path`, the PNG (and the raw
+  renderer scene file, for debugging) is persisted there. Renders are slow and
+  worth keeping; base64-only would be wasteful for a "final" pass.
+
+The return payload carries provenance so the agent can reason about cost/quality:
+`{png_base64, png_path, renderer, scene, view, samples, elapsed_s, width, height}`.
+
+## 7. The MCP contract — choosing the "rendering situation"
+
+**Design principle: the agent speaks intent, never renderer syntax.** No POV-Ray
+finishes or LuxCore node graphs cross the tool boundary. The minimal §5.2
+`render_photoreal` is the P0 plumbing proof; the shipping surface is a richer
+`render_scene` with three orthogonal knobs plus a discovery tool:
+
+```python
+render_scene(
+    target,                    # handle OR assembly handle
+    scene   = "studio",        # lighting + environment + background
+    view    = "iso",           # preset OR {azimuth, elevation, distance, perspective, fov}
+    quality = "preview",       # time/samples budget: draft | preview | final
+    width=1280, height=720,
+    output_path=None,          # also write PNG here
+    renderer="auto",           # "auto" picks the best installed engine
+    cmf_overrides=None,        # per-component appearance, see §8
+)  # -> {png_base64, png_path, renderer, scene, samples, elapsed_s, ...}
+```
+
+**`scene`** is the heart of "what situation" — a small set of named, renderer-neutral
+setups, each realized as a workbench template + Light objects + groundplane +
+environment:
+
+| `scene` | Looks like | Built from |
+|---|---|---|
+| `studio` | Seamless backdrop, soft 3-point key/fill/rim — product hero shot | template + AreaLights + sweep groundplane |
+| `workshop` | Even matte lighting, faint contact shadow — engineering/spec look | template + DistantLight + neutral ground |
+| `outdoor` | Sun + sky, horizon ground — context/marketing | SunskyLight + groundplane |
+| `hdri` | Image-based lighting from an environment map | ImageLight (+ supplied `.hdr`) |
+| `xray` / `section` | Internals visible — semi-transparent or cutaway | transparency override / `section_view` plane |
+
+**`quality`** is the time-budget knob (`draft` → `preview` → `final`, mapping to
+samples / denoise / resolution-scale). The returned `samples` / `elapsed_s` let the
+agent learn the trade-off and decide whether to re-render larger.
+
+**Discovery — `render_capabilities()`** (mirrors the existing `list_thread_options`
+pattern): returns installed renderers, available `scene` names + descriptions,
+quality presets, and material-library names. This is *how the agent determines the
+situation* — it introspects the menu instead of guessing, then maps user intent →
+preset.
+
+Optional sugar (open question): a **`purpose=`** alias
+(`"inspection" | "documentation" | "marketing"`) that sets sensible `scene`+`quality`
+defaults the agent can still override — lets the model say "nice picture for the
+README" without learning the preset taxonomy.
+
+## 8. Per-component CMF (Color / Material / Finish)
+
+Render materials are `App::MaterialObjectPython` objects (`make_material(name, color,
+transparency)`) holding a **renderer-neutral dict** — `basecolor` / `metallic` /
+`roughness` plus per-renderer `Render.<engine>.*` overrides. Only the
+ViewProvider / task-panel is GUI-gated, so **the material object itself is
+headless-creatable** — which is what makes per-component CMF possible under
+`freecadcmd`.
+
+```python
+set_appearance(
+    handle,
+    material = "aluminum_6061_brushed",   # name from the Render material library (renderer-neutral)
+    color    = [0.8, 0.8, 0.82],          # OR generic PBR override
+    metallic = 1.0, roughness = 0.35,
+    finish   = "brushed",                 # nudges roughness / anisotropy / clearcoat
+)
+```
+
+- **Color → `basecolor`, Material → a library card** (sets metallic/roughness/
+  transmission for steel/ABS/glass/…), **Finish → roughness/clearcoat tweak**
+  (matte/satin/gloss/brushed). All land in the renderer-neutral dict; the workbench
+  translates per engine, so the *same* CMF renders in POV-Ray or LuxCore.
+- **It persists in the `.FCStd`** (material is an App object linked to the part).
+  This is the key property for multi-agent: **`merge_assembly` preserves each
+  component's CMF automatically** — no central re-skin needed.
+
+Two authoring modes, both supported:
+
+- **(a) Builder-owned** — each component agent calls `set_appearance` on its own
+  part; CMF travels in the component file. Most autonomous; fits the "cold builder
+  sees only its slice" model in [`MULTI_AGENT.md`](MULTI_AGENT.md).
+- **(b) Coordinator art-direction** — `cmf_overrides={component_id: {material,
+  color, ...}}` on `render_scene`, applied to the *merged* instances at render time
+  without editing source files. Enforces a consistent palette ("all brackets
+  anodized black") or re-themes for a different shot.
+
+Wiring into the multi-agent contract: extend the manifest with an optional
+`appearance` per component (so `decompose` can assign CMF intent up front); the
+coordinator's `cmf_overrides` win at render time. The `merge_assembly` primitive
+stays appearance-agnostic — CMF is just object state it carries.
+
+## 9. Phasing
+
+| Phase | Scope |
+|---|---|
+| **P0** | `render_photoreal` for a single handle: `studio` + `draft`/`final`, POV-Ray, PNG path+base64. Proves the headless camera/light/material plumbing (§5). |
+| **P1** | Promote to `render_scene`: full `scene` set + custom camera + `render_capabilities` discovery. |
+| **P2** | `set_appearance` + CMF persistence; render whole assemblies. |
+| **P3** | `cmf_overrides` + manifest `appearance`; coordinator integration. |
+
+## 10. Prerequisites (none present in dev env today)
 
 1. Install the addon so `freecadcmd` auto-loads it:
    ```bash
@@ -144,7 +257,7 @@ def render_photoreal(handle, renderer="Povray", view="iso", width=800, height=60
 2. Install one renderer binary (POV-Ray recommended for the first cut).
 3. Set its `RenderExecPath` param (§4).
 
-## 7. Risks & open questions for reviewers
+## 11. Risks & open questions for reviewers
 
 - **Upstream is unmaintained.** Do we pin + vendor, or fork under FreeCAD-org or
   our own org? What FreeCAD version do we commit to supporting?
@@ -159,5 +272,13 @@ def render_photoreal(handle, renderer="Povray", view="iso", width=800, height=60
   variant so the worker isn't held hostage?
 - **Renderer choice.** Start POV-Ray-only, or design the handler renderer-agnostic
   from day one (it nearly is — `renderer=` is already a param)?
-- **Materials.** First cut uses default material headless. Is that good enough to
-  ship, with explicit Render `Material` objects as a follow-up?
+- **CMF source of truth (§8).** Component file (mode a), manifest + overrides
+  (mode b), or both? Lean: both, with `cmf_overrides` winning at render time.
+- **Material vocabulary (§8).** Adopt the Render WB's library card names as the
+  contract, or define our own renderer-neutral CMF schema and translate? Library
+  is faster to ship; our own schema is more stable against the unmaintained
+  upstream.
+- **`purpose=` auto-preset (§7).** Worth the extra surface area, or keep `scene` +
+  `quality` explicit?
+- **Assembly rendering (§7).** One combined image, or also per-component contact
+  sheets?
