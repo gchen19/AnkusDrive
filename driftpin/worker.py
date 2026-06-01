@@ -2253,7 +2253,7 @@ def _h_export_shape(p):
     elif ext == ".brep":
         obj.Shape.exportBrep(path)
     elif ext == ".stl":
-        import Mesh
+        import Mesh  # noqa: F401  (side-effect: registers the Mesh module MeshPart needs)
         import MeshPart
         mesh = MeshPart.meshFromShape(
             Shape=obj.Shape,
@@ -2867,9 +2867,9 @@ def _h_revolve(p):
     doc.recompute()
     if rev.Shape.isNull():
         raise RuntimeError(
-            f"Revolution recompute produced a null shape — sketch may be "
-            f"open, self-intersecting, or the axis/profile configuration is "
-            f"unsupported."
+            "Revolution recompute produced a null shape — sketch may be "
+            "open, self-intersecting, or the axis/profile configuration is "
+            "unsupported."
         )
     h = _register("revolve", rev)
     return {"handle": h, "name": rev.Name, "volume": rev.Shape.Volume}
