@@ -21,6 +21,10 @@ echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 
 echo
+echo "== Mating-dimension golden table =="
+python3 tests/test_mating_dims.py
+
+echo
 echo "== Render tests =="
 $VENV_PY tests/test_render.py
 
