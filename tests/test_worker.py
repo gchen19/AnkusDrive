@@ -3255,6 +3255,240 @@ def test_section_view():
             raise AssertionError("expected WorkerError when emit_profile misses the shape")
 
 
+# --- producer smoke: every solid-producing command yields ONE watertight solid ---
+#
+# A uniform invariant over the whole producer surface, with check_shape as the
+# oracle: the result must be a single, valid, closed (watertight) solid. This is
+# strictly stronger than the per-command "volume > 0" tests and is the general
+# form of the add_thread fuse-drop bug class (a fuse that silently drops an
+# operand, an inside-out extrude, a 2-solid compound). It auto-scales: add a row
+# to _producer_specs and the new command is covered. A coverage guard
+# (test_every_add_command_has_a_producer_smoke) makes sure new add_* generators
+# can't ship without a row here.
+#
+# NOTE: loft, sweep, helix, draft, thickness, the patterns (linear/polar/mirror)
+# and partdesign_fillet/chamfer are NOT driven here — they have dedicated tests
+# and need bespoke multi-sketch fixtures. This smoke covers the parametric
+# generators, the direct-shape ops, and the core PartDesign producers.
+
+# add_* tools that legitimately do NOT emit a solid (so the coverage guard
+# doesn't demand a producer row for them).
+_ADD_NOT_SOLID = {
+    "add_part",             # links a part into an assembly — no new solid
+    "add_sketch_geometry",  # sketch editing
+    "add_sketch_constraint",
+    "add_sketch_external",
+    "add_projection_group",  # a TechDraw view
+}
+
+
+def _ws_box(w, **kw):
+    """A fresh box solid (default 20mm cube), returns its handle."""
+    kw.setdefault("kind", "box")
+    for k, v in (("w", 20), ("d", 20), ("h", 20)):
+        kw.setdefault(k, v)
+    return w.call("add_primitive", **kw)["handle"]
+
+
+def _ws_vertical_edge_tags(w, box_h, length=20.0, mid_z=10.0):
+    """The 4 vertical edge tags of an axis-aligned box (lines of `length` whose
+    centroid sits at mid-height)."""
+    edges = w.call("list_edges", handle=box_h)
+    return [
+        e["tag"] for e in edges
+        if e["kind"] == "line"
+        and abs(e["length"] - length) < 1e-3
+        and abs(e["centroid"][2] - mid_z) < 1e-3
+    ]
+
+
+def _ws_top_face_tag(w, handle):
+    top = w.call("query_faces", handle=handle,
+                 predicate={"type": "planar", "normal_dir": [0, 0, 1]})
+    assert top, "no +Z face found"
+    return top[0]["tag"]
+
+
+def _ws_fillet(w):
+    b = _ws_box(w)
+    return w.call("fillet_edges", handle=b, edges=_ws_vertical_edge_tags(w, b), radius=2.0)["handle"]
+
+
+def _ws_chamfer(w):
+    b = _ws_box(w)
+    return w.call("chamfer_edges", handle=b, edges=_ws_vertical_edge_tags(w, b), size=2.0)["handle"]
+
+
+def _ws_shell(w):
+    b = _ws_box(w)
+    return w.call("shell_solid", handle=b, faces=[_ws_top_face_tag(w, b)], thickness=2.0)["handle"]
+
+
+def _ws_bool_cut(w):
+    a = _ws_box(w)
+    t = w.call("add_primitive", kind="cylinder", r=5, h=20, placement=[10, 10, 0])["handle"]
+    return w.call("boolean_op", op="cut", base=a, tool=t)["handle"]
+
+
+def _ws_bool_fuse(w):
+    a = _ws_box(w)
+    t = w.call("add_primitive", kind="box", w=20, d=20, h=20, placement=[10, 0, 0])["handle"]
+    return w.call("boolean_op", op="fuse", base=a, tool=t)["handle"]
+
+
+def _ws_oring(w):
+    b = w.call("add_primitive", kind="box", w=60, d=60, h=10)["handle"]
+    return w.call("oring_groove", handle=b, face=_ws_top_face_tag(w, b),
+                  cross_section=2.62, inner_diameter=20, cut=True)["handle"]
+
+
+def _ws_pad(w):
+    return _build_pad_cube(w, side=20.0, height=10.0)["pad"]
+
+
+def _ws_pocket(w):
+    h = _build_pad_cube(w, side=30.0, height=20.0)
+    sk = _sketch_circle_on_top(w, h["body"], h["pad"], (15, 15), 4.0)
+    return w.call("pocket", sketch=sk, through_all=True, direction="into_body")["handle"]
+
+
+def _ws_hole(w):
+    h = _build_pad_cube(w, side=30.0, height=30.0)
+    sk = _sketch_circle_on_top(w, h["body"], h["pad"], (15, 15), 3.0)
+    return w.call("hole", sketch=sk, diameter=6.0, depth_type="ThroughAll")["handle"]
+
+
+def _ws_revolve(w):
+    body = w.call("make_body")
+    sk = _make_closed_polyline_sketch(w, body["handle"], "XY", [
+        ([5, 1], [10, 1]), ([10, 1], [10, 5]), ([10, 5], [5, 5]), ([5, 5], [5, 1]),
+    ])
+    return w.call("revolve", sketch=sk, axis="Y", angle=360.0)["handle"]
+
+
+def _mk_line_items(pts):
+    return [{"type": "line", "start": list(pts[i]), "end": list(pts[i + 1])}
+            for i in range(len(pts) - 1)]
+
+
+def _ws_engrave(w, font):
+    b = _ws_box(w)
+    return w.call("engrave_text", handle=b, face=_ws_top_face_tag(w, b),
+                  text="M3", depth=0.5, mode="engrave", font=font)["handle"]
+
+
+def _ws_rib(w):
+    body = w.call("make_body")["handle"]
+    sk1 = w.call("make_sketch", body=body, plane="XY")["handle"]
+    u_pts = [(-20, 0), (20, 0), (20, 30), (12, 30), (12, 8),
+             (-12, 8), (-12, 30), (-20, 30), (-20, 0)]
+    w.call("add_sketch_geometry", sketch=sk1, items=_mk_line_items(u_pts))
+    w.call("pad", sketch=sk1, length=10.0)
+    sk2 = w.call("make_sketch", body=body, plane="XY")["handle"]
+    w.call("add_sketch_geometry", sketch=sk2,
+           items=[{"type": "line", "start": [-12, 20], "end": [12, 20]}])
+    return w.call("add_rib", body=body, sketch=sk2, thickness=4.0)["handle"]
+
+
+def _producer_specs(font=None):
+    """(tool, label, build_fn) for every solid-producing command this smoke
+    drives. build_fn(w) sets up any precondition and returns the result handle.
+    `tool` is the MCP tool exercised (used by the coverage guard)."""
+    specs = [
+        # standalone parametric generators
+        ("add_primitive", "box", lambda w: _ws_box(w)),
+        ("add_primitive", "cylinder", lambda w: w.call("add_primitive", kind="cylinder", r=5, h=10)["handle"]),
+        ("add_primitive", "sphere", lambda w: w.call("add_primitive", kind="sphere", r=5)["handle"]),
+        ("add_gear", "gear_external", lambda w: w.call("add_gear", teeth=12, module=2.0, height=6.0)["handle"]),
+        ("add_gear", "gear_internal", lambda w: w.call("add_gear", teeth=24, module=2.0, height=6.0, external=False)["handle"]),
+        ("add_rack", "rack", lambda w: w.call("add_rack", teeth=10, module=2.0)["handle"]),
+        ("add_sprocket", "sprocket", lambda w: w.call("add_sprocket", teeth=17, chain_pitch=12.7, roller_diameter=7.92)["handle"]),
+        ("add_pulley", "pulley_flanged", lambda w: w.call("add_pulley", teeth=20, belt_pitch=2.0, width=6, flanged=True)["handle"]),
+        ("add_pulley", "pulley_plain", lambda w: w.call("add_pulley", teeth=20, belt_pitch=2.0, width=6, flanged=False)["handle"]),
+        ("add_spring", "spring", lambda w: w.call("add_spring", wire_diameter=2, outer_diameter=20, free_length=40, coils=8)["handle"]),
+        ("add_fastener", "fastener_screw", lambda w: w.call("add_fastener", kind="socket_head_cap_screw", size="M3", length=10)["handle"]),
+        ("add_fastener", "fastener_bolt", lambda w: w.call("add_fastener", kind="hex_bolt", size="M6", length=20)["handle"]),
+        ("add_fastener", "fastener_nut", lambda w: w.call("add_fastener", kind="hex_nut", size="M6")["handle"]),
+        ("add_fastener", "fastener_washer", lambda w: w.call("add_fastener", kind="washer", size="M3")["handle"]),
+        ("add_bearing", "bearing", lambda w: w.call("add_bearing", designation="608")["handle"]),
+        ("add_thread", "thread_external", lambda w: w.call("add_thread", diameter=8, pitch=1.25, length=10)["handle"]),
+        ("add_thread", "thread_internal", lambda w: w.call("add_thread", diameter=8, pitch=1.25, length=10, internal=True)["handle"]),
+        # direct-shape ops (box fixture)
+        ("fillet_edges", "fillet_edges", _ws_fillet),
+        ("chamfer_edges", "chamfer_edges", _ws_chamfer),
+        ("shell_solid", "shell_solid", _ws_shell),
+        ("scale_shape", "scale_shape", lambda w: w.call("scale_shape", handle=_ws_box(w), factor=2.0)["handle"]),
+        ("copy_shape", "copy_shape", lambda w: w.call("copy_shape", handle=_ws_box(w), placement=[50, 0, 0])["handle"]),
+        ("boolean_op", "boolean_cut", _ws_bool_cut),
+        ("boolean_op", "boolean_fuse", _ws_bool_fuse),
+        ("oring_groove", "oring_groove_cut", _ws_oring),
+        # core PartDesign producers (known-good fixtures)
+        ("pad", "pad", _ws_pad),
+        ("pocket", "pocket", _ws_pocket),
+        ("hole", "hole", _ws_hole),
+        ("revolve", "revolve", _ws_revolve),
+        ("add_rib", "add_rib", _ws_rib),
+    ]
+    if font:
+        specs.append(("engrave_text", "engrave_text", lambda w: _ws_engrave(w, font)))
+    return specs
+
+
+def test_producers_yield_watertight_solids():
+    """Every solid-producing command builds ONE valid, closed (watertight) solid.
+    Each producer runs in its own fresh document; failures are collected so one
+    broken producer reports clearly without masking the rest."""
+    import os
+    font = next((f for f in (
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc") if os.path.isfile(f)), None)
+    specs = _producer_specs(font=font)
+    if not font:
+        print("    (engrave_text skipped: no system font)")
+
+    failures = []
+    with Worker() as w:
+        for i, (tool, label, build) in enumerate(specs):
+            w.call("new_document", name=f"prod_{i}_{label}")
+            try:
+                handle = build(w)
+                r = w.call("check_shape", handle=handle)
+                if not (r["valid"] and r["solids"] == 1 and r["watertight_solid"]
+                        and r["volume_mm3"] > 0):
+                    failures.append(f"{label} ({tool}): not a single watertight solid -> {r}")
+            except Exception as e:
+                failures.append(f"{label} ({tool}): build/check raised {type(e).__name__}: {e}")
+            finally:
+                w.call("close_document")
+    assert not failures, (
+        f"{len(failures)}/{len(specs)} producers failed the watertight-solid check:\n  "
+        + "\n  ".join(failures))
+
+
+def test_every_add_command_has_a_producer_smoke():
+    """Coverage guard: every `add_*` MCP tool that emits a solid has a row in
+    _producer_specs, so a new generator can't ship without a watertight smoke.
+    Non-solid add_* tools are explicitly excluded (and the exclusions are checked
+    to be real tools, so the allowlist can't hide a missing producer)."""
+    import ast
+    src = (REPO / "driftpin" / "mcp_server.py").read_text()
+    tree = ast.parse(src)
+    add_tools = {
+        n.name for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name.startswith("add_")
+        and any(isinstance(d, ast.Call) and getattr(d.func, "attr", None) == "tool"
+                for d in n.decorator_list)
+    }
+    covered = {tool for tool, _, _ in _producer_specs(font="x")}
+    missing = sorted(add_tools - _ADD_NOT_SOLID - covered)
+    assert not missing, (
+        "add_* tools with no producer smoke row (add one to _producer_specs, or "
+        f"to _ADD_NOT_SOLID if it emits no solid): {missing}")
+    stale = sorted(t for t in _ADD_NOT_SOLID if t not in add_tools)
+    assert not stale, f"_ADD_NOT_SOLID names that aren't add_* tools anymore: {stale}"
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
