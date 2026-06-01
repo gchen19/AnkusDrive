@@ -387,6 +387,1519 @@ def _shape_of(handle):
     return obj, shape
 
 
+@handler("add_rack")
+def _h_add_rack(p):
+    """Linear gear rack: a straight-flanked tooth rail (a gear of infinite
+    radius). All lengths mm, angles deg. Standard full-depth tooth form:
+    pitch p = pi*module, addendum = module, dedendum = 1.25*module, so tooth
+    height = 2.25*module; flanks are straight at pressure_angle from vertical.
+    The profile is drawn in the XZ plane (root line at z=0, base band of
+    thickness `width` below it, teeth rising to z=2.25*module) and extruded
+    along +Y by `height` to a solid (face normal is flipped, so a negative
+    -volume solid is reversed, mirroring add_gear). Returns the solid's handle
+    plus the mating numbers: `pitch` (mm/tooth, must equal a meshing gear's
+    module*pi), `module`, `teeth`, `tooth_height`, and `length` (= teeth*pi
+    *module) so a coordinator can size and place the rail."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+    teeth = int(p["teeth"])
+    if teeth < 1:
+        raise ValueError("teeth must be >= 1")
+    module = float(p["module"])
+    if module <= 0:
+        raise ValueError("module must be > 0")
+    height = float(p.get("height", 6.0))
+    width = float(p.get("width", 10.0))
+    if height <= 0 or width <= 0:
+        raise ValueError("height and width must be > 0")
+    pressure = float(p.get("pressure_angle", 20.0))
+    if not 0 < pressure < 45:
+        raise ValueError("pressure_angle must be between 0 and 45 deg")
+
+    import math
+    pitch = math.pi * module            # circular pitch (mm/tooth)
+    add = module                        # addendum (above root line + dedendum)
+    ded = 1.25 * module                 # dedendum
+    tooth_h = add + ded                 # full tooth height = 2.25*module
+    pa = math.radians(pressure)
+    # half-widths of a tooth measured from its centerline:
+    half_tip = pitch / 4.0 - add * math.tan(pa)         # at the tip (z=tooth_h)
+    half_root = pitch / 4.0 + ded * math.tan(pa)        # at the root line (z=0)
+    if half_tip <= 0:
+        raise ValueError(
+            "tooth tip degenerate for this module/pressure_angle "
+            "(pitch/4 <= module*tan(pressure_angle)); lower pressure_angle")
+    length = teeth * pitch
+
+    # Walk the profile CCW: up the left edge, along the root line with a
+    # trapezoidal tooth per pitch period, down the right edge, close the base.
+    pts = [App.Vector(0, 0, -width), App.Vector(0, 0, 0)]
+    for i in range(teeth):
+        center = i * pitch + pitch / 2.0
+        pts.append(App.Vector(center - half_root, 0, 0))
+        pts.append(App.Vector(center - half_tip, 0, tooth_h))
+        pts.append(App.Vector(center + half_tip, 0, tooth_h))
+        pts.append(App.Vector(center + half_root, 0, 0))
+    pts.append(App.Vector(length, 0, 0))
+    pts.append(App.Vector(length, 0, -width))
+    pts.append(App.Vector(0, 0, -width))
+
+    face = Part.Face(Part.makePolygon(pts))
+    prism = face.extrude(App.Vector(0, height, 0))
+    sol = prism.Solids[0] if prism.Solids else Part.Solid(prism)
+    if sol.Volume < 0:                  # flipped profile normal -> inside-out solid
+        sol = sol.reversed()
+        sol = sol.Solids[0] if sol.Solids else Part.Solid(sol)
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Rack"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("rack", obj)
+    return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume,
+            "pitch": round(pitch, 4), "module": module, "teeth": teeth,
+            "tooth_height": round(tooth_h, 4), "length": round(length, 4)}
+
+
+@handler("add_sprocket")
+def _h_add_sprocket(p):
+    """Roller-chain sprocket (ISO 606 / ANSI), built as a static solid. teeth
+    (tooth count, >= 3), chain_pitch (mm, chain link pitch e.g. 12.7 for #40),
+    roller_diameter (mm), height (mm, plate thickness). Pitch diameter
+    PD = chain_pitch / sin(pi/teeth); tip/outer radius ~= PD/2 + chain_pitch*0.3.
+    Roller seats are circular pockets (radius roller_diameter/2 * 1.05) spaced one
+    per tooth on the pitch circle and cut clean through the plate (a fit/visual
+    approximation of the true ISO tooth form). placement: optional [x,y,z] mm.
+    Returns the solid handle plus the mating numbers: pitch_diameter, chain_pitch,
+    teeth, tip_radius, bore (0). A chain of the same chain_pitch wraps it; the
+    centre distance between two sprockets derives from their pitch_diameters."""
+    import math
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+    teeth = int(p["teeth"])
+    if teeth < 3:
+        raise ValueError(f"teeth must be >= 3, got {teeth}")
+    chain_pitch = float(p["chain_pitch"])
+    if chain_pitch <= 0:
+        raise ValueError(f"chain_pitch must be > 0, got {chain_pitch}")
+    roller_diameter = float(p["roller_diameter"])
+    if roller_diameter <= 0:
+        raise ValueError(f"roller_diameter must be > 0, got {roller_diameter}")
+    height = float(p.get("height", p.get("h", 6.0)))
+    if height <= 0:
+        raise ValueError(f"height must be > 0, got {height}")
+
+    # ISO 606 pitch diameter; pitch radius is where roller-seat centres sit.
+    pd = chain_pitch / math.sin(math.pi / teeth)
+    pitch_radius = pd / 2.0
+    tip_radius = pitch_radius + chain_pitch * 0.3   # tip/outer radius approximation
+    seat_radius = roller_diameter / 2.0 * 1.05      # 5% clearance for roller fit
+
+    disc = Part.makeCylinder(tip_radius, height)
+    body = disc
+    for i in range(teeth):
+        ang = 2.0 * math.pi * i / teeth
+        cx = pitch_radius * math.cos(ang)
+        cy = pitch_radius * math.sin(ang)
+        seat = Part.makeCylinder(seat_radius, height, App.Vector(cx, cy, 0))
+        body = body.cut(seat)
+    sol = body.Solids[0] if body.Solids else Part.Solid(body)
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Sprocket"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("sprocket", obj)
+    return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume,
+            "pitch_diameter": round(pd, 4), "chain_pitch": chain_pitch,
+            "teeth": teeth, "tip_radius": round(tip_radius, 4), "bore": 0}
+
+
+@handler("add_pulley")
+def _h_add_pulley(p):
+    """Timing-belt (or V) pulley as a static solid. Pitch diameter
+    PD = belt_pitch * teeth / pi. Builds a belt-face cylinder of radius PD/2 and
+    axial length = width (mm), cuts `teeth` axial tooth grooves on the pitch
+    circle (groove ~= belt_pitch*0.5 wide, ~belt_pitch*0.4 deep), and — when
+    flanged — fuses two thin guide discs (radius PD/2 + 2*belt_pitch) at each
+    end. The pulley axis is +Z; the toothed face spans z in [0, width].
+
+    Units: mm throughout. Params: teeth (int >= 6), belt_pitch (mm/tooth),
+    width (mm belt face), flanged (bool, default True), height (mm; overrides
+    width if given), placement ([x,y,z] mm), name (str). Returns the solid's
+    handle plus pitch_diameter (the mating number: centre distance with a mating
+    pulley + belt length derives from the two PDs), belt_pitch, teeth, width,
+    flanged, and volume."""
+    doc = _active_doc()
+    teeth = int(p["teeth"])
+    if teeth < 6:
+        raise ValueError("teeth must be >= 6 for a timing pulley")
+    belt_pitch = float(p["belt_pitch"])
+    if belt_pitch <= 0:
+        raise ValueError("belt_pitch must be > 0 (mm/tooth)")
+    # height overrides width when both supplied; default height = width.
+    height = p.get("height")
+    width = float(height) if height is not None else float(p["width"])
+    if width <= 0:
+        raise ValueError("width (belt face length) must be > 0 mm")
+    flanged = bool(p.get("flanged", True))
+
+    import math
+    PD = belt_pitch * teeth / math.pi
+    R = PD / 2.0
+    # Belt-face cylinder, axis +Z, base at origin.
+    sol = Part.makeCylinder(R, width)
+    # Tooth grooves: axial cylindrical pockets centred on the pitch circle, one
+    # per tooth, full belt-face length. Cylinder cutters approximate the groove
+    # form (same polar-cut technique as the sprocket) — adequate for fit/visual.
+    groove_w = belt_pitch * 0.5
+    cutters = []
+    for i in range(teeth):
+        ang = 2.0 * math.pi * i / teeth
+        cx = R * math.cos(ang)
+        cy = R * math.sin(ang)
+        cutters.append(
+            Part.makeCylinder(groove_w / 2.0, width,
+                              App.Vector(cx, cy, 0), App.Vector(0, 0, 1)))
+    allcut = cutters[0]
+    for c in cutters[1:]:
+        allcut = allcut.fuse(c)
+    sol = sol.cut(allcut)
+    if flanged:
+        # Thin guide discs overhanging the belt face at each end.
+        flange_r = R + 2.0 * belt_pitch
+        flange_t = max(0.8, belt_pitch * 0.4)
+        f1 = Part.makeCylinder(flange_r, flange_t,
+                               App.Vector(0, 0, -flange_t), App.Vector(0, 0, 1))
+        f2 = Part.makeCylinder(flange_r, flange_t,
+                               App.Vector(0, 0, width), App.Vector(0, 0, 1))
+        sol = sol.fuse(f1).fuse(f2)
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Pulley"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("pulley", obj)
+    return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume,
+            "pitch_diameter": round(PD, 4), "belt_pitch": belt_pitch,
+            "teeth": teeth, "width": width, "flanged": flanged}
+
+
+@handler("add_spring")
+def _h_add_spring(p):
+    """Helical compression spring: a circular wire-section swept along a helix.
+    Units: all lengths mm. wire_diameter (d), outer_diameter (OD), free_length,
+    coils (turns, may be fractional). kind: 'compression' (only mode for v1).
+    Spring rate computed for steel (G = 79.3 GPa = 79300 MPa) via
+    k = G*d^4 / (8*D^3*Na), D = mean coil diameter, Na = active coils (= coils),
+    yielding k in N/mm. Returns the solid's handle plus the mating/reference
+    dimensions {mean_diameter, free_length, coils, solid_height, spring_rate_n_per_mm}.
+    """
+    doc = _active_doc()
+    wire_diameter = float(p["wire_diameter"])
+    outer_diameter = float(p["outer_diameter"])
+    free_length = float(p["free_length"])
+    coils = float(p["coils"])
+    kind = str(p.get("kind", "compression"))
+    if wire_diameter <= 0:
+        raise ValueError("wire_diameter must be > 0")
+    if outer_diameter <= 0:
+        raise ValueError("outer_diameter must be > 0")
+    if outer_diameter <= wire_diameter:
+        raise ValueError("outer_diameter must be > wire_diameter (no room for a coil)")
+    if free_length <= 0:
+        raise ValueError("free_length must be > 0")
+    if coils <= 0:
+        raise ValueError("coils must be > 0")
+
+    # Mean coil radius: centreline of the wire sits half a wire-diameter inside the OD.
+    Rm = (outer_diameter - wire_diameter) / 2.0
+    pitch = free_length / coils
+    helix = Part.makeHelix(pitch, free_length, Rm)
+
+    # Profile must lie in the plane normal to the helix's start tangent, else the
+    # swept section is skewed; makePipeShell with is_frenet keeps it normal along.
+    e0 = helix.Edges[0]
+    p0 = e0.valueAt(e0.FirstParameter)
+    t0 = e0.tangentAt(e0.FirstParameter)
+    circ = Part.Circle(App.Vector(p0), App.Vector(t0), wire_diameter / 2.0)
+    profile = Part.Wire(circ.toShape())
+    # makePipeShell(profiles, make_solid=True, is_frenet=True) -> closed swept solid.
+    sol = Part.Wire(helix.Edges).makePipeShell([profile], True, True)
+    if not sol.isValid() or sol.Volume <= 0:
+        raise RuntimeError("spring sweep produced an invalid/empty solid; check dimensions")
+    # TODO: kind=="compression" could flatten/grind the end coils (squared ends);
+    # v1 leaves open ends — solid_height below still uses the closed-coil estimate.
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Spring"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("spring", obj)
+
+    # Spring rate, steel: G in MPa, d/D in mm -> k in N/mm.
+    G = 79300.0
+    D = Rm * 2.0
+    k = G * wire_diameter ** 4 / (8.0 * D ** 3 * coils)
+    return {"handle": h, "name": obj.Name, "volume": round(obj.Shape.Volume, 4),
+            "mean_diameter": round(D, 4), "free_length": free_length, "coils": coils,
+            "kind": kind, "solid_height": round(coils * wire_diameter, 4),
+            "spring_rate_n_per_mm": round(k, 4)}
+
+
+@handler("add_fastener")
+def _h_add_fastener(p):
+    """Build a standard ISO metric fastener as a static Part solid from
+    primitives. kind in {socket_head_cap_screw, hex_bolt, hex_nut, washer};
+    size in {M3,M4,M5,M6,M8,M10,M12}; length = shank length (mm, screws/bolts
+    only, required for them). All dims in mm. Threads are cosmetic (plain
+    shank). Returns the solid's handle plus the mating numbers a coordinator
+    needs: major_diameter (drill the through-hole this + clearance), pitch,
+    head_diameter / head_height (counterbore size), and length."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+
+    # ISO metric reference table (representative ISO 4762 socket-head /
+    # ISO 4032 nut / ISO 7089 washer values):
+    # {size: (major_dia, pitch, head_dia, head_height, nut_width_af, nut_height,
+    #         washer_od, washer_thk)}
+    _FASTENER = {
+        "M3":  (3.0,  0.5,  5.5,  3.0,  5.5,  2.4,  7.0,  0.5),
+        "M4":  (4.0,  0.7,  7.0,  4.0,  7.0,  3.2,  9.0,  0.8),
+        "M5":  (5.0,  0.8,  8.5,  5.0,  8.0,  4.7,  10.0, 1.0),
+        "M6":  (6.0,  1.0,  10.0, 6.0,  10.0, 5.2,  12.0, 1.6),
+        "M8":  (8.0,  1.25, 13.0, 8.0,  13.0, 6.8,  16.0, 1.6),
+        "M10": (10.0, 1.5,  16.0, 10.0, 16.0, 8.4,  20.0, 2.0),
+        "M12": (12.0, 1.75, 18.0, 12.0, 18.0, 10.8, 24.0, 2.5),
+    }
+    _KINDS = ("socket_head_cap_screw", "hex_bolt", "hex_nut", "washer")
+
+    kind = str(p["kind"])
+    if kind not in _KINDS:
+        raise ValueError(f"unknown kind {kind!r}; expected one of {list(_KINDS)}")
+    size = str(p["size"]).upper()
+    if size not in _FASTENER:
+        raise ValueError(f"unknown size {size!r}; expected one of {list(_FASTENER)}")
+    major, pitch, head_dia, head_h, nut_af, nut_h, washer_od, washer_thk = _FASTENER[size]
+
+    length = None
+    if kind in ("socket_head_cap_screw", "hex_bolt"):
+        if p.get("length") is None:
+            raise ValueError(f"length (mm) is required for kind={kind!r}")
+        length = float(p["length"])
+        if length <= 0:
+            raise ValueError("length must be > 0")
+
+    def _hex_prism(across_flats, height, z0=0.0):
+        # Regular hexagon with the given across-flats dimension (flat-to-flat),
+        # circumradius = across_flats / sqrt(3); oriented flats parallel to X.
+        import math
+        rr = across_flats / math.sqrt(3.0)
+        pts = [App.Vector(rr * math.cos(math.radians(60 * i + 30)),
+                          rr * math.sin(math.radians(60 * i + 30)), z0)
+               for i in range(6)]
+        pts.append(pts[0])
+        return Part.Face(Part.makePolygon(pts)).extrude(App.Vector(0, 0, height))
+
+    if kind == "socket_head_cap_screw":
+        # Cylindrical head (z: 0..head_h) + shank below it (z: -length..0).
+        head = Part.makeCylinder(head_dia / 2.0, head_h)
+        shank = Part.makeCylinder(major / 2.0, length, App.Vector(0, 0, -length))
+        body = head.fuse(shank)
+        # Cosmetic hex socket sunk into the head top.
+        sock_af = 0.6 * head_dia
+        sock_depth = 0.6 * head_h
+        socket = _hex_prism(sock_af, sock_depth + 1.0, z0=head_h - sock_depth)
+        sol = body.cut(socket).removeSplitter()
+    elif kind == "hex_bolt":
+        # Hex head (across-flats = head_dia) + plain shank below.
+        head = _hex_prism(head_dia, head_h)
+        shank = Part.makeCylinder(major / 2.0, length, App.Vector(0, 0, -length))
+        sol = head.fuse(shank)
+    elif kind == "hex_nut":
+        # Hex prism with an axial clearance hole of the major diameter.
+        prism = _hex_prism(nut_af, nut_h)
+        sol = prism.cut(Part.makeCylinder(major / 2.0, nut_h))
+    else:  # washer
+        sol = (Part.makeCylinder(washer_od / 2.0, washer_thk)
+               .cut(Part.makeCylinder(major / 2.0, washer_thk)))
+
+    if not sol.Solids:
+        raise RuntimeError(f"failed to build a solid for {kind} {size}")
+    sol = sol.Solids[0] if len(sol.Solids) == 1 else sol
+
+    obj = doc.addObject("Part::Feature", p.get("name") or kind.replace("_", " ").title().replace(" ", ""))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+
+    h = _register("fastener", obj)
+    out = {"handle": h, "name": obj.Name, "kind": kind, "size": size,
+           "major_diameter": major, "pitch": pitch, "volume": obj.Shape.Volume}
+    if kind in ("socket_head_cap_screw", "hex_bolt"):
+        out["length"] = length
+        out["head_diameter"] = head_dia
+        out["head_height"] = head_h
+        out["model_thread"] = False
+    elif kind == "hex_nut":
+        out["head_diameter"] = nut_af  # across-flats wrench size
+        out["head_height"] = nut_h
+    else:  # washer
+        out["head_diameter"] = washer_od  # outer diameter
+        out["head_height"] = washer_thk
+    return out
+
+
+@handler("add_bearing")
+def _h_add_bearing(p):
+    """Deep-groove ball bearing as an assembly *envelope* solid: an annular ring
+    (OD cylinder minus bore cylinder), `width` long, axis along +Z. No
+    balls/races — the coordinator only needs the fit envelope and bore shoulder.
+
+    Dimensions come from either `designation` (looked up in a small metric table)
+    or explicit `bore`/`outer_diameter`/`width`. Explicit values override a
+    designation when both are supplied. All lengths mm.
+
+    Returns {handle, name, designation, bore, outer_diameter, width, volume}.
+    `bore` sizes the shaft, `outer_diameter` sizes the housing, `width` sets the
+    shoulder spacing."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+
+    # common metric deep-groove series: {designation: (bore, OD, width)} mm
+    _BEARING = {
+        "608":  (8.0, 22.0, 7.0),    # skateboard
+        "623":  (3.0, 10.0, 4.0),
+        "624":  (4.0, 13.0, 5.0),
+        "625":  (5.0, 16.0, 5.0),
+        "626":  (6.0, 19.0, 6.0),
+        "688":  (8.0, 16.0, 5.0),
+        "6000": (10.0, 26.0, 8.0),
+        "6200": (10.0, 30.0, 9.0),
+        "6800": (10.0, 19.0, 5.0),
+        "6900": (10.0, 22.0, 6.0),
+    }
+
+    designation = p.get("designation")
+    bore = p.get("bore")
+    outer_diameter = p.get("outer_diameter")
+    width = p.get("width")
+
+    if designation is not None:
+        designation = str(designation)
+        if designation not in _BEARING:
+            known = ", ".join(sorted(_BEARING))
+            raise ValueError(
+                f"unknown bearing designation {designation!r}; known: {known}. "
+                f"Alternatively pass explicit bore/outer_diameter/width."
+            )
+        d_bore, d_od, d_w = _BEARING[designation]
+        # explicit dims override table values when supplied
+        bore = d_bore if bore is None else bore
+        outer_diameter = d_od if outer_diameter is None else outer_diameter
+        width = d_w if width is None else width
+
+    if bore is None or outer_diameter is None or width is None:
+        known = ", ".join(sorted(_BEARING))
+        raise ValueError(
+            "specify either a known `designation` or all of "
+            "bore/outer_diameter/width. Known designations: " + known
+        )
+
+    bore = float(bore)
+    outer_diameter = float(outer_diameter)
+    width = float(width)
+    if bore <= 0:
+        raise ValueError("bore must be > 0")
+    if width <= 0:
+        raise ValueError("width must be > 0")
+    if outer_diameter <= bore:
+        raise ValueError(
+            f"outer_diameter ({outer_diameter}) must be > bore ({bore})"
+        )
+
+    # envelope = OD cylinder with the bore cylinder cut out, axis +Z
+    outer = Part.makeCylinder(outer_diameter / 2.0, width)
+    inner = Part.makeCylinder(bore / 2.0, width)
+    ring = outer.cut(inner)
+    if ring.isNull() or not ring.isValid() or ring.Volume <= 0:
+        raise RuntimeError(
+            "bearing envelope produced an invalid/empty solid; check dimensions"
+        )
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Bearing"))
+    obj.Shape = ring
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("bearing", obj)
+    return {"handle": h, "name": obj.Name,
+            "designation": designation,
+            "bore": round(bore, 4),
+            "outer_diameter": round(outer_diameter, 4),
+            "width": round(width, 4),
+            "volume": obj.Shape.Volume}
+
+
+@handler("oring_groove")
+def _h_oring_groove(p):
+    """Compute a static O-ring gland (groove) from the ring's cross-section and,
+    optionally, cut the annular groove into a named flat face of a host solid.
+
+    Units: mm throughout. Gland rule-of-thumb for a static seal:
+      groove_depth = cross_section * 0.75  (~25% squeeze; clamped to a 20-30%
+                     squeeze band so depth stays within w*0.70 .. w*0.80),
+      groove_width = cross_section * 1.30  (room for swell/extrusion),
+      corner_radius <= 0.4 mm.
+    The groove is centred so its INNER diameter == inner_diameter; the groove
+    therefore spans radially outward by groove_width:
+      groove_inner_diameter = inner_diameter,
+      groove_outer_diameter = inner_diameter + 2 * groove_width.
+
+    When cut=True, the annular groove is cut into the face named by `face` (a
+    stable f_* tag, a 'FaceN' index, or an int) of the solid `handle`: the cut
+    is a ring (outer cylinder minus inner cylinder) of depth=groove_depth driven
+    into the solid along the inward face normal, axially centred on the face's
+    centre of mass. Requires the face to be planar.
+
+    Returns {groove_depth, groove_width, groove_inner_diameter,
+    groove_outer_diameter, squeeze_pct, cross_section} plus, when cut=True,
+    {handle, name, volume} for the resulting solid. The host input is hidden."""
+    cross_section = float(p["cross_section"])
+    if cross_section <= 0:
+        raise ValueError("cross_section must be > 0 (O-ring wire diameter in mm)")
+    inner_diameter = float(p.get("inner_diameter", 0.0))
+    cut = bool(p.get("cut", True))
+    gland_type = str(p.get("gland_type", "static_radial"))
+
+    # Static-seal gland: 25% nominal squeeze, clamped to a 20-30% band.
+    depth = cross_section * 0.75
+    depth = max(cross_section * 0.70, min(cross_section * 0.80, depth))
+    width = cross_section * 1.30
+    squeeze_pct = (1.0 - depth / cross_section) * 100.0
+
+    result = {
+        "groove_depth": round(depth, 4),
+        "groove_width": round(width, 4),
+        "groove_inner_diameter": round(inner_diameter, 4),
+        "groove_outer_diameter": round(inner_diameter + 2.0 * width, 4),
+        "squeeze_pct": round(squeeze_pct, 2),
+        "cross_section": cross_section,
+        "gland_type": gland_type,
+    }
+
+    if not cut:
+        return result
+
+    if "handle" not in p or p.get("handle") is None:
+        raise ValueError("cut=True requires a `handle` for the host solid")
+    if inner_diameter <= 0:
+        raise ValueError("cut=True requires inner_diameter > 0 (mm)")
+    ref = p.get("face")
+    if ref is None:
+        raise ValueError("cut=True requires `face` (an f_* tag, 'FaceN', or int)")
+
+    doc = _active_doc()
+    obj, shape = _shape_of(p["handle"])
+
+    # Resolve the face reference to a 1-based FaceN index (mirror _h_fillet_edges).
+    if isinstance(ref, str) and ref.startswith("f_"):
+        idx = int(_h_resolve_face({"handle": p["handle"], "tag": ref})["index"][len("Face"):])
+    elif isinstance(ref, str) and ref.startswith("Face"):
+        idx = int(ref[len("Face"):])
+    else:
+        idx = int(ref)
+    if idx < 1 or idx > len(shape.Faces):
+        raise ValueError(f"face index {idx} out of range (1..{len(shape.Faces)})")
+    face = shape.Faces[idx - 1]
+    if _surface_kind(face) != "planar":
+        raise ValueError(f"face {ref!r} is not planar; O-ring groove needs a flat face")
+
+    com = face.CenterOfMass
+    normal = _outward_normal(face)
+    # Fresh vector pointing INTO the solid; avoid in-place negate of `normal`.
+    into = App.Vector(-normal.x, -normal.y, -normal.z)
+
+    r_out = (inner_diameter + 2.0 * width) / 2.0
+    r_in = inner_diameter / 2.0
+    cyl_out = Part.makeCylinder(r_out, depth, com, into)
+    cyl_in = Part.makeCylinder(r_in, depth, com, into)
+    ring = cyl_out.cut(cyl_in)
+    if ring.Volume <= 0 or not ring.isValid():
+        raise RuntimeError("failed to build a valid annular groove tool")
+    cut_shape = shape.cut(ring)
+    if not cut_shape.isValid():
+        raise RuntimeError("O-ring groove cut produced an invalid solid")
+
+    out = doc.addObject("Part::Feature", p.get("name", "ORingGroove"))
+    out.Shape = cut_shape
+    doc.recompute()
+    _set_visibility(obj, False)  # host solid consumed into the grooved result
+    h = _register("oring_groove", out)
+    result["handle"] = h
+    result["name"] = out.Name
+    result["volume"] = out.Shape.Volume
+    return result
+
+
+@handler("chamfer_edges")
+def _h_chamfer_edges(p):
+    """Chamfer specific edges of a shaped (Part) object. Edges are referenced by
+    tag (preferred, e_* from list_edges), 'EdgeN' string, or bare 1-based int.
+    `size` is the symmetric chamfer leg distance in mm (applied as both
+    dist1=dist2). Mirrors fillet_edges, swapping Part::Fillet for Part::Chamfer.
+    The base object is hidden (consumed into the chamfer feature). Returns the
+    new chamfer feature's handle plus name, resulting Shape volume (mm^3), and
+    the resolved 1-based edge indices."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+    obj, shape = _shape_of(p["handle"])
+    size = float(p.get("size", 1.0))
+    if size <= 0:
+        raise ValueError(f"size must be > 0 mm, got {size}")
+
+    edges = []
+    for ref in p.get("edges", []):
+        if isinstance(ref, str) and ref.startswith("e_"):
+            r = _h_resolve_edge({"handle": p["handle"], "tag": ref})
+            edges.append(int(r["index"][len("Edge"):]))
+        elif isinstance(ref, str) and ref.startswith("Edge"):
+            edges.append(int(ref[len("Edge"):]))
+        else:
+            edges.append(int(ref))
+    if not edges:
+        raise ValueError("edges must be a non-empty list of edge tags/indices")
+
+    chamfer = doc.addObject("Part::Chamfer", p.get("name", "Chamfer"))
+    chamfer.Base = obj
+    # (edge_idx, dist1, dist2): symmetric chamfer -> both legs == size.
+    chamfer.Edges = [(i, size, size) for i in edges]
+    doc.recompute()
+    _set_visibility(obj, False)
+    h = _register("chamfer", chamfer)
+    return {"handle": h, "name": chamfer.Name,
+            "volume": chamfer.Shape.Volume, "edges": edges}
+
+
+@handler("shell_solid")
+def _h_shell_solid(p):
+    """Hollow a raw Part solid into a shell of uniform wall thickness, removing
+    the listed faces to leave them as openings. Inputs: handle (a shaped Part
+    object), faces (list of face refs to REMOVE — f_* tags, 'FaceN' strings, or
+    1-based ints), thickness (wall thickness in mm, positive). The shell is
+    offset INWARD (outer dimensions preserved). Produces a new Part::Feature,
+    hides the consumed input, and returns {handle, name, volume (mm^3),
+    wall_thickness (mm), removed_faces (1-based indices)}."""
+    doc = _active_doc()
+    obj, shape = _shape_of(p["handle"])
+
+    thickness = float(p.get("thickness", 1.0))
+    if thickness <= 0:
+        raise ValueError("thickness must be > 0")
+
+    refs = p.get("faces") or []
+    if not refs:
+        raise ValueError("faces must be a non-empty list of face refs to remove")
+
+    # Resolve each ref to a 1-based face index (mirror _h_fillet_edges' loop).
+    indices = []
+    for ref in refs:
+        if isinstance(ref, str) and ref.startswith("f_"):
+            idx = int(_h_resolve_face({"handle": p["handle"], "tag": ref})["index"][len("Face"):])
+        elif isinstance(ref, str) and ref.startswith("Face"):
+            idx = int(ref[len("Face"):])
+        else:
+            idx = int(ref)
+        if idx < 1 or idx > len(shape.Faces):
+            raise ValueError(f"face index {idx} out of range 1..{len(shape.Faces)}")
+        indices.append(idx)
+
+    faces_to_remove = [shape.Faces[i - 1] for i in indices]
+    # Negative offset shells inward; tolerance 1e-3 matches FreeCAD's default.
+    hollow = shape.makeThickness(faces_to_remove, -abs(thickness), 1e-3)
+    if hollow.isNull() or not hollow.isValid():
+        raise RuntimeError(
+            "makeThickness produced an invalid shell; thickness may exceed the "
+            "solid's local wall room or the removed faces are degenerate"
+        )
+
+    out = doc.addObject("Part::Feature", p.get("name", "Shell"))
+    out.Shape = hollow
+    doc.recompute()
+    _set_visibility(obj, False)
+    h = _register("shell", out)
+    return {
+        "handle": h,
+        "name": out.Name,
+        "volume": out.Shape.Volume,
+        "wall_thickness": abs(thickness),
+        "removed_faces": indices,
+    }
+
+
+@handler("add_thread")
+def _h_add_thread(p):
+    """Build a REAL helical ISO-style thread as a static Part solid.
+
+    Units: all lengths mm, angles deg. Parameters:
+      diameter: nominal major diameter (mm). For external this is the crest
+                diameter; for internal (a tap/insert tool) it is the bore.
+      pitch:    thread pitch (mm per turn).
+      length:   threaded length along the axis (mm). The thread runs +Z from z=0.
+      internal: if True the returned solid is a TAP/cutting-tool sized to the
+                bore (fuse it into a bored hole, or cut it, to thread the bore);
+                if False it is a finished externally-threaded stud.
+      starts:   number of thread starts (>=1); multi-start repeats the helix
+                rotated by 360/starts and uses lead = pitch*starts.
+      placement: optional [x,y,z] mm translation of the solid's base.
+
+    Geometry: a 60-deg ISO triangular rib (fundamental height H = pitch*0.866,
+    truncated to 5H/8) is swept along a Part.makeHelix at the minor radius via
+    makePipeShell, then fused onto a core cylinder. The core radius eats 35% into
+    the rib root so the OCC fuse is robust (a bare-tangent overlap intermittently
+    drops the core operand). If a fuse fails to add material it is retried on a
+    splitter-cleaned rib. Returns the solid's handle plus the mating numbers a
+    coordinator needs: major_diameter (= diameter), minor_diameter
+    (= diameter - 1.0825*pitch, the ISO 60-deg minor), pitch, length, starts,
+    internal, volume (mm^3), and modeled (True when a valid swept solid was
+    produced; the cosmetic-only fallback is never taken here because the sweep
+    validates). Raises ValueError on non-positive dims or a pitch too coarse for
+    the diameter (minor radius <= 0)."""
+    import math
+    doc = _active_doc()
+    diameter = float(p["diameter"])
+    pitch = float(p["pitch"])
+    length = float(p["length"])
+    internal = bool(p.get("internal", False))
+    starts = int(p.get("starts", 1))
+    if diameter <= 0:
+        raise ValueError("diameter must be > 0")
+    if pitch <= 0:
+        raise ValueError("pitch must be > 0")
+    if length <= 0:
+        raise ValueError("length must be > 0")
+    if starts < 1:
+        raise ValueError("starts must be >= 1")
+
+    Rmaj = diameter / 2.0
+    # ISO 60-deg fundamental triangle height, truncated to the 5H/8 engaged depth.
+    H = pitch * math.sqrt(3.0) / 2.0
+    depth = 5.0 * H / 8.0
+    Rminor = Rmaj - depth
+    if Rminor <= 0:
+        raise ValueError("pitch too coarse for diameter (minor radius <= 0)")
+    # Core radius bites 35% into the rib root: a bare root-tangent overlap makes
+    # the OCC fuse intermittently drop the core operand and return only the rib.
+    Rcore = Rminor + 0.35 * depth
+
+    solid = Part.makeCylinder(Rcore, length)
+    for s in range(starts):
+        ang = 360.0 * s / starts
+        # lead = pitch*starts so multi-start crests don't collide.
+        helix = Part.makeHelix(pitch * starts, length, Rminor)
+        if ang:
+            helix.rotate(App.Vector(0, 0, 0), App.Vector(0, 0, 1), ang)
+        w = Part.Wire(helix.Edges)
+        e0 = w.Edges[0]
+        p0 = e0.valueAt(e0.FirstParameter)
+        # Triangular profile in the plane of the start point: base spans one
+        # pitch axially, apex points radially outward by the engaged depth.
+        radial = App.Vector(p0.x, p0.y, 0)
+        radial.normalize()
+        axial = App.Vector(0, 0, 1)
+        half = pitch / 2.0
+        a = App.Vector(p0) + axial * half
+        b = App.Vector(p0) - axial * half
+        apex = App.Vector(p0) + radial * (depth * 1.05)
+        prof = Part.makePolygon([a, apex, b, a])
+        # makePipeShell(profiles, make_solid=True, is_frenet=True): keeps the
+        # section normal to the helix tangent so the rib doesn't skew/self-cross.
+        rib = w.makePipeShell([prof], True, True)
+        fused = solid.fuse(rib)
+        if fused.isValid() and fused.Volume > solid.Volume:
+            solid = fused
+        else:
+            solid = solid.fuse(rib.removeSplitter())
+    try:
+        solid = solid.removeSplitter()
+    except Exception:
+        pass
+
+    modeled = bool(solid.isValid() and solid.Volume > 0)
+    if not modeled:
+        # Cosmetic fallback: the swept solid is unusable — emit the bare core
+        # cylinder tagged with the thread spec rather than a broken shape.
+        solid = Part.makeCylinder(Rminor if internal else Rmaj, length)
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Thread"))
+    obj.Shape = solid
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("thread", obj)
+
+    minor_diameter = diameter - 1.0825 * pitch
+    return {"handle": h, "name": obj.Name, "volume": round(obj.Shape.Volume, 4),
+            "major_diameter": round(diameter, 4), "minor_diameter": round(minor_diameter, 4),
+            "pitch": pitch, "length": length, "starts": starts,
+            "internal": internal, "modeled": modeled}
+
+
+@handler("engrave_text")
+def _h_engrave_text(p):
+    """Engrave (cut) or emboss (add) extruded text onto a planar face of a solid.
+
+    Units: mm. text is rendered as a Draft ShapeString in a system TrueType font,
+    extruded by `depth` mm, oriented so its plane lies on the resolved face and
+    centred on the face centroid (with an optional in-face [u, v] mm offset), then
+    booleaned into the host: mode='engrave' cuts the text below the surface,
+    mode='emboss' fuses it standing proud of the surface. The host solid and the
+    transient text tool are hidden; the Draft ShapeString helper is dropped after
+    extrusion (a static solid is kept).
+
+    Params: handle (host solid), face (f_* tag / 'FaceN' / int, must be planar),
+    text (non-empty str), size (cap height mm, default 5.0), depth (mm, default
+    0.5), mode ('engrave'|'emboss', default 'engrave'), position (optional [u, v]
+    mm in-face offset), font (optional path to a .ttf/.ttc; auto-probed if omitted),
+    name (label, default 'Text').
+
+    Returns {handle, name, volume (mm^3 of the result solid), text, mode, depth}.
+    Raises RuntimeError if no usable font is found and none was supplied."""
+    import os
+    import Draft
+    doc = _active_doc()
+    obj, shape = _shape_of(p["handle"])
+
+    text = str(p.get("text", "")).strip()
+    if not text:
+        raise ValueError("text must be a non-empty string")
+    size = float(p.get("size", 5.0))
+    if size <= 0:
+        raise ValueError("size must be > 0 (mm)")
+    depth = float(p.get("depth", 0.5))
+    if depth <= 0:
+        raise ValueError("depth must be > 0 (mm)")
+    mode = str(p.get("mode", "engrave")).lower()
+    if mode not in ("engrave", "emboss"):
+        raise ValueError("mode must be 'engrave' (cut) or 'emboss' (add)")
+
+    # FontFile must exist on disk headless; probe common macOS locations.
+    font = p.get("font")
+    if not font:
+        for cand in ("/System/Library/Fonts/Supplemental/Arial.ttf",
+                     "/Library/Fonts/Arial.ttf",
+                     "/System/Library/Fonts/Helvetica.ttc"):
+            if os.path.isfile(cand):
+                font = cand
+                break
+    if not font or not os.path.isfile(font):
+        raise RuntimeError(
+            "no usable font file found; pass font=<path to a .ttf/.ttc> "
+            "(probed Arial/Helvetica under /System/Library/Fonts and /Library/Fonts)"
+        )
+
+    # Resolve the face reference to a 1-based FaceN index (mirror _h_oring_groove).
+    ref = p.get("face")
+    if ref is None:
+        raise ValueError("face required (an f_* tag, 'FaceN', or int)")
+    if isinstance(ref, str) and ref.startswith("f_"):
+        idx = int(_h_resolve_face({"handle": p["handle"], "tag": ref})["index"][len("Face"):])
+    elif isinstance(ref, str) and ref.startswith("Face"):
+        idx = int(ref[len("Face"):])
+    else:
+        idx = int(ref)
+    if idx < 1 or idx > len(shape.Faces):
+        raise ValueError(f"face index {idx} out of range (1..{len(shape.Faces)})")
+    face = shape.Faces[idx - 1]
+    if _surface_kind(face) != "planar":
+        raise ValueError(f"face {ref!r} is not planar; engrave_text needs a flat face")
+
+    com = face.CenterOfMass
+    normal = _outward_normal(face)
+
+    # Draft ShapeString lies flat in the local XY plane (text along +X). Extrude
+    # along local +Z to a solid, then drop the parametric helper (keep a static solid).
+    ss = Draft.make_shapestring(String=text, FontFile=font, Size=size)
+    doc.recompute()
+    ss_name = ss.Name
+    tsolid = ss.Shape.extrude(App.Vector(0, 0, depth))
+    doc.removeObject(ss_name)
+    doc.recompute()
+    if not tsolid.isValid() or tsolid.Volume <= 0:
+        raise RuntimeError(f"text {text!r} produced no valid extruded solid")
+
+    # Map local +Z onto the outward face normal; centre the text bbox on the face
+    # centroid. Engrave recesses the body inward (text top flush with surface),
+    # emboss stands it proud (text bottom flush with surface): shift by depth/2.
+    rot = App.Rotation(App.Vector(0, 0, 1), normal)
+    rotated_center = rot.multVec(tsolid.BoundBox.Center)
+    offset = App.Vector(0, 0, 0)
+    pos = p.get("position")
+    if pos:
+        u_dir = rot.multVec(App.Vector(1, 0, 0))
+        v_dir = rot.multVec(App.Vector(0, 1, 0))
+        offset = u_dir.multiply(float(pos[0])) + v_dir.multiply(float(pos[1]))
+    half = normal.multiply(depth / 2.0)
+    base = com - rotated_center + (offset - half if mode == "engrave" else offset + half)
+    placement = App.Placement()
+    placement.Rotation = rot
+    placement.Base = base
+    placed = tsolid.transformGeometry(placement.toMatrix())
+
+    # Materialise the placed text as a tool object, then cut/fuse via boolean_op
+    # so consumed-input visibility hygiene is applied for free.
+    tool = doc.addObject("Part::Feature", "TextTool")
+    tool.Shape = placed
+    doc.recompute()
+    tool_h = _register("texttool", tool)
+    op = "cut" if mode == "engrave" else "fuse"
+    r = HANDLERS["boolean_op"]({"op": op, "base": p["handle"], "tool": tool_h})
+    result_obj = _resolve(r["handle"])
+    result_obj.Label = p.get("name", "Text")
+    doc.recompute()
+    h = _register("text", result_obj)
+    return {"handle": h, "name": result_obj.Name,
+            "volume": result_obj.Shape.Volume, "text": text,
+            "mode": mode, "depth": depth}
+
+
+@handler("add_rib")
+def _h_add_rib(p):
+    """Add a reinforcing rib/web inside a PartDesign Body, thickening an OPEN
+    sketch profile (a line/arc/polyline spine) into a wall that fuses with the
+    surrounding material. Units: thickness in mm. midplane=True centers the
+    wall on the spine (thickness/2 each side); reversed flips the extrusion
+    sense. Returns {handle, name, volume (whole-body Shape.Volume in mm^3 after
+    the rib, which is strictly larger than before), thickness}.
+
+    Fallback note: FreeCAD's native PartDesign::Rib type is NOT registered in
+    the headless freecadcmd runtime, so this command synthesizes the rib as a
+    midplane PartDesign::Pad: it offsets the open spine by +/-thickness/2 into a
+    closed footprint sketch and pads it across the body's bounding-box diagonal
+    (so the wall reliably reaches the surrounding walls), centered on the spine.
+    Geometrically equivalent to a Rib for the common straight/curved-spine
+    case."""
+    doc = _active_doc()
+    body = _resolve_body(p["body"])
+    profile = _resolve_sketch(p["sketch"])
+    thickness = float(p.get("thickness", 2.0))
+    if thickness <= 0:
+        raise ValueError(f"thickness must be > 0 mm (got {thickness})")
+    midplane = bool(p.get("midplane", True))
+    reversed_ = bool(p.get("reversed", False))
+    name = p.get("name", "Rib")
+
+    # Read the spine in the sketch's LOCAL frame (sketch geometry is planar at
+    # z=0 local); we offset it there, then re-attach the footprint to the same
+    # plane so it inherits the profile's world placement.
+    local_edges = [g.toShape() for g in profile.Geometry if hasattr(g, "toShape")]
+    if not local_edges:
+        raise ValueError("rib profile sketch has no geometry")
+    wire = Part.Wire(local_edges)
+    if wire.isClosed():
+        raise ValueError(
+            "rib profile must be an OPEN spine (line/arc/polyline), not a closed "
+            "loop; it is thickened to `thickness` mm about that spine"
+        )
+    ovs = wire.OrderedVertexes if hasattr(wire, "OrderedVertexes") else wire.Vertexes
+    poly = [App.Vector(v.X, v.Y, 0.0) for v in ovs]
+    clean = [poly[0]]
+    for v in poly[1:]:
+        if (v - clean[-1]).Length > 1e-7:
+            clean.append(v)
+    poly = clean
+    if len(poly) < 2:
+        raise ValueError("rib profile degenerated to a single point")
+
+    # Perpendicular offset of the polyline using per-vertex averaged tangents
+    # (left normal = z x tangent). Robust where Part.makeOffset2D is flaky on a
+    # lone open segment.
+    def _offset(d):
+        out = []
+        n = len(poly)
+        for i, pt in enumerate(poly):
+            if i == 0:
+                t = poly[1] - poly[0]
+            elif i == n - 1:
+                t = poly[-1] - poly[-2]
+            else:
+                t = poly[i + 1] - poly[i - 1]
+            t.normalize()
+            nrm = App.Vector(-t.y, t.x, 0.0)
+            out.append(pt + nrm.multiply(d))
+        return out
+
+    half = thickness / 2.0
+    loop = _offset(half) + list(reversed(_offset(-half)))
+
+    def _bvol(b):
+        s = getattr(b, "Shape", None)
+        return 0.0 if (s is None or s.isNull()) else s.Volume
+    pre_volume = _bvol(body)
+
+    # Extrude the rib across the body so it always reaches surrounding walls;
+    # Midplane keeps it centered on the spine plane.
+    bb = body.Shape.BoundBox if not body.Shape.isNull() else None
+    span = bb.DiagonalLength if (bb is not None and bb.DiagonalLength > 1e-6) else 100.0
+
+    foot = doc.addObject("Sketcher::SketchObject", name + "Footprint")
+    body.addObject(foot)
+    foot.AttachmentSupport = profile.AttachmentSupport
+    foot.MapMode = profile.MapMode
+    foot.AttachmentOffset = profile.AttachmentOffset
+    for i in range(len(loop)):
+        a = loop[i]
+        b2 = loop[(i + 1) % len(loop)]
+        foot.addGeometry(
+            Part.LineSegment(App.Vector(a.x, a.y, 0.0), App.Vector(b2.x, b2.y, 0.0)),
+            False,
+        )
+    doc.recompute()
+
+    rib = doc.addObject("PartDesign::Pad", name)
+    rib.Profile = foot
+    rib.Length = span
+    rib.Midplane = midplane
+    rib.Reversed = reversed_
+    body.addObject(rib)
+    doc.recompute()
+
+    if rib.Shape.isNull() or not rib.Shape.isValid():
+        raise RuntimeError(
+            "rib feature produced a null/invalid shape; check that the open "
+            "profile lies between the body walls it should connect"
+        )
+    post_volume = rib.Shape.Volume
+    if post_volume <= pre_volume + 1e-6:
+        raise RuntimeError(
+            f"rib added no material (body volume {pre_volume:.1f} -> "
+            f"{post_volume:.1f} mm^3); the spine may not reach surrounding walls"
+        )
+    # The spine sketch and the generated footprint are consumed inputs.
+    _set_visibility(profile, False)
+    _set_visibility(foot, False)
+    h = _register("rib", rib)
+    return {
+        "handle": h,
+        "name": rib.Name,
+        "volume": post_volume,
+        "thickness": thickness,
+    }
+
+
+@handler("transform")
+def _h_transform(p):
+    """Move and/or rotate an existing object in place by mutating its Placement.
+
+    Units: translate in mm [x, y, z]; rotate_axis a direction vector (need not be
+    unit length); angle in degrees about that axis. relative=True (default)
+    composes the delta onto the object's CURRENT placement (incremental move);
+    relative=False sets the delta as the object's ABSOLUTE placement (discarding
+    prior placement). No new object/handle is created — the same object moves.
+
+    Returns {handle, name, placement: {base:[x,y,z], axis:[x,y,z], angle_deg}}
+    where base/axis/angle_deg describe the object's resulting Placement."""
+    import math
+    doc = _active_doc()
+    obj = _resolve(p["handle"])
+    if not hasattr(obj, "Placement"):
+        raise TypeError(f"object {obj.Name!r} has no Placement to transform")
+
+    translate = p.get("translate") or [0.0, 0.0, 0.0]
+    if len(translate) != 3:
+        raise ValueError(f"translate must be [x, y, z] mm, got {translate!r}")
+    trans = App.Vector(*[float(c) for c in translate])
+
+    axis = p.get("rotate_axis") or [0.0, 0.0, 1.0]
+    if len(axis) != 3:
+        raise ValueError(f"rotate_axis must be a 3-vector, got {axis!r}")
+    ax = App.Vector(*[float(c) for c in axis])
+    angle = float(p.get("angle", 0.0))
+    if angle != 0.0 and ax.Length == 0.0:
+        raise ValueError("rotate_axis must be non-zero when angle != 0")
+    if ax.Length == 0.0:
+        ax = App.Vector(0.0, 0.0, 1.0)  # harmless default for a 0-deg no-op
+
+    # App.Rotation(axis, deg) takes the angle in DEGREES.
+    delta = App.Placement(trans, App.Rotation(ax, angle))
+    relative = bool(p.get("relative", True))
+    obj.Placement = delta.multiply(obj.Placement) if relative else delta
+    doc.recompute()
+
+    pl = obj.Placement
+    rax = pl.Rotation.Axis
+    return {
+        "handle": p["handle"],
+        "name": obj.Name,
+        "placement": {
+            "base": [pl.Base.x, pl.Base.y, pl.Base.z],
+            "axis": [rax.x, rax.y, rax.z],
+            "angle_deg": math.degrees(pl.Rotation.Angle),
+        },
+    }
+
+
+@handler("scale_shape")
+def _h_scale_shape(p):
+    """Scale a shape uniformly or per-axis, baking a fresh static Part::Feature
+    (scaling breaks parametric history, so the result is a standalone solid, not
+    a linked feature). All lengths mm. `factor` is a scalar (uniform) or a
+    [sx, sy, sz] list. `center` is an optional [x, y, z] mm pivot; when omitted
+    the scale is about the world origin. Geometry is transformed via
+    shape.transformGeometry(matrix) so the actual geometry scales (transformShape
+    would only move it). The source object is hidden, since its shape has been
+    consumed into the scaled copy. Returns {handle, name, volume, factor} where
+    volume scales by sx*sy*sz versus the source."""
+    doc = _active_doc()
+    obj, shape = _shape_of(p["handle"])
+    factor = p["factor"]
+    if isinstance(factor, (int, float)):
+        sx = sy = sz = float(factor)
+    else:
+        if not (isinstance(factor, (list, tuple)) and len(factor) == 3):
+            raise ValueError(
+                f"factor must be a number or [sx, sy, sz], got {factor!r}")
+        sx, sy, sz = (float(factor[0]), float(factor[1]), float(factor[2]))
+    if sx <= 0 or sy <= 0 or sz <= 0:
+        raise ValueError(f"scale factors must be > 0, got [{sx}, {sy}, {sz}]")
+
+    center = p.get("center")
+    m = App.Matrix()
+    m.scale(sx, sy, sz)
+    if center is not None:
+        if not (isinstance(center, (list, tuple)) and len(center) == 3):
+            raise ValueError(f"center must be [x, y, z], got {center!r}")
+        cx, cy, cz = (float(center[0]), float(center[1]), float(center[2]))
+        # Scale about `center`: translate pivot to origin, scale, translate back.
+        # Compose right-to-left so the move-to-origin is applied first.
+        to_origin = App.Matrix(); to_origin.move(App.Vector(-cx, -cy, -cz))
+        back = App.Matrix(); back.move(App.Vector(cx, cy, cz))
+        m = back.multiply(m.multiply(to_origin))
+
+    # transformGeometry rebuilds the geometry (B-rep) under the matrix, unlike
+    # transformShape which only changes placement — non-uniform scale needs this.
+    scaled = shape.transformGeometry(m)
+    out = doc.addObject("Part::Feature", p.get("name", "Scaled"))
+    out.Shape = scaled
+    doc.recompute()
+    _set_visibility(obj, False)
+    h = _register("scaled", out)
+    return {
+        "handle": h,
+        "name": out.Name,
+        "volume": out.Shape.Volume,
+        "factor": [sx, sy, sz],
+    }
+
+
+@handler("copy_shape")
+def _h_copy_shape(p):
+    """Duplicate an existing shape as an independent static solid. Lengths mm.
+
+    Resolves p["handle"] to its Shape and stamps a deep copy (shape.copy())
+    into a fresh Part::Feature. The copy carries its own geometry — unlike
+    add_part's App::Link, later edits to the source do NOT propagate to the
+    copy. Optional p["placement"] is an absolute [x, y, z] translation in mm
+    applied to the copy's base (the source is left untouched and still visible).
+    Optional p["name"] names the new object (defaults to "<SourceName>_copy").
+    Returns {handle, name, volume} where volume is mm^3 of the copied solid."""
+    doc = _active_doc()
+    obj, shape = _shape_of(p["handle"])
+    out = doc.addObject("Part::Feature", p.get("name") or (obj.Name + "_copy"))
+    out.Shape = shape.copy()  # deep copy → independent geometry, not an App::Link
+    placement = p.get("placement")
+    if placement is not None:
+        if len(placement) != 3:
+            raise ValueError("placement must be [x, y, z] in mm")
+        out.Placement.Base = App.Vector(*(float(c) for c in placement))
+    doc.recompute()
+    h = _register("copy", out)
+    return {"handle": h, "name": out.Name, "volume": out.Shape.Volume}
+
+
+@handler("measure_distance")
+def _h_measure_distance(p):
+    """Minimum distance between two entities (mm). a/b are handles; a_ref/b_ref
+    optionally narrow to a sub-shape on that handle: an f_*/e_* tag or a
+    FaceN/EdgeN string (whole Shape used if the ref is omitted). FreeCAD's
+    Shape.distToShape does the math. Returns:
+      distance_mm  -- minimum gap (0.0 when shapes touch or interpenetrate)
+      point_on_a   -- [x,y,z] closest point on a (mm)
+      point_on_b   -- [x,y,z] closest point on b (mm)
+      touching     -- True when distance_mm < 1e-7
+    Does not mutate input geometry."""
+    def _sub(handle, ref):
+        # Resolve a handle (+ optional face/edge ref) to a measurable shape.
+        _, shape = _shape_of(handle)
+        if ref is None:
+            return shape
+        ref = str(ref)
+        # Tags resolve to a 1-based FaceN/EdgeN index; bare FaceN/EdgeN accepted too.
+        if ref.startswith("f_"):
+            ref = _h_resolve_face({"handle": handle, "tag": ref})["index"]
+        elif ref.startswith("e_"):
+            ref = _h_resolve_edge({"handle": handle, "tag": ref})["index"]
+        if ref.startswith("Face"):
+            idx = int(ref[len("Face"):])
+            faces = shape.Faces
+            if not 1 <= idx <= len(faces):
+                raise ValueError(
+                    f"{handle!r} has no Face{idx} (has {len(faces)} faces)"
+                )
+            return faces[idx - 1]
+        if ref.startswith("Edge"):
+            idx = int(ref[len("Edge"):])
+            edges = shape.Edges
+            if not 1 <= idx <= len(edges):
+                raise ValueError(
+                    f"{handle!r} has no Edge{idx} (has {len(edges)} edges)"
+                )
+            return edges[idx - 1]
+        raise ValueError(
+            f"unrecognized ref {ref!r}: use an f_*/e_* tag or a FaceN/EdgeN string"
+        )
+
+    sa = _sub(p["a"], p.get("a_ref"))
+    sb = _sub(p["b"], p.get("b_ref"))
+    # distToShape -> (dist, [(pt_on_a, pt_on_b), ...], infos); points[0] is the
+    # closest pair. dist == 0 means the shapes touch or intersect.
+    dist, points, _infos = sa.distToShape(sb)
+    pa, pb = points[0]
+    return {
+        "distance_mm": round(dist, 6),
+        "point_on_a": [round(pa.x, 6), round(pa.y, 6), round(pa.z, 6)],
+        "point_on_b": [round(pb.x, 6), round(pb.y, 6), round(pb.z, 6)],
+        "touching": dist < 1e-7,
+    }
+
+
+@handler("measure_angle")
+def _h_measure_angle(p):
+    """Angle between two planar faces or two straight edges, in degrees.
+
+    `a`/`b` are object handles; `a_ref`/`b_ref` are required references that
+    each narrow to a sub-shape on their handle: an `f_*` face tag (planar faces
+    only -> angle between outward normals) or an `e_*` edge tag (straight/line
+    edges only -> angle between tangent directions). `FaceN`/`EdgeN` strings and
+    bare 1-based ints are accepted fallbacks. Both refs must be the same kind
+    (both faces or both edges). The reported `angle_deg` is the raw angle between
+    the two direction vectors (0..180); `supplement_deg` = 180 - angle_deg is
+    also returned because the agent often wants the acute complement (e.g. two
+    opposite parallel faces give angle_deg 180, supplement 0). Returns
+    {angle_deg, supplement_deg, kind: 'face'|'edge'}. Read-only; mutates nothing.
+    """
+    import math
+    a = p["a"]
+    b = p["b"]
+    a_ref = p.get("a_ref")
+    b_ref = p.get("b_ref")
+    if a_ref is None or b_ref is None:
+        raise ValueError(
+            "measure_angle requires a_ref and b_ref (f_* face tags or e_* edge tags)"
+        )
+
+    def _kind_of(ref):
+        if isinstance(ref, str) and (ref.startswith("f_") or ref.startswith("Face")):
+            return "face"
+        if isinstance(ref, str) and (ref.startswith("e_") or ref.startswith("Edge")):
+            return "edge"
+        raise ValueError(
+            f"ref {ref!r} must be an f_*/FaceN face tag or an e_*/EdgeN edge tag"
+        )
+
+    ka, kb = _kind_of(a_ref), _kind_of(b_ref)
+    if ka != kb:
+        raise ValueError(
+            f"a_ref ({ka}) and b_ref ({kb}) must be the same kind: both faces or both edges"
+        )
+    kind = ka
+
+    def _face_index(handle, ref):
+        if isinstance(ref, str) and ref.startswith("f_"):
+            return int(_h_resolve_face({"handle": handle, "tag": ref})["index"][len("Face"):])
+        return int(ref[len("Face"):])
+
+    def _edge_index(handle, ref):
+        if isinstance(ref, str) and ref.startswith("e_"):
+            return int(_h_resolve_edge({"handle": handle, "tag": ref})["index"][len("Edge"):])
+        return int(ref[len("Edge"):])
+
+    _, sa = _shape_of(a)
+    _, sb = _shape_of(b)
+
+    if kind == "face":
+        ia, ib = _face_index(a, a_ref), _face_index(b, b_ref)
+        if ia < 1 or ia > len(sa.Faces):
+            raise ValueError(f"face index {ia} out of range (1..{len(sa.Faces)}) on {a!r}")
+        if ib < 1 or ib > len(sb.Faces):
+            raise ValueError(f"face index {ib} out of range (1..{len(sb.Faces)}) on {b!r}")
+        fa, fb = sa.Faces[ia - 1], sb.Faces[ib - 1]
+        if _surface_kind(fa) != "planar":
+            raise ValueError(f"a_ref {a_ref!r} is not a planar face; angle needs planar faces")
+        if _surface_kind(fb) != "planar":
+            raise ValueError(f"b_ref {b_ref!r} is not a planar face; angle needs planar faces")
+        va, vb = _outward_normal(fa), _outward_normal(fb)
+    else:
+        ia, ib = _edge_index(a, a_ref), _edge_index(b, b_ref)
+        if ia < 1 or ia > len(sa.Edges):
+            raise ValueError(f"edge index {ia} out of range (1..{len(sa.Edges)}) on {a!r}")
+        if ib < 1 or ib > len(sb.Edges):
+            raise ValueError(f"edge index {ib} out of range (1..{len(sb.Edges)}) on {b!r}")
+        ea, eb = sa.Edges[ia - 1], sb.Edges[ib - 1]
+        # tangentAt(FirstParameter) gives a constant direction for a Line; curved
+        # edges have a direction that varies along their length, so reject them.
+        if type(ea.Curve).__name__ != "Line":
+            raise ValueError(f"a_ref {a_ref!r} is not a straight edge; angle needs line edges")
+        if type(eb.Curve).__name__ != "Line":
+            raise ValueError(f"b_ref {b_ref!r} is not a straight edge; angle needs line edges")
+        va, vb = ea.tangentAt(ea.FirstParameter), eb.tangentAt(eb.FirstParameter)
+
+    ang = math.degrees(va.getAngle(vb))  # getAngle returns radians in 0..pi
+    return {
+        "angle_deg": _round(ang),
+        "supplement_deg": _round(180.0 - ang),
+        "kind": kind,
+    }
+
+
+@handler("bounding_box")
+def _h_bounding_box(p):
+    """Axis-aligned bounding box (AABB) of a shaped object — a focused, cheap
+    query (the same numbers mass_properties buries in its payload). All lengths
+    in mm, in world coordinates.
+
+    Returns:
+      min      [x,y,z]  lower corner of the AABB
+      max      [x,y,z]  upper corner of the AABB
+      size     [x,y,z]  extents = max - min  (XLength, YLength, ZLength)
+      center   [x,y,z]  AABB center
+      diagonal float    space-diagonal length of the AABB
+      oriented null, or (when oriented=True and FreeCAD supports it)
+               {size:[x,y,z], center:[x,y,z], diagonal:float} for the tightest
+               box at any orientation (from shape.optimalBoundingBox()); null if
+               that computation is unavailable/failed.
+
+    Does not mutate the input. No handle is returned (this is a measurement)."""
+    _, shape = _shape_of(p["handle"])
+    bb = shape.BoundBox
+    out = {
+        "min": [_round(bb.XMin), _round(bb.YMin), _round(bb.ZMin)],
+        "max": [_round(bb.XMax), _round(bb.YMax), _round(bb.ZMax)],
+        "size": [_round(bb.XLength), _round(bb.YLength), _round(bb.ZLength)],
+        "center": [_round(bb.Center.x), _round(bb.Center.y), _round(bb.Center.z)],
+        "diagonal": _round(bb.DiagonalLength),
+        "oriented": None,
+    }
+    if p.get("oriented"):
+        # optimalBoundingBox() (FreeCAD >= 0.20) returns a Base.BoundBox aligned
+        # to the shape's tightest orientation; wrap in try/except since older
+        # builds or degenerate shapes may not support it.
+        try:
+            obb = shape.optimalBoundingBox()
+            out["oriented"] = {
+                "size": [_round(obb.XLength), _round(obb.YLength), _round(obb.ZLength)],
+                "center": [_round(obb.Center.x), _round(obb.Center.y), _round(obb.Center.z)],
+                "diagonal": _round(obb.DiagonalLength),
+            }
+        except Exception:
+            out["oriented"] = None
+    return out
+
+
+@handler("min_clearance")
+def _h_min_clearance(p):
+    """Closest approach between two solids — the richer companion to
+    interference_check (which only reports overlap volume). Takes two handles
+    `a` and `b` (whole shapes). Classifies the relationship and measures the
+    gap. All lengths mm, volumes mm³.
+
+    Logic: if the boolean common() has volume > 1e-9 the solids interpenetrate
+    ("interference"); otherwise distToShape gives the minimum gap — dist > 1e-7
+    is "clear", dist ~ 0 is "contact" (touching faces/edges).
+
+    Returns:
+      status: "clear" | "contact" | "interference"
+      clearance_mm: minimum gap (0.0 when interfering or touching)
+      overlap_volume_mm3: present only when status == "interference"
+      point_on_a / point_on_b: [x,y,z] closest points (present when not
+        interfering; for "contact" they coincide)
+    """
+    _, sa = _shape_of(p["a"])
+    _, sb = _shape_of(p["b"])
+    # interpenetration first: a non-trivial boolean intersection means the
+    # solids share material, so there is no positive clearance to report.
+    try:
+        overlap = sa.common(sb).Volume
+    except Exception:
+        overlap = 0.0
+    if overlap > 1e-9:
+        return {
+            "status": "interference",
+            "clearance_mm": 0.0,
+            "overlap_volume_mm3": round(overlap, 6),
+        }
+    dist, pts, _ = sa.distToShape(sb)
+    pa, pb = pts[0]
+    return {
+        "status": "clear" if dist > 1e-7 else "contact",
+        "clearance_mm": round(dist, 6),
+        "point_on_a": [round(pa.x, 6), round(pa.y, 6), round(pa.z, 6)],
+        "point_on_b": [round(pb.x, 6), round(pb.y, 6), round(pb.z, 6)],
+    }
+
+
+@handler("check_shape")
+def _h_check_shape(p):
+    """Geometry validity / sanity check for a shaped object (a cheap guard so
+    agents don't keep building on a broken solid). Reports OCC validity, the
+    topology census, and a single watertight-solid verdict. Inspects only; never
+    mutates the input and never auto-fixes (a fix_shape would be a later sibling).
+    All volumes in mm3.
+
+    Returns:
+      valid            (bool)  shape.isValid() — OCC topology/geometry is sound
+      watertight_solid (bool)  exactly one solid AND valid AND closed
+      shape_type       (str)   'Solid'/'Shell'/'Compound'/... (shape.ShapeType)
+      closed           (bool)  shape.isClosed() — no free boundary edges
+      solids/shells/faces/edges (int) sub-shape counts
+      volume_mm3       (float) shape.Volume (0 for open/2D shapes)
+      is_null          (bool)  shape.isNull() — empty shape
+      check            (str, only when invalid) note that shape.check(True)
+                       printed diagnostics to the worker log
+      check_error      (str, only when the diagnostic call itself raised)
+    """
+    _, shape = _shape_of(p["handle"])
+    valid = bool(shape.isValid())
+    closed = bool(shape.isClosed())
+    out = {
+        "valid": valid,
+        "shape_type": shape.ShapeType,
+        "closed": closed,
+        "solids": len(shape.Solids),
+        "shells": len(shape.Shells),
+        "faces": len(shape.Faces),
+        "edges": len(shape.Edges),
+        "volume_mm3": round(shape.Volume, 6),
+        "is_null": bool(shape.isNull()),
+    }
+    if not valid:
+        # check(True) prints per-defect diagnostics to stderr/worker log; it has
+        # no structured return, so we just flag that detail landed in the log.
+        try:
+            shape.check(True)
+            out["check"] = "see worker log"
+        except Exception as e:
+            out["check_error"] = str(e)
+    out["watertight_solid"] = bool(out["solids"] == 1 and valid and closed)
+    return out
+
+
+@handler("section_view")
+def _h_section_view(p):
+    """Cut a solid with a plane and report the cross-section. Lengths mm, areas
+    mm^2. `plane` is "XY"/"XZ"/"YZ" (world datum planes, oriented per FreeCAD's
+    own datum map: XY normal +Z, XZ normal -Y, YZ normal +X) or a datum-plane
+    handle (or any object with a Placement -> its local +Z is the normal, its
+    origin the base). `offset` (mm) shifts the cutting plane along that normal.
+    Slices the shape with Part `shape.slice(normal, d)` where d is the signed
+    distance of the plane from the world origin along `normal`
+    (d = base.dot(normal) + offset). section_area_mm2 sums the areas of the
+    closed section wires. When `emit_profile` is True a Part::Feature holding the
+    section wires is added to the document and registered, and its handle is
+    returned (raises if the plane misses the shape so there is nothing to emit).
+    Does not mutate the input geometry. Returns keys: plane, offset_mm, normal
+    [x,y,z], section_area_mm2, wire_count, closed_wire_count, bbox
+    {min:[x,y,z], max:[x,y,z], size:[dx,dy,dz]} (None when the plane misses the
+    shape), and handle + name (only when emit_profile=True)."""
+    doc = _active_doc()
+    obj, shape = _shape_of(p["handle"])
+    offset = float(p.get("offset", 0.0))
+
+    plane = p.get("plane", "XY")
+    if plane in _DATUM_PLANES:
+        # World datum: reuse the same rotation map FreeCAD uses for origin planes
+        # so the section normal matches the plane the agent named (XY->+Z etc.).
+        _base, rot = _DATUM_PLANES[plane]
+        normal = rot.multVec(App.Vector(0, 0, 1))
+        base = App.Vector(0, 0, 0)
+    else:
+        # A datum-plane handle (or any object with a Placement): the plane is its
+        # local XY, the normal is local +Z, and base is its origin.
+        ref = _resolve(plane)
+        pl = getattr(ref, "Placement", None)
+        if pl is None:
+            raise ValueError(
+                f"plane {plane!r} is neither 'XY'/'XZ'/'YZ' nor a handle with a "
+                f"Placement (datum plane); cannot derive a cutting normal"
+            )
+        normal = pl.Rotation.multVec(App.Vector(0, 0, 1))
+        base = pl.Base
+    normal = App.Vector(normal).normalize()
+
+    # signed distance of the cutting plane from the world origin along `normal`
+    d = base.dot(normal) + offset
+
+    wires = shape.slice(normal, d)  # list of section wires at signed distance d
+    closed = [w for w in wires if w.isClosed()]
+    area = 0.0
+    for w in closed:
+        try:
+            area += Part.Face(w).Area
+        except Exception:
+            # a closed wire that doesn't bound a planar face (rare) adds 0 area
+            pass
+
+    out = {
+        "plane": plane,
+        "offset_mm": round(offset, 6),
+        "normal": [round(normal.x, 6), round(normal.y, 6), round(normal.z, 6)],
+        "section_area_mm2": round(area, 6),
+        "wire_count": len(wires),
+        "closed_wire_count": len(closed),
+    }
+
+    if wires:
+        bb = Part.Compound(wires).BoundBox
+        out["bbox"] = {
+            "min": [round(bb.XMin, 6), round(bb.YMin, 6), round(bb.ZMin, 6)],
+            "max": [round(bb.XMax, 6), round(bb.YMax, 6), round(bb.ZMax, 6)],
+            "size": [round(bb.XLength, 6), round(bb.YLength, 6), round(bb.ZLength, 6)],
+        }
+    else:
+        out["bbox"] = None
+
+    if p.get("emit_profile"):
+        if not wires:
+            raise RuntimeError(
+                "emit_profile=True but the plane does not intersect the shape "
+                "(no section wires); adjust plane/offset"
+            )
+        prof = doc.addObject("Part::Feature", p.get("name", "Section"))
+        prof.Shape = Part.Compound(wires)
+        doc.recompute()
+        out["handle"] = _register("section", prof)
+        out["name"] = prof.Name
+
+    return out
+
+
 @handler("list_faces")
 def _h_list_faces(p):
     _, shape = _shape_of(p["handle"])

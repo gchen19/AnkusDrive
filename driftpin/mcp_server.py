@@ -162,6 +162,764 @@ def add_gear(
 
 
 @mcp.tool()
+def add_rack(
+    teeth: int,
+    module: float,
+    height: float = 6.0,
+    width: float = 10.0,
+    pressure_angle: float = 20.0,
+    placement: list | None = None,
+    name: str = "Rack",
+) -> dict:
+    """Add a linear gear rack (a spur gear's straight counterpart) as a solid.
+
+    A rack is a gear of infinite radius: straight-flanked teeth on a rail.
+    Standard full-depth tooth form (addendum = module, dedendum = 1.25*module,
+    tooth height = 2.25*module, flanks at pressure_angle from vertical).
+
+    teeth: number of teeth (>= 1).
+    module: mm (sets tooth size; circular pitch = module * pi).
+    height: extrusion thickness mm along +Y (the rack's face width; default 6).
+    width: mm, rail base-band thickness below the tooth root line (default 10).
+    pressure_angle: deg, flank angle from vertical (default 20; 0 < pa < 45).
+    placement: optional [x, y, z] mm translation of the rack origin.
+    name: object label (default "Rack").
+
+    The profile lies in the XZ plane: root line at z=0, base band from z=-width
+    to z=0, teeth from z=0 to z=2.25*module, extruded along +Y by height.
+
+    Returns {handle, name, volume (mm^3), pitch (mm/tooth = module*pi),
+    module, teeth, tooth_height (2.25*module mm), length (teeth*module*pi mm)}.
+    A spur gear MESHES with this rack when their `pitch` values match
+    (gear module*pi == rack pitch); `length` sizes the rail for the travel.
+    """
+    params = {"teeth": teeth, "module": module, "height": height,
+              "width": width, "pressure_angle": pressure_angle, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_rack", **params)
+
+
+@mcp.tool()
+def add_sprocket(
+    teeth: int,
+    chain_pitch: float,
+    roller_diameter: float,
+    height: float = 6.0,
+    placement: list | None = None,
+    name: str = "Sprocket",
+) -> dict:
+    """Add a roller-chain sprocket (ISO 606 / ANSI), built as a static solid plate.
+
+    teeth: tooth count (>= 3). chain_pitch: chain link pitch in mm (e.g. 12.7 for
+    #40 / ANSI 40 chain). roller_diameter: chain roller diameter in mm.
+    height: plate thickness in mm (default 6.0).
+    placement: optional [x, y, z] mm translation.
+
+    Build: a disc of tip radius ~= pitch_radius + chain_pitch*0.3 with `teeth`
+    roller seats (circular pockets, radius roller_diameter/2 * 1.05) cut on the
+    pitch circle, one per tooth. This is a fit/visualisation approximation of the
+    true ISO 606 tooth form, not a load-rated profile.
+
+    Returns {handle, name, volume, pitch_diameter, chain_pitch, teeth, tip_radius,
+    bore}. pitch_diameter (mm) = chain_pitch / sin(pi/teeth) and chain_pitch are
+    the MATING numbers: a chain of the same chain_pitch wraps the sprocket, and the
+    centre distance between two sprockets derives from their pitch_diameters. bore
+    is 0 (no shaft hole cut yet — drill one with the `hole` command).
+    """
+    params = {"teeth": teeth, "chain_pitch": chain_pitch,
+              "roller_diameter": roller_diameter, "height": height, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_sprocket", **params)
+
+
+@mcp.tool()
+def add_pulley(
+    teeth: int,
+    belt_pitch: float,
+    width: float,
+    flanged: bool = True,
+    height: float | None = None,
+    placement: list | None = None,
+    name: str = "Pulley",
+) -> dict:
+    """Add a timing-belt (or V) pulley as a static solid. Axis is +Z; toothed
+    belt face spans z in [0, width].
+
+    teeth: tooth count (>= 6). belt_pitch: belt tooth pitch mm/tooth (e.g. 2.0
+    for GT2, 3.0 for GT3/HTD-3M); pitch diameter PD = belt_pitch * teeth / pi.
+    width: belt-face length mm. flanged: True adds two thin guide discs (radius
+    PD/2 + 2*belt_pitch) at each end to retain the belt. height: optional mm;
+    OVERRIDES width when given (default height = width). placement: optional
+    [x, y, z] mm translation of the axis base. name: object label.
+
+    Returns {handle, name, volume, pitch_diameter, belt_pitch, teeth, width,
+    flanged}. pitch_diameter (mm) is the mating number: the centre distance to a
+    mating pulley plus the required belt length derive from the two pitch
+    diameters and the same belt_pitch.
+    """
+    params = {"teeth": teeth, "belt_pitch": belt_pitch, "width": width,
+              "flanged": flanged, "name": name}
+    if height is not None:
+        params["height"] = height
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_pulley", **params)
+
+
+@mcp.tool()
+def add_spring(
+    wire_diameter: float,
+    outer_diameter: float,
+    free_length: float,
+    coils: float,
+    kind: str = "compression",
+    placement: list | None = None,
+    name: str = "Spring",
+) -> dict:
+    """Add a helical compression spring: a round wire swept along a cylindrical helix.
+
+    All lengths in mm; angles n/a.
+    wire_diameter: wire (stock) diameter d, mm.
+    outer_diameter: spring outer diameter OD, mm (must be > wire_diameter).
+    free_length: uncompressed overall length along the axis, mm.
+    coils: number of turns (active coils), may be fractional.
+    kind: 'compression' (only supported mode in v1; end coils are not squared yet).
+    placement: optional [x, y, z] mm translation of the spring's base.
+
+    Geometry: mean coil diameter D = outer_diameter - wire_diameter; coil pitch =
+    free_length / coils. Spring rate is computed for STEEL (shear modulus
+    G = 79.3 GPa) as k = G*d^4 / (8*D^3*coils), reported in N/mm.
+
+    Returns {handle, name, volume (mm^3), mean_diameter (mm), free_length (mm),
+    coils, kind, solid_height (mm, = coils*wire_diameter, the fully-compressed
+    block height), spring_rate_n_per_mm (N/mm)}. Use free_length, solid_height
+    and spring_rate_n_per_mm to spec the spring into a mechanism (available travel
+    = free_length - solid_height; force = spring_rate_n_per_mm * deflection).
+    """
+    params = {"wire_diameter": wire_diameter, "outer_diameter": outer_diameter,
+              "free_length": free_length, "coils": coils, "kind": kind, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_spring", **params)
+
+
+@mcp.tool()
+def add_fastener(
+    kind: str,
+    size: str,
+    length: float | None = None,
+    placement: list | None = None,
+    name: str | None = None,
+) -> dict:
+    """Add a standard ISO metric fastener (screw / bolt / nut / washer) as a solid.
+
+    kind: one of "socket_head_cap_screw", "hex_bolt", "hex_nut", "washer".
+      - socket_head_cap_screw: cylindrical head with a cosmetic hex socket + plain
+        shank (threads not modeled).
+      - hex_bolt: hex head (across-flats) + plain shank.
+      - hex_nut: hex prism with an axial clearance hole.
+      - washer: flat annular ring.
+    size: ISO designation, one of "M3","M4","M5","M6","M8","M10","M12".
+    length: shank length in mm. REQUIRED for socket_head_cap_screw and hex_bolt;
+      ignored for nut/washer.
+    placement: optional [x, y, z] mm translation of the fastener origin (head top
+      sits at z=0, shank runs in -z for screws/bolts).
+    name: optional object name (default derived from kind).
+
+    All dimensions are in mm. Threads are cosmetic (the shank is a plain cylinder
+    of the major diameter).
+
+    Returns {handle, name, kind, size, major_diameter, pitch, volume} plus, by kind:
+    screws/bolts add {length, head_diameter, head_height, model_thread:false};
+    nut adds {head_diameter (wrench across-flats), head_height};
+    washer adds {head_diameter (outer diameter), head_height (thickness)}.
+    Mating numbers: drill a through-hole of major_diameter (+ clearance) for the
+    shank; head_diameter sizes a counterbore.
+    """
+    params = {"kind": kind, "size": size}
+    if length is not None:
+        params["length"] = length
+    if placement is not None:
+        params["placement"] = placement
+    if name is not None:
+        params["name"] = name
+    return _call("add_fastener", **params)
+
+
+@mcp.tool()
+def add_bearing(
+    designation: str | None = None,
+    bore: float | None = None,
+    outer_diameter: float | None = None,
+    width: float | None = None,
+    placement: list | None = None,
+    name: str = "Bearing",
+) -> dict:
+    """Add a deep-groove ball bearing as an assembly *envelope* solid: an annular
+    ring (outer-diameter cylinder minus bore cylinder) of the given width, axis
+    along +Z. Balls/races are not modeled — this is the fit envelope a coordinator
+    needs to size the shaft, the housing bore, and the shoulder spacing.
+
+    Specify dimensions ONE of two ways:
+    - designation: a standard metric series code, looked up in a built-in table.
+      Known: "608", "623", "624", "625", "626", "688", "6000", "6200", "6800",
+      "6900". (e.g. "608" -> bore 8, OD 22, width 7 mm.)
+    - bore + outer_diameter + width: explicit dims in mm (all three required).
+      Explicit values override a designation's table values when both are given.
+
+    bore: inner-bore diameter mm (sizes the shaft). outer_diameter: OD mm (sizes
+    the housing bore). width: axial length mm (shoulder spacing). placement:
+    optional [x, y, z] mm translation of the bearing's near face.
+
+    Raises ValueError if the designation is unknown and dims are incomplete, or if
+    outer_diameter <= bore.
+
+    Returns {handle, name, designation, bore, outer_diameter, width, volume}.
+    handle starts "bearing_". designation is None when built from explicit dims.
+    """
+    params = {"name": name}
+    if designation is not None:
+        params["designation"] = designation
+    if bore is not None:
+        params["bore"] = bore
+    if outer_diameter is not None:
+        params["outer_diameter"] = outer_diameter
+    if width is not None:
+        params["width"] = width
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_bearing", **params)
+
+
+@mcp.tool()
+def oring_groove(
+    cross_section: float,
+    inner_diameter: float = 0.0,
+    handle: str | None = None,
+    face: str | None = None,
+    gland_type: str = "static_radial",
+    cut: bool = True,
+    name: str = "ORingGroove",
+) -> dict:
+    """Compute a static O-ring gland (groove) and optionally cut it into a face.
+
+    This is the gland calc designers always fumble, plus an optional cut. Given
+    the O-ring cross-section it returns standard static-seal gland dimensions;
+    with cut=True it also machines the annular groove into a flat face.
+
+    cross_section: O-ring wire cross-section diameter in mm (e.g. 1.78, 2.62). Required, > 0.
+    inner_diameter: groove inner diameter in mm (the O-ring's nominal seal ID).
+        Required when cut=True; used to size the returned diameters either way.
+    handle: host solid to cut into (required only when cut=True).
+    face: the flat face to cut the groove into — a stable f_* tag (preferred),
+        a 'FaceN' index string, or an int. Required when cut=True. Must be planar.
+    gland_type: seal-geometry label, default 'static_radial' (informational).
+    cut: True (default) cuts the groove and returns a new solid; False makes this
+        a pure calculator (no geometry, no handle).
+    name: name for the resulting solid when cut=True.
+
+    Gland rule (static seal): groove_depth = cross_section*0.75 (~25% squeeze,
+    clamped to a 20-30% band), groove_width = cross_section*1.30. The groove's
+    inner diameter equals inner_diameter and it spans outward by groove_width.
+
+    Returns {groove_depth, groove_width, groove_inner_diameter,
+    groove_outer_diameter, squeeze_pct, cross_section, gland_type} (all mm except
+    squeeze_pct in percent). When cut=True it ALSO returns {handle, name, volume}
+    for the grooved solid; the host input is hidden. mating numbers: cut a groove
+    of inner_diameter to seat an O-ring of that ID; groove_outer_diameter sizes
+    the radial space the groove occupies.
+    """
+    params = {"cross_section": cross_section, "inner_diameter": inner_diameter,
+              "gland_type": gland_type, "cut": cut, "name": name}
+    if handle is not None:
+        params["handle"] = handle
+    if face is not None:
+        params["face"] = face
+    return _call("oring_groove", **params)
+
+
+@mcp.tool()
+def chamfer_edges(
+    handle: str, edges: list, size: float = 1.0, name: str = "Chamfer"
+) -> dict:
+    """Chamfer (bevel) specific edges of a shaped Part object — the direct-shape
+    counterpart to fillet_edges.
+
+    handle: handle of the object to chamfer (e.g. 'box_1', a boolean result).
+    edges: non-empty list of edge references. Each may be a tag ('e_...' from
+        list_edges, preferred), an 'EdgeN' string, or a bare 1-based integer
+        index.
+    size: symmetric chamfer leg distance in mm (applied equally to both faces
+        meeting at the edge, i.e. dist1 = dist2 = size). Must be > 0. Default 1.0.
+    name: label for the resulting feature object. Default 'Chamfer'.
+
+    The base object is hidden (consumed into the chamfer feature). Returns
+    {handle, name, volume, edges} where volume is the resulting Shape volume in
+    mm^3 and edges is the list of resolved 1-based edge indices that were
+    chamfered.
+    """
+    params = {"handle": handle, "edges": edges, "size": size, "name": name}
+    return _call("chamfer_edges", **params)
+
+
+@mcp.tool()
+def shell_solid(
+    handle: str,
+    faces: list,
+    thickness: float,
+    name: str = "Shell",
+) -> dict:
+    """Hollow a raw Part solid into a thin-walled shell (the direct-shape
+    counterpart to `thickness`, which only works on PartDesign bodies).
+
+    handle: handle of the solid to hollow (e.g. a box/cylinder from
+    add_primitive, or any shaped Part::Feature).
+    faces: NON-EMPTY list of the faces to REMOVE — these become the shell's
+    openings. Each entry is a face tag (f_..., from list_faces/query_faces,
+    preferred and edit-stable), a 'FaceN' string, or a 1-based integer index.
+    thickness: wall thickness in mm, must be > 0. The wall is grown INWARD, so
+    the part's outer dimensions are preserved.
+
+    The consumed input solid is hidden (its geometry now lives in the shell).
+    Returns {handle (starts 'shell_'), name, volume (mm^3 of the resulting
+    walls), wall_thickness (mm), removed_faces (list of 1-based face indices
+    that were opened)}. Raises if faces is empty, thickness <= 0, an index is
+    out of range, or the offset is too large to produce a valid shell.
+    """
+    params = {
+        "handle": handle,
+        "faces": faces,
+        "thickness": thickness,
+        "name": name,
+    }
+    return _call("shell_solid", **params)
+
+
+@mcp.tool()
+def add_thread(
+    diameter: float,
+    pitch: float,
+    length: float,
+    internal: bool = False,
+    starts: int = 1,
+    placement: list | None = None,
+    name: str = "Thread",
+) -> dict:
+    """Generate a REAL helical ISO-style 60-degree thread as a static solid.
+
+    Unlike `hole`/`list_thread_options` (which only flag a thread as metadata),
+    this cuts actual helical geometry: a truncated triangular rib swept along a
+    helix and fused to a core cylinder.
+
+    All lengths in mm, angles in degrees.
+    diameter: nominal MAJOR (crest) diameter, mm. For internal=True this is the
+      bore the tap fits.
+    pitch: thread pitch, mm per turn (e.g. M8 coarse = 1.25).
+    length: threaded length along +Z from z=0, mm.
+    internal: False (default) -> a finished externally-threaded stud. True -> a
+      TAP/insert cutting-tool solid sized to the bore; fuse it into (or cut it
+      from) a bored hole in your part to produce a threaded bore.
+    starts: number of thread starts, >=1. Multi-start repeats the helix rotated
+      by 360/starts and uses lead = pitch*starts.
+    placement: optional [x, y, z] mm translation of the solid's base (default at
+      the origin, axis along +Z).
+    name: optional object name.
+
+    Geometry note: the modeled minor (root) uses the ISO 5H/8 truncation; the
+    reported minor_diameter uses the standard ISO formula
+    diameter - 1.0825*pitch. Fallback behaviour: if the helical sweep cannot
+    produce a valid solid the tool returns a plain cylinder tagged with the
+    thread spec and modeled=False (this is rare for sane M-series inputs); always
+    check the modeled flag.
+
+    Returns {handle, name, volume (mm^3), major_diameter (mm), minor_diameter
+    (mm), pitch (mm), length (mm), starts (int), internal (bool), modeled (bool)}.
+    Mating numbers: drill/bore minor_diameter to tap an internal thread; clear a
+    major_diameter (+clearance) hole to pass an external stud.
+    """
+    params = {"diameter": diameter, "pitch": pitch, "length": length,
+              "internal": internal, "starts": starts, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_thread", **params)
+
+
+@mcp.tool()
+def engrave_text(
+    handle: str,
+    face: str,
+    text: str,
+    size: float = 5.0,
+    depth: float = 0.5,
+    mode: str = "engrave",
+    position: list | None = None,
+    font: str | None = None,
+    name: str = "Text",
+) -> dict:
+    """Engrave (cut) or emboss (add) extruded text onto a planar face of a solid.
+
+    The text is rendered in a system TrueType font, extruded, laid flat on the
+    chosen face centred on its centroid, then booleaned into the host solid.
+
+    handle: the host solid to mark.
+    face: the planar face to put the text on — a stable f_* tag (preferred), a
+        'FaceN' index string, or an int. Must be a flat (planar) face. Get a tag
+        from list_faces / query_faces.
+    text: the string to render (non-empty).
+    size: cap height of the text in mm (default 5.0).
+    depth: extrusion/engraving depth in mm (default 0.5). Engrave recesses the
+        text this far below the surface; emboss raises it this far above.
+    mode: 'engrave' (default) cuts the text into the solid (removes material);
+        'emboss' fuses raised text onto the surface (adds material).
+    position: optional [u, v] in-face offset in mm from the face centroid, along
+        the text's local X (u) and Y (v) axes. Omit to centre on the face.
+    font: optional absolute path to a .ttf/.ttc font file. If omitted, common
+        macOS fonts are auto-probed (Arial, then Helvetica). If none is found and
+        none is supplied, the call raises RuntimeError — pass an explicit path.
+    name: label for the resulting solid (default 'Text').
+
+    Returns {handle, name, volume, text, mode, depth} where volume is the mm^3 of
+    the resulting solid (less than the input for engrave, more for emboss). The
+    host solid is consumed/hidden and replaced by the returned handle.
+    """
+    params = {"handle": handle, "face": face, "text": text, "size": size,
+              "depth": depth, "mode": mode, "name": name}
+    if position is not None:
+        params["position"] = position
+    if font is not None:
+        params["font"] = font
+    return _call("engrave_text", **params)
+
+
+@mcp.tool()
+def add_rib(
+    body: str,
+    sketch: str,
+    thickness: float,
+    midplane: bool = True,
+    reversed: bool = False,
+    name: str = "Rib",
+) -> dict:
+    """Add a reinforcing rib/web inside a PartDesign Body by thickening an OPEN
+    sketch profile into a wall that fuses with the body's surrounding material.
+
+    Args:
+      body: handle of the PartDesign Body (from make_body) to add the rib to.
+      sketch: handle of a sketch holding an OPEN spine (a single line, arc, or
+        connected polyline) that defines where the rib runs. Must NOT be a
+        closed loop. The sketch's attachment plane sets the rib's orientation.
+      thickness: rib wall thickness in mm (> 0).
+      midplane: if True (default) the wall is centered on the spine, growing
+        thickness/2 to each side; if False it grows from one side.
+      reversed: flip the extrusion sense (use if the rib lands on the wrong
+        side of its sketch plane).
+      name: object label.
+
+    Returns a dict: {handle (starts 'rib_'), name, volume (the whole Body's
+    Shape.Volume in mm^3 after the rib — strictly greater than before the rib,
+    since a rib only adds material), thickness}.
+
+    Fallback behaviour the caller should know: FreeCAD's native PartDesign::Rib
+    type is unavailable in DriftPin's headless runtime, so the rib is built as
+    an equivalent midplane PartDesign::Pad — the open spine is offset by
+    +/-thickness/2 into a closed footprint and padded across the body so it
+    reaches the surrounding walls. For the usual straight or smoothly-curved
+    spine this matches a Rib; very intricate spines may differ from the native
+    tool. Raises ValueError if the profile is closed/empty/degenerate or
+    thickness <= 0, and RuntimeError if the rib adds no material (spine does not
+    span between walls)."""
+    params = {
+        "body": body,
+        "sketch": sketch,
+        "thickness": thickness,
+        "midplane": midplane,
+        "reversed": reversed,
+        "name": name,
+    }
+    return _call("add_rib", **params)
+
+
+@mcp.tool()
+def transform(
+    handle: str,
+    translate: list | None = None,
+    rotate_axis: list | None = None,
+    angle: float = 0.0,
+    relative: bool = True,
+) -> dict:
+    """Move and/or rotate an existing object in place — first-class replacement
+    for hand-poking an object's Placement via set_property.
+
+    handle: object to move (any object with a Placement: primitive, body, feature).
+    translate: [x, y, z] translation in mm (default no translation).
+    rotate_axis: rotation axis as a 3-vector [x, y, z] (need not be unit length;
+                 default [0, 0, 1], the Z axis).
+    angle: rotation about rotate_axis in DEGREES (default 0 = no rotation).
+    relative: True (default) composes this move ONTO the object's current
+              placement (incremental); False sets it as the ABSOLUTE placement,
+              discarding the object's prior placement.
+
+    The same object is moved — NO new handle is created. The rotation is applied
+    about the object's local origin (combine with translate to pivot elsewhere).
+
+    Returns {handle, name, placement: {base:[x,y,z] mm, axis:[x,y,z],
+    angle_deg}} describing the object's resulting placement.
+    """
+    params = {"handle": handle, "angle": angle, "relative": relative}
+    if translate is not None:
+        params["translate"] = translate
+    if rotate_axis is not None:
+        params["rotate_axis"] = rotate_axis
+    return _call("transform", **params)
+
+
+@mcp.tool()
+def scale_shape(
+    handle: str,
+    factor: float | list,
+    center: list | None = None,
+    name: str = "Scaled",
+) -> dict:
+    """Scale a shape uniformly or per-axis, baking a fresh static solid.
+
+    Scaling breaks parametric history, so this produces a standalone
+    Part::Feature (not a linked/parametric feature); the source object is hidden
+    since its geometry is consumed into the scaled copy.
+
+    handle: source shape handle.
+    factor: scalar for uniform scale, or [sx, sy, sz] for per-axis scale. All
+        factors must be > 0.
+    center: optional [x, y, z] mm pivot to scale about; when omitted the scale is
+        about the world origin (so the shape also moves away from/toward origin).
+    name: object label (default 'Scaled').
+
+    Lengths in mm. Returns {handle, name, volume, factor} where `factor` is the
+    normalized [sx, sy, sz] applied and `volume` (mm^3) equals the source volume
+    times sx*sy*sz.
+    """
+    params = {"handle": handle, "factor": factor, "name": name}
+    if center is not None:
+        params["center"] = center
+    return _call("scale_shape", **params)
+
+
+@mcp.tool()
+def copy_shape(
+    handle: str,
+    placement: list | None = None,
+    name: str | None = None,
+) -> dict:
+    """Duplicate a shaped object as an INDEPENDENT static solid.
+
+    Unlike add_part (which creates an App::Link that tracks the source), this
+    deep-copies the geometry: later edits to the original do NOT propagate to
+    the copy. Use it to seed a mirror/pattern, or to drop a standalone duplicate
+    instance into an assembly.
+
+    handle: handle of the source object (must have a Shape).
+    placement: optional absolute [x, y, z] translation in mm applied to the
+        copy's base. Omit to leave the copy coincident with the source. The
+        source object is unchanged and stays visible.
+    name: optional name for the new object (default '<SourceName>_copy').
+
+    Returns {handle, name, volume}: handle is a new 'copy_N' handle, name is the
+    FreeCAD object name, volume is the copied solid's volume in mm^3.
+    """
+    params = {"handle": handle}
+    if placement is not None:
+        params["placement"] = placement
+    if name is not None:
+        params["name"] = name
+    return _call("copy_shape", **params)
+
+
+@mcp.tool()
+def measure_distance(
+    a: str,
+    b: str,
+    a_ref: str | None = None,
+    b_ref: str | None = None,
+) -> dict:
+    """Minimum distance between two entities, in mm. The workhorse measurement
+    tool: lets a blind agent verify gaps, clearances, and contact.
+
+    Args:
+        a: handle of the first object.
+        b: handle of the second object.
+        a_ref: optional sub-shape selector on `a` to measure FROM instead of the
+               whole solid -- an f_* face tag, an e_* edge tag, or a literal
+               "FaceN"/"EdgeN" (1-based). Omit to use the whole shape.
+        b_ref: optional sub-shape selector on `b` (same forms as a_ref).
+
+    Measures the minimum (closest-approach) distance, so distance_mm = 0 means
+    the two entities touch or interpenetrate. This does NOT report overlap
+    volume -- use min_clearance / interference_check for penetration depth.
+
+    Returns a dict (no handle; this is a measurement):
+        distance_mm: float -- minimum gap in mm (0.0 when touching/intersecting).
+        point_on_a:  [x, y, z] mm -- closest point on a (or its sub-shape).
+        point_on_b:  [x, y, z] mm -- closest point on b (or its sub-shape).
+        touching:    bool -- True when distance_mm < 1e-7.
+    """
+    params = {"a": a, "b": b}
+    if a_ref is not None:
+        params["a_ref"] = a_ref
+    if b_ref is not None:
+        params["b_ref"] = b_ref
+    return _call("measure_distance", **params)
+
+
+@mcp.tool()
+def measure_angle(a: str, a_ref: str, b: str, b_ref: str) -> dict:
+    """Angle (degrees) between two planar faces or two straight edges.
+
+    a, b: object handles. a_ref, b_ref: REQUIRED sub-shape references, one per
+    handle. Both must be the SAME kind:
+      - face tags ('f_*' from list_faces/query_faces, or 'FaceN', or 1-based int)
+        -> angle is between the faces' outward normals. Faces must be planar.
+      - edge tags ('e_*' from list_edges, or 'EdgeN', or 1-based int)
+        -> angle is between the edges' tangent directions. Edges must be straight.
+    Mixing a face ref with an edge ref, a non-planar face, or a curved edge raises.
+
+    Units: degrees. Returns:
+      - angle_deg:      raw angle between the two direction vectors, 0..180.
+      - supplement_deg: 180 - angle_deg (the complementary angle; use this for
+                        the acute reading when angle_deg is obtuse).
+      - kind:           "face" or "edge".
+    Two adjacent box faces -> angle_deg 90. Two opposite parallel box faces ->
+    angle_deg 180, supplement_deg 0. Read-only: measures, creates no geometry.
+    """
+    return _call("measure_angle", a=a, a_ref=a_ref, b=b, b_ref=b_ref)
+
+
+@mcp.tool()
+def bounding_box(handle: str, oriented: bool = False) -> dict:
+    """Axis-aligned bounding box (AABB) of a shaped object. All lengths in mm,
+    in world coordinates. This is a measurement — it returns numbers, not a new
+    object, and does not modify the model.
+
+    handle:   the object to measure.
+    oriented: if True, also compute the tightest box at any orientation (the
+              oriented bounding box, OBB) and return it under "oriented"; if the
+              build can't compute it, "oriented" is null. Default False.
+
+    Returns a dict:
+      min      [x,y,z] mm — lower corner of the AABB
+      max      [x,y,z] mm — upper corner of the AABB
+      size     [x,y,z] mm — extents (max - min) along X, Y, Z
+      center   [x,y,z] mm — AABB center point
+      diagonal float  mm — space-diagonal length of the AABB
+      oriented null, or {size:[x,y,z] mm, center:[x,y,z] mm, diagonal: mm} when
+               oriented=True and supported — the minimum-volume box at the
+               shape's best orientation (size is its three edge lengths).
+    """
+    params = {"handle": handle}
+    if oriented:
+        params["oriented"] = True
+    return _call("bounding_box", **params)
+
+
+@mcp.tool()
+def min_clearance(a: str, b: str) -> dict:
+    """Closest approach between two solids — the measured gap, richer than the
+    binary interference_check. `a` and `b` are object handles. All lengths mm,
+    volumes mm³.
+
+    Returns a dict:
+      status: "clear" (a positive gap separates them),
+              "contact" (faces/edges touch, gap ~ 0), or
+              "interference" (the solids interpenetrate / share material).
+      clearance_mm: minimum distance between the two solids (mm). 0.0 when they
+        are touching or interfering.
+      overlap_volume_mm3: volume of interpenetration (mm³). Present ONLY when
+        status == "interference".
+      point_on_a: [x,y,z] of the closest point on `a`. Present when status is
+        "clear" or "contact" (omitted for "interference").
+      point_on_b: [x,y,z] of the closest point on `b`. Present when status is
+        "clear" or "contact" (omitted for "interference").
+    """
+    return _call("min_clearance", a=a, b=b)
+
+
+@mcp.tool()
+def check_shape(handle: str) -> dict:
+    """Check a shaped object's geometry validity and topology before you build on
+    it. Inspection only — measures, returns no handle, mutates nothing, and does
+    NOT auto-repair. Use it as a guard after booleans/sweeps/imports to confirm
+    you have one clean watertight solid.
+
+    handle: the object to inspect.
+
+    Returns a dict (volumes in mm3):
+      valid            (bool)  OCC topology/geometry is sound
+      watertight_solid (bool)  exactly one solid AND valid AND closed — the
+                               'safe to keep building' verdict
+      shape_type       (str)   e.g. 'Solid', 'Shell', 'Compound', 'Wire'
+      closed           (bool)  no free boundary edges
+      solids           (int)   number of solids (want 1 for a part)
+      shells           (int)   number of shells
+      faces            (int)   number of faces
+      edges            (int)   number of edges
+      volume_mm3       (float) total volume (0 for open/2D shapes)
+      is_null          (bool)  the shape is empty
+      check            (str)   present only when valid is False — diagnostics
+                               were printed to the worker log
+      check_error      (str)   present only if the diagnostic pass itself raised
+    """
+    return _call("check_shape", handle=handle)
+
+
+@mcp.tool()
+def section_view(
+    handle: str,
+    plane: str = "XY",
+    offset: float = 0.0,
+    emit_profile: bool = False,
+    name: str = "Section",
+) -> dict:
+    """Cut a solid with a plane and return the cross-section it exposes. This is
+    the best way to "see inside" a part blind: it measures the cut area and its
+    extent, and can optionally emit the section outline as a new object for
+    rendering/export. Units: mm (lengths), mm^2 (areas).
+
+    handle: the solid to slice (a DriftPin handle).
+    plane: "XY", "XZ", or "YZ" (world datum planes) OR a datum-plane handle.
+           World normals follow FreeCAD: XY -> +Z, XZ -> -Y, YZ -> +X. A datum
+           handle uses its local +Z as the cutting normal.
+    offset: shift of the cutting plane along its normal, in mm (default 0 = the
+            plane through the world origin / datum origin). E.g. plane="XY",
+            offset=10 cuts at z=10.
+    emit_profile: when True, add a Part::Feature holding the section wires to the
+            document, register it, and return its handle (raises if the plane
+            misses the shape). Default False = measure only, no new geometry.
+    name: object name for the emitted profile (only used when emit_profile=True).
+
+    Does not modify the input geometry. Returns a dict:
+      plane: str (echoed),
+      offset_mm: float (echoed),
+      normal: [x, y, z] unit cutting-plane normal,
+      section_area_mm2: float — total area of the closed cross-section wires,
+      wire_count: int — number of section wires found (0 means the plane misses
+                  the shape),
+      closed_wire_count: int — how many of those wires are closed,
+      bbox: {min:[x,y,z], max:[x,y,z], size:[dx,dy,dz]} of the section, or None
+            when the plane misses the shape,
+      handle: str — handle of the emitted profile (ONLY when emit_profile=True),
+      name: str — its FreeCAD object name (ONLY when emit_profile=True).
+    """
+    params = {
+        "handle": handle,
+        "plane": plane,
+        "offset": offset,
+        "emit_profile": emit_profile,
+        "name": name,
+    }
+    return _call("section_view", **params)
+
+
+@mcp.tool()
 def list_faces(handle: str) -> list:
     """List all faces of a shaped object with stable tags + geometric descriptors.
 
