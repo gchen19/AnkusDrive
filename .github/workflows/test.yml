@@ -21,6 +21,12 @@ on:
       - main
   pull_request:
 
+# Only one run per ref needs the single self-hosted FreeCAD box — a new push to
+# a branch cancels the superseded run instead of queueing behind it.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -28,6 +34,9 @@ jobs:
   test:
     name: Test suite (FreeCAD 1.1, self-hosted)
     runs-on: [self-hosted, driftpin]
+    # The suite is ~1 min; this only bounds a wedged freecadcmd worker so it
+    # can't hold the self-hosted runner indefinitely.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
