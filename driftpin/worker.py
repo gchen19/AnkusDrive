@@ -387,6 +387,576 @@ def _shape_of(handle):
     return obj, shape
 
 
+@handler("add_rack")
+def _h_add_rack(p):
+    """Linear gear rack: a straight-flanked tooth rail (a gear of infinite
+    radius). All lengths mm, angles deg. Standard full-depth tooth form:
+    pitch p = pi*module, addendum = module, dedendum = 1.25*module, so tooth
+    height = 2.25*module; flanks are straight at pressure_angle from vertical.
+    The profile is drawn in the XZ plane (root line at z=0, base band of
+    thickness `width` below it, teeth rising to z=2.25*module) and extruded
+    along +Y by `height` to a solid (face normal is flipped, so a negative
+    -volume solid is reversed, mirroring add_gear). Returns the solid's handle
+    plus the mating numbers: `pitch` (mm/tooth, must equal a meshing gear's
+    module*pi), `module`, `teeth`, `tooth_height`, and `length` (= teeth*pi
+    *module) so a coordinator can size and place the rail."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+    teeth = int(p["teeth"])
+    if teeth < 1:
+        raise ValueError("teeth must be >= 1")
+    module = float(p["module"])
+    if module <= 0:
+        raise ValueError("module must be > 0")
+    height = float(p.get("height", 6.0))
+    width = float(p.get("width", 10.0))
+    if height <= 0 or width <= 0:
+        raise ValueError("height and width must be > 0")
+    pressure = float(p.get("pressure_angle", 20.0))
+    if not 0 < pressure < 45:
+        raise ValueError("pressure_angle must be between 0 and 45 deg")
+
+    import math
+    pitch = math.pi * module            # circular pitch (mm/tooth)
+    add = module                        # addendum (above root line + dedendum)
+    ded = 1.25 * module                 # dedendum
+    tooth_h = add + ded                 # full tooth height = 2.25*module
+    pa = math.radians(pressure)
+    # half-widths of a tooth measured from its centerline:
+    half_tip = pitch / 4.0 - add * math.tan(pa)         # at the tip (z=tooth_h)
+    half_root = pitch / 4.0 + ded * math.tan(pa)        # at the root line (z=0)
+    if half_tip <= 0:
+        raise ValueError(
+            "tooth tip degenerate for this module/pressure_angle "
+            "(pitch/4 <= module*tan(pressure_angle)); lower pressure_angle")
+    length = teeth * pitch
+
+    # Walk the profile CCW: up the left edge, along the root line with a
+    # trapezoidal tooth per pitch period, down the right edge, close the base.
+    pts = [App.Vector(0, 0, -width), App.Vector(0, 0, 0)]
+    for i in range(teeth):
+        center = i * pitch + pitch / 2.0
+        pts.append(App.Vector(center - half_root, 0, 0))
+        pts.append(App.Vector(center - half_tip, 0, tooth_h))
+        pts.append(App.Vector(center + half_tip, 0, tooth_h))
+        pts.append(App.Vector(center + half_root, 0, 0))
+    pts.append(App.Vector(length, 0, 0))
+    pts.append(App.Vector(length, 0, -width))
+    pts.append(App.Vector(0, 0, -width))
+
+    face = Part.Face(Part.makePolygon(pts))
+    prism = face.extrude(App.Vector(0, height, 0))
+    sol = prism.Solids[0] if prism.Solids else Part.Solid(prism)
+    if sol.Volume < 0:                  # flipped profile normal -> inside-out solid
+        sol = sol.reversed()
+        sol = sol.Solids[0] if sol.Solids else Part.Solid(sol)
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Rack"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("rack", obj)
+    return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume,
+            "pitch": round(pitch, 4), "module": module, "teeth": teeth,
+            "tooth_height": round(tooth_h, 4), "length": round(length, 4)}
+
+
+@handler("add_sprocket")
+def _h_add_sprocket(p):
+    """Roller-chain sprocket (ISO 606 / ANSI), built as a static solid. teeth
+    (tooth count, >= 3), chain_pitch (mm, chain link pitch e.g. 12.7 for #40),
+    roller_diameter (mm), height (mm, plate thickness). Pitch diameter
+    PD = chain_pitch / sin(pi/teeth); tip/outer radius ~= PD/2 + chain_pitch*0.3.
+    Roller seats are circular pockets (radius roller_diameter/2 * 1.05) spaced one
+    per tooth on the pitch circle and cut clean through the plate (a fit/visual
+    approximation of the true ISO tooth form). placement: optional [x,y,z] mm.
+    Returns the solid handle plus the mating numbers: pitch_diameter, chain_pitch,
+    teeth, tip_radius, bore (0). A chain of the same chain_pitch wraps it; the
+    centre distance between two sprockets derives from their pitch_diameters."""
+    import math
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+    teeth = int(p["teeth"])
+    if teeth < 3:
+        raise ValueError(f"teeth must be >= 3, got {teeth}")
+    chain_pitch = float(p["chain_pitch"])
+    if chain_pitch <= 0:
+        raise ValueError(f"chain_pitch must be > 0, got {chain_pitch}")
+    roller_diameter = float(p["roller_diameter"])
+    if roller_diameter <= 0:
+        raise ValueError(f"roller_diameter must be > 0, got {roller_diameter}")
+    height = float(p.get("height", p.get("h", 6.0)))
+    if height <= 0:
+        raise ValueError(f"height must be > 0, got {height}")
+
+    # ISO 606 pitch diameter; pitch radius is where roller-seat centres sit.
+    pd = chain_pitch / math.sin(math.pi / teeth)
+    pitch_radius = pd / 2.0
+    tip_radius = pitch_radius + chain_pitch * 0.3   # tip/outer radius approximation
+    seat_radius = roller_diameter / 2.0 * 1.05      # 5% clearance for roller fit
+
+    disc = Part.makeCylinder(tip_radius, height)
+    body = disc
+    for i in range(teeth):
+        ang = 2.0 * math.pi * i / teeth
+        cx = pitch_radius * math.cos(ang)
+        cy = pitch_radius * math.sin(ang)
+        seat = Part.makeCylinder(seat_radius, height, App.Vector(cx, cy, 0))
+        body = body.cut(seat)
+    sol = body.Solids[0] if body.Solids else Part.Solid(body)
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Sprocket"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("sprocket", obj)
+    return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume,
+            "pitch_diameter": round(pd, 4), "chain_pitch": chain_pitch,
+            "teeth": teeth, "tip_radius": round(tip_radius, 4), "bore": 0}
+
+
+@handler("add_pulley")
+def _h_add_pulley(p):
+    """Timing-belt (or V) pulley as a static solid. Pitch diameter
+    PD = belt_pitch * teeth / pi. Builds a belt-face cylinder of radius PD/2 and
+    axial length = width (mm), cuts `teeth` axial tooth grooves on the pitch
+    circle (groove ~= belt_pitch*0.5 wide, ~belt_pitch*0.4 deep), and — when
+    flanged — fuses two thin guide discs (radius PD/2 + 2*belt_pitch) at each
+    end. The pulley axis is +Z; the toothed face spans z in [0, width].
+
+    Units: mm throughout. Params: teeth (int >= 6), belt_pitch (mm/tooth),
+    width (mm belt face), flanged (bool, default True), height (mm; overrides
+    width if given), placement ([x,y,z] mm), name (str). Returns the solid's
+    handle plus pitch_diameter (the mating number: centre distance with a mating
+    pulley + belt length derives from the two PDs), belt_pitch, teeth, width,
+    flanged, and volume."""
+    doc = _active_doc()
+    teeth = int(p["teeth"])
+    if teeth < 6:
+        raise ValueError("teeth must be >= 6 for a timing pulley")
+    belt_pitch = float(p["belt_pitch"])
+    if belt_pitch <= 0:
+        raise ValueError("belt_pitch must be > 0 (mm/tooth)")
+    # height overrides width when both supplied; default height = width.
+    height = p.get("height")
+    width = float(height) if height is not None else float(p["width"])
+    if width <= 0:
+        raise ValueError("width (belt face length) must be > 0 mm")
+    flanged = bool(p.get("flanged", True))
+
+    import math
+    PD = belt_pitch * teeth / math.pi
+    R = PD / 2.0
+    # Belt-face cylinder, axis +Z, base at origin.
+    sol = Part.makeCylinder(R, width)
+    # Tooth grooves: axial cylindrical pockets centred on the pitch circle, one
+    # per tooth, full belt-face length. Cylinder cutters approximate the groove
+    # form (same polar-cut technique as the sprocket) — adequate for fit/visual.
+    groove_w = belt_pitch * 0.5
+    cutters = []
+    for i in range(teeth):
+        ang = 2.0 * math.pi * i / teeth
+        cx = R * math.cos(ang)
+        cy = R * math.sin(ang)
+        cutters.append(
+            Part.makeCylinder(groove_w / 2.0, width,
+                              App.Vector(cx, cy, 0), App.Vector(0, 0, 1)))
+    allcut = cutters[0]
+    for c in cutters[1:]:
+        allcut = allcut.fuse(c)
+    sol = sol.cut(allcut)
+    if flanged:
+        # Thin guide discs overhanging the belt face at each end.
+        flange_r = R + 2.0 * belt_pitch
+        flange_t = max(0.8, belt_pitch * 0.4)
+        f1 = Part.makeCylinder(flange_r, flange_t,
+                               App.Vector(0, 0, -flange_t), App.Vector(0, 0, 1))
+        f2 = Part.makeCylinder(flange_r, flange_t,
+                               App.Vector(0, 0, width), App.Vector(0, 0, 1))
+        sol = sol.fuse(f1).fuse(f2)
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Pulley"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("pulley", obj)
+    return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume,
+            "pitch_diameter": round(PD, 4), "belt_pitch": belt_pitch,
+            "teeth": teeth, "width": width, "flanged": flanged}
+
+
+@handler("add_spring")
+def _h_add_spring(p):
+    """Helical compression spring: a circular wire-section swept along a helix.
+    Units: all lengths mm. wire_diameter (d), outer_diameter (OD), free_length,
+    coils (turns, may be fractional). kind: 'compression' (only mode for v1).
+    Spring rate computed for steel (G = 79.3 GPa = 79300 MPa) via
+    k = G*d^4 / (8*D^3*Na), D = mean coil diameter, Na = active coils (= coils),
+    yielding k in N/mm. Returns the solid's handle plus the mating/reference
+    dimensions {mean_diameter, free_length, coils, solid_height, spring_rate_n_per_mm}.
+    """
+    doc = _active_doc()
+    wire_diameter = float(p["wire_diameter"])
+    outer_diameter = float(p["outer_diameter"])
+    free_length = float(p["free_length"])
+    coils = float(p["coils"])
+    kind = str(p.get("kind", "compression"))
+    if wire_diameter <= 0:
+        raise ValueError("wire_diameter must be > 0")
+    if outer_diameter <= 0:
+        raise ValueError("outer_diameter must be > 0")
+    if outer_diameter <= wire_diameter:
+        raise ValueError("outer_diameter must be > wire_diameter (no room for a coil)")
+    if free_length <= 0:
+        raise ValueError("free_length must be > 0")
+    if coils <= 0:
+        raise ValueError("coils must be > 0")
+
+    # Mean coil radius: centreline of the wire sits half a wire-diameter inside the OD.
+    Rm = (outer_diameter - wire_diameter) / 2.0
+    pitch = free_length / coils
+    helix = Part.makeHelix(pitch, free_length, Rm)
+
+    # Profile must lie in the plane normal to the helix's start tangent, else the
+    # swept section is skewed; makePipeShell with is_frenet keeps it normal along.
+    e0 = helix.Edges[0]
+    p0 = e0.valueAt(e0.FirstParameter)
+    t0 = e0.tangentAt(e0.FirstParameter)
+    circ = Part.Circle(App.Vector(p0), App.Vector(t0), wire_diameter / 2.0)
+    profile = Part.Wire(circ.toShape())
+    # makePipeShell(profiles, make_solid=True, is_frenet=True) -> closed swept solid.
+    sol = Part.Wire(helix.Edges).makePipeShell([profile], True, True)
+    if not sol.isValid() or sol.Volume <= 0:
+        raise RuntimeError("spring sweep produced an invalid/empty solid; check dimensions")
+    # TODO: kind=="compression" could flatten/grind the end coils (squared ends);
+    # v1 leaves open ends — solid_height below still uses the closed-coil estimate.
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Spring"))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("spring", obj)
+
+    # Spring rate, steel: G in MPa, d/D in mm -> k in N/mm.
+    G = 79300.0
+    D = Rm * 2.0
+    k = G * wire_diameter ** 4 / (8.0 * D ** 3 * coils)
+    return {"handle": h, "name": obj.Name, "volume": round(obj.Shape.Volume, 4),
+            "mean_diameter": round(D, 4), "free_length": free_length, "coils": coils,
+            "kind": kind, "solid_height": round(coils * wire_diameter, 4),
+            "spring_rate_n_per_mm": round(k, 4)}
+
+
+@handler("add_fastener")
+def _h_add_fastener(p):
+    """Build a standard ISO metric fastener as a static Part solid from
+    primitives. kind in {socket_head_cap_screw, hex_bolt, hex_nut, washer};
+    size in {M3,M4,M5,M6,M8,M10,M12}; length = shank length (mm, screws/bolts
+    only, required for them). All dims in mm. Threads are cosmetic (plain
+    shank). Returns the solid's handle plus the mating numbers a coordinator
+    needs: major_diameter (drill the through-hole this + clearance), pitch,
+    head_diameter / head_height (counterbore size), and length."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+
+    # ISO metric reference table (representative ISO 4762 socket-head /
+    # ISO 4032 nut / ISO 7089 washer values):
+    # {size: (major_dia, pitch, head_dia, head_height, nut_width_af, nut_height,
+    #         washer_od, washer_thk)}
+    _FASTENER = {
+        "M3":  (3.0,  0.5,  5.5,  3.0,  5.5,  2.4,  7.0,  0.5),
+        "M4":  (4.0,  0.7,  7.0,  4.0,  7.0,  3.2,  9.0,  0.8),
+        "M5":  (5.0,  0.8,  8.5,  5.0,  8.0,  4.7,  10.0, 1.0),
+        "M6":  (6.0,  1.0,  10.0, 6.0,  10.0, 5.2,  12.0, 1.6),
+        "M8":  (8.0,  1.25, 13.0, 8.0,  13.0, 6.8,  16.0, 1.6),
+        "M10": (10.0, 1.5,  16.0, 10.0, 16.0, 8.4,  20.0, 2.0),
+        "M12": (12.0, 1.75, 18.0, 12.0, 18.0, 10.8, 24.0, 2.5),
+    }
+    _KINDS = ("socket_head_cap_screw", "hex_bolt", "hex_nut", "washer")
+
+    kind = str(p["kind"])
+    if kind not in _KINDS:
+        raise ValueError(f"unknown kind {kind!r}; expected one of {list(_KINDS)}")
+    size = str(p["size"]).upper()
+    if size not in _FASTENER:
+        raise ValueError(f"unknown size {size!r}; expected one of {list(_FASTENER)}")
+    major, pitch, head_dia, head_h, nut_af, nut_h, washer_od, washer_thk = _FASTENER[size]
+
+    length = None
+    if kind in ("socket_head_cap_screw", "hex_bolt"):
+        if p.get("length") is None:
+            raise ValueError(f"length (mm) is required for kind={kind!r}")
+        length = float(p["length"])
+        if length <= 0:
+            raise ValueError("length must be > 0")
+
+    def _hex_prism(across_flats, height, z0=0.0):
+        # Regular hexagon with the given across-flats dimension (flat-to-flat),
+        # circumradius = across_flats / sqrt(3); oriented flats parallel to X.
+        import math
+        rr = across_flats / math.sqrt(3.0)
+        pts = [App.Vector(rr * math.cos(math.radians(60 * i + 30)),
+                          rr * math.sin(math.radians(60 * i + 30)), z0)
+               for i in range(6)]
+        pts.append(pts[0])
+        return Part.Face(Part.makePolygon(pts)).extrude(App.Vector(0, 0, height))
+
+    if kind == "socket_head_cap_screw":
+        # Cylindrical head (z: 0..head_h) + shank below it (z: -length..0).
+        head = Part.makeCylinder(head_dia / 2.0, head_h)
+        shank = Part.makeCylinder(major / 2.0, length, App.Vector(0, 0, -length))
+        body = head.fuse(shank)
+        # Cosmetic hex socket sunk into the head top.
+        sock_af = 0.6 * head_dia
+        sock_depth = 0.6 * head_h
+        socket = _hex_prism(sock_af, sock_depth + 1.0, z0=head_h - sock_depth)
+        sol = body.cut(socket).removeSplitter()
+    elif kind == "hex_bolt":
+        # Hex head (across-flats = head_dia) + plain shank below.
+        head = _hex_prism(head_dia, head_h)
+        shank = Part.makeCylinder(major / 2.0, length, App.Vector(0, 0, -length))
+        sol = head.fuse(shank)
+    elif kind == "hex_nut":
+        # Hex prism with an axial clearance hole of the major diameter.
+        prism = _hex_prism(nut_af, nut_h)
+        sol = prism.cut(Part.makeCylinder(major / 2.0, nut_h))
+    else:  # washer
+        sol = (Part.makeCylinder(washer_od / 2.0, washer_thk)
+               .cut(Part.makeCylinder(major / 2.0, washer_thk)))
+
+    if not sol.Solids:
+        raise RuntimeError(f"failed to build a solid for {kind} {size}")
+    sol = sol.Solids[0] if len(sol.Solids) == 1 else sol
+
+    obj = doc.addObject("Part::Feature", p.get("name") or kind.replace("_", " ").title().replace(" ", ""))
+    obj.Shape = sol
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+
+    h = _register("fastener", obj)
+    out = {"handle": h, "name": obj.Name, "kind": kind, "size": size,
+           "major_diameter": major, "pitch": pitch, "volume": obj.Shape.Volume}
+    if kind in ("socket_head_cap_screw", "hex_bolt"):
+        out["length"] = length
+        out["head_diameter"] = head_dia
+        out["head_height"] = head_h
+        out["model_thread"] = False
+    elif kind == "hex_nut":
+        out["head_diameter"] = nut_af  # across-flats wrench size
+        out["head_height"] = nut_h
+    else:  # washer
+        out["head_diameter"] = washer_od  # outer diameter
+        out["head_height"] = washer_thk
+    return out
+
+
+@handler("add_bearing")
+def _h_add_bearing(p):
+    """Deep-groove ball bearing as an assembly *envelope* solid: an annular ring
+    (OD cylinder minus bore cylinder), `width` long, axis along +Z. No
+    balls/races — the coordinator only needs the fit envelope and bore shoulder.
+
+    Dimensions come from either `designation` (looked up in a small metric table)
+    or explicit `bore`/`outer_diameter`/`width`. Explicit values override a
+    designation when both are supplied. All lengths mm.
+
+    Returns {handle, name, designation, bore, outer_diameter, width, volume}.
+    `bore` sizes the shaft, `outer_diameter` sizes the housing, `width` sets the
+    shoulder spacing."""
+    doc = App.ActiveDocument
+    if doc is None:
+        raise RuntimeError("no active document; call new_document first")
+
+    # common metric deep-groove series: {designation: (bore, OD, width)} mm
+    _BEARING = {
+        "608":  (8.0, 22.0, 7.0),    # skateboard
+        "623":  (3.0, 10.0, 4.0),
+        "624":  (4.0, 13.0, 5.0),
+        "625":  (5.0, 16.0, 5.0),
+        "626":  (6.0, 19.0, 6.0),
+        "688":  (8.0, 16.0, 5.0),
+        "6000": (10.0, 26.0, 8.0),
+        "6200": (10.0, 30.0, 9.0),
+        "6800": (10.0, 19.0, 5.0),
+        "6900": (10.0, 22.0, 6.0),
+    }
+
+    designation = p.get("designation")
+    bore = p.get("bore")
+    outer_diameter = p.get("outer_diameter")
+    width = p.get("width")
+
+    if designation is not None:
+        designation = str(designation)
+        if designation not in _BEARING:
+            known = ", ".join(sorted(_BEARING))
+            raise ValueError(
+                f"unknown bearing designation {designation!r}; known: {known}. "
+                f"Alternatively pass explicit bore/outer_diameter/width."
+            )
+        d_bore, d_od, d_w = _BEARING[designation]
+        # explicit dims override table values when supplied
+        bore = d_bore if bore is None else bore
+        outer_diameter = d_od if outer_diameter is None else outer_diameter
+        width = d_w if width is None else width
+
+    if bore is None or outer_diameter is None or width is None:
+        known = ", ".join(sorted(_BEARING))
+        raise ValueError(
+            "specify either a known `designation` or all of "
+            "bore/outer_diameter/width. Known designations: " + known
+        )
+
+    bore = float(bore)
+    outer_diameter = float(outer_diameter)
+    width = float(width)
+    if bore <= 0:
+        raise ValueError("bore must be > 0")
+    if width <= 0:
+        raise ValueError("width must be > 0")
+    if outer_diameter <= bore:
+        raise ValueError(
+            f"outer_diameter ({outer_diameter}) must be > bore ({bore})"
+        )
+
+    # envelope = OD cylinder with the bore cylinder cut out, axis +Z
+    outer = Part.makeCylinder(outer_diameter / 2.0, width)
+    inner = Part.makeCylinder(bore / 2.0, width)
+    ring = outer.cut(inner)
+    if ring.isNull() or not ring.isValid() or ring.Volume <= 0:
+        raise RuntimeError(
+            "bearing envelope produced an invalid/empty solid; check dimensions"
+        )
+
+    obj = doc.addObject("Part::Feature", p.get("name", "Bearing"))
+    obj.Shape = ring
+    placement = p.get("placement")
+    if placement:
+        obj.Placement.Base = App.Vector(*placement)
+    doc.recompute()
+    h = _register("bearing", obj)
+    return {"handle": h, "name": obj.Name,
+            "designation": designation,
+            "bore": round(bore, 4),
+            "outer_diameter": round(outer_diameter, 4),
+            "width": round(width, 4),
+            "volume": obj.Shape.Volume}
+
+
+@handler("oring_groove")
+def _h_oring_groove(p):
+    """Compute a static O-ring gland (groove) from the ring's cross-section and,
+    optionally, cut the annular groove into a named flat face of a host solid.
+
+    Units: mm throughout. Gland rule-of-thumb for a static seal:
+      groove_depth = cross_section * 0.75  (~25% squeeze; clamped to a 20-30%
+                     squeeze band so depth stays within w*0.70 .. w*0.80),
+      groove_width = cross_section * 1.30  (room for swell/extrusion),
+      corner_radius <= 0.4 mm.
+    The groove is centred so its INNER diameter == inner_diameter; the groove
+    therefore spans radially outward by groove_width:
+      groove_inner_diameter = inner_diameter,
+      groove_outer_diameter = inner_diameter + 2 * groove_width.
+
+    When cut=True, the annular groove is cut into the face named by `face` (a
+    stable f_* tag, a 'FaceN' index, or an int) of the solid `handle`: the cut
+    is a ring (outer cylinder minus inner cylinder) of depth=groove_depth driven
+    into the solid along the inward face normal, axially centred on the face's
+    centre of mass. Requires the face to be planar.
+
+    Returns {groove_depth, groove_width, groove_inner_diameter,
+    groove_outer_diameter, squeeze_pct, cross_section} plus, when cut=True,
+    {handle, name, volume} for the resulting solid. The host input is hidden."""
+    cross_section = float(p["cross_section"])
+    if cross_section <= 0:
+        raise ValueError("cross_section must be > 0 (O-ring wire diameter in mm)")
+    inner_diameter = float(p.get("inner_diameter", 0.0))
+    cut = bool(p.get("cut", True))
+    gland_type = str(p.get("gland_type", "static_radial"))
+
+    # Static-seal gland: 25% nominal squeeze, clamped to a 20-30% band.
+    depth = cross_section * 0.75
+    depth = max(cross_section * 0.70, min(cross_section * 0.80, depth))
+    width = cross_section * 1.30
+    squeeze_pct = (1.0 - depth / cross_section) * 100.0
+
+    result = {
+        "groove_depth": round(depth, 4),
+        "groove_width": round(width, 4),
+        "groove_inner_diameter": round(inner_diameter, 4),
+        "groove_outer_diameter": round(inner_diameter + 2.0 * width, 4),
+        "squeeze_pct": round(squeeze_pct, 2),
+        "cross_section": cross_section,
+        "gland_type": gland_type,
+    }
+
+    if not cut:
+        return result
+
+    if "handle" not in p or p.get("handle") is None:
+        raise ValueError("cut=True requires a `handle` for the host solid")
+    if inner_diameter <= 0:
+        raise ValueError("cut=True requires inner_diameter > 0 (mm)")
+    ref = p.get("face")
+    if ref is None:
+        raise ValueError("cut=True requires `face` (an f_* tag, 'FaceN', or int)")
+
+    doc = _active_doc()
+    obj, shape = _shape_of(p["handle"])
+
+    # Resolve the face reference to a 1-based FaceN index (mirror _h_fillet_edges).
+    if isinstance(ref, str) and ref.startswith("f_"):
+        idx = int(_h_resolve_face({"handle": p["handle"], "tag": ref})["index"][len("Face"):])
+    elif isinstance(ref, str) and ref.startswith("Face"):
+        idx = int(ref[len("Face"):])
+    else:
+        idx = int(ref)
+    if idx < 1 or idx > len(shape.Faces):
+        raise ValueError(f"face index {idx} out of range (1..{len(shape.Faces)})")
+    face = shape.Faces[idx - 1]
+    if _surface_kind(face) != "planar":
+        raise ValueError(f"face {ref!r} is not planar; O-ring groove needs a flat face")
+
+    com = face.CenterOfMass
+    normal = _outward_normal(face)
+    # Fresh vector pointing INTO the solid; avoid in-place negate of `normal`.
+    into = App.Vector(-normal.x, -normal.y, -normal.z)
+
+    r_out = (inner_diameter + 2.0 * width) / 2.0
+    r_in = inner_diameter / 2.0
+    cyl_out = Part.makeCylinder(r_out, depth, com, into)
+    cyl_in = Part.makeCylinder(r_in, depth, com, into)
+    ring = cyl_out.cut(cyl_in)
+    if ring.Volume <= 0 or not ring.isValid():
+        raise RuntimeError("failed to build a valid annular groove tool")
+    cut_shape = shape.cut(ring)
+    if not cut_shape.isValid():
+        raise RuntimeError("O-ring groove cut produced an invalid solid")
+
+    out = doc.addObject("Part::Feature", p.get("name", "ORingGroove"))
+    out.Shape = cut_shape
+    doc.recompute()
+    _set_visibility(obj, False)  # host solid consumed into the grooved result
+    h = _register("oring_groove", out)
+    result["handle"] = h
+    result["name"] = out.Name
+    result["volume"] = out.Shape.Volume
+    return result
+
+
 @handler("list_faces")
 def _h_list_faces(p):
     _, shape = _shape_of(p["handle"])

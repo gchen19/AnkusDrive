@@ -162,6 +162,285 @@ def add_gear(
 
 
 @mcp.tool()
+def add_rack(
+    teeth: int,
+    module: float,
+    height: float = 6.0,
+    width: float = 10.0,
+    pressure_angle: float = 20.0,
+    placement: list | None = None,
+    name: str = "Rack",
+) -> dict:
+    """Add a linear gear rack (a spur gear's straight counterpart) as a solid.
+
+    A rack is a gear of infinite radius: straight-flanked teeth on a rail.
+    Standard full-depth tooth form (addendum = module, dedendum = 1.25*module,
+    tooth height = 2.25*module, flanks at pressure_angle from vertical).
+
+    teeth: number of teeth (>= 1).
+    module: mm (sets tooth size; circular pitch = module * pi).
+    height: extrusion thickness mm along +Y (the rack's face width; default 6).
+    width: mm, rail base-band thickness below the tooth root line (default 10).
+    pressure_angle: deg, flank angle from vertical (default 20; 0 < pa < 45).
+    placement: optional [x, y, z] mm translation of the rack origin.
+    name: object label (default "Rack").
+
+    The profile lies in the XZ plane: root line at z=0, base band from z=-width
+    to z=0, teeth from z=0 to z=2.25*module, extruded along +Y by height.
+
+    Returns {handle, name, volume (mm^3), pitch (mm/tooth = module*pi),
+    module, teeth, tooth_height (2.25*module mm), length (teeth*module*pi mm)}.
+    A spur gear MESHES with this rack when their `pitch` values match
+    (gear module*pi == rack pitch); `length` sizes the rail for the travel.
+    """
+    params = {"teeth": teeth, "module": module, "height": height,
+              "width": width, "pressure_angle": pressure_angle, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_rack", **params)
+
+
+@mcp.tool()
+def add_sprocket(
+    teeth: int,
+    chain_pitch: float,
+    roller_diameter: float,
+    height: float = 6.0,
+    placement: list | None = None,
+    name: str = "Sprocket",
+) -> dict:
+    """Add a roller-chain sprocket (ISO 606 / ANSI), built as a static solid plate.
+
+    teeth: tooth count (>= 3). chain_pitch: chain link pitch in mm (e.g. 12.7 for
+    #40 / ANSI 40 chain). roller_diameter: chain roller diameter in mm.
+    height: plate thickness in mm (default 6.0).
+    placement: optional [x, y, z] mm translation.
+
+    Build: a disc of tip radius ~= pitch_radius + chain_pitch*0.3 with `teeth`
+    roller seats (circular pockets, radius roller_diameter/2 * 1.05) cut on the
+    pitch circle, one per tooth. This is a fit/visualisation approximation of the
+    true ISO 606 tooth form, not a load-rated profile.
+
+    Returns {handle, name, volume, pitch_diameter, chain_pitch, teeth, tip_radius,
+    bore}. pitch_diameter (mm) = chain_pitch / sin(pi/teeth) and chain_pitch are
+    the MATING numbers: a chain of the same chain_pitch wraps the sprocket, and the
+    centre distance between two sprockets derives from their pitch_diameters. bore
+    is 0 (no shaft hole cut yet — drill one with the `hole` command).
+    """
+    params = {"teeth": teeth, "chain_pitch": chain_pitch,
+              "roller_diameter": roller_diameter, "height": height, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_sprocket", **params)
+
+
+@mcp.tool()
+def add_pulley(
+    teeth: int,
+    belt_pitch: float,
+    width: float,
+    flanged: bool = True,
+    height: float | None = None,
+    placement: list | None = None,
+    name: str = "Pulley",
+) -> dict:
+    """Add a timing-belt (or V) pulley as a static solid. Axis is +Z; toothed
+    belt face spans z in [0, width].
+
+    teeth: tooth count (>= 6). belt_pitch: belt tooth pitch mm/tooth (e.g. 2.0
+    for GT2, 3.0 for GT3/HTD-3M); pitch diameter PD = belt_pitch * teeth / pi.
+    width: belt-face length mm. flanged: True adds two thin guide discs (radius
+    PD/2 + 2*belt_pitch) at each end to retain the belt. height: optional mm;
+    OVERRIDES width when given (default height = width). placement: optional
+    [x, y, z] mm translation of the axis base. name: object label.
+
+    Returns {handle, name, volume, pitch_diameter, belt_pitch, teeth, width,
+    flanged}. pitch_diameter (mm) is the mating number: the centre distance to a
+    mating pulley plus the required belt length derive from the two pitch
+    diameters and the same belt_pitch.
+    """
+    params = {"teeth": teeth, "belt_pitch": belt_pitch, "width": width,
+              "flanged": flanged, "name": name}
+    if height is not None:
+        params["height"] = height
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_pulley", **params)
+
+
+@mcp.tool()
+def add_spring(
+    wire_diameter: float,
+    outer_diameter: float,
+    free_length: float,
+    coils: float,
+    kind: str = "compression",
+    placement: list | None = None,
+    name: str = "Spring",
+) -> dict:
+    """Add a helical compression spring: a round wire swept along a cylindrical helix.
+
+    All lengths in mm; angles n/a.
+    wire_diameter: wire (stock) diameter d, mm.
+    outer_diameter: spring outer diameter OD, mm (must be > wire_diameter).
+    free_length: uncompressed overall length along the axis, mm.
+    coils: number of turns (active coils), may be fractional.
+    kind: 'compression' (only supported mode in v1; end coils are not squared yet).
+    placement: optional [x, y, z] mm translation of the spring's base.
+
+    Geometry: mean coil diameter D = outer_diameter - wire_diameter; coil pitch =
+    free_length / coils. Spring rate is computed for STEEL (shear modulus
+    G = 79.3 GPa) as k = G*d^4 / (8*D^3*coils), reported in N/mm.
+
+    Returns {handle, name, volume (mm^3), mean_diameter (mm), free_length (mm),
+    coils, kind, solid_height (mm, = coils*wire_diameter, the fully-compressed
+    block height), spring_rate_n_per_mm (N/mm)}. Use free_length, solid_height
+    and spring_rate_n_per_mm to spec the spring into a mechanism (available travel
+    = free_length - solid_height; force = spring_rate_n_per_mm * deflection).
+    """
+    params = {"wire_diameter": wire_diameter, "outer_diameter": outer_diameter,
+              "free_length": free_length, "coils": coils, "kind": kind, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_spring", **params)
+
+
+@mcp.tool()
+def add_fastener(
+    kind: str,
+    size: str,
+    length: float | None = None,
+    placement: list | None = None,
+    name: str | None = None,
+) -> dict:
+    """Add a standard ISO metric fastener (screw / bolt / nut / washer) as a solid.
+
+    kind: one of "socket_head_cap_screw", "hex_bolt", "hex_nut", "washer".
+      - socket_head_cap_screw: cylindrical head with a cosmetic hex socket + plain
+        shank (threads not modeled).
+      - hex_bolt: hex head (across-flats) + plain shank.
+      - hex_nut: hex prism with an axial clearance hole.
+      - washer: flat annular ring.
+    size: ISO designation, one of "M3","M4","M5","M6","M8","M10","M12".
+    length: shank length in mm. REQUIRED for socket_head_cap_screw and hex_bolt;
+      ignored for nut/washer.
+    placement: optional [x, y, z] mm translation of the fastener origin (head top
+      sits at z=0, shank runs in -z for screws/bolts).
+    name: optional object name (default derived from kind).
+
+    All dimensions are in mm. Threads are cosmetic (the shank is a plain cylinder
+    of the major diameter).
+
+    Returns {handle, name, kind, size, major_diameter, pitch, volume} plus, by kind:
+    screws/bolts add {length, head_diameter, head_height, model_thread:false};
+    nut adds {head_diameter (wrench across-flats), head_height};
+    washer adds {head_diameter (outer diameter), head_height (thickness)}.
+    Mating numbers: drill a through-hole of major_diameter (+ clearance) for the
+    shank; head_diameter sizes a counterbore.
+    """
+    params = {"kind": kind, "size": size}
+    if length is not None:
+        params["length"] = length
+    if placement is not None:
+        params["placement"] = placement
+    if name is not None:
+        params["name"] = name
+    return _call("add_fastener", **params)
+
+
+@mcp.tool()
+def add_bearing(
+    designation: str | None = None,
+    bore: float | None = None,
+    outer_diameter: float | None = None,
+    width: float | None = None,
+    placement: list | None = None,
+    name: str = "Bearing",
+) -> dict:
+    """Add a deep-groove ball bearing as an assembly *envelope* solid: an annular
+    ring (outer-diameter cylinder minus bore cylinder) of the given width, axis
+    along +Z. Balls/races are not modeled — this is the fit envelope a coordinator
+    needs to size the shaft, the housing bore, and the shoulder spacing.
+
+    Specify dimensions ONE of two ways:
+    - designation: a standard metric series code, looked up in a built-in table.
+      Known: "608", "623", "624", "625", "626", "688", "6000", "6200", "6800",
+      "6900". (e.g. "608" -> bore 8, OD 22, width 7 mm.)
+    - bore + outer_diameter + width: explicit dims in mm (all three required).
+      Explicit values override a designation's table values when both are given.
+
+    bore: inner-bore diameter mm (sizes the shaft). outer_diameter: OD mm (sizes
+    the housing bore). width: axial length mm (shoulder spacing). placement:
+    optional [x, y, z] mm translation of the bearing's near face.
+
+    Raises ValueError if the designation is unknown and dims are incomplete, or if
+    outer_diameter <= bore.
+
+    Returns {handle, name, designation, bore, outer_diameter, width, volume}.
+    handle starts "bearing_". designation is None when built from explicit dims.
+    """
+    params = {"name": name}
+    if designation is not None:
+        params["designation"] = designation
+    if bore is not None:
+        params["bore"] = bore
+    if outer_diameter is not None:
+        params["outer_diameter"] = outer_diameter
+    if width is not None:
+        params["width"] = width
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_bearing", **params)
+
+
+@mcp.tool()
+def oring_groove(
+    cross_section: float,
+    inner_diameter: float = 0.0,
+    handle: str | None = None,
+    face: str | None = None,
+    gland_type: str = "static_radial",
+    cut: bool = True,
+    name: str = "ORingGroove",
+) -> dict:
+    """Compute a static O-ring gland (groove) and optionally cut it into a face.
+
+    This is the gland calc designers always fumble, plus an optional cut. Given
+    the O-ring cross-section it returns standard static-seal gland dimensions;
+    with cut=True it also machines the annular groove into a flat face.
+
+    cross_section: O-ring wire cross-section diameter in mm (e.g. 1.78, 2.62). Required, > 0.
+    inner_diameter: groove inner diameter in mm (the O-ring's nominal seal ID).
+        Required when cut=True; used to size the returned diameters either way.
+    handle: host solid to cut into (required only when cut=True).
+    face: the flat face to cut the groove into — a stable f_* tag (preferred),
+        a 'FaceN' index string, or an int. Required when cut=True. Must be planar.
+    gland_type: seal-geometry label, default 'static_radial' (informational).
+    cut: True (default) cuts the groove and returns a new solid; False makes this
+        a pure calculator (no geometry, no handle).
+    name: name for the resulting solid when cut=True.
+
+    Gland rule (static seal): groove_depth = cross_section*0.75 (~25% squeeze,
+    clamped to a 20-30% band), groove_width = cross_section*1.30. The groove's
+    inner diameter equals inner_diameter and it spans outward by groove_width.
+
+    Returns {groove_depth, groove_width, groove_inner_diameter,
+    groove_outer_diameter, squeeze_pct, cross_section, gland_type} (all mm except
+    squeeze_pct in percent). When cut=True it ALSO returns {handle, name, volume}
+    for the grooved solid; the host input is hidden. mating numbers: cut a groove
+    of inner_diameter to seat an O-ring of that ID; groove_outer_diameter sizes
+    the radial space the groove occupies.
+    """
+    params = {"cross_section": cross_section, "inner_diameter": inner_diameter,
+              "gland_type": gland_type, "cut": cut, "name": name}
+    if handle is not None:
+        params["handle"] = handle
+    if face is not None:
+        params["face"] = face
+    return _call("oring_groove", **params)
+
+
+@mcp.tool()
 def list_faces(handle: str) -> list:
     """List all faces of a shaped object with stable tags + geometric descriptors.
 

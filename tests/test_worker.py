@@ -2546,6 +2546,193 @@ def test_set_visibility_explicit_override():
         )
 
 
+def test_add_rack():
+    with Worker() as w:
+        w.call("new_document", name="rack_t")
+        r = w.call("add_rack", teeth=10, module=2.0)
+        assert r["handle"].startswith("rack_"), r
+        assert r["volume"] > 0, r
+        assert abs(r["pitch"] - 6.283) < 0.01, r        # module*pi
+        assert abs(r["length"] - 62.83) < 0.01, r       # teeth*module*pi
+        assert abs(r["tooth_height"] - 4.5) < 1e-6, r   # 2.25*module
+        assert r["module"] == 2.0, r
+        assert r["teeth"] == 10, r
+
+
+def test_add_sprocket():
+    with Worker() as w:
+        w.call("new_document", name="sprocket_t")
+        # #40 / ANSI 40 chain: pitch 12.7 mm, roller 7.92 mm, 17 teeth.
+        r = w.call("add_sprocket", teeth=17, chain_pitch=12.7,
+                   roller_diameter=7.92, height=6.0)
+        assert r["handle"].startswith("sprocket_"), r
+        assert r["volume"] > 0, r
+        # PD = 12.7 / sin(pi/17) ~= 69.1158
+        assert abs(r["pitch_diameter"] - 69.1158) < 0.01, r
+        assert r["chain_pitch"] == 12.7, r
+        assert r["teeth"] == 17, r
+        assert r["bore"] == 0, r
+        assert r["tip_radius"] > r["pitch_diameter"] / 2.0, r
+        # teeth must be >= 3
+        try:
+            w.call("add_sprocket", teeth=2, chain_pitch=12.7, roller_diameter=7.92)
+            assert False, "expected ValueError for teeth < 3"
+        except Exception:
+            pass
+
+
+def test_add_pulley():
+    with Worker() as w:
+        w.call("new_document", name="t")
+        r = w.call("add_pulley", teeth=20, belt_pitch=2.0, width=6)
+        assert r["handle"].startswith("pulley_"), r
+        assert abs(r["pitch_diameter"] - 12.7324) < 0.01, r
+        assert r["teeth"] == 20, r
+        assert r["belt_pitch"] == 2.0, r
+        assert r["width"] == 6, r
+        assert r["flanged"] is True, r
+        vol_flanged = r["volume"]
+        assert vol_flanged > 0, r
+
+        r2 = w.call("add_pulley", teeth=20, belt_pitch=2.0, width=6,
+                    flanged=False)
+        assert r2["flanged"] is False, r2
+        assert r2["volume"] > 0, r2
+        # Flanges add material: flanged volume strictly greater.
+        assert vol_flanged > r2["volume"], (vol_flanged, r2["volume"])
+
+        # height overrides width when both given.
+        r3 = w.call("add_pulley", teeth=20, belt_pitch=2.0, width=6, height=12,
+                    flanged=False)
+        assert r3["width"] == 12, r3
+        assert r3["volume"] > r2["volume"], (r3["volume"], r2["volume"])
+
+
+def test_add_spring():
+    with Worker() as w:
+        w.call("new_document", name="spring_t")
+        r = w.call("add_spring", wire_diameter=2, outer_diameter=20,
+                   free_length=40, coils=8)
+        assert r["handle"].startswith("spring_"), r
+        assert r["volume"] > 0, r
+        # solid_height = coils * wire_diameter = 8 * 2 = 16
+        assert abs(r["solid_height"] - 16.0) < 1e-6, r
+        # mean_diameter = outer_diameter - wire_diameter = 20 - 2 = 18
+        assert abs(r["mean_diameter"] - 18.0) < 1e-6, r
+        # spring rate in a sane band (steel, ~3.4 N/mm here)
+        assert 1.0 <= r["spring_rate_n_per_mm"] <= 10.0, r
+        assert r["free_length"] == 40, r
+        assert r["coils"] == 8, r
+        # outer_diameter must exceed wire_diameter
+        try:
+            w.call("add_spring", wire_diameter=20, outer_diameter=20,
+                   free_length=40, coils=8)
+            assert False, "expected ValueError for OD <= wire_diameter"
+        except Exception as e:
+            assert "outer_diameter" in str(e), e
+
+
+def test_add_fastener():
+    with Worker() as w:
+        w.call("new_document", name="fastener_test")
+
+        # Hex nut: major_diameter 6.0, has an axial hole (vol < solid hex prism).
+        n = w.call("add_fastener", kind="hex_nut", size="M6")
+        assert n["handle"].startswith("fastener_"), n
+        assert n["major_diameter"] == 6.0, n
+        assert n["pitch"] == 1.0, n
+        assert n["volume"] > 0, n
+        # Solid M6 hex prism (af=10.0, height=5.2): vol = (sqrt(3)/2)*af^2 * h
+        import math
+        solid_hex = (math.sqrt(3) / 2.0) * 10.0 ** 2 * 5.2
+        assert n["volume"] < solid_hex, (n["volume"], solid_hex)
+
+        # Socket head cap screw: head_diameter 5.5, positive volume.
+        s = w.call("add_fastener", kind="socket_head_cap_screw", size="M3", length=10)
+        assert s["handle"].startswith("fastener_"), s
+        assert s["volume"] > 0, s
+        assert s["head_diameter"] == 5.5, s
+        assert s["length"] == 10.0, s
+        assert s["model_thread"] is False, s
+
+        # Washer: annulus volume matches pi*(OD^2 - ID^2)/4 * thk.
+        wsh = w.call("add_fastener", kind="washer", size="M3")
+        expect = math.pi * (7.0 ** 2 - 3.0 ** 2) / 4.0 * 0.5
+        assert abs(wsh["volume"] - expect) < 1e-3, (wsh["volume"], expect)
+
+        # length required for screws/bolts.
+        try:
+            w.call("add_fastener", kind="hex_bolt", size="M6")
+            assert False, "expected ValueError for missing length"
+        except WorkerError:
+            pass
+
+        # unknown size rejected.
+        try:
+            w.call("add_fastener", kind="hex_nut", size="M99")
+            assert False, "expected ValueError for unknown size"
+        except WorkerError:
+            pass
+
+
+def test_add_bearing():
+    import math
+    with Worker() as w:
+        w.call("new_document", name="t_bearing")
+
+        # designation lookup path: 608 -> bore 8, OD 22, width 7
+        r = w.call("add_bearing", designation="608")
+        assert r["handle"].startswith("bearing_"), r
+        assert r["bore"] == 8.0, r
+        assert r["outer_diameter"] == 22.0, r
+        assert r["width"] == 7.0, r
+        assert r["designation"] == "608", r
+        expected = math.pi * (11.0 ** 2 - 4.0 ** 2) * 7.0
+        assert abs(r["volume"] - expected) < 1e-3, (r, expected)
+
+        # explicit-dims path also works (no designation)
+        r2 = w.call("add_bearing", bore=10.0, outer_diameter=30.0, width=9.0)
+        assert r2["handle"].startswith("bearing_"), r2
+        assert r2["bore"] == 10.0, r2
+        assert r2["designation"] is None, r2
+        assert r2["volume"] > 0, r2
+
+        # unknown designation with no dims -> ValueError
+        try:
+            w.call("add_bearing", designation="9999")
+            assert False, "expected ValueError for unknown designation"
+        except Exception as e:
+            assert "9999" in str(e) or "unknown" in str(e).lower(), e
+
+
+def test_oring_groove():
+    with Worker() as w:
+        w.call("new_document", name="oring")
+
+        # Calc-only path: pure gland calculator, no geometry.
+        r = w.call("oring_groove", cross_section=2.62, inner_diameter=20, cut=False)
+        assert abs(r["groove_depth"] - 1.965) < 1e-3, r       # 2.62 * 0.75
+        assert abs(r["groove_width"] - 3.406) < 1e-3, r       # 2.62 * 1.30
+        assert abs(r["squeeze_pct"] - 25.0) < 1e-2, r
+        assert r["groove_inner_diameter"] == 20.0, r
+        assert r["groove_outer_diameter"] > 20.0, r           # spans outward
+        assert abs(r["groove_outer_diameter"] - 26.812) < 1e-2, r  # 20 + 2*3.406
+        assert "handle" not in r, r                           # no geometry on calc path
+
+        # Cut path: machine the groove into the top (+Z) face of a box.
+        box = w.call("add_primitive", kind="box", w=60, d=60, h=10)
+        faces = w.call("list_faces", handle=box["handle"])
+        top = next(f for f in faces
+                   if f.get("normal") and abs(f["normal"][2] - 1) < 1e-6)
+        r2 = w.call("oring_groove", handle=box["handle"], face=top["tag"],
+                    cross_section=2.62, inner_diameter=20, cut=True)
+        assert r2["handle"].startswith("oring_groove_"), r2
+        assert r2["volume"] > 0, r2
+        assert r2["volume"] < box["volume"], r2               # material removed
+        removed = box["volume"] - r2["volume"]
+        assert abs(removed - 492.135) < 1.0, (removed, r2)    # pi*(r_out^2-r_in^2)*depth
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
