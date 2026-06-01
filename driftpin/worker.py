@@ -1534,6 +1534,372 @@ def _h_copy_shape(p):
     return {"handle": h, "name": out.Name, "volume": out.Shape.Volume}
 
 
+@handler("measure_distance")
+def _h_measure_distance(p):
+    """Minimum distance between two entities (mm). a/b are handles; a_ref/b_ref
+    optionally narrow to a sub-shape on that handle: an f_*/e_* tag or a
+    FaceN/EdgeN string (whole Shape used if the ref is omitted). FreeCAD's
+    Shape.distToShape does the math. Returns:
+      distance_mm  -- minimum gap (0.0 when shapes touch or interpenetrate)
+      point_on_a   -- [x,y,z] closest point on a (mm)
+      point_on_b   -- [x,y,z] closest point on b (mm)
+      touching     -- True when distance_mm < 1e-7
+    Does not mutate input geometry."""
+    def _sub(handle, ref):
+        # Resolve a handle (+ optional face/edge ref) to a measurable shape.
+        _, shape = _shape_of(handle)
+        if ref is None:
+            return shape
+        ref = str(ref)
+        # Tags resolve to a 1-based FaceN/EdgeN index; bare FaceN/EdgeN accepted too.
+        if ref.startswith("f_"):
+            ref = _h_resolve_face({"handle": handle, "tag": ref})["index"]
+        elif ref.startswith("e_"):
+            ref = _h_resolve_edge({"handle": handle, "tag": ref})["index"]
+        if ref.startswith("Face"):
+            idx = int(ref[len("Face"):])
+            faces = shape.Faces
+            if not 1 <= idx <= len(faces):
+                raise ValueError(
+                    f"{handle!r} has no Face{idx} (has {len(faces)} faces)"
+                )
+            return faces[idx - 1]
+        if ref.startswith("Edge"):
+            idx = int(ref[len("Edge"):])
+            edges = shape.Edges
+            if not 1 <= idx <= len(edges):
+                raise ValueError(
+                    f"{handle!r} has no Edge{idx} (has {len(edges)} edges)"
+                )
+            return edges[idx - 1]
+        raise ValueError(
+            f"unrecognized ref {ref!r}: use an f_*/e_* tag or a FaceN/EdgeN string"
+        )
+
+    sa = _sub(p["a"], p.get("a_ref"))
+    sb = _sub(p["b"], p.get("b_ref"))
+    # distToShape -> (dist, [(pt_on_a, pt_on_b), ...], infos); points[0] is the
+    # closest pair. dist == 0 means the shapes touch or intersect.
+    dist, points, _infos = sa.distToShape(sb)
+    pa, pb = points[0]
+    return {
+        "distance_mm": round(dist, 6),
+        "point_on_a": [round(pa.x, 6), round(pa.y, 6), round(pa.z, 6)],
+        "point_on_b": [round(pb.x, 6), round(pb.y, 6), round(pb.z, 6)],
+        "touching": dist < 1e-7,
+    }
+
+
+@handler("measure_angle")
+def _h_measure_angle(p):
+    """Angle between two planar faces or two straight edges, in degrees.
+
+    `a`/`b` are object handles; `a_ref`/`b_ref` are required references that
+    each narrow to a sub-shape on their handle: an `f_*` face tag (planar faces
+    only -> angle between outward normals) or an `e_*` edge tag (straight/line
+    edges only -> angle between tangent directions). `FaceN`/`EdgeN` strings and
+    bare 1-based ints are accepted fallbacks. Both refs must be the same kind
+    (both faces or both edges). The reported `angle_deg` is the raw angle between
+    the two direction vectors (0..180); `supplement_deg` = 180 - angle_deg is
+    also returned because the agent often wants the acute complement (e.g. two
+    opposite parallel faces give angle_deg 180, supplement 0). Returns
+    {angle_deg, supplement_deg, kind: 'face'|'edge'}. Read-only; mutates nothing.
+    """
+    import math
+    a = p["a"]
+    b = p["b"]
+    a_ref = p.get("a_ref")
+    b_ref = p.get("b_ref")
+    if a_ref is None or b_ref is None:
+        raise ValueError(
+            "measure_angle requires a_ref and b_ref (f_* face tags or e_* edge tags)"
+        )
+
+    def _kind_of(ref):
+        if isinstance(ref, str) and (ref.startswith("f_") or ref.startswith("Face")):
+            return "face"
+        if isinstance(ref, str) and (ref.startswith("e_") or ref.startswith("Edge")):
+            return "edge"
+        raise ValueError(
+            f"ref {ref!r} must be an f_*/FaceN face tag or an e_*/EdgeN edge tag"
+        )
+
+    ka, kb = _kind_of(a_ref), _kind_of(b_ref)
+    if ka != kb:
+        raise ValueError(
+            f"a_ref ({ka}) and b_ref ({kb}) must be the same kind: both faces or both edges"
+        )
+    kind = ka
+
+    def _face_index(handle, ref):
+        if isinstance(ref, str) and ref.startswith("f_"):
+            return int(_h_resolve_face({"handle": handle, "tag": ref})["index"][len("Face"):])
+        return int(ref[len("Face"):])
+
+    def _edge_index(handle, ref):
+        if isinstance(ref, str) and ref.startswith("e_"):
+            return int(_h_resolve_edge({"handle": handle, "tag": ref})["index"][len("Edge"):])
+        return int(ref[len("Edge"):])
+
+    _, sa = _shape_of(a)
+    _, sb = _shape_of(b)
+
+    if kind == "face":
+        ia, ib = _face_index(a, a_ref), _face_index(b, b_ref)
+        if ia < 1 or ia > len(sa.Faces):
+            raise ValueError(f"face index {ia} out of range (1..{len(sa.Faces)}) on {a!r}")
+        if ib < 1 or ib > len(sb.Faces):
+            raise ValueError(f"face index {ib} out of range (1..{len(sb.Faces)}) on {b!r}")
+        fa, fb = sa.Faces[ia - 1], sb.Faces[ib - 1]
+        if _surface_kind(fa) != "planar":
+            raise ValueError(f"a_ref {a_ref!r} is not a planar face; angle needs planar faces")
+        if _surface_kind(fb) != "planar":
+            raise ValueError(f"b_ref {b_ref!r} is not a planar face; angle needs planar faces")
+        va, vb = _outward_normal(fa), _outward_normal(fb)
+    else:
+        ia, ib = _edge_index(a, a_ref), _edge_index(b, b_ref)
+        if ia < 1 or ia > len(sa.Edges):
+            raise ValueError(f"edge index {ia} out of range (1..{len(sa.Edges)}) on {a!r}")
+        if ib < 1 or ib > len(sb.Edges):
+            raise ValueError(f"edge index {ib} out of range (1..{len(sb.Edges)}) on {b!r}")
+        ea, eb = sa.Edges[ia - 1], sb.Edges[ib - 1]
+        # tangentAt(FirstParameter) gives a constant direction for a Line; curved
+        # edges have a direction that varies along their length, so reject them.
+        if type(ea.Curve).__name__ != "Line":
+            raise ValueError(f"a_ref {a_ref!r} is not a straight edge; angle needs line edges")
+        if type(eb.Curve).__name__ != "Line":
+            raise ValueError(f"b_ref {b_ref!r} is not a straight edge; angle needs line edges")
+        va, vb = ea.tangentAt(ea.FirstParameter), eb.tangentAt(eb.FirstParameter)
+
+    ang = math.degrees(va.getAngle(vb))  # getAngle returns radians in 0..pi
+    return {
+        "angle_deg": _round(ang),
+        "supplement_deg": _round(180.0 - ang),
+        "kind": kind,
+    }
+
+
+@handler("bounding_box")
+def _h_bounding_box(p):
+    """Axis-aligned bounding box (AABB) of a shaped object — a focused, cheap
+    query (the same numbers mass_properties buries in its payload). All lengths
+    in mm, in world coordinates.
+
+    Returns:
+      min      [x,y,z]  lower corner of the AABB
+      max      [x,y,z]  upper corner of the AABB
+      size     [x,y,z]  extents = max - min  (XLength, YLength, ZLength)
+      center   [x,y,z]  AABB center
+      diagonal float    space-diagonal length of the AABB
+      oriented null, or (when oriented=True and FreeCAD supports it)
+               {size:[x,y,z], center:[x,y,z], diagonal:float} for the tightest
+               box at any orientation (from shape.optimalBoundingBox()); null if
+               that computation is unavailable/failed.
+
+    Does not mutate the input. No handle is returned (this is a measurement)."""
+    _, shape = _shape_of(p["handle"])
+    bb = shape.BoundBox
+    out = {
+        "min": [_round(bb.XMin), _round(bb.YMin), _round(bb.ZMin)],
+        "max": [_round(bb.XMax), _round(bb.YMax), _round(bb.ZMax)],
+        "size": [_round(bb.XLength), _round(bb.YLength), _round(bb.ZLength)],
+        "center": [_round(bb.Center.x), _round(bb.Center.y), _round(bb.Center.z)],
+        "diagonal": _round(bb.DiagonalLength),
+        "oriented": None,
+    }
+    if p.get("oriented"):
+        # optimalBoundingBox() (FreeCAD >= 0.20) returns a Base.BoundBox aligned
+        # to the shape's tightest orientation; wrap in try/except since older
+        # builds or degenerate shapes may not support it.
+        try:
+            obb = shape.optimalBoundingBox()
+            out["oriented"] = {
+                "size": [_round(obb.XLength), _round(obb.YLength), _round(obb.ZLength)],
+                "center": [_round(obb.Center.x), _round(obb.Center.y), _round(obb.Center.z)],
+                "diagonal": _round(obb.DiagonalLength),
+            }
+        except Exception:
+            out["oriented"] = None
+    return out
+
+
+@handler("min_clearance")
+def _h_min_clearance(p):
+    """Closest approach between two solids — the richer companion to
+    interference_check (which only reports overlap volume). Takes two handles
+    `a` and `b` (whole shapes). Classifies the relationship and measures the
+    gap. All lengths mm, volumes mm³.
+
+    Logic: if the boolean common() has volume > 1e-9 the solids interpenetrate
+    ("interference"); otherwise distToShape gives the minimum gap — dist > 1e-7
+    is "clear", dist ~ 0 is "contact" (touching faces/edges).
+
+    Returns:
+      status: "clear" | "contact" | "interference"
+      clearance_mm: minimum gap (0.0 when interfering or touching)
+      overlap_volume_mm3: present only when status == "interference"
+      point_on_a / point_on_b: [x,y,z] closest points (present when not
+        interfering; for "contact" they coincide)
+    """
+    _, sa = _shape_of(p["a"])
+    _, sb = _shape_of(p["b"])
+    # interpenetration first: a non-trivial boolean intersection means the
+    # solids share material, so there is no positive clearance to report.
+    try:
+        overlap = sa.common(sb).Volume
+    except Exception:
+        overlap = 0.0
+    if overlap > 1e-9:
+        return {
+            "status": "interference",
+            "clearance_mm": 0.0,
+            "overlap_volume_mm3": round(overlap, 6),
+        }
+    dist, pts, _ = sa.distToShape(sb)
+    pa, pb = pts[0]
+    return {
+        "status": "clear" if dist > 1e-7 else "contact",
+        "clearance_mm": round(dist, 6),
+        "point_on_a": [round(pa.x, 6), round(pa.y, 6), round(pa.z, 6)],
+        "point_on_b": [round(pb.x, 6), round(pb.y, 6), round(pb.z, 6)],
+    }
+
+
+@handler("check_shape")
+def _h_check_shape(p):
+    """Geometry validity / sanity check for a shaped object (a cheap guard so
+    agents don't keep building on a broken solid). Reports OCC validity, the
+    topology census, and a single watertight-solid verdict. Inspects only; never
+    mutates the input and never auto-fixes (a fix_shape would be a later sibling).
+    All volumes in mm3.
+
+    Returns:
+      valid            (bool)  shape.isValid() — OCC topology/geometry is sound
+      watertight_solid (bool)  exactly one solid AND valid AND closed
+      shape_type       (str)   'Solid'/'Shell'/'Compound'/... (shape.ShapeType)
+      closed           (bool)  shape.isClosed() — no free boundary edges
+      solids/shells/faces/edges (int) sub-shape counts
+      volume_mm3       (float) shape.Volume (0 for open/2D shapes)
+      is_null          (bool)  shape.isNull() — empty shape
+      check            (str, only when invalid) note that shape.check(True)
+                       printed diagnostics to the worker log
+      check_error      (str, only when the diagnostic call itself raised)
+    """
+    _, shape = _shape_of(p["handle"])
+    valid = bool(shape.isValid())
+    closed = bool(shape.isClosed())
+    out = {
+        "valid": valid,
+        "shape_type": shape.ShapeType,
+        "closed": closed,
+        "solids": len(shape.Solids),
+        "shells": len(shape.Shells),
+        "faces": len(shape.Faces),
+        "edges": len(shape.Edges),
+        "volume_mm3": round(shape.Volume, 6),
+        "is_null": bool(shape.isNull()),
+    }
+    if not valid:
+        # check(True) prints per-defect diagnostics to stderr/worker log; it has
+        # no structured return, so we just flag that detail landed in the log.
+        try:
+            shape.check(True)
+            out["check"] = "see worker log"
+        except Exception as e:
+            out["check_error"] = str(e)
+    out["watertight_solid"] = bool(out["solids"] == 1 and valid and closed)
+    return out
+
+
+@handler("section_view")
+def _h_section_view(p):
+    """Cut a solid with a plane and report the cross-section. Lengths mm, areas
+    mm^2. `plane` is "XY"/"XZ"/"YZ" (world datum planes, oriented per FreeCAD's
+    own datum map: XY normal +Z, XZ normal -Y, YZ normal +X) or a datum-plane
+    handle (or any object with a Placement -> its local +Z is the normal, its
+    origin the base). `offset` (mm) shifts the cutting plane along that normal.
+    Slices the shape with Part `shape.slice(normal, d)` where d is the signed
+    distance of the plane from the world origin along `normal`
+    (d = base.dot(normal) + offset). section_area_mm2 sums the areas of the
+    closed section wires. When `emit_profile` is True a Part::Feature holding the
+    section wires is added to the document and registered, and its handle is
+    returned (raises if the plane misses the shape so there is nothing to emit).
+    Does not mutate the input geometry. Returns keys: plane, offset_mm, normal
+    [x,y,z], section_area_mm2, wire_count, closed_wire_count, bbox
+    {min:[x,y,z], max:[x,y,z], size:[dx,dy,dz]} (None when the plane misses the
+    shape), and handle + name (only when emit_profile=True)."""
+    doc = _active_doc()
+    obj, shape = _shape_of(p["handle"])
+    offset = float(p.get("offset", 0.0))
+
+    plane = p.get("plane", "XY")
+    if plane in _DATUM_PLANES:
+        # World datum: reuse the same rotation map FreeCAD uses for origin planes
+        # so the section normal matches the plane the agent named (XY->+Z etc.).
+        _base, rot = _DATUM_PLANES[plane]
+        normal = rot.multVec(App.Vector(0, 0, 1))
+        base = App.Vector(0, 0, 0)
+    else:
+        # A datum-plane handle (or any object with a Placement): the plane is its
+        # local XY, the normal is local +Z, and base is its origin.
+        ref = _resolve(plane)
+        pl = getattr(ref, "Placement", None)
+        if pl is None:
+            raise ValueError(
+                f"plane {plane!r} is neither 'XY'/'XZ'/'YZ' nor a handle with a "
+                f"Placement (datum plane); cannot derive a cutting normal"
+            )
+        normal = pl.Rotation.multVec(App.Vector(0, 0, 1))
+        base = pl.Base
+    normal = App.Vector(normal).normalize()
+
+    # signed distance of the cutting plane from the world origin along `normal`
+    d = base.dot(normal) + offset
+
+    wires = shape.slice(normal, d)  # list of section wires at signed distance d
+    closed = [w for w in wires if w.isClosed()]
+    area = 0.0
+    for w in closed:
+        try:
+            area += Part.Face(w).Area
+        except Exception:
+            # a closed wire that doesn't bound a planar face (rare) adds 0 area
+            pass
+
+    out = {
+        "plane": plane,
+        "offset_mm": round(offset, 6),
+        "normal": [round(normal.x, 6), round(normal.y, 6), round(normal.z, 6)],
+        "section_area_mm2": round(area, 6),
+        "wire_count": len(wires),
+        "closed_wire_count": len(closed),
+    }
+
+    if wires:
+        bb = Part.Compound(wires).BoundBox
+        out["bbox"] = {
+            "min": [round(bb.XMin, 6), round(bb.YMin, 6), round(bb.ZMin, 6)],
+            "max": [round(bb.XMax, 6), round(bb.YMax, 6), round(bb.ZMax, 6)],
+            "size": [round(bb.XLength, 6), round(bb.YLength, 6), round(bb.ZLength, 6)],
+        }
+    else:
+        out["bbox"] = None
+
+    if p.get("emit_profile"):
+        if not wires:
+            raise RuntimeError(
+                "emit_profile=True but the plane does not intersect the shape "
+                "(no section wires); adjust plane/offset"
+            )
+        prof = doc.addObject("Part::Feature", p.get("name", "Section"))
+        prof.Shape = Part.Compound(wires)
+        doc.recompute()
+        out["handle"] = _register("section", prof)
+        out["name"] = prof.Name
+
+    return out
+
+
 @handler("list_faces")
 def _h_list_faces(p):
     _, shape = _shape_of(p["handle"])

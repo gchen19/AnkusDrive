@@ -3028,6 +3028,233 @@ def test_copy_shape():
         assert abs(src_mp2["center_of_mass_mm"][0] - 10.0) < 1e-3, src_mp2
 
 
+def test_measure_distance():
+    """Two 20mm cubes 10mm apart on X -> distance 10; overlapping -> 0 + touching;
+    top face of one to bottom face of another (5mm gap) -> face-to-face distance 5.
+    A bad face ref raises WorkerError."""
+    with Worker() as w:
+        w.call("new_document", name="md")
+        a = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        # Second cube at x=30: its near face is at x=30, a's far face at x=20 -> gap 10.
+        b = w.call("add_primitive", kind="box", w=20, d=20, h=20, placement=[30, 0, 0])
+        r = w.call("measure_distance", a=a["handle"], b=b["handle"])
+        assert abs(r["distance_mm"] - 10.0) < 1e-6, r
+        assert r["touching"] is False, r
+        assert r["point_on_a"] == [20.0, 0.0, 20.0], r
+        assert r["point_on_b"] == [30.0, 0.0, 20.0], r
+
+        # Overlapping cube (offset 10 on X) -> minimum distance 0, touching True.
+        c = w.call("add_primitive", kind="box", w=20, d=20, h=20, placement=[10, 0, 0])
+        r2 = w.call("measure_distance", a=a["handle"], b=c["handle"])
+        assert r2["distance_mm"] == 0.0, r2
+        assert r2["touching"] is True, r2
+
+        # Face-to-face: cube at z=25, a's top face (Face6, z=20) to its bottom (Face5, z=25) -> 5.
+        d = w.call("add_primitive", kind="box", w=20, d=20, h=20, placement=[0, 0, 25])
+        r3 = w.call(
+            "measure_distance",
+            a=a["handle"], b=d["handle"], a_ref="Face6", b_ref="Face5",
+        )
+        assert abs(r3["distance_mm"] - 5.0) < 1e-6, r3
+        assert r3["touching"] is False, r3
+
+        # Out-of-range face ref is an actionable error.
+        try:
+            w.call("measure_distance", a=a["handle"], b=b["handle"], a_ref="Face99")
+        except WorkerError:
+            pass
+        else:
+            raise AssertionError("expected WorkerError for out-of-range face ref")
+
+
+def test_measure_angle():
+    """Adjacent box faces meet at 90 deg; opposite parallel faces at 180 deg
+    (supplement 0); two perpendicular box edges at 90 deg. Mismatched kinds and
+    non-planar faces raise."""
+    with Worker() as w:
+        w.call("new_document", name="angle")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        faces = w.call("list_faces", handle=box["handle"])
+        fx = [f for f in faces if f.get("normal") == [1.0, 0.0, 0.0]][0]
+        fz = [f for f in faces if f.get("normal") == [0.0, 0.0, 1.0]][0]
+        fnegx = [f for f in faces if f.get("normal") == [-1.0, 0.0, 0.0]][0]
+
+        # Adjacent faces (+X vs +Z) are perpendicular.
+        perp = w.call("measure_angle", a=box["handle"], a_ref=fx["tag"],
+                      b=box["handle"], b_ref=fz["tag"])
+        assert abs(perp["angle_deg"] - 90.0) < 1e-3, perp
+        assert abs(perp["supplement_deg"] - 90.0) < 1e-3, perp
+        assert perp["kind"] == "face", perp
+
+        # Opposite parallel faces (+X vs -X): normals antiparallel -> 180 deg.
+        opp = w.call("measure_angle", a=box["handle"], a_ref=fx["tag"],
+                     b=box["handle"], b_ref=fnegx["tag"])
+        assert abs(opp["angle_deg"] - 180.0) < 1e-3, opp
+        assert abs(opp["supplement_deg"] - 0.0) < 1e-3, opp
+
+        # Two perpendicular straight box edges -> 90 deg.
+        edges = w.call("list_edges", handle=box["handle"])
+        e_ang = w.call("measure_angle", a=box["handle"], a_ref=edges[0]["tag"],
+                       b=box["handle"], b_ref=edges[1]["tag"])
+        assert abs(e_ang["angle_deg"] - 90.0) < 1e-3, e_ang
+        assert e_ang["kind"] == "edge", e_ang
+
+        # Mixing a face ref with an edge ref is rejected.
+        try:
+            w.call("measure_angle", a=box["handle"], a_ref=fx["tag"],
+                   b=box["handle"], b_ref=edges[0]["tag"])
+            assert False, "mixed face/edge refs should raise"
+        except WorkerError:
+            pass
+
+        # A non-planar (cylindrical) face is rejected.
+        cyl = w.call("add_primitive", kind="cylinder", r=5, h=10)
+        cfaces = w.call("list_faces", handle=cyl["handle"])
+        cylface = [f for f in cfaces if f["kind"] == "cylindrical"][0]
+        try:
+            w.call("measure_angle", a=cyl["handle"], a_ref=cylface["tag"],
+                   b=box["handle"], b_ref=fz["tag"])
+            assert False, "non-planar face should raise"
+        except WorkerError:
+            pass
+
+
+def test_bounding_box():
+    import math
+    with Worker() as w:
+        w.call("new_document", name="bb")
+        box = w.call("add_primitive", kind="box", w=10, d=20, h=5)
+        r = w.call("bounding_box", handle=box["handle"])
+        assert "handle" not in r, r
+        assert r["size"] == [10.0, 20.0, 5.0], r
+        assert r["min"] == [0.0, 0.0, 0.0], r
+        assert r["max"] == [10.0, 20.0, 5.0], r
+        assert r["center"] == [5.0, 10.0, 2.5], r
+        expected_diag = math.sqrt(10.0**2 + 20.0**2 + 5.0**2)
+        assert abs(r["diagonal"] - expected_diag) < 1e-3, r
+        assert r["oriented"] is None, r
+        ro = w.call("bounding_box", handle=box["handle"], oriented=True)
+        assert ro["oriented"] is not None, ro
+        assert sorted(ro["oriented"]["size"]) == sorted([10.0, 20.0, 5.0]), ro
+        try:
+            w.call("bounding_box", handle="nope_999")
+            assert False, "expected error on unknown handle"
+        except WorkerError:
+            pass
+
+
+def test_min_clearance():
+    """Two 10mm boxes: 3mm apart -> clear/3.0; overlapping 5mm -> interference
+    with ~500mm³ overlap; face-touching -> contact/0.0. Numbers verified in
+    FreeCAD 1.1.1."""
+    with Worker() as w:
+        w.call("new_document", name="clr")
+        a = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        # clear: B 3mm past A's far face (A spans x=0..10, B at x=13)
+        b_clear = w.call("add_primitive", kind="box", w=10, d=10, h=10,
+                         placement=[13, 0, 0])
+        r = w.call("min_clearance", a=a["handle"], b=b_clear["handle"])
+        assert r["status"] == "clear", r
+        assert abs(r["clearance_mm"] - 3.0) < 1e-3, r
+        assert "overlap_volume_mm3" not in r, r
+        assert len(r["point_on_a"]) == 3 and len(r["point_on_b"]) == 3, r
+
+        # interference: B overlaps A by 5mm (B at x=5) -> 5*10*10 = 500 mm³
+        b_interf = w.call("add_primitive", kind="box", w=10, d=10, h=10,
+                          placement=[5, 0, 0])
+        r = w.call("min_clearance", a=a["handle"], b=b_interf["handle"])
+        assert r["status"] == "interference", r
+        assert r["clearance_mm"] == 0.0, r
+        assert abs(r["overlap_volume_mm3"] - 500.0) < 1.0, r
+
+        # contact: B's near face touches A's far face (B at x=10)
+        b_contact = w.call("add_primitive", kind="box", w=10, d=10, h=10,
+                           placement=[10, 0, 0])
+        r = w.call("min_clearance", a=a["handle"], b=b_contact["handle"])
+        assert r["status"] == "contact", r
+        assert abs(r["clearance_mm"]) < 1e-6, r
+        assert "overlap_volume_mm3" not in r, r
+
+
+def test_check_shape():
+    with Worker() as w:
+        w.call("new_document", name="checkshape")
+        box = w.call("add_primitive", kind="box", w=10, d=20, h=5)
+        r = w.call("check_shape", handle=box["handle"])
+        assert r["valid"] is True, r
+        assert r["watertight_solid"] is True, r
+        assert r["closed"] is True, r
+        assert r["is_null"] is False, r
+        assert r["shape_type"] == "Solid", r
+        assert r["solids"] == 1, r
+        assert r["shells"] == 1, r
+        assert r["faces"] == 6, r
+        assert r["edges"] == 12, r
+        assert abs(r["volume_mm3"] - 1000.0) < 1e-6, r
+        assert "check" not in r, r
+        assert "check_error" not in r, r
+
+
+def test_section_view():
+    """Slice solids with a plane and check measured cross-section areas.
+      cylinder r=5 cut on XY at mid-height -> area = pi*25 ~= 78.5398 mm^2
+      box 10x10x10 cut on XY at z=5        -> area = 100 mm^2
+      plane that misses the shape          -> wire_count 0, area 0, bbox None
+      emit_profile=True                    -> registers a 'section_*' handle
+      emit_profile on a miss               -> WorkerError (nothing to emit)
+    """
+    import math
+    with Worker() as w:
+        w.call("new_document", name="section")
+
+        cyl = w.call("add_primitive", kind="cylinder", r=5, h=20)
+        r = w.call("section_view", handle=cyl["handle"], plane="XY", offset=10.0)
+        assert abs(r["section_area_mm2"] - math.pi * 25) < 0.05, (
+            f"cylinder section area {r['section_area_mm2']} not ~= pi*25 ({math.pi*25:.4f})"
+        )
+        assert r["wire_count"] >= 1, f"expected >=1 section wire: {r}"
+        assert r["closed_wire_count"] >= 1, f"expected a closed wire: {r}"
+        assert "handle" not in r, f"measure-only call must not emit a handle: {r}"
+        assert r["bbox"] is not None and r["bbox"]["size"][2] == 0.0, (
+            f"section bbox should be flat in the cut direction: {r}"
+        )
+
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        r2 = w.call("section_view", handle=box["handle"], plane="XY", offset=5.0)
+        assert abs(r2["section_area_mm2"] - 100.0) < 0.01, (
+            f"box section area {r2['section_area_mm2']} not ~= 100"
+        )
+
+        # plane above the box misses it entirely
+        miss = w.call("section_view", handle=box["handle"], plane="XY", offset=100.0)
+        assert miss["wire_count"] == 0, f"plane should miss the box: {miss}"
+        assert miss["section_area_mm2"] == 0.0, f"missed slice has no area: {miss}"
+        assert miss["bbox"] is None, f"missed slice has no bbox: {miss}"
+
+        # emit_profile registers a real section object
+        emit = w.call(
+            "section_view", handle=box["handle"], plane="XY", offset=5.0,
+            emit_profile=True,
+        )
+        assert emit["handle"].startswith("section_"), (
+            f"emit_profile should register a section handle: {emit}"
+        )
+        assert abs(emit["section_area_mm2"] - 100.0) < 0.01, (
+            f"emitted section area {emit['section_area_mm2']} not ~= 100"
+        )
+
+        # emit_profile on a miss is an error (nothing to emit)
+        try:
+            w.call(
+                "section_view", handle=box["handle"], plane="XY", offset=100.0,
+                emit_profile=True,
+            )
+        except WorkerError:
+            pass
+        else:
+            raise AssertionError("expected WorkerError when emit_profile misses the shape")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

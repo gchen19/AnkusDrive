@@ -736,6 +736,190 @@ def copy_shape(
 
 
 @mcp.tool()
+def measure_distance(
+    a: str,
+    b: str,
+    a_ref: str | None = None,
+    b_ref: str | None = None,
+) -> dict:
+    """Minimum distance between two entities, in mm. The workhorse measurement
+    tool: lets a blind agent verify gaps, clearances, and contact.
+
+    Args:
+        a: handle of the first object.
+        b: handle of the second object.
+        a_ref: optional sub-shape selector on `a` to measure FROM instead of the
+               whole solid -- an f_* face tag, an e_* edge tag, or a literal
+               "FaceN"/"EdgeN" (1-based). Omit to use the whole shape.
+        b_ref: optional sub-shape selector on `b` (same forms as a_ref).
+
+    Measures the minimum (closest-approach) distance, so distance_mm = 0 means
+    the two entities touch or interpenetrate. This does NOT report overlap
+    volume -- use min_clearance / interference_check for penetration depth.
+
+    Returns a dict (no handle; this is a measurement):
+        distance_mm: float -- minimum gap in mm (0.0 when touching/intersecting).
+        point_on_a:  [x, y, z] mm -- closest point on a (or its sub-shape).
+        point_on_b:  [x, y, z] mm -- closest point on b (or its sub-shape).
+        touching:    bool -- True when distance_mm < 1e-7.
+    """
+    params = {"a": a, "b": b}
+    if a_ref is not None:
+        params["a_ref"] = a_ref
+    if b_ref is not None:
+        params["b_ref"] = b_ref
+    return _call("measure_distance", **params)
+
+
+@mcp.tool()
+def measure_angle(a: str, a_ref: str, b: str, b_ref: str) -> dict:
+    """Angle (degrees) between two planar faces or two straight edges.
+
+    a, b: object handles. a_ref, b_ref: REQUIRED sub-shape references, one per
+    handle. Both must be the SAME kind:
+      - face tags ('f_*' from list_faces/query_faces, or 'FaceN', or 1-based int)
+        -> angle is between the faces' outward normals. Faces must be planar.
+      - edge tags ('e_*' from list_edges, or 'EdgeN', or 1-based int)
+        -> angle is between the edges' tangent directions. Edges must be straight.
+    Mixing a face ref with an edge ref, a non-planar face, or a curved edge raises.
+
+    Units: degrees. Returns:
+      - angle_deg:      raw angle between the two direction vectors, 0..180.
+      - supplement_deg: 180 - angle_deg (the complementary angle; use this for
+                        the acute reading when angle_deg is obtuse).
+      - kind:           "face" or "edge".
+    Two adjacent box faces -> angle_deg 90. Two opposite parallel box faces ->
+    angle_deg 180, supplement_deg 0. Read-only: measures, creates no geometry.
+    """
+    return _call("measure_angle", a=a, a_ref=a_ref, b=b, b_ref=b_ref)
+
+
+@mcp.tool()
+def bounding_box(handle: str, oriented: bool = False) -> dict:
+    """Axis-aligned bounding box (AABB) of a shaped object. All lengths in mm,
+    in world coordinates. This is a measurement — it returns numbers, not a new
+    object, and does not modify the model.
+
+    handle:   the object to measure.
+    oriented: if True, also compute the tightest box at any orientation (the
+              oriented bounding box, OBB) and return it under "oriented"; if the
+              build can't compute it, "oriented" is null. Default False.
+
+    Returns a dict:
+      min      [x,y,z] mm — lower corner of the AABB
+      max      [x,y,z] mm — upper corner of the AABB
+      size     [x,y,z] mm — extents (max - min) along X, Y, Z
+      center   [x,y,z] mm — AABB center point
+      diagonal float  mm — space-diagonal length of the AABB
+      oriented null, or {size:[x,y,z] mm, center:[x,y,z] mm, diagonal: mm} when
+               oriented=True and supported — the minimum-volume box at the
+               shape's best orientation (size is its three edge lengths).
+    """
+    params = {"handle": handle}
+    if oriented:
+        params["oriented"] = True
+    return _call("bounding_box", **params)
+
+
+@mcp.tool()
+def min_clearance(a: str, b: str) -> dict:
+    """Closest approach between two solids — the measured gap, richer than the
+    binary interference_check. `a` and `b` are object handles. All lengths mm,
+    volumes mm³.
+
+    Returns a dict:
+      status: "clear" (a positive gap separates them),
+              "contact" (faces/edges touch, gap ~ 0), or
+              "interference" (the solids interpenetrate / share material).
+      clearance_mm: minimum distance between the two solids (mm). 0.0 when they
+        are touching or interfering.
+      overlap_volume_mm3: volume of interpenetration (mm³). Present ONLY when
+        status == "interference".
+      point_on_a: [x,y,z] of the closest point on `a`. Present when status is
+        "clear" or "contact" (omitted for "interference").
+      point_on_b: [x,y,z] of the closest point on `b`. Present when status is
+        "clear" or "contact" (omitted for "interference").
+    """
+    return _call("min_clearance", a=a, b=b)
+
+
+@mcp.tool()
+def check_shape(handle: str) -> dict:
+    """Check a shaped object's geometry validity and topology before you build on
+    it. Inspection only — measures, returns no handle, mutates nothing, and does
+    NOT auto-repair. Use it as a guard after booleans/sweeps/imports to confirm
+    you have one clean watertight solid.
+
+    handle: the object to inspect.
+
+    Returns a dict (volumes in mm3):
+      valid            (bool)  OCC topology/geometry is sound
+      watertight_solid (bool)  exactly one solid AND valid AND closed — the
+                               'safe to keep building' verdict
+      shape_type       (str)   e.g. 'Solid', 'Shell', 'Compound', 'Wire'
+      closed           (bool)  no free boundary edges
+      solids           (int)   number of solids (want 1 for a part)
+      shells           (int)   number of shells
+      faces            (int)   number of faces
+      edges            (int)   number of edges
+      volume_mm3       (float) total volume (0 for open/2D shapes)
+      is_null          (bool)  the shape is empty
+      check            (str)   present only when valid is False — diagnostics
+                               were printed to the worker log
+      check_error      (str)   present only if the diagnostic pass itself raised
+    """
+    return _call("check_shape", handle=handle)
+
+
+@mcp.tool()
+def section_view(
+    handle: str,
+    plane: str = "XY",
+    offset: float = 0.0,
+    emit_profile: bool = False,
+    name: str = "Section",
+) -> dict:
+    """Cut a solid with a plane and return the cross-section it exposes. This is
+    the best way to "see inside" a part blind: it measures the cut area and its
+    extent, and can optionally emit the section outline as a new object for
+    rendering/export. Units: mm (lengths), mm^2 (areas).
+
+    handle: the solid to slice (a DriftPin handle).
+    plane: "XY", "XZ", or "YZ" (world datum planes) OR a datum-plane handle.
+           World normals follow FreeCAD: XY -> +Z, XZ -> -Y, YZ -> +X. A datum
+           handle uses its local +Z as the cutting normal.
+    offset: shift of the cutting plane along its normal, in mm (default 0 = the
+            plane through the world origin / datum origin). E.g. plane="XY",
+            offset=10 cuts at z=10.
+    emit_profile: when True, add a Part::Feature holding the section wires to the
+            document, register it, and return its handle (raises if the plane
+            misses the shape). Default False = measure only, no new geometry.
+    name: object name for the emitted profile (only used when emit_profile=True).
+
+    Does not modify the input geometry. Returns a dict:
+      plane: str (echoed),
+      offset_mm: float (echoed),
+      normal: [x, y, z] unit cutting-plane normal,
+      section_area_mm2: float — total area of the closed cross-section wires,
+      wire_count: int — number of section wires found (0 means the plane misses
+                  the shape),
+      closed_wire_count: int — how many of those wires are closed,
+      bbox: {min:[x,y,z], max:[x,y,z], size:[dx,dy,dz]} of the section, or None
+            when the plane misses the shape,
+      handle: str — handle of the emitted profile (ONLY when emit_profile=True),
+      name: str — its FreeCAD object name (ONLY when emit_profile=True).
+    """
+    params = {
+        "handle": handle,
+        "plane": plane,
+        "offset": offset,
+        "emit_profile": emit_profile,
+        "name": name,
+    }
+    return _call("section_view", **params)
+
+
+@mcp.tool()
 def list_faces(handle: str) -> list:
     """List all faces of a shaped object with stable tags + geometric descriptors.
 
