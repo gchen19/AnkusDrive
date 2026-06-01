@@ -7,7 +7,8 @@ A CLI + MCP server that drives [FreeCAD](https://www.freecad.org/) through its P
 FreeCAD exposes almost everything it does through a Python API — create documents, build sketches, extrude solids, mesh them, run CalculiX/Elmer FEM solves, read back stress/displacement fields. But that API lives inside FreeCAD's embedded Python (`freecadcmd`), which is awkward to call from anywhere else. DriftPin wraps it behind two surfaces:
 
 - **CLI** — one-shot commands (`driftpin run script.py`, `driftpin box --w 10 --d 20 --h 5 -o part.FCStd`) for scripts, CI, and quick iteration.
-- **MCP server** — structured tools (`create_document`, `add_primitive`, `boolean_cut`, `make_fem_analysis`, `run_solver`, `get_results`) so an LLM agent can model and simulate iteratively.
+- **MCP server** — ~100 structured tools (`new_document`, `add_primitive`, `boolean_op`, `pad`, `add_gear`, `fem_new_analysis`, `fem_run`, `fem_results`) so an LLM agent can model, inspect, and simulate iteratively.
+- **Multi-agent orchestration** — a host-side reference layer that lets a *team* of agents partition one product into components, build them in parallel, and merge the pieces back together with the joints actually fitting (see [Multi-agent design](#multi-agent-design)).
 
 ## Target environment
 
@@ -83,7 +84,7 @@ claude mcp add driftpin -- driftpin mcp
 **Other hosts (Cursor, Continue, custom MCP clients)** — same shape: stdio
 transport, command = `driftpin`, args = `["mcp"]`.
 
-After restarting the host, you should see ~76 `driftpin__*` tools become
+After restarting the host, you should see ~100 `driftpin__*` tools become
 available. If startup hangs or the host reports a closed connection, run
 `driftpin ping` directly — that exercises the same worker boot path with
 cleaner error messages.
@@ -140,19 +141,23 @@ how to invoke it.
 
 ### Layer 1 — typed MCP tools (the agent surface)
 
-~70 first-class MCP tools cover the **core mechanical-design surface area**.
+~100 first-class MCP tools cover the **core mechanical-design surface area**.
 They have validated parameters, structured returns, and stable handles for
 chaining. This is the happy path — what an agent uses for things people do
 every day.
 
 | Domain | What's covered |
 |---|---|
-| Document lifecycle | `new_document`, `open_document`, `save_document`, `list_documents`, `set_active_document`, `close_document` |
+| Document lifecycle | `new_document`, `open_document`, `save_document`, `list_documents`, `set_active_document`, `close_document`, `restart_worker` |
 | Geometry primitives | `add_primitive` (box/cyl/sphere), `boolean_op`, `export_shape` (STEP/IGES/BREP/STL) |
-| Selection (stable refs) | `list_faces`, `list_edges`, `query_faces`, `resolve_face`, `resolve_edge` |
+| Selection (stable refs) | `list_faces`, `list_edges`, `query_faces`, `resolve_face`, `resolve_edge`, `register_handle`, `verify_feature` |
 | PartDesign | `make_body`, `make_datum_plane`, `make_sketch`, `add_sketch_geometry`, `add_sketch_constraint`, `add_sketch_external`, `close_sketch`, `pad`, `pocket`, `revolve`, `hole`, `loft`, `sweep`, `helix`, `partdesign_fillet`, `partdesign_chamfer`, `linear_pattern`, `polar_pattern`, `mirrored`, `thickness`, `draft` |
+| Direct modeling & feature ops | `fillet_edges`, `chamfer_edges`, `shell_solid`, `add_rib`, `engrave_text`, `oring_groove`, `transform`, `scale_shape`, `copy_shape` |
+| Parametric components | `add_gear`, `add_rack`, `add_sprocket`, `add_pulley`, `add_spring`, `add_fastener`, `add_bearing`, `add_thread`, `list_thread_options` |
+| Metrology & inspection | `measure_distance`, `measure_angle`, `bounding_box`, `check_shape`, `section_view`, `min_clearance`, `envelope_check`, `interference_check` |
 | Generic property access | `get_object`, `set_property` |
-| Mass / assembly / drawings | `mass_properties`, `make_assembly`, `add_part`, `list_assembly_parts`, `interference_check`, `bom_extract`, `make_drawing_page`, `add_projection_group` |
+| Assembly & interfaces | `make_assembly`, `add_part`, `list_assembly_parts`, `merge_assembly`, `publish_interface`, `interface_align_check`, `assembly_lock`, `assembly_lock_check`, `bom_extract` |
+| Drawings | `make_drawing_page`, `add_projection_group`, `mass_properties` |
 | Visual feedback | `render_view`, `render_views` (8 preset views, multi-view sheets) |
 | FEM | `fem_new_analysis`, `fem_set_solver`, `fem_set_material`, `fem_add_constraint` (fixed/force/pressure/displacement/temperature/heatflux/initial_temperature), `fem_mesh`, `fem_mesh_refinement`, `fem_modal`, `fem_buckling`, `fem_run`, `fem_results`, `fem_modal_results`, `fem_buckling_results`, `fem_thermal_results`, plus the legacy `fem_cantilever_demo` |
 | Operations | `transaction_open`, `transaction_commit`, `transaction_abort` |
@@ -228,19 +233,60 @@ client.
 | Workbench / API not wrapped at all | `run_script` (Layer 3) |
 | Smoke test from a shell, or stand up MCP | CLI |
 
+## Multi-agent design
+
+The roadmap above is about deepening what *one* agent can do. The
+[`orchestration/`](orchestration/) layer is about *many* agents sharing the
+work: split a product into components and subassemblies, build those in
+parallel (each agent cold, seeing only its own contract slice), then merge the
+whole back up with the joints actually fitting. The design is written up in
+[`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md); it targets **partition + merge**,
+not shared co-editing of one live document (a single worker = one
+`App.ActiveDocument`, so concurrent mutation is a non-goal for now).
+
+The split of responsibilities is deliberate:
+
+- **DriftPin ships the thin, tool-agnostic primitives** that make a merge
+  verifiable — `publish_interface` (declare a component's mating frames),
+  `merge_assembly` (combine component files into one assembly), and the
+  **gates** that decide whether a merge is sound: `interface_align_check`
+  (do published frames line up?), `interference_check` (do solids collide?),
+  `envelope_check` (does it fit its bounding budget?), plus an
+  `assembly_lock` / `assembly_lock_check` contract lockfile. These are real
+  MCP tools usable by any host.
+- **`orchestration/` is the host-side *reference* coordinator** — explicitly
+  **not** part of the `driftpin` package. Given a free-text brief it
+  `decompose`s it into a validated manifest, fans out one builder agent per
+  component, `merge_assembly`s them, reads the gates, and on failure
+  **renegotiates** — re-dispatching only the components implicated by the
+  failing gate — up to a round budget. It runs against a real Anthropic client
+  or a scripted stub (`ScriptedClient`) for free dry runs; the merge and gates
+  are real worker calls either way. Any host (Claude, another tool, a human)
+  can use it, replace it, or ignore it — the only contract that matters is the
+  manifest + the component files on disk.
+
+How well partition+merge holds up is measured by a dedicated eval ladder
+(`tests/test_multiagent_m1.py` / `_m2.py`, runnable in CI) with hard-oracle
+merge gates and a single-agent baseline — see
+[`tests/MULTI_AGENT_EVAL.md`](tests/MULTI_AGENT_EVAL.md). Early experiments have
+partition performing at or above the single-agent baseline on the harder toys.
+
 ## Status
 
 Phase 3 closed 2026-05-10 (v0.3.0). The core mechanical-design surface from
 Phase 2 (2026-04-25) is intact; Phase 3 layered intent-encoding APIs on top
-of it.
+of it. Since then two waves landed: a **command-tier expansion** (21 new MCAD
+tools) and the **multi-agent orchestration** layer.
 
 - **Worker + transport** — long-lived `freecadcmd` worker, newline-JSON over stdio with stdio hygiene (FreeCAD C++ chatter redirected off the protocol fd).
 - **CLI** — `ping`, `version`, `box`, `cylinder`, `export`, `run`, `mcp`, `fem cantilever`, plus top-level `--version`.
-- **MCP server** — FastMCP over stdio, ~76 typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), generic property reflection, mass properties, assembly, TechDraw, multi-view rendering, FEM (static + modal + buckling + thermal), and transactions.
+- **MCP server** — FastMCP over stdio, ~100 typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), direct-modeling feature ops, parametric components, metrology/inspection, generic property reflection, mass properties, assembly + interface gates, TechDraw, multi-view rendering, FEM (static + modal + buckling + thermal), and transactions.
+- **Command tiers 1–3** — 21 new tools: parametric components (`add_gear`, `add_rack`, `add_sprocket`, `add_pulley`, `add_spring`, `add_fastener`, `add_bearing`, `add_thread`), direct feature ops (`fillet_edges`, `chamfer_edges`, `shell_solid`, `add_rib`, `engrave_text`, `oring_groove`, `transform`, `scale_shape`, `copy_shape`), and metrology/inspection (`measure_distance`, `measure_angle`, `bounding_box`, `check_shape`, `section_view`, `min_clearance`).
+- **Multi-agent orchestration** — DriftPin ships the thin merge primitives + gates (`publish_interface`, `merge_assembly`, `interface_align_check`, `envelope_check`, `assembly_lock`/`_check`); the host-side reference coordinator (`orchestration/`) decomposes a brief, fans out per-component builders, merges, gates, and renegotiates. See [Multi-agent design](#multi-agent-design) and [`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md).
 - **Phase 3 intent-encoding additions** — `direction='into_body'|'away_from_body'` and `through='wall'|'body'` on pocket/hole (ray-cast wall depth handles hollow shells correctly); `intended_for='print'|'machine'|'drawing'` on hole drives ModelThread; `verify_feature` diffs actual-vs-expected volume change to catch silent failures; visibility hygiene at save hides consumed inputs; `register_handle` + `run_script` auto_register close the escape-hatch one-way trapdoor; `list_thread_options` surfaces the coupled ThreadType/ThreadSize enums dynamically; revolve has an OCCT pre-check that flags axis-coincident edges with an actionable error.
 - **Selection layer** — `list_faces` / `list_edges` / `query_faces` / `resolve_*` produce stable geometric tags that survive edits; FEM constraints take tags directly.
 - **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer; `render_view` / `render_views` return PNGs as MCP `ImageContent`.
-- **Tests** — 90 worker tests + 22 across MCP / CLI / render / determinism / edit stability / negative paths / perf (112 total), runnable via `tests/run_all.sh`. Reliability harness (Layer A: "can the agent see what it built?") is scaffolded behind `RUN_RELIABILITY=1`.
+- **Tests** — 153 test functions across worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent (M1+M2), runnable via `tests/run_all.sh`. Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](tests/RELIABILITY.md).
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and the
 "After Phase 2" backlog (FEM contact/spring/tie, async `fem_run`,
