@@ -17,10 +17,9 @@ extreme cases (interpenetrating triangles), no anti-aliasing. Good enough for
 from __future__ import annotations
 
 import io
-import math
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 
 _VIEWS = {

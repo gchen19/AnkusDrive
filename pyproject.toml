@@ -59,6 +59,23 @@ Homepage = "https://github.com/gchen19/DriftPin"
 Repository = "https://github.com/gchen19/DriftPin"
 Issues = "https://github.com/gchen19/DriftPin/issues"
 
+[tool.ruff]
+# Fast "real-bug" lint for the CI fast lane (no FreeCAD needed). Throwaway
+# probe scripts and the example tree aren't part of the shipped surface.
+target-version = "py310"
+extend-exclude = ["scratch", "example"]
+
+[tool.ruff.lint]
+# E9 = syntax errors; F = pyflakes (undefined names, redefinitions, bad
+# f-strings, unused imports). Deliberately NOT the full style ruleset — this
+# gate catches bugs, not bikeshedding.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test scaffolding legitimately keeps a named result for readability and
+# imports fixtures it doesn't always reference — don't gate on that noise.
+"tests/*" = ["F401", "F841"]
+
 [tool.setuptools.dynamic]
 version = { attr = "driftpin.__version__" }
 

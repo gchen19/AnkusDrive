@@ -13,6 +13,10 @@ cd "$(dirname "$0")/.."
 
 VENV_PY=".venv/bin/python3"
 
+echo "== Static contracts (registry parity + docstrings; no FreeCAD) =="
+python3 tests/test_contracts.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

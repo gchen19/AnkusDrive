@@ -1,0 +1,46 @@
+name: Fast checks
+
+# A FreeCAD-free "fast lane" that runs on stock GitHub-hosted runners in
+# seconds, complementing the heavyweight self-hosted suite in test.yml. It
+# catches the failure modes of this codebase's two parallel command registries
+# (worker @handler <-> mcp @mcp.tool) plus syntax/import errors and stub
+# docstrings — so PRs get signal even when the self-hosted FreeCAD box is busy
+# or offline. None of these steps import FreeCAD.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+# A new push to a PR cancels the previous (still-running) fast-checks run.
+concurrency:
+  group: fast-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    name: Lint + contracts (no FreeCAD)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install "ruff==0.15.15"
+
+      - name: Ruff (syntax + pyflakes, config in pyproject.toml)
+        run: ruff check driftpin tests
+
+      - name: Byte-compile every module (catches syntax/indent errors)
+        run: python -m compileall -q driftpin tests
+
+      - name: Registry parity + docstring contracts
+        run: python tests/test_contracts.py
