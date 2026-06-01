@@ -441,6 +441,301 @@ def oring_groove(
 
 
 @mcp.tool()
+def chamfer_edges(
+    handle: str, edges: list, size: float = 1.0, name: str = "Chamfer"
+) -> dict:
+    """Chamfer (bevel) specific edges of a shaped Part object — the direct-shape
+    counterpart to fillet_edges.
+
+    handle: handle of the object to chamfer (e.g. 'box_1', a boolean result).
+    edges: non-empty list of edge references. Each may be a tag ('e_...' from
+        list_edges, preferred), an 'EdgeN' string, or a bare 1-based integer
+        index.
+    size: symmetric chamfer leg distance in mm (applied equally to both faces
+        meeting at the edge, i.e. dist1 = dist2 = size). Must be > 0. Default 1.0.
+    name: label for the resulting feature object. Default 'Chamfer'.
+
+    The base object is hidden (consumed into the chamfer feature). Returns
+    {handle, name, volume, edges} where volume is the resulting Shape volume in
+    mm^3 and edges is the list of resolved 1-based edge indices that were
+    chamfered.
+    """
+    params = {"handle": handle, "edges": edges, "size": size, "name": name}
+    return _call("chamfer_edges", **params)
+
+
+@mcp.tool()
+def shell_solid(
+    handle: str,
+    faces: list,
+    thickness: float,
+    name: str = "Shell",
+) -> dict:
+    """Hollow a raw Part solid into a thin-walled shell (the direct-shape
+    counterpart to `thickness`, which only works on PartDesign bodies).
+
+    handle: handle of the solid to hollow (e.g. a box/cylinder from
+    add_primitive, or any shaped Part::Feature).
+    faces: NON-EMPTY list of the faces to REMOVE — these become the shell's
+    openings. Each entry is a face tag (f_..., from list_faces/query_faces,
+    preferred and edit-stable), a 'FaceN' string, or a 1-based integer index.
+    thickness: wall thickness in mm, must be > 0. The wall is grown INWARD, so
+    the part's outer dimensions are preserved.
+
+    The consumed input solid is hidden (its geometry now lives in the shell).
+    Returns {handle (starts 'shell_'), name, volume (mm^3 of the resulting
+    walls), wall_thickness (mm), removed_faces (list of 1-based face indices
+    that were opened)}. Raises if faces is empty, thickness <= 0, an index is
+    out of range, or the offset is too large to produce a valid shell.
+    """
+    params = {
+        "handle": handle,
+        "faces": faces,
+        "thickness": thickness,
+        "name": name,
+    }
+    return _call("shell_solid", **params)
+
+
+@mcp.tool()
+def add_thread(
+    diameter: float,
+    pitch: float,
+    length: float,
+    internal: bool = False,
+    starts: int = 1,
+    placement: list | None = None,
+    name: str = "Thread",
+) -> dict:
+    """Generate a REAL helical ISO-style 60-degree thread as a static solid.
+
+    Unlike `hole`/`list_thread_options` (which only flag a thread as metadata),
+    this cuts actual helical geometry: a truncated triangular rib swept along a
+    helix and fused to a core cylinder.
+
+    All lengths in mm, angles in degrees.
+    diameter: nominal MAJOR (crest) diameter, mm. For internal=True this is the
+      bore the tap fits.
+    pitch: thread pitch, mm per turn (e.g. M8 coarse = 1.25).
+    length: threaded length along +Z from z=0, mm.
+    internal: False (default) -> a finished externally-threaded stud. True -> a
+      TAP/insert cutting-tool solid sized to the bore; fuse it into (or cut it
+      from) a bored hole in your part to produce a threaded bore.
+    starts: number of thread starts, >=1. Multi-start repeats the helix rotated
+      by 360/starts and uses lead = pitch*starts.
+    placement: optional [x, y, z] mm translation of the solid's base (default at
+      the origin, axis along +Z).
+    name: optional object name.
+
+    Geometry note: the modeled minor (root) uses the ISO 5H/8 truncation; the
+    reported minor_diameter uses the standard ISO formula
+    diameter - 1.0825*pitch. Fallback behaviour: if the helical sweep cannot
+    produce a valid solid the tool returns a plain cylinder tagged with the
+    thread spec and modeled=False (this is rare for sane M-series inputs); always
+    check the modeled flag.
+
+    Returns {handle, name, volume (mm^3), major_diameter (mm), minor_diameter
+    (mm), pitch (mm), length (mm), starts (int), internal (bool), modeled (bool)}.
+    Mating numbers: drill/bore minor_diameter to tap an internal thread; clear a
+    major_diameter (+clearance) hole to pass an external stud.
+    """
+    params = {"diameter": diameter, "pitch": pitch, "length": length,
+              "internal": internal, "starts": starts, "name": name}
+    if placement is not None:
+        params["placement"] = placement
+    return _call("add_thread", **params)
+
+
+@mcp.tool()
+def engrave_text(
+    handle: str,
+    face: str,
+    text: str,
+    size: float = 5.0,
+    depth: float = 0.5,
+    mode: str = "engrave",
+    position: list | None = None,
+    font: str | None = None,
+    name: str = "Text",
+) -> dict:
+    """Engrave (cut) or emboss (add) extruded text onto a planar face of a solid.
+
+    The text is rendered in a system TrueType font, extruded, laid flat on the
+    chosen face centred on its centroid, then booleaned into the host solid.
+
+    handle: the host solid to mark.
+    face: the planar face to put the text on — a stable f_* tag (preferred), a
+        'FaceN' index string, or an int. Must be a flat (planar) face. Get a tag
+        from list_faces / query_faces.
+    text: the string to render (non-empty).
+    size: cap height of the text in mm (default 5.0).
+    depth: extrusion/engraving depth in mm (default 0.5). Engrave recesses the
+        text this far below the surface; emboss raises it this far above.
+    mode: 'engrave' (default) cuts the text into the solid (removes material);
+        'emboss' fuses raised text onto the surface (adds material).
+    position: optional [u, v] in-face offset in mm from the face centroid, along
+        the text's local X (u) and Y (v) axes. Omit to centre on the face.
+    font: optional absolute path to a .ttf/.ttc font file. If omitted, common
+        macOS fonts are auto-probed (Arial, then Helvetica). If none is found and
+        none is supplied, the call raises RuntimeError — pass an explicit path.
+    name: label for the resulting solid (default 'Text').
+
+    Returns {handle, name, volume, text, mode, depth} where volume is the mm^3 of
+    the resulting solid (less than the input for engrave, more for emboss). The
+    host solid is consumed/hidden and replaced by the returned handle.
+    """
+    params = {"handle": handle, "face": face, "text": text, "size": size,
+              "depth": depth, "mode": mode, "name": name}
+    if position is not None:
+        params["position"] = position
+    if font is not None:
+        params["font"] = font
+    return _call("engrave_text", **params)
+
+
+@mcp.tool()
+def add_rib(
+    body: str,
+    sketch: str,
+    thickness: float,
+    midplane: bool = True,
+    reversed: bool = False,
+    name: str = "Rib",
+) -> dict:
+    """Add a reinforcing rib/web inside a PartDesign Body by thickening an OPEN
+    sketch profile into a wall that fuses with the body's surrounding material.
+
+    Args:
+      body: handle of the PartDesign Body (from make_body) to add the rib to.
+      sketch: handle of a sketch holding an OPEN spine (a single line, arc, or
+        connected polyline) that defines where the rib runs. Must NOT be a
+        closed loop. The sketch's attachment plane sets the rib's orientation.
+      thickness: rib wall thickness in mm (> 0).
+      midplane: if True (default) the wall is centered on the spine, growing
+        thickness/2 to each side; if False it grows from one side.
+      reversed: flip the extrusion sense (use if the rib lands on the wrong
+        side of its sketch plane).
+      name: object label.
+
+    Returns a dict: {handle (starts 'rib_'), name, volume (the whole Body's
+    Shape.Volume in mm^3 after the rib — strictly greater than before the rib,
+    since a rib only adds material), thickness}.
+
+    Fallback behaviour the caller should know: FreeCAD's native PartDesign::Rib
+    type is unavailable in DriftPin's headless runtime, so the rib is built as
+    an equivalent midplane PartDesign::Pad — the open spine is offset by
+    +/-thickness/2 into a closed footprint and padded across the body so it
+    reaches the surrounding walls. For the usual straight or smoothly-curved
+    spine this matches a Rib; very intricate spines may differ from the native
+    tool. Raises ValueError if the profile is closed/empty/degenerate or
+    thickness <= 0, and RuntimeError if the rib adds no material (spine does not
+    span between walls)."""
+    params = {
+        "body": body,
+        "sketch": sketch,
+        "thickness": thickness,
+        "midplane": midplane,
+        "reversed": reversed,
+        "name": name,
+    }
+    return _call("add_rib", **params)
+
+
+@mcp.tool()
+def transform(
+    handle: str,
+    translate: list | None = None,
+    rotate_axis: list | None = None,
+    angle: float = 0.0,
+    relative: bool = True,
+) -> dict:
+    """Move and/or rotate an existing object in place — first-class replacement
+    for hand-poking an object's Placement via set_property.
+
+    handle: object to move (any object with a Placement: primitive, body, feature).
+    translate: [x, y, z] translation in mm (default no translation).
+    rotate_axis: rotation axis as a 3-vector [x, y, z] (need not be unit length;
+                 default [0, 0, 1], the Z axis).
+    angle: rotation about rotate_axis in DEGREES (default 0 = no rotation).
+    relative: True (default) composes this move ONTO the object's current
+              placement (incremental); False sets it as the ABSOLUTE placement,
+              discarding the object's prior placement.
+
+    The same object is moved — NO new handle is created. The rotation is applied
+    about the object's local origin (combine with translate to pivot elsewhere).
+
+    Returns {handle, name, placement: {base:[x,y,z] mm, axis:[x,y,z],
+    angle_deg}} describing the object's resulting placement.
+    """
+    params = {"handle": handle, "angle": angle, "relative": relative}
+    if translate is not None:
+        params["translate"] = translate
+    if rotate_axis is not None:
+        params["rotate_axis"] = rotate_axis
+    return _call("transform", **params)
+
+
+@mcp.tool()
+def scale_shape(
+    handle: str,
+    factor: float | list,
+    center: list | None = None,
+    name: str = "Scaled",
+) -> dict:
+    """Scale a shape uniformly or per-axis, baking a fresh static solid.
+
+    Scaling breaks parametric history, so this produces a standalone
+    Part::Feature (not a linked/parametric feature); the source object is hidden
+    since its geometry is consumed into the scaled copy.
+
+    handle: source shape handle.
+    factor: scalar for uniform scale, or [sx, sy, sz] for per-axis scale. All
+        factors must be > 0.
+    center: optional [x, y, z] mm pivot to scale about; when omitted the scale is
+        about the world origin (so the shape also moves away from/toward origin).
+    name: object label (default 'Scaled').
+
+    Lengths in mm. Returns {handle, name, volume, factor} where `factor` is the
+    normalized [sx, sy, sz] applied and `volume` (mm^3) equals the source volume
+    times sx*sy*sz.
+    """
+    params = {"handle": handle, "factor": factor, "name": name}
+    if center is not None:
+        params["center"] = center
+    return _call("scale_shape", **params)
+
+
+@mcp.tool()
+def copy_shape(
+    handle: str,
+    placement: list | None = None,
+    name: str | None = None,
+) -> dict:
+    """Duplicate a shaped object as an INDEPENDENT static solid.
+
+    Unlike add_part (which creates an App::Link that tracks the source), this
+    deep-copies the geometry: later edits to the original do NOT propagate to
+    the copy. Use it to seed a mirror/pattern, or to drop a standalone duplicate
+    instance into an assembly.
+
+    handle: handle of the source object (must have a Shape).
+    placement: optional absolute [x, y, z] translation in mm applied to the
+        copy's base. Omit to leave the copy coincident with the source. The
+        source object is unchanged and stays visible.
+    name: optional name for the new object (default '<SourceName>_copy').
+
+    Returns {handle, name, volume}: handle is a new 'copy_N' handle, name is the
+    FreeCAD object name, volume is the copied solid's volume in mm^3.
+    """
+    params = {"handle": handle}
+    if placement is not None:
+        params["placement"] = placement
+    if name is not None:
+        params["name"] = name
+    return _call("copy_shape", **params)
+
+
+@mcp.tool()
 def list_faces(handle: str) -> list:
     """List all faces of a shaped object with stable tags + geometric descriptors.
 

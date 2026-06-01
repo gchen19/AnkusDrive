@@ -2733,6 +2733,301 @@ def test_oring_groove():
         assert abs(removed - 492.135) < 1.0, (removed, r2)    # pi*(r_out^2-r_in^2)*depth
 
 
+def test_chamfer_edges():
+    """Box 20^3, chamfer its 4 vertical edges by 2 mm -> valid solid with volume
+    7840 mm^3 (< original 8000). Mirrors test_partdesign_fillet_by_tag's
+    tag-based edge selection."""
+    with Worker() as w:
+        w.call("new_document", name="chamfer")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        v_before = box["volume"]
+        assert abs(v_before - 8000.0) < 1e-3, box
+
+        # The 4 vertical edges are lines of length 20 whose centroid sits at
+        # mid-height (z = 10); top/bottom rails share length 20 but lie at z=0/20.
+        edges = w.call("list_edges", handle=box["handle"])
+        verticals = [
+            e for e in edges
+            if e["kind"] == "line"
+            and abs(e["length"] - 20.0) < 1e-3
+            and abs(e["centroid"][2] - 10.0) < 1e-3
+        ]
+        assert len(verticals) == 4, f"expected 4 vertical edges, got {len(verticals)}"
+
+        r = w.call(
+            "chamfer_edges",
+            handle=box["handle"],
+            edges=[e["tag"] for e in verticals],
+            size=2.0,
+        )
+        assert r["handle"].startswith("chamfer_"), r
+        assert len(r["edges"]) == 4, r
+        assert abs(r["volume"] - 7840.0) < 1e-3, r
+        assert r["volume"] < v_before, r
+
+
+def test_shell_solid():
+    with Worker() as w:
+        w.call("new_document", name="shell")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        box_vol = w.call("mass_properties", handle=box["handle"])["volume_mm3"]
+        assert abs(box_vol - 8000.0) < 1e-3, box_vol
+
+        # Tag the +Z (top) face to remove as the shell opening.
+        top = w.call(
+            "query_faces",
+            handle=box["handle"],
+            predicate={"type": "planar", "normal_dir": [0, 0, 1]},
+        )
+        assert len(top) == 1, top
+        top_tag = top[0]["tag"]
+
+        r = w.call("shell_solid", handle=box["handle"], faces=[top_tag], thickness=2.0)
+        assert r["handle"].startswith("shell_"), r
+        assert r["wall_thickness"] == 2.0, r
+        assert r["removed_faces"], r
+        # 20^3 box, top removed, 2mm inward wall -> ~3392 mm^3 of wall material:
+        # positive, far below the solid 8000, well under a half-solid block.
+        assert 0 < r["volume"] < 8000.0, r
+        assert r["volume"] < 5000.0, r
+        assert abs(r["volume"] - 3392.0) < 1.0, r
+
+        # Bad inputs must raise (actionable for the agent), not corrupt state.
+        try:
+            w.call("shell_solid", handle=box["handle"], faces=[top_tag], thickness=0)
+            assert False, "thickness <= 0 must raise"
+        except WorkerError:
+            pass
+        try:
+            w.call("shell_solid", handle=box["handle"], faces=[], thickness=2.0)
+            assert False, "empty faces must raise"
+        except WorkerError:
+            pass
+
+
+def test_add_thread():
+    with Worker() as w:
+        w.call("new_document", name="t")
+        # External M8 coarse: diameter=8, pitch=1.25, length=10.
+        r = w.call("add_thread", diameter=8.0, pitch=1.25, length=10.0)
+        assert r["handle"].startswith("thread_"), r
+        assert r["modeled"] is True, r
+        assert r["volume"] > 0, r
+        assert r["major_diameter"] == 8.0, r
+        assert r["minor_diameter"] < 8.0, r            # root is below the crest
+        assert abs(r["minor_diameter"] - 6.6469) < 0.01, r  # 8 - 1.0825*1.25
+        assert r["pitch"] == 1.25 and r["length"] == 10.0 and r["starts"] == 1, r
+
+        # Confirm the swept solid is genuinely valid by re-measuring it.
+        m = w.call("mass_properties", handle=r["handle"])
+        assert m["volume_mm3"] > 0, m
+        # Volume must exceed the bare minor-radius core (the rib added material).
+        import math
+        core = math.pi * (r["minor_diameter"] / 2.0) ** 2 * 10.0
+        assert m["volume_mm3"] > core, (m, core)
+
+        # Internal tap tool and multi-start variant must also produce valid solids.
+        ri = w.call("add_thread", diameter=8.0, pitch=1.25, length=10.0, internal=True)
+        assert ri["internal"] is True and ri["modeled"] is True and ri["volume"] > 0, ri
+        r2 = w.call("add_thread", diameter=10.0, pitch=1.5, length=12.0, starts=2)
+        assert r2["starts"] == 2 and r2["modeled"] is True and r2["volume"] > 0, r2
+
+        # Bad inputs raise.
+        try:
+            w.call("add_thread", diameter=0, pitch=1.25, length=10.0)
+            assert False, "expected ValueError for diameter<=0"
+        except WorkerError:
+            pass
+
+
+def test_engrave_text():
+    """Engrave 'M3' into the +Z face of a 20^3 box: result volume drops below the
+    box volume and the handle is a text_ handle. Emboss raises it above. Skips
+    cleanly if no system TrueType font is available."""
+    import os
+
+    font = None
+    for cand in ("/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/Library/Fonts/Arial.ttf",
+                 "/System/Library/Fonts/Helvetica.ttc"):
+        if os.path.isfile(cand):
+            font = cand
+            break
+    if font is None:
+        print("SKIP test_engrave_text: no system TrueType font found")
+        return
+
+    with Worker() as w:
+        w.call("new_document", name="engrave")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        box_vol = w.call("mass_properties", handle=box["handle"])["volume_mm3"]
+
+        # Tag the +Z face (mirror test_list_faces_box) and engrave into it.
+        faces = w.call("list_faces", handle=box["handle"])
+        top = [f for f in faces if f.get("normal") == [0.0, 0.0, 1.0]]
+        assert len(top) == 1, f"expected one +Z face, got {len(top)}"
+        top_tag = top[0]["tag"]
+
+        r = w.call("engrave_text", handle=box["handle"], face=top_tag,
+                   text="M3", size=5.0, depth=0.5, mode="engrave")
+        assert r["handle"].startswith("text_"), f"handle should be text_*, got {r}"
+        assert r["text"] == "M3", r
+        assert r["mode"] == "engrave", r
+        assert r["volume"] < box_vol, (
+            f"engrave should remove material: {r['volume']} !< {box_vol}"
+        )
+        assert r["volume"] > 0, r
+
+        # Emboss on a fresh box raises material above the surface.
+        w.call("new_document", name="emboss")
+        box2 = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        box2_vol = w.call("mass_properties", handle=box2["handle"])["volume_mm3"]
+        faces2 = w.call("list_faces", handle=box2["handle"])
+        top2 = [f for f in faces2 if f.get("normal") == [0.0, 0.0, 1.0]][0]
+        r2 = w.call("engrave_text", handle=box2["handle"], face=top2["tag"],
+                    text="AB", size=5.0, depth=1.0, mode="emboss")
+        assert r2["handle"].startswith("text_"), r2
+        assert r2["mode"] == "emboss", r2
+        assert r2["volume"] > box2_vol, (
+            f"emboss should add material: {r2['volume']} !> {box2_vol}"
+        )
+
+        # A bad mode is a clean, recoverable error.
+        try:
+            w.call("engrave_text", handle=box2["handle"], face=top2["tag"],
+                   text="X", mode="bogus")
+            assert False, "expected WorkerError for bad mode"
+        except WorkerError:
+            pass
+
+
+def test_add_rib():
+    """Build a U-channel body (two parallel walls + a floor), then add a rib
+    spanning between the walls from an open spine line. The rib must fuse in and
+    grow the body volume. PartDesign::Rib is unavailable headless, so the worker
+    falls back to a midplane pad of the offset spine — this exercises that path."""
+    with Worker() as w:
+        w.call("new_document", name="rib")
+        body = w.call("make_body")
+
+        # Base: pad a U-shaped profile -> two uprights (x in [-20,-12] and
+        # [12,20]) joined by a floor (y in [0,8]), 10 mm thick.
+        sk1 = w.call("make_sketch", body=body["handle"], plane="XY")
+        u_pts = [
+            (-20, 0), (20, 0), (20, 30), (12, 30), (12, 8),
+            (-12, 8), (-12, 30), (-20, 30), (-20, 0),
+        ]
+        u_items = [
+            {"type": "line", "start": list(u_pts[i]), "end": list(u_pts[i + 1])}
+            for i in range(len(u_pts) - 1)
+        ]
+        w.call("add_sketch_geometry", sketch=sk1["handle"], items=u_items)
+        pad_r = w.call("pad", sketch=sk1["handle"], length=10.0)
+        base_vol = pad_r["volume"]
+        assert base_vol > 0, pad_r
+
+        # Open spine: a single line bridging the two walls at y=20.
+        sk2 = w.call("make_sketch", body=body["handle"], plane="XY")
+        w.call(
+            "add_sketch_geometry",
+            sketch=sk2["handle"],
+            items=[{"type": "line", "start": [-12, 20], "end": [12, 20]}],
+        )
+
+        r = w.call("add_rib", body=body["handle"], sketch=sk2["handle"], thickness=4.0)
+        assert r["handle"].startswith("rib_"), r
+        assert r["thickness"] == 4.0, r
+        assert r["volume"] > base_vol, (
+            f"rib should add material: body {base_vol:.1f} -> {r['volume']:.1f}"
+        )
+
+        # A closed-loop profile is not a valid rib spine -> ValueError.
+        sk3 = w.call("make_sketch", body=body["handle"], plane="XY")
+        box_pts = [(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)]
+        box_items = [
+            {"type": "line", "start": list(box_pts[i]), "end": list(box_pts[i + 1])}
+            for i in range(len(box_pts) - 1)
+        ]
+        w.call("add_sketch_geometry", sketch=sk3["handle"], items=box_items)
+        try:
+            w.call("add_rib", body=body["handle"], sketch=sk3["handle"], thickness=2.0)
+            assert False, "closed profile should have raised"
+        except WorkerError:
+            pass
+
+
+def test_transform():
+    """Box 20^3: translate [10,0,0] shifts CoM x 10->20; then rotate 90 deg about
+    Z maps the X-extent 0..20 to -20..0 (bbox swap), placement angle_deg == 90."""
+    with Worker() as w:
+        w.call("new_document", name="xf")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+
+        r = w.call("transform", handle=box["handle"], translate=[10, 0, 0])
+        assert r["handle"] == box["handle"], r
+        assert abs(r["placement"]["base"][0] - 10.0) < 1e-6, r
+        mp = w.call("mass_properties", handle=box["handle"])
+        assert abs(mp["center_of_mass_mm"][0] - 20.0) < 1e-3, mp
+
+        r2 = w.call("transform", handle=box["handle"], rotate_axis=[0, 0, 1], angle=90)
+        assert abs(r2["placement"]["angle_deg"] - 90.0) < 1e-3, r2
+        mp2 = w.call("mass_properties", handle=box["handle"])
+        bb = mp2["bounding_box_mm"]  # [xmin, ymin, zmin, xmax, ymax, zmax]
+        assert abs(bb[0] - (-20.0)) < 1e-3 and abs(bb[3] - 0.0) < 1e-3, mp2
+        assert abs(bb[1] - 10.0) < 1e-3 and abs(bb[4] - 30.0) < 1e-3, mp2
+
+
+def test_scale_shape():
+    """Uniform scale of a 10^3 box (vol 1000) by 2 -> vol ~8000; per-axis
+    [2,3,4] -> vol ~24000; center-pivot scale keeps the pivot fixed."""
+    with Worker() as w:
+        w.call("new_document", name="scale")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        assert abs(box["volume"] - 1000.0) < 1e-6, box
+
+        u = w.call("scale_shape", handle=box["handle"], factor=2.0)
+        assert u["handle"].startswith("scaled_"), u["handle"]
+        assert abs(u["volume"] - 8000.0) < 1e-3, u["volume"]
+        assert u["factor"] == [2.0, 2.0, 2.0], u["factor"]
+
+        n = w.call("scale_shape", handle=box["handle"], factor=[2, 3, 4])
+        assert abs(n["volume"] - 24000.0) < 1e-3, n["volume"]
+
+        # center-pivot scale about the box center leaves volume scaled the same
+        c = w.call("scale_shape", handle=box["handle"], factor=2.0,
+                   center=[5, 5, 5])
+        assert abs(c["volume"] - 8000.0) < 1e-3, c["volume"]
+
+        # non-positive factors are rejected
+        try:
+            w.call("scale_shape", handle=box["handle"], factor=0)
+        except WorkerError:
+            pass
+        else:
+            raise AssertionError("expected WorkerError for factor <= 0")
+
+
+def test_copy_shape():
+    """20mm cube copied with placement [50,0,0]: two independent solids, copy
+    volume 8000 mm^3, copy CG x ≈ original (10) + 50 = 60; handle starts 'copy_'."""
+    with Worker() as w:
+        w.call("new_document", name="copy")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        src_mp = w.call("mass_properties", handle=box["handle"])
+        assert abs(src_mp["center_of_mass_mm"][0] - 10.0) < 1e-3, src_mp
+
+        cp = w.call("copy_shape", handle=box["handle"], placement=[50, 0, 0])
+        assert cp["handle"].startswith("copy_"), cp
+        assert abs(cp["volume"] - 8000.0) < 1e-3, cp
+
+        cp_mp = w.call("mass_properties", handle=cp["handle"])
+        assert abs(cp_mp["volume_mm3"] - 8000.0) < 1e-3, cp_mp
+        assert abs(cp_mp["center_of_mass_mm"][0] - 60.0) < 1e-3, cp_mp
+        # independent geometry: source unmoved after the copy
+        src_mp2 = w.call("mass_properties", handle=box["handle"])
+        assert abs(src_mp2["center_of_mass_mm"][0] - 10.0) < 1e-3, src_mp2
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
