@@ -891,9 +891,10 @@ def check_airtight_path(
     Inspection only: measures, returns no handle, mutates nothing.
 
     handle: the part to inspect.
-    inlet / outlet: a face reference (f_* tag, 'FaceN', or int index) naming each
-      port OPENING — the rim face around the hole. Both ports are sealed with cap
-      solids and the negative-space void is analysed.
+    inlet / outlet: a face reference naming each port OPENING (the rim face around
+      the hole) — an f_* tag, 'FaceN', int index, or a role/name declared with
+      annotate_face (e.g. "inlet"). Both ports are sealed with cap solids and the
+      negative-space void is analysed.
     min_aperture_mm2: optional minimum acceptable bottleneck cross-section; a
       connected-but-pinched path (a near-zero 'almond slit') then fails.
     pad_mm: optional bounding-box margin (default max(2.0, 0.05*diagonal)).
@@ -1740,6 +1741,56 @@ def publish_interface(handle: str, name: str, frame: dict) -> dict:
     Persists in the component's .FCStd as a JSON property bag, so merge_assembly
     can mate against it later. Returns {handle, name, frame, interfaces}."""
     return _call("publish_interface", handle=handle, name=name, frame=frame)
+
+
+@mcp.tool()
+def annotate_face(
+    handle: str,
+    face: str | int,
+    role: str,
+    name: str | None = None,
+    meta: dict | None = None,
+) -> dict:
+    """Declare the semantic ROLE of a face — what it is FOR — so later edits can be
+    checked against intent instead of re-derived from raw geometry. The role binds
+    to the face's stable f_* tag and persists in the .FCStd as a JSON property bag
+    (same mechanism as publish_interface); it survives save/reopen. Once declared,
+    check_airtight_path accepts the role/name directly (e.g. inlet="inlet").
+
+    handle: the part.
+    face: an f_* tag, 'FaceN', or int index of the face to annotate.
+    role: one of 'inlet' | 'outlet' | 'sealing' | 'wetted' | 'ambient' | 'mating'.
+    name: optional unique label for this annotation (default: the role, then
+      role_2, role_3, …); re-using a name updates that annotation.
+    meta: optional dict stored verbatim (e.g. {"spec": "32mm hose"}).
+
+    Returns a dict: {handle, name (the annotation key used), role, tag (the f_*
+    the role is bound to), index ('FaceN' at annotation time), roles (sorted list
+    of all annotation names now on the part)}."""
+    params = {"handle": handle, "face": face, "role": role}
+    if name is not None:
+        params["name"] = name
+    if meta is not None:
+        params["meta"] = meta
+    return _call("annotate_face", **params)
+
+
+@mcp.tool()
+def list_face_roles(handle: str) -> list:
+    """Read back the semantic face roles declared on a part (see annotate_face).
+
+    Each entry re-resolves its stored tag against the CURRENT geometry, so a
+    drifted or deleted face is reported rather than silently resolving wrong.
+
+    Returns a list (sorted by name) of dicts:
+      name    (str)   the annotation key
+      role    (str)   inlet | outlet | sealing | wetted | ambient | mating
+      tag     (str)   the f_* face tag the role is bound to
+      present (bool)  whether that tag still resolves on the current shape
+      index   (str)   'FaceN' on the current shape (only when present)
+      meta    (dict)  the verbatim metadata (only when set)
+    """
+    return _call("list_face_roles", handle=handle)
 
 
 @mcp.tool()

@@ -3596,6 +3596,98 @@ def test_check_airtight_same_face_rejected():
         assert w.call("ping") == "pong", "worker poisoned by the rejected call"
 
 
+# --- annotate_face / face roles (issue #19, slice 2) -------------------------
+
+def test_annotate_face_and_role_resolution():
+    """Declare inlet/outlet roles, read them back, and drive check_airtight_path
+    by role name — the result must match driving it by raw tag."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "good")
+        a = w.call("annotate_face", handle=h, face=inlet, role="inlet", name="window")
+        b = w.call("annotate_face", handle=h, face=outlet, role="outlet", name="barb")
+        assert a["role"] == "inlet" and a["tag"] == inlet, a
+        assert sorted(b["roles"]) == ["barb", "window"], b
+
+        roles = w.call("list_face_roles", handle=h)
+        assert {r["name"]: r["role"] for r in roles} == {"window": "inlet", "barb": "outlet"}
+        assert all(r["present"] for r in roles), roles
+
+        by_tag = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet)
+        by_role = w.call("check_airtight_path", handle=h, inlet="inlet", outlet="outlet")
+        by_name = w.call("check_airtight_path", handle=h, inlet="window", outlet="barb")
+        assert by_role == by_tag, (by_role, by_tag)
+        assert by_name == by_tag, (by_name, by_tag)
+        assert by_role["ok"] is True, by_role
+
+
+def test_annotate_face_persists_across_save():
+    """Roles are stored in the .FCStd and survive save -> reopen, and role-name
+    resolution still works in a fresh worker."""
+    import tempfile, os
+    path = os.path.join(tempfile.mkdtemp(), "annotated.FCStd")
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "good")
+        w.call("annotate_face", handle=h, face=inlet, role="inlet", name="window",
+               meta={"spec": "router window"})
+        w.call("annotate_face", handle=h, face=outlet, role="outlet", name="barb")
+        w.call("save_document", path=path)
+
+    with Worker() as w2:
+        w2.call("open_document", path=path)
+        h2 = w2.call("register_handle", object="Adapter", prefix="p")["handle"]
+        roles = w2.call("list_face_roles", handle=h2)
+        assert {r["name"] for r in roles} == {"window", "barb"}, roles
+        assert all(r["present"] for r in roles), roles
+        meta = next(r.get("meta") for r in roles if r["name"] == "window")
+        assert meta == {"spec": "router window"}, roles
+        res = w2.call("check_airtight_path", handle=h2, inlet="inlet", outlet="outlet")
+        assert res["connected"] is True and res["ok"] is True, res
+
+
+def test_annotate_face_invalid_role_rejected():
+    """An unknown role is a usage error listing the valid set, not a silent pass."""
+    with Worker() as w:
+        h, inlet, _ = _build_adapter(w, "good")
+        try:
+            w.call("annotate_face", handle=h, face=inlet, role="intlet")
+        except WorkerError as e:
+            assert "inlet" in str(e) and "intlet" in str(e), e
+        else:
+            assert False, "expected an error for an unknown role"
+        assert w.call("ping") == "pong"
+
+
+def test_annotate_face_autonames():
+    """Omitting name defaults to the role, then role_2, role_3 for repeats."""
+    with Worker() as w:
+        w.call("new_document", name="autoname")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        h = box["handle"]
+        faces = w.call("list_faces", handle=h)
+        a = w.call("annotate_face", handle=h, face=faces[0]["tag"], role="sealing")
+        b = w.call("annotate_face", handle=h, face=faces[1]["tag"], role="sealing")
+        assert a["name"] == "sealing" and b["name"] == "sealing_2", (a, b)
+
+
+def test_face_role_drift_detected():
+    """When an edit changes a tagged face, list_face_roles reports present=False —
+    the cheap drift signal the regression gate (slice 4) will build on."""
+    with Worker() as w:
+        w.call("new_document", name="drift")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        h = box["handle"]
+        topz = w.call("query_faces", handle=h,
+                      predicate={"type": "planar", "normal_dir": [0, 0, 1]})[0]["tag"]
+        w.call("annotate_face", handle=h, face=topz, role="sealing", name="lid")
+        assert w.call("list_face_roles", handle=h)[0]["present"] is True
+        # shrink the box: the annotated +Z face (area 100) no longer exists
+        w.call("run_script", code=(
+            "o = App.ActiveDocument.getObject('Box'); o.Width = 8.0; o.Length = 8.0; "
+            "App.ActiveDocument.recompute()"))
+        after = w.call("list_face_roles", handle=h)
+        assert after[0]["present"] is False, after
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

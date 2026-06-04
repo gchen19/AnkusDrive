@@ -1916,8 +1916,10 @@ def _h_section_view(p):
 
 
 def _resolve_port_face(handle, shape, ref, label):
-    """A face reference (f_* tag, 'FaceN', or int index) -> (Face, 1-based index).
-    Mirrors the inline resolution in oring_groove / fillet_edges."""
+    """A face reference -> (Face, 1-based index). Accepts an f_* tag, a 'FaceN'
+    string, an int index, or — once roles are declared with annotate_face — a
+    face-role NAME or ROLE string (resolved through DP_FaceRoles via the stored
+    tag, so it survives edits). Mirrors the inline resolution in oring_groove."""
     if ref is None:
         raise ValueError(f"{label} face reference is required")
     if isinstance(ref, str) and ref.startswith("f_"):
@@ -1925,7 +1927,10 @@ def _resolve_port_face(handle, shape, ref, label):
     elif isinstance(ref, str) and ref.startswith("Face"):
         idx = int(ref[len("Face"):])
     else:
-        idx = int(ref)
+        try:
+            idx = int(ref)
+        except (TypeError, ValueError):
+            idx = _resolve_face_role(handle, ref, label)
     if idx < 1 or idx > len(shape.Faces):
         raise ValueError(f"{label} face index {idx} out of range (1..{len(shape.Faces)})")
     return shape.Faces[idx - 1], idx
@@ -1971,10 +1976,11 @@ def _h_check_airtight_path(p):
     check_shape's watertight verdict CANNOT tell you — a watertight solid can
     still have a blocked path or a hidden leak. Pure inspection: mutates nothing.
 
-    inlet / outlet: a face reference on `handle` — an f_* tag, 'FaceN', or an int
-        index — naming each port OPENING (the rim face around the hole). The check
-        seals both ports with cap solids, builds the negative-space void as
-        padded_bbox.cut(capped), and classifies the result.
+    inlet / outlet: a face reference on `handle` naming each port OPENING (the rim
+        face around the hole) — an f_* tag, 'FaceN', an int index, or a role/name
+        declared with annotate_face (e.g. "inlet"). The check seals both ports with
+        cap solids, builds the negative-space void as padded_bbox.cut(capped), and
+        classifies the result.
     min_aperture_mm2 (optional): minimum acceptable bottleneck cross-section. When
         given, a connected-but-pinched path (a near-zero 'almond slit') fails.
     pad_mm (optional): bounding-box margin for the void box (default
@@ -4044,6 +4050,141 @@ def _h_publish_interface(p):
     base.Document.recompute()
     return {"handle": p["handle"], "name": name, "frame": frame,
             "interfaces": sorted(ifaces.keys())}
+
+
+# --- semantic face roles (issue #19) -----------------------------------------
+#
+# Declare WHAT a face is FOR — "inlet", "outlet", "sealing", ... — so later edits
+# can be checked against intent instead of re-derived from raw geometry. Roles
+# bind to the stable f_* face tag (which survives edits) and persist as a JSON
+# property bag, mirroring publish_interface's DP_Interfaces exactly. The stored
+# signature snapshot lets a later check (verify_intent, slice 4) detect a tagged
+# face that has drifted or vanished. check_airtight_path resolves a role/name
+# string back to the current face through the stored tag.
+
+_FACEROLE_PROP = "DP_FaceRoles"
+_FACE_ROLES = ("inlet", "outlet", "sealing", "wetted", "ambient", "mating")
+
+
+def _read_face_roles(obj):
+    """Declared face-role dict for an object ({} if none)."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _FACEROLE_PROP in base.PropertiesList:
+        try:
+            return _json.loads(getattr(base, _FACEROLE_PROP) or "{}")
+        except Exception:
+            return {}
+    return {}
+
+
+def _unique_role_name(roles, role):
+    """A free key for a new annotation: the role itself, else role_2, role_3, …"""
+    if role not in roles:
+        return role
+    i = 2
+    while f"{role}_{i}" in roles:
+        i += 1
+    return f"{role}_{i}"
+
+
+def _resolve_face_role(handle, ref, label):
+    """Resolve a face-role NAME (preferred) or ROLE string to a current 1-based
+    face index via the stored tag. Raises if unknown or (for a role) ambiguous."""
+    roles = _read_face_roles(_resolve(handle))
+    if not roles:
+        raise ValueError(
+            f"{label}={ref!r} is not a face tag/'FaceN'/index, and no face roles "
+            f"are declared on {handle!r} (use annotate_face first)"
+        )
+    if ref in roles:
+        tag = roles[ref]["tag"]
+    else:
+        matches = [n for n, e in roles.items() if e.get("role") == ref]
+        if not matches:
+            raise ValueError(
+                f"{label}={ref!r}: no annotation with that name or role "
+                f"(declared: {sorted(roles)})"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"{label} role {ref!r} is ambiguous across {sorted(matches)}; "
+                f"pass a specific annotation name or a face tag"
+            )
+        tag = roles[matches[0]]["tag"]
+    return int(_h_resolve_face({"handle": handle, "tag": tag})["index"][len("Face"):])
+
+
+@handler("annotate_face")
+def _h_annotate_face(p):
+    """Declare the semantic ROLE of a face — what it is FOR — so edits can be
+    checked against intent. Persists in the .FCStd as a JSON property bag keyed by
+    a unique annotation name; survives save/reopen. The role binds to the face's
+    stable f_* tag, and a signature snapshot is stored so a later check can flag a
+    tagged face that has drifted or vanished.
+
+    handle: the part.
+    face: an f_* tag, 'FaceN', or int index of the face to annotate.
+    role: one of inlet | outlet | sealing | wetted | ambient | mating.
+    name: optional unique label for this annotation (default: the role, then
+        role_2, role_3, …). Re-using a name updates that annotation.
+    meta: optional dict stored verbatim (e.g. {"spec": "32mm hose", "od": 32}).
+
+    Returns {handle, name, role, tag, index, roles} — roles is the sorted list of
+    all annotation names now on the part."""
+    import json as _json
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    face, idx = _resolve_port_face(handle, shape, p.get("face"), "face")
+    role = p.get("role")
+    if role not in _FACE_ROLES:
+        raise ValueError(f"role {role!r} not in {list(_FACE_ROLES)}")
+    sig = _face_signature(face)
+    tag = f"f_{_hash_sig(sig)}"
+    roles = _read_face_roles(obj)
+    name = p.get("name") or _unique_role_name(roles, role)
+    entry = {"role": role, "tag": tag, "index": f"Face{idx}", "signature": sig}
+    meta = p.get("meta")
+    if meta:
+        entry["meta"] = meta
+    roles[name] = entry
+    base = _shaped_top(obj)
+    if _FACEROLE_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _FACEROLE_PROP, "DriftPin",
+                         "semantic face roles (JSON)")
+    setattr(base, _FACEROLE_PROP, _json.dumps(roles))
+    base.Document.recompute()
+    return {"handle": handle, "name": name, "role": role, "tag": tag,
+            "index": f"Face{idx}", "roles": sorted(roles)}
+
+
+@handler("list_face_roles")
+def _h_list_face_roles(p):
+    """Read back the semantic face roles declared on a part (see annotate_face).
+    Each entry re-resolves its stored tag against the CURRENT geometry, so
+    `present` is False when the tagged face has drifted or vanished since it was
+    annotated — the cheap drift signal the regression gate builds on.
+
+    Returns a list of {name, role, tag, present, index?, meta?}, sorted by name."""
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    roles = _read_face_roles(obj)
+    current = {f"f_{_hash_sig(_face_signature(f))}" for f in shape.Faces}
+    out = []
+    for name in sorted(roles):
+        e = roles[name]
+        tag = e.get("tag")
+        item = {"name": name, "role": e.get("role"), "tag": tag,
+                "present": tag in current}
+        if item["present"]:
+            try:
+                item["index"] = _h_resolve_face({"handle": handle, "tag": tag})["index"]
+            except Exception:
+                item["present"] = False
+        if "meta" in e:
+            item["meta"] = e["meta"]
+        out.append(item)
+    return out
 
 
 def _apply_mate(link, parent_link, child_iface, parent_iface):
