@@ -4662,6 +4662,77 @@ def _apply_render_material(doc, view, material_name):
     return mat
 
 
+def _require_render():
+    """Import the FreeCAD Render workbench, or raise with cross-platform install
+    guidance. Returns the Render module."""
+    try:
+        import Render
+        return Render
+    except Exception as e:
+        raise RuntimeError(
+            "FreeCAD Render workbench not importable. Install it by cloning "
+            "https://github.com/FreeCAD/FreeCAD-render into "
+            f"{os.path.join(App.getUserAppDataDir(), 'Mod', 'Render')} "
+            f"(or via the Addon Manager). Underlying error: {e!r}"
+        )
+
+
+def _parse_render_request(p):
+    """Validate render_photoreal params and resolve the renderer binary (setting
+    its FreeCAD param). Returns a dict of normalized parameters. Shared by the
+    blocking and async handlers."""
+    src = _resolve(p["handle"])
+    if not hasattr(src, "Shape"):
+        raise TypeError(f"handle {p['handle']!r} has no Shape to render")
+    width = int(p.get("width", 800))
+    height = int(p.get("height", 600))
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive")
+    renderer = p.get("renderer", "Povray")
+    exec_path = _resolve_renderer_exec(renderer)     # validates renderer + sets param
+    return {
+        "src": src,
+        "renderer": renderer,
+        "view": p.get("view", "iso"),
+        "width": width,
+        "height": height,
+        "material": p.get("material") or None,       # None -> default gray material
+        "template": p.get("template") or _RENDERERS[renderer]["template"],
+        "exec_path": exec_path,
+    }
+
+
+def _setup_render_project(tmp, req):
+    """Build the Render Project/Camera/View graph for req['src'] in document tmp.
+    Returns the project fpo (call proj.Proxy.render(...) on it). Shared by the
+    blocking and async handlers; assumes tmp is the active document."""
+    Render = _require_render()
+    feat = tmp.addObject("Part::Feature", "RenderTarget")
+    feat.Shape = req["src"].Shape.copy()
+    tmp.recompute()
+
+    proj_proxy, proj, _ = Render.Project.create(
+        tmp, renderer=req["renderer"], template=req["template"]
+    )
+    proj.RenderWidth = req["width"]
+    proj.RenderHeight = req["height"]
+    if _RENDERERS[req["renderer"]].get("batch") and hasattr(proj, "BatchMode"):
+        proj.BatchMode = True                        # headless console binary (e.g. LuxCore)
+
+    _, cam, _ = Render.Camera.create(tmp)
+    cam.Projection = "Perspective"
+    cam.Placement = _placement_from_view(req["view"], feat)
+
+    proj_proxy.add_views([cam, feat])
+    if req["material"]:
+        # add_views wraps feat in a View object; link the material to it.
+        for v in proj_proxy.all_views():
+            if getattr(v, "Source", None) is feat:
+                _apply_render_material(tmp, v, req["material"])
+    tmp.recompute()
+    return proj
+
+
 @handler("render_photoreal")
 def _h_render_photoreal(p):
     """Photorealistic render of a shaped object via the FreeCAD Render workbench
@@ -4673,80 +4744,37 @@ def _h_render_photoreal(p):
     'Glass', 'Aluminium', 'GlossyPlastic'); omitted -> default gray material. An
     unknown name raises ValueError listing the available cards.
 
-    Presentation-only: photoreal output is not bit-reproducible (sampler noise,
-    thread count), so this stays out of the reliability/golden tests.
+    Blocks until the render finishes; for long renders use render_photoreal_submit
+    + render_job. Presentation-only: photoreal output is not bit-reproducible
+    (sampler noise, thread count), so this stays out of the reliability/golden tests.
     """
     import base64
-    try:
-        import Render
-    except Exception as e:
-        raise RuntimeError(
-            "FreeCAD Render workbench not importable. Install it by cloning "
-            "https://github.com/FreeCAD/FreeCAD-render into "
-            f"{os.path.join(App.getUserAppDataDir(), 'Mod', 'Render')} "
-            f"(or via the Addon Manager). Underlying error: {e!r}"
-        )
-
-    src = _resolve(p["handle"])
-    if not hasattr(src, "Shape"):
-        raise TypeError(f"handle {p['handle']!r} has no Shape to render")
-    renderer = p.get("renderer", "Povray")
-    view = p.get("view", "iso")
-    width = int(p.get("width", 800))
-    height = int(p.get("height", 600))
-    material = p.get("material") or None             # None -> default gray material
-    if width <= 0 or height <= 0:
-        raise ValueError("width and height must be positive")
-    exec_path = _resolve_renderer_exec(renderer)     # validates renderer + sets param
-    template = p.get("template") or _RENDERERS[renderer]["template"]
-
-    # Render in an isolated temp document: copy the shape in, build the scene
-    # there, render, then close it. Keeps the user's live document untouched (no
-    # Project/Camera/View objects leaking into their model or their saved .FCStd).
+    _require_render()
+    req = _parse_render_request(p)
+    # Render in an isolated temp document: build the scene there, render, then close
+    # it. Keeps the user's live document untouched (no Project/Camera/View objects
+    # leaking into their model or their saved .FCStd).
     prev_active = App.ActiveDocument.Name if App.ActiveDocument else None
     tmp = App.newDocument("driftpin_render")
     try:
-        feat = tmp.addObject("Part::Feature", "RenderTarget")
-        feat.Shape = src.Shape.copy()
-        tmp.recompute()
-
-        proj_proxy, proj, _ = Render.Project.create(
-            tmp, renderer=renderer, template=template
-        )
-        proj.RenderWidth = width
-        proj.RenderHeight = height
-        if _RENDERERS[renderer].get("batch") and hasattr(proj, "BatchMode"):
-            proj.BatchMode = True                    # headless console binary (e.g. LuxCore)
-
-        _, cam, _ = Render.Camera.create(tmp)
-        cam.Projection = "Perspective"
-        cam.Placement = _placement_from_view(view, feat)
-
-        proj_proxy.add_views([cam, feat])
-        if material:
-            # add_views wraps feat in a View object; link the material to it.
-            for v in proj_proxy.all_views():
-                if getattr(v, "Source", None) is feat:
-                    _apply_render_material(tmp, v, material)
-        tmp.recompute()
-
+        proj = _setup_render_project(tmp, req)
         out = proj.Proxy.render(wait_for_completion=True)
         if not out or not os.path.isfile(out):
             raise RuntimeError(
-                f"renderer {renderer!r} (exec {exec_path!r}) produced no output "
-                "image. Check that the renderer runs headless on this platform "
-                "(see the FreeCAD report log)."
+                f"renderer {req['renderer']!r} (exec {req['exec_path']!r}) produced "
+                "no output image. Check that the renderer runs headless on this "
+                "platform (see the FreeCAD report log)."
             )
         with open(out, "rb") as f:
             data = f.read()
         return {
             "png_base64": base64.b64encode(data).decode("ascii"),
             "png_path": out,
-            "renderer": renderer,
-            "view": view,
-            "material": material,
-            "width": width,
-            "height": height,
+            "renderer": req["renderer"],
+            "view": req["view"],
+            "material": req["material"],
+            "width": req["width"],
+            "height": req["height"],
         }
     finally:
         try:
@@ -4755,6 +4783,115 @@ def _h_render_photoreal(p):
             pass
         if prev_active and App.getDocument(prev_active) is not None:
             App.setActiveDocument(prev_active)
+
+
+# Async render jobs. render_photoreal_submit launches the external renderer via the
+# Render workbench's headless executor (RendererExecutorCli — a plain threading.Thread
+# that runs ONLY the renderer subprocess; the FreeCAD scene export already ran in the
+# calling thread before launch, so there is no cross-thread FreeCAD access). The job
+# keeps its temp document open until the result is collected, because the renderer
+# reads exported scene files from the doc's TransientDir. Jobs persist for the worker
+# session, like _handles.
+_render_jobs = {}
+
+
+def _close_render_job_doc(job):
+    name = job.pop("doc", None)
+    if name and App.getDocument(name) is not None:
+        try:
+            App.closeDocument(name)
+        except Exception:
+            pass
+
+
+def _refresh_render_job(job):
+    """Advance a running job: poll its executor thread, and once finished cache the
+    PNG (base64) and close the temp document. No-op for already-finished jobs."""
+    import base64
+    if job["status"] != "running":
+        return
+    thread = job.get("thread")
+    if thread is not None and thread.is_alive():
+        return                                       # renderer still running
+    out = job["out_path"]
+    if os.path.isfile(out) and os.path.getsize(out) > 0:
+        with open(out, "rb") as f:
+            job["png_base64"] = base64.b64encode(f.read()).decode("ascii")
+        job["status"] = "done"
+    elif thread is None and not os.path.isfile(out):
+        return                                       # untrackable + no output yet -> still running
+    else:
+        job["status"] = "failed"
+        job["error"] = (
+            f"renderer {job['renderer']!r} finished without producing an output image"
+        )
+    _close_render_job_doc(job)
+
+
+@handler("render_photoreal_submit")
+def _h_render_photoreal_submit(p):
+    """Start a photoreal render asynchronously and return immediately, so a long
+    external render does not block the worker. Same params as render_photoreal.
+    Returns {job_id, status}; poll render_job(job_id) for the result."""
+    import threading
+    _require_render()
+    req = _parse_render_request(p)
+    prev_active = App.ActiveDocument.Name if App.ActiveDocument else None
+    tmp = App.newDocument("driftpin_render")
+    try:
+        proj = _setup_render_project(tmp, req)
+        before = set(threading.enumerate())
+        out = proj.Proxy.render(wait_for_completion=False)   # launches executor thread
+        new_threads = [t for t in threading.enumerate() if t not in before]
+    except Exception:
+        try:
+            App.closeDocument(tmp.Name)
+        except Exception:
+            pass
+        raise
+    finally:
+        if prev_active and App.getDocument(prev_active) is not None:
+            App.setActiveDocument(prev_active)
+    job_id = _new_handle("render_job")
+    _render_jobs[job_id] = {
+        "status": "running",
+        "thread": new_threads[0] if new_threads else None,
+        "doc": tmp.Name,
+        "out_path": out,
+        "renderer": req["renderer"],
+        "view": req["view"],
+        "material": req["material"],
+        "width": req["width"],
+        "height": req["height"],
+    }
+    return {"job_id": job_id, "status": "running"}
+
+
+@handler("render_job")
+def _h_render_job(p):
+    """Poll an async render started by render_photoreal_submit. Returns
+    {job_id, status} with status 'running' | 'done' | 'failed'. When 'done', also
+    returns {png_base64, png_path, renderer, view, material, width, height}; when
+    'failed', {error}. The result stays available for repeat polls."""
+    job_id = p["job_id"]
+    job = _render_jobs.get(job_id)
+    if job is None:
+        raise KeyError(f"unknown render job: {job_id!r}")
+    _refresh_render_job(job)
+    out = {"job_id": job_id, "status": job["status"]}
+    if job["status"] == "done":
+        out.update({
+            "png_base64": job["png_base64"],
+            "png_path": job["out_path"],
+            "renderer": job["renderer"],
+            "view": job["view"],
+            "material": job["material"],
+            "width": job["width"],
+            "height": job["height"],
+        })
+    elif job["status"] == "failed":
+        out["error"] = job.get("error", "render failed")
+    return out
 
 
 # --- FEM (decomposed) ---------------------------------------------------------

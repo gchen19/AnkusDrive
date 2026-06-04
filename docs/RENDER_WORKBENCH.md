@@ -10,11 +10,11 @@ worker and the MCP server, verified on Linux with FreeCAD 1.1.0 + POV-Ray 3.7.
 The addon and a renderer binary are still *optional at runtime* — DriftPin boots
 and runs without them, and the tool returns clear install guidance if they are
 absent (the renderer-gated tests skip rather than fail). It supports the Render
-addon's material library (the `material` argument — Gold, Glass, Aluminium, …) and a
-second renderer, LuxCore (`renderer="Luxcore"`). What it does **not** yet do — more
-renderers (Appleseed, Cycles) and an async/job variant for very long renders — is
-tracked in §7 as follow-ups. This doc doubles as the design record and the operator's
-install guide for all three platforms.
+addon's material library (the `material` argument — Gold, Glass, Aluminium, …), a
+second renderer (LuxCore, `renderer="Luxcore"`), and a non-blocking job API
+(`render_photoreal_submit` + `render_job`) for long renders. What it does **not** yet
+do — more renderers (Appleseed, Cycles) — is tracked in §7 as follow-ups. This doc
+doubles as the design record and the operator's install guide for all three platforms.
 
 ---
 
@@ -186,11 +186,35 @@ def render_photoreal(handle, renderer="Povray", view="iso",
                  material=material, width=width, height=height)
 ```
 
-- **Worker-call timeout raised to 600 s for this call.** `Worker.call` defaults to a
-  120 s timeout (`client.py`); an external render legitimately takes seconds to
-  minutes, and hitting that default raises `WorkerDied` and respawns a fresh worker,
-  destroying the live document. `_call` now threads an optional `_timeout`, and
-  `render_photoreal` passes 600 s.
+- **Worker-call timeout raised to 600 s for this (blocking) call.** `Worker.call`
+  defaults to a 120 s timeout (`client.py`); an external render legitimately takes
+  seconds to minutes, and hitting that default raises `WorkerDied` and respawns a
+  fresh worker, destroying the live document. `_call` now threads an optional
+  `_timeout`, and `render_photoreal` passes 600 s.
+
+### 5.3 Async jobs — `render_photoreal_submit` + `render_job`
+
+For renders that may exceed even 600 s — or simply to keep the worker responsive — a
+non-blocking job API runs alongside the blocking `render_photoreal`:
+
+- `render_photoreal_submit(...)` (same args) builds the scene synchronously and calls
+  `proj.Proxy.render(wait_for_completion=False)`, then returns `{job_id, status:
+  "running"}` immediately. `render_job(job_id)` polls → `{status: "running"}`, or when
+  finished `{status: "done", png_base64, …}` / `{status: "failed", error}`.
+- **Why this is thread-safe.** Headless, the workbench's executor is `RendererExecutorCli`
+  — a plain `threading.Thread` that runs *only* the renderer subprocess. The FreeCAD
+  scene export already happened in the calling thread *before* the thread starts, so
+  the background thread never touches the (non-thread-safe) FreeCAD document model. The
+  worker's main loop is free to serve other tool calls while the render runs (verified:
+  `ping` succeeds mid-render).
+- **Temp-doc lifetime.** Unlike the blocking path, the job keeps its temp document open
+  until the result is collected — the renderer reads exported scene files from the doc's
+  `TransientDir`. `render_job` closes the doc and caches the PNG once the render finishes.
+  Jobs persist for the worker session (like object handles); the result survives repeat
+  polls. The submit handler restores the previously-active document so the live session
+  is unaffected.
+- Completion is detected from the executor thread (`is_alive()`), captured by diffing
+  `threading.enumerate()` across the launch, with output-file existence as a fallback.
 
 ## 6. Prerequisites (cross-platform)
 
@@ -224,8 +248,11 @@ Resolved (were open questions in the proposal):
   everywhere; they only do real work on a box that provisions a renderer. They run in
   the self-hosted suite (`tests/run_all.sh`), alongside `test_render.py` — *not* the
   hosted nightly, which has neither Pillow nor a renderer.
-- **Worker blocking.** Mitigated for normal use by the 600 s call timeout (§5.2). A
-  true async/job variant remains a follow-up below.
+- **Worker blocking.** Resolved (§5.3). `render_photoreal_submit` + `render_job` give a
+  non-blocking job API — the external renderer runs in the workbench's headless
+  `threading.Thread`, the worker stays responsive (verified: `ping` mid-render), and
+  there is no hard time ceiling. Blocking `render_photoreal` (600 s cap) stays for the
+  common quick-render case.
 - **Renderer choice.** The handler is renderer-agnostic: adding one is a single entry
   in the `_RENDERERS` registry (param key, default template, binary names, per-OS dirs,
   optional `batch` flag). POV-Ray and **LuxCore** are wired; unknown renderers raise
@@ -246,7 +273,7 @@ Remaining follow-ups (not yet implemented):
 
 - **More renderers.** Appleseed and Cycles are the next candidates — each is a registry
   entry plus its own binary, following the POV-Ray/LuxCore pattern.
-- **Async/job variant.** For renders that exceed even 600 s, a non-blocking job API so
-  the worker isn't held hostage.
+- **Job lifecycle.** Async jobs persist for the worker session; a future cleanup/expiry
+  (or explicit discard) would bound memory if very many large renders are submitted.
 - **Upstream risk.** Decide if/when to fork or re-host the unmaintained addon, and what
   FreeCAD version range we commit to supporting (§2).

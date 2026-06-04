@@ -1887,6 +1887,42 @@ def render_photoreal(
 
 
 @mcp.tool()
+def render_photoreal_submit(
+    handle: str,
+    renderer: str = "Povray",
+    view: str = "iso",
+    material: str | None = None,
+    width: int = 800,
+    height: int = 600,
+) -> dict:
+    """Start a photorealistic render asynchronously; returns immediately with
+    {job_id, status} instead of blocking for the whole render.
+
+    Use this (rather than render_photoreal) for renders that may take a long time —
+    heavy materials/renderers, large images — so the worker stays responsive. The
+    external renderer runs in the background; poll render_job(job_id) until status is
+    'done' (then it returns the PNG) or 'failed'. Same arguments as render_photoreal;
+    requires the Render addon + a renderer binary (see docs/RENDER_WORKBENCH.md).
+    """
+    return _call(
+        "render_photoreal_submit",
+        handle=handle, renderer=renderer, view=view, material=material,
+        width=width, height=height,
+    )
+
+
+@mcp.tool()
+def render_job(job_id: str) -> dict:
+    """Poll an async render started by render_photoreal_submit.
+
+    Returns {job_id, status} where status is 'running', 'done', or 'failed'. When
+    'done', also returns {png_base64, png_path, renderer, view, material, width,
+    height}; when 'failed', {error}. The result remains available for repeat polls.
+    """
+    return _call("render_job", job_id=job_id)
+
+
+@mcp.tool()
 def fem_new_analysis(name: str = "Analysis") -> dict:
     """Create a Fem::FemAnalysis container. Returns {handle, name}."""
     return _call("fem_new_analysis", name=name)

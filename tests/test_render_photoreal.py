@@ -155,6 +155,49 @@ def test_photoreal_isolates_live_document():
         )
 
 
+def test_photoreal_async_job():
+    """render_photoreal_submit returns immediately and the worker stays responsive
+    (a ping succeeds mid-render); render_job polls to a valid non-blank PNG; and the
+    live document is left untouched (the temp doc is closed on completion)."""
+    with Worker() as w:
+        box = _box(w)
+        try:
+            sub = w.call("render_photoreal_submit", handle=box["handle"],
+                         width=400, height=300, _timeout=60.0)
+        except WorkerError as e:
+            if any(m in e.remote_message for m in _UNAVAILABLE_MARKERS):
+                raise _Skip(e.remote_message.splitlines()[0])
+            raise
+        assert sub["status"] == "running" and sub["job_id"]
+        assert w.call("ping") == "pong"          # worker responsive while rendering
+
+        res = None
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            res = w.call("render_job", job_id=sub["job_id"], _timeout=30.0)
+            if res["status"] != "running":
+                break
+            time.sleep(0.3)
+        assert res and res["status"] == "done", f"job did not finish: {res}"
+        png = base64.b64decode(res["png_base64"])
+        assert png[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+        assert np.asarray(Image.open(io.BytesIO(png)).convert("RGB")).std() > 3, "blank"
+        assert [o["type"] for o in w.call("list_objects")] == ["Part::Box"], \
+            "async render leaked objects into the live document"
+
+
+def test_render_job_unknown():
+    """Polling a nonexistent job id errors cleanly (independent of the renderer, so
+    this runs even without the addon installed)."""
+    with Worker() as w:
+        try:
+            w.call("render_job", job_id="render_job_does_not_exist", _timeout=30.0)
+        except WorkerError as e:
+            assert "unknown render job" in e.remote_message, e.remote_message
+            return
+        raise AssertionError("expected an error for an unknown job id")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
