@@ -1857,6 +1857,7 @@ def render_photoreal(
     handle: str,
     renderer: str = "Povray",
     view: str = "iso",
+    material: str | None = None,
     width: int = 800,
     height: int = 600,
 ) -> dict:
@@ -1869,7 +1870,10 @@ def render_photoreal(
     an isolated temporary document, so the live model is never modified.
 
     view: 'iso' | 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right' | 'side'.
-    Returns {png_base64, png_path, renderer, view, width, height}.
+    material: optional Render material library card — e.g. 'Gold', 'Glass',
+        'Aluminium', 'GlossyPlastic', 'RoughPlastic', 'Iron', 'Brass'. Omitted
+        gives a neutral default material; an unknown name raises with the full list.
+    Returns {png_base64, png_path, renderer, view, material, width, height}.
 
     Presentation-only: output is not bit-reproducible, so it is kept out of the
     reliability/golden tests. External renders can take seconds to minutes, so this
@@ -1877,7 +1881,8 @@ def render_photoreal(
     """
     return _call(
         "render_photoreal", _timeout=600.0,
-        handle=handle, renderer=renderer, view=view, width=width, height=height,
+        handle=handle, renderer=renderer, view=view, material=material,
+        width=width, height=height,
     )
 
 

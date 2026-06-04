@@ -4596,12 +4596,61 @@ def _resolve_renderer_exec(renderer):
     )
 
 
+def _available_render_materials():
+    """Sorted names of the material library cards shipped with the Render addon
+    (e.g. 'Gold', 'Glass', 'Aluminium', 'GlossyPlastic'). Empty if the addon's
+    materials dir is missing. Assumes `import Render` has already succeeded."""
+    from Render.constants import WBMATERIALDIR
+    if not os.path.isdir(WBMATERIALDIR):
+        return []
+    suffix = ".FCMat"
+    return sorted(
+        f[: -len(suffix)] for f in os.listdir(WBMATERIALDIR) if f.endswith(suffix)
+    )
+
+
+def _apply_render_material(doc, view, material_name):
+    """Load a Render material library card by name and link it to `view`.
+
+    Parses the .FCMat card (case-sensitive INI, all sections flattened into one
+    dict — the exact logic the addon's material chooser uses), creates a Render
+    Material object, imports any image textures, and links it via the View's
+    Material property. Raises ValueError listing the valid names if the card is
+    unknown. Assumes `import Render` has already succeeded.
+    """
+    import configparser
+    from Render.constants import WBMATERIALDIR
+    from Render.material import make_material
+
+    path = os.path.join(WBMATERIALDIR, material_name + ".FCMat")
+    if not os.path.isfile(path):
+        raise ValueError(
+            f"unknown render material {material_name!r}; available: "
+            f"{_available_render_materials()}"
+        )
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = lambda s: s                 # material card keys are case-sensitive
+    parser.read(path)
+    card = {key: value for section in parser.values() for key, value in section.items()}
+
+    mat = make_material(name=material_name, doc=doc)
+    # import_textures is a no-op for solid cards (metals, glass, plastics) and
+    # extracts image textures into child objects for textured cards (marble, etc.).
+    mat.Material = mat.Proxy.import_textures(card, WBMATERIALDIR)
+    view.Material = mat
+    return mat
+
+
 @handler("render_photoreal")
 def _h_render_photoreal(p):
     """Photorealistic render of a shaped object via the FreeCAD Render workbench
     (external renderer; POV-Ray by default). Renders in an isolated temporary
     document so the live model is never mutated, then returns
-    {png_base64, png_path, renderer, view, width, height}.
+    {png_base64, png_path, renderer, view, material, width, height}.
+
+    Optional `material` names a Render material library card (e.g. 'Gold',
+    'Glass', 'Aluminium', 'GlossyPlastic'); omitted -> default gray material. An
+    unknown name raises ValueError listing the available cards.
 
     Presentation-only: photoreal output is not bit-reproducible (sampler noise,
     thread count), so this stays out of the reliability/golden tests.
@@ -4624,6 +4673,7 @@ def _h_render_photoreal(p):
     view = p.get("view", "iso")
     width = int(p.get("width", 800))
     height = int(p.get("height", 600))
+    material = p.get("material") or None             # None -> default gray material
     if width <= 0 or height <= 0:
         raise ValueError("width and height must be positive")
     exec_path = _resolve_renderer_exec(renderer)     # validates renderer + sets param
@@ -4650,6 +4700,11 @@ def _h_render_photoreal(p):
         cam.Placement = _placement_from_view(view, feat)
 
         proj_proxy.add_views([cam, feat])
+        if material:
+            # add_views wraps feat in a View object; link the material to it.
+            for v in proj_proxy.all_views():
+                if getattr(v, "Source", None) is feat:
+                    _apply_render_material(tmp, v, material)
         tmp.recompute()
 
         out = proj.Proxy.render(wait_for_completion=True)
@@ -4666,6 +4721,7 @@ def _h_render_photoreal(p):
             "png_path": out,
             "renderer": renderer,
             "view": view,
+            "material": material,
             "width": width,
             "height": height,
         }

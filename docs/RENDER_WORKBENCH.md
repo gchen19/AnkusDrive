@@ -9,10 +9,11 @@ it as an MCP tool (`render_photoreal`) alongside the existing software-rasterize
 worker and the MCP server, verified on Linux with FreeCAD 1.1.0 + POV-Ray 3.7.
 The addon and a renderer binary are still *optional at runtime* — DriftPin boots
 and runs without them, and the tool returns clear install guidance if they are
-absent (the renderer-gated tests skip rather than fail). What it does **not** yet
-do — real materials, renderers other than POV-Ray, and an async/job variant for
-very long renders — is tracked in §7 as follow-ups. This doc doubles as the design
-record and the operator's install guide for all three platforms.
+absent (the renderer-gated tests skip rather than fail). It supports the Render
+addon's material library (the `material` argument — Gold, Glass, Aluminium, …).
+What it does **not** yet do — renderers other than POV-Ray, and an async/job variant
+for very long renders — is tracked in §7 as follow-ups. This doc doubles as the
+design record and the operator's install guide for all three platforms.
 
 ---
 
@@ -112,7 +113,7 @@ building scene state as `App` objects instead of borrowing it from a viewport:
 |---|---|---|
 | **Camera** | grabs `Gui.ActiveDocument.ActiveView.getCamera()` | No viewport → **adds an explicit `Camera` object and sets its `Placement`** via [`_placement_from_view`](../driftpin/worker.py) (pure `App.Vector` math mirroring `render.py`'s `_camera_basis`; see below). |
 | **Visibility filter** | renders only views with `ViewObject.Visibility` | Falls back to **all** views. No action needed. |
-| **Materials / colors** | reads `ViewObject.ShapeColor` etc. | No ViewObject colors → falls back to **default material**. Acceptable for Phase 1; real Render `Material` objects are a follow-up (§7). |
+| **Materials / colors** | reads `ViewObject.ShapeColor` etc. | No ViewObject colors → the optional `material` argument applies a real Render `Material` from the library (§5.1); omitted falls back to the **default material**. |
 
 Two harmless headless artifacts worth knowing:
 
@@ -151,8 +152,16 @@ decisions beyond the API corrections in §3:
   `App` document, builds the Project/Camera/View graph *there*, renders, reads the
   PNG, and closes the temp doc — restoring the previously active document. The user's
   live model is never mutated and no Render objects leak into their saved `.FCStd`.
-  (Trade-off: it renders the *shape*, so ViewObject colors/materials are dropped —
-  which headless has none of anyway, per §4.)
+  (Trade-off: it renders the *shape*, so any ViewObject colors are dropped — which
+  headless has none of anyway, per §4. Materials are applied explicitly instead;
+  see below.)
+- **Materials.** The optional `material` argument names a Render material library
+  card (e.g. `Gold`, `Glass`, `Aluminium`, `GlossyPlastic`). `_apply_render_material`
+  parses the `.FCMat` card (the same flattened-configparser read the addon's material
+  chooser uses), creates a Render `Material` object, imports any image textures, and
+  links it via the render target's `View.Material`. Omitting it keeps the neutral
+  default; an unknown name raises with the list of available cards. `_available_render_materials`
+  enumerates them from the addon's `materials/` dir.
 - **Cross-platform renderer resolution.** `_resolve_renderer_exec` finds the binary
   via, in order: `DRIFTPIN_<RENDERER>_PATH` env override → path already set in FreeCAD
   prefs → `PATH` (`shutil.which`, which honors Windows `PATHEXT`) → common per-OS
@@ -161,18 +170,19 @@ decisions beyond the API corrections in §3:
   `User parameter:BaseApp/Preferences/Mod/Render`** — *not* `RenderExecPath` as the
   proposal claimed, and the plugin does *not* fall back to `PATH`, so DriftPin must
   set it.
-- Returns `{png_base64, png_path, renderer, view, width, height}`.
+- Returns `{png_base64, png_path, renderer, view, material, width, height}`.
 
 ### 5.2 MCP tool — [`driftpin/mcp_server.py`](../driftpin/mcp_server.py)
 
 ```python
 @mcp.tool()
-def render_photoreal(handle, renderer="Povray", view="iso", width=800, height=600):
+def render_photoreal(handle, renderer="Povray", view="iso",
+                     material=None, width=800, height=600):
     """Photorealistic render via the FreeCAD Render workbench (external renderer).
-    Returns {png_base64, png_path, renderer, view, width, height}."""
+    Returns {png_base64, png_path, renderer, view, material, width, height}."""
     return _call("render_photoreal", _timeout=600.0,
                  handle=handle, renderer=renderer, view=view,
-                 width=width, height=height)
+                 material=material, width=width, height=height)
 ```
 
 - **Worker-call timeout raised to 600 s for this call.** `Worker.call` defaults to a
@@ -207,7 +217,8 @@ Resolved (were open questions in the proposal):
 - **Determinism.** Photoreal renders are not bit-reproducible, so `render_photoreal`
   stays *out* of the reliability/golden tests — it is presentation-only. Its tests
   ([`tests/test_render_photoreal.py`](../tests/test_render_photoreal.py)) assert
-  invariants (valid PNG, non-blank, `view=` changes the image, live doc untouched).
+  invariants (valid PNG, non-blank, `view=` changes the image, a `material=` card
+  changes the color, unknown material errors cleanly, live doc untouched).
 - **CI.** The tests **skip** when the addon/binary is absent (exit 0), so they're safe
   everywhere; they only do real work on a box that provisions a renderer. They run in
   the self-hosted suite (`tests/run_all.sh`), alongside `test_render.py` — *not* the
@@ -217,11 +228,15 @@ Resolved (were open questions in the proposal):
 - **Renderer choice.** POV-Ray-first, but the handler is renderer-agnostic: adding one
   is a single entry in the `_RENDERERS` registry (param key, default template, binary
   names, per-OS dirs). Unknown renderers raise with clear guidance.
+- **Materials.** Implemented — the `material` argument applies any of the addon's
+  library cards (metals, glass, plastics, marble, …) via `View.Material`, verified
+  visually (Gold renders yellow) and in tests. The card-driven `[Render]` sections are
+  renderer-agnostic, so this carries to other renderers as they're added. *Follow-ups:*
+  user-supplied colors/parameters beyond the shipped cards, and confirming textured
+  cards (marble, terrazzo) render their image maps under POV-Ray specifically.
 
-Remaining follow-ups (not in Phase 1):
+Remaining follow-ups (not yet implemented):
 
-- **Real materials.** Phase 1 uses the default material. A follow-up would create
-  Render `Material` `App`-objects and map DriftPin material metadata onto them.
 - **Other renderers.** Only POV-Ray is verified end-to-end. LuxCore (PBR) is the
   natural next target for quality.
 - **Async/job variant.** For renders that exceed even 600 s, a non-blocking job API so

@@ -59,6 +59,13 @@ def _img(res):
     return np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
 
 
+def _center_rgb(res):
+    """Mean RGB of the central third — the part, not the background."""
+    a = _img(res)
+    h, w, _ = a.shape
+    return a[h // 3:2 * h // 3, w // 3:2 * w // 3].reshape(-1, 3).mean(axis=0)
+
+
 # --- tests --------------------------------------------------------------------
 
 def test_photoreal_returns_valid_png():
@@ -92,6 +99,36 @@ def test_photoreal_view_changes_image():
             f"iso and front renders nearly identical (mean abs diff={diff:.2f}) — "
             "view parameter may not reach the camera"
         )
+
+
+def test_photoreal_material_changes_color():
+    """A material library card visibly changes the render: 'Gold' is yellow
+    (red channel well above blue), while the default material is neutral gray
+    (red ~= blue). Also confirms the chosen material is echoed back."""
+    with Worker() as w:
+        box = _box(w)
+        gold_res = _photoreal(w, box["handle"], material="Gold", width=240, height=180)
+        assert gold_res["material"] == "Gold"
+        gold = _center_rgb(gold_res)
+        dflt = _center_rgb(_photoreal(w, box["handle"], width=240, height=180))
+        assert gold[0] - gold[2] > 30, f"'Gold' not yellow enough: RGB={gold.round(1)}"
+        assert abs(dflt[0] - dflt[2]) < 10, f"default material not neutral: RGB={dflt.round(1)}"
+
+
+def test_photoreal_unknown_material_errors():
+    """An unknown material name fails with a listing of the valid cards (rather
+    than rendering something wrong or crashing)."""
+    with Worker() as w:
+        box = _box(w)
+        try:
+            w.call("render_photoreal", handle=box["handle"],
+                   material="Unobtanium__nope", _timeout=60.0)
+        except WorkerError as e:
+            if any(m in e.remote_message for m in _UNAVAILABLE_MARKERS):
+                raise _Skip(e.remote_message.splitlines()[0])
+            assert "unknown render material" in e.remote_message, e.remote_message
+            return
+        raise AssertionError("expected an error for an unknown material name")
 
 
 def test_photoreal_isolates_live_document():
