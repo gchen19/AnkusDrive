@@ -4473,6 +4473,211 @@ def _h_tessellate(p):
     }
 
 
+# --- photorealistic rendering (FreeCAD Render workbench) ----------------------
+#
+# Unlike render_view (the host-side NumPy rasterizer in driftpin/render.py),
+# photoreal rendering must run inside the FreeCAD process: it needs the live Part
+# shapes and the third-party `Render` workbench, which serializes the scene and
+# shells out to an external renderer binary (POV-Ray by default). It is therefore
+# a worker handler, not a change to render.py. See docs/RENDER_WORKBENCH.md.
+#
+# Install (cross-platform): clone https://github.com/FreeCAD/FreeCAD-render into
+# <App.getUserAppDataDir()>/Mod/Render (or via the Addon Manager), plus a renderer
+# binary. DriftPin locates the binary at call time and writes its path into the
+# FreeCAD param the Render plugin reads, so no preferences UI is needed.
+
+# View directions — (unit vector from bbox center toward the camera, up vector).
+# Mirrors driftpin/render.py's _VIEWS so render_view and render_photoreal frame a
+# part identically. Kept as a local copy because render.py is a host-side
+# (NumPy/Pillow) module the freecadcmd worker does not import.
+_RENDER_VIEWS = {
+    "iso":    ((1.0, 1.0, 1.0),  (0.0, 0.0, 1.0)),
+    "top":    ((0.0, 0.0, 1.0),  (0.0, 1.0, 0.0)),
+    "bottom": ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+    "front":  ((0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+    "back":   ((0.0, 1.0, 0.0),  (0.0, 0.0, 1.0)),
+    "right":  ((1.0, 0.0, 0.0),  (0.0, 0.0, 1.0)),
+    "left":   ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    "side":   ((1.0, 0.0, 0.0),  (0.0, 0.0, 1.0)),  # alias for "right"
+}
+
+# Renderer registry. Phase 1 wires POV-Ray (verified end-to-end on Linux); adding
+# another renderer is a single dict entry: the FreeCAD param key its plugin reads
+# for the exec path, a default scene template shipped with the addon, candidate
+# binary names, and common install dirs per OS (platform.system() keys).
+_RENDER_PARAM_GROUP = "User parameter:BaseApp/Preferences/Mod/Render"
+_RENDERERS = {
+    "Povray": {
+        "param_key": "PovRayPath",
+        "template": "povray_standard.pov",
+        "binaries": ("povray", "pvengine64", "pvengine"),
+        "dirs": {
+            "Linux":   ("/usr/bin", "/usr/local/bin"),
+            "Darwin":  ("/opt/homebrew/bin", "/usr/local/bin"),
+            "Windows": (r"C:\Program Files\POV-Ray\v3.7\bin",
+                        r"C:\Program Files (x86)\POV-Ray\v3.7\bin"),
+        },
+    },
+}
+
+
+def _placement_from_view(view, obj, fov_deg=45.0, margin=1.2):
+    """App.Placement that frames obj's bounding box from the named view.
+
+    Pure App.Vector math (no NumPy): builds the same orthonormal camera basis as
+    render.py's _camera_basis — the camera looks down its local -Z toward the bbox
+    center, local +Y is up, local +X is right — then steps back far enough that the
+    bounding sphere fits the vertical field of view. Returns a camera->world
+    App.Placement (App.Rotation(x, y, z) maps the local axes onto x/y/z).
+    """
+    import math
+    if view not in _RENDER_VIEWS:
+        raise ValueError(f"unknown view {view!r}; valid: {sorted(_RENDER_VIEWS)}")
+    cam_dir, up = _RENDER_VIEWS[view]
+    z = App.Vector(*cam_dir)
+    z.normalize()                                    # bbox center -> camera
+    x = App.Vector(*up).cross(z)
+    if x.Length < 1e-8:                              # up parallel to view dir
+        x = App.Vector(0.0, 1.0, 0.0).cross(z)
+        if x.Length < 1e-8:
+            x = App.Vector(1.0, 0.0, 0.0).cross(z)
+    x.normalize()
+    y = z.cross(x)
+    y.normalize()
+    bb = obj.Shape.BoundBox
+    center = App.Vector(bb.Center.x, bb.Center.y, bb.Center.z)
+    radius = (bb.DiagonalLength / 2.0) or 1.0
+    dist = (radius * margin) / math.tan(math.radians(fov_deg) / 2.0)
+    return App.Placement(center + z * dist, App.Rotation(x, y, z))
+
+
+def _resolve_renderer_exec(renderer):
+    """Locate the external renderer binary cross-platform and write its path into
+    the FreeCAD param the Render plugin reads. Returns the resolved path.
+
+    Resolution order: DRIFTPIN_<RENDERER>_PATH env override -> path already set in
+    FreeCAD prefs -> PATH (shutil.which, which honors Windows PATHEXT) -> common
+    per-OS install dirs. Raises RuntimeError with install guidance if not found.
+    """
+    import shutil
+    import platform
+    spec = _RENDERERS.get(renderer)
+    if spec is None:
+        raise RuntimeError(
+            f"renderer {renderer!r} is not wired in DriftPin yet (Phase 1 supports "
+            f"{sorted(_RENDERERS)}). Install it and set its path in FreeCAD's Render "
+            "preferences, or use renderer='Povray'."
+        )
+    params = App.ParamGet(_RENDER_PARAM_GROUP)
+    key = spec["param_key"]
+
+    candidates = []
+    if env_path := os.environ.get(f"DRIFTPIN_{renderer.upper()}_PATH"):
+        candidates.append(env_path)                  # 1) explicit env override
+    if existing := params.GetString(key, ""):
+        candidates.append(existing)                  # 2) already set in prefs
+    for name in spec["binaries"]:                    # 3) PATH
+        if found := shutil.which(name):
+            candidates.append(found)
+    for d in spec["dirs"].get(platform.system(), ()):  # 4) common install dirs
+        for name in spec["binaries"]:
+            for exe in (name, name + ".exe"):
+                candidates.append(os.path.join(d, exe))
+
+    for c in candidates:
+        if c and os.path.isfile(c):
+            params.SetString(key, c)
+            return c
+    raise RuntimeError(
+        f"could not locate the {renderer} renderer binary (tried "
+        f"{list(spec['binaries'])}). Install it (POV-Ray: 'apt install povray' on "
+        "Linux, 'brew install povray' on macOS, or the Windows installer) or set "
+        f"DRIFTPIN_{renderer.upper()}_PATH to its full path."
+    )
+
+
+@handler("render_photoreal")
+def _h_render_photoreal(p):
+    """Photorealistic render of a shaped object via the FreeCAD Render workbench
+    (external renderer; POV-Ray by default). Renders in an isolated temporary
+    document so the live model is never mutated, then returns
+    {png_base64, png_path, renderer, view, width, height}.
+
+    Presentation-only: photoreal output is not bit-reproducible (sampler noise,
+    thread count), so this stays out of the reliability/golden tests.
+    """
+    import base64
+    try:
+        import Render
+    except Exception as e:
+        raise RuntimeError(
+            "FreeCAD Render workbench not importable. Install it by cloning "
+            "https://github.com/FreeCAD/FreeCAD-render into "
+            f"{os.path.join(App.getUserAppDataDir(), 'Mod', 'Render')} "
+            f"(or via the Addon Manager). Underlying error: {e!r}"
+        )
+
+    src = _resolve(p["handle"])
+    if not hasattr(src, "Shape"):
+        raise TypeError(f"handle {p['handle']!r} has no Shape to render")
+    renderer = p.get("renderer", "Povray")
+    view = p.get("view", "iso")
+    width = int(p.get("width", 800))
+    height = int(p.get("height", 600))
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive")
+    exec_path = _resolve_renderer_exec(renderer)     # validates renderer + sets param
+    template = p.get("template") or _RENDERERS[renderer]["template"]
+
+    # Render in an isolated temp document: copy the shape in, build the scene
+    # there, render, then close it. Keeps the user's live document untouched (no
+    # Project/Camera/View objects leaking into their model or their saved .FCStd).
+    prev_active = App.ActiveDocument.Name if App.ActiveDocument else None
+    tmp = App.newDocument("driftpin_render")
+    try:
+        feat = tmp.addObject("Part::Feature", "RenderTarget")
+        feat.Shape = src.Shape.copy()
+        tmp.recompute()
+
+        proj_proxy, proj, _ = Render.Project.create(
+            tmp, renderer=renderer, template=template
+        )
+        proj.RenderWidth = width
+        proj.RenderHeight = height
+
+        _, cam, _ = Render.Camera.create(tmp)
+        cam.Projection = "Perspective"
+        cam.Placement = _placement_from_view(view, feat)
+
+        proj_proxy.add_views([cam, feat])
+        tmp.recompute()
+
+        out = proj.Proxy.render(wait_for_completion=True)
+        if not out or not os.path.isfile(out):
+            raise RuntimeError(
+                f"renderer {renderer!r} (exec {exec_path!r}) produced no output "
+                "image. Check that the renderer runs headless on this platform "
+                "(see the FreeCAD report log)."
+            )
+        with open(out, "rb") as f:
+            data = f.read()
+        return {
+            "png_base64": base64.b64encode(data).decode("ascii"),
+            "png_path": out,
+            "renderer": renderer,
+            "view": view,
+            "width": width,
+            "height": height,
+        }
+    finally:
+        try:
+            App.closeDocument(tmp.Name)
+        except Exception:
+            pass
+        if prev_active and App.getDocument(prev_active) is not None:
+            App.setActiveDocument(prev_active)
+
+
 # --- FEM (decomposed) ---------------------------------------------------------
 
 def _resolve_analysis(handle):

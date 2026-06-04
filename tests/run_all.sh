@@ -31,6 +31,10 @@ echo "== Render tests =="
 $VENV_PY tests/test_render.py
 
 echo
+echo "== Photoreal render tests (skip if Render addon / renderer absent) =="
+$VENV_PY tests/test_render_photoreal.py
+
+echo
 echo "== Cross-slice integration =="
 $VENV_PY tests/test_integration.py
 

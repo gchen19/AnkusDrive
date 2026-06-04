@@ -1,33 +1,36 @@
-# Photoreal rendering via the FreeCAD Render workbench (proposal)
+# Photoreal rendering via the FreeCAD Render workbench
 
-A proposal — for review with other contributors — to give DriftPin a
-*photorealistic* render path by stitching in the third-party
+DriftPin grows a *photorealistic* render path by stitching in the third-party
 [FreeCAD Render workbench](https://github.com/FreeCAD/FreeCAD-render) and exposing
 it as an MCP tool (`render_photoreal`) alongside the existing software-rasterized
 [`render_view`](../driftpin/render.py).
 
-**Status:** plan only. Nothing in this document is implemented. The addon and a
-renderer binary are *not* installed in the current dev environment. This doc
-exists so we can decide together whether to take it on, given the maintenance
-risk below.
+**Status: Phase 1 implemented.** `render_photoreal` is wired end-to-end through the
+worker and the MCP server, verified on Linux with FreeCAD 1.1.0 + POV-Ray 3.7.
+The addon and a renderer binary are still *optional at runtime* — DriftPin boots
+and runs without them, and the tool returns clear install guidance if they are
+absent (the renderer-gated tests skip rather than fail). What it does **not** yet
+do — real materials, renderers other than POV-Ray, and an async/job variant for
+very long renders — is tracked in §7 as follow-ups. This doc doubles as the design
+record and the operator's install guide for all three platforms.
 
 ---
 
 ## 1. Why, and what we have today
 
-DriftPin's current render path is a deliberate "can the agent *see* what it just
+DriftPin's original render path is a deliberate "can the agent *see* what it just
 built?" tool, not a presentation tool:
 
 - `render_view` / `render_views` (MCP) → worker `tessellate` handler returns
   vertices + triangles → host-side [`render.py`](../driftpin/render.py)
   rasterizes in pure NumPy + Pillow.
-- Flat Lambertian shading, orthographic, fixed light, painter's/z-buffer hybrid.
-  No materials, no GI, no perspective. Fast, deterministic, zero external deps.
+- Flat Lambertian shading, orthographic, fixed light, per-pixel z-buffer. No
+  materials, no GI, no perspective. Fast, deterministic, zero external deps.
 
 That's the right tool for closed-loop reliability checks (Layer A/D). It is the
 wrong tool for "show me a nice picture of the part." Photoreal output (materials,
-lighting, global illumination, perspective camera) is a separate concern and
-should be a separate tool — not a flag on `render_view`.
+lighting, global illumination, perspective camera) is a separate concern and is a
+separate tool — `render_photoreal`, **not** a flag on `render_view`.
 
 ## 2. Maintenance status of the upstream workbench — read this first
 
@@ -36,128 +39,192 @@ The Render workbench is **frozen / in maintenance limbo**:
 - The maintainer **Howetuft announced discontinuation on 2025-11-12**
   ("I am discontinuing maintenance of this workbench as of now") and is seeking a
   successor. None has stepped up.
-- As of mid-2026: ~226★, ~3,900 commits, **15 open issues, 2 open PRs**, issues
-  still being filed (people use it; nobody merges). Still listed in the official
-  FreeCAD Addon Manager and still functional.
+- As of mid-2026: ~226★, ~3,900 commits, issues still filed (people use it; nobody
+  merges). Still listed in the official FreeCAD Addon Manager and still functional.
 
-**Implication for us:** it is safe to *consume* (we depend on a stable Python
-API, not on a roadmap) but risky *long-term*. The concrete failure mode is
-FreeCAD 1.1 / 2.0 eventually drifting out from under it with nobody upstream to
-patch — the same class of breakage we already track in
-`docs/`-adjacent notes on FreeCAD API drift. If we adopt it, we should pin a
-known-good commit and treat the integration as something we may have to fork or
-re-host.
+**Implication for us:** it is safe to *consume* (we depend on a stable Python API,
+not on a roadmap) but risky *long-term*. The concrete failure mode is FreeCAD 1.1 /
+2.0 eventually drifting out from under it with nobody upstream to patch — the same
+class of breakage we already track for FreeCAD API drift. We therefore **pin a
+known-good commit** rather than tracking `master`, and treat the integration as
+something we may have to fork or re-host.
+
+> **Pinned commit:** `08be2fe94b8a998323c8a5443f7f0afd0d05bed5` (2026-05-16),
+> verified against FreeCAD 1.1.0. Bump deliberately, re-run the photoreal tests.
 
 ## 3. How the workbench works (architecture)
 
-It is a **pure-Python workbench**. The entire scene — `Project`, `Camera`,
-`View`, lights, materials — is a graph of FreeCAD `App` document objects. On
-render it serializes that graph into a renderer-specific scene file and
-**shells out to an external renderer binary**:
+It is a **pure-Python workbench**. The entire scene — `Project`, `Camera`, `View`,
+lights, materials — is a graph of FreeCAD `App` document objects. On render it
+serializes that graph into a renderer-specific scene file and **shells out to an
+external renderer binary**:
 
-| Renderer | macOS install | Notes |
+| Renderer | Install (Linux / macOS / Windows) | Notes |
 |---|---|---|
-| POV-Ray | `brew install povray` | Single CLI binary, deterministic, easiest. Lower photoreal ceiling. |
-| LuxCoreRender | hand-fetched build | Highest quality + PBR materials; heavier/slower headless. |
+| POV-Ray | `apt install povray` / `brew install povray` / official installer | **Phase 1 default.** Single CLI binary, deterministic-ish, easiest. Lower photoreal ceiling. |
+| LuxCoreRender | hand-fetched build (all OSes) | Highest quality + PBR materials; heavier/slower headless. |
 | Appleseed | hand-fetched build | `appleseed.cli` headless renderer. |
-| Cycles (standalone) | hand-fetched build | Blender's engine; fiddliest to wire on macOS. |
+| Cycles (standalone) | hand-fetched build | Blender's engine; fiddliest to wire. |
 | Ospray / pbrt-v4 | hand-fetched | pbrt-v4 marked experimental upstream. |
 
 The workbench itself rasterizes nothing — **it's a scene exporter + process
-launcher.** That is exactly what makes it embeddable in DriftPin's worker, *if*
-we can drive it without the GUI.
+launcher.** That is exactly what makes it embeddable in DriftPin's worker, given
+that we can drive it without the GUI.
 
-Public Python API (read from upstream `project.py` / `commands.py`):
+**Public Python API — as actually observed (the original proposal mis-stated
+several of these; corrected here):**
 
 ```python
-proj = Render.Project.create(doc, renderer="Povray", template=...)  # template optional
-cam  = Render.Camera.create(doc)
-proj.Proxy.add_views([cam, obj])              # camera + part are both "views"
-out  = proj.Proxy.render(wait_for_completion=True, skip_meshing=False)  # -> image path
+# create() returns a 3-TUPLE (proxy, fpo, viewprovider) — NOT the object.
+proj_proxy, proj, _ = Render.Project.create(doc, renderer="Povray",
+                                             template="povray_standard.pov")
+proj.RenderWidth, proj.RenderHeight = 800, 600   # REQUIRED: render() aborts if <= 0
+
+cam_proxy, cam, _ = Render.Camera.create(doc)    # also a 3-tuple
+cam.Projection = "Perspective"
+cam.Placement  = ...                              # camera->world placement
+
+proj_proxy.add_views([cam, part])                 # camera + part are both "views"
+img = proj.Proxy.render(wait_for_completion=True) # -> output image path (or None)
 ```
 
-## 4. The headless question (the crux)
+Corrections vs. the original proposal:
+
+- **`Project.create` / `Camera.create` return `(proxy, fpo, viewprovider)`**, so you
+  must unpack. `proj.Proxy.render(...)` (equivalently `proj_proxy.render(...)`) is
+  the render entry point.
+- **A template is effectively required.** With no `template=`, `Project.Template`
+  is empty and `render()` fails (`Is a directory: '.../templates/'`). We pass a
+  shipped template (`povray_standard.pov`). `Template` is a relative filename
+  resolved against the addon's `templates/` dir.
+- **`RenderWidth` / `RenderHeight` must be set** on the project fpo — resolution is
+  *not* an argument to `render()`.
+- The output path defaults to `{Document.TransientDir}/{Name}_output.png`; `render()`
+  returns it. (We never set `OutputImage`.)
+
+## 4. The headless question (resolved)
 
 DriftPin's worker runs inside `freecadcmd` — **no GUI, `App.GuiUp == False`**.
-The upstream render path is gated on `App.GuiUp`, and three behaviors change
-when there is no GUI. None is a blocker; each just means we build scene state as
-`App` objects instead of borrowing it from a viewport:
+Photoreal rendering works headless; the three GUI-coupled behaviors are handled by
+building scene state as `App` objects instead of borrowing it from a viewport:
 
-| Concern | With GUI | Headless — what DriftPin must do |
+| Concern | With GUI | Headless — what DriftPin does |
 |---|---|---|
-| **Camera** | grabs `Gui.ActiveDocument.ActiveView.getCamera()` | No viewport → **add an explicit `Camera` object and set its `Placement`.** Reuse `render.py`'s `_VIEWS` / `_camera_basis` + bbox auto-fit to aim it. (Same discipline as the post-save camera injection we already do for headless saves.) |
+| **Camera** | grabs `Gui.ActiveDocument.ActiveView.getCamera()` | No viewport → **adds an explicit `Camera` object and sets its `Placement`** via [`_placement_from_view`](../driftpin/worker.py) (pure `App.Vector` math mirroring `render.py`'s `_camera_basis`; see below). |
 | **Visibility filter** | renders only views with `ViewObject.Visibility` | Falls back to **all** views. No action needed. |
-| **Materials / colors** | reads `ViewObject.ShapeColor` etc. | No ViewObject colors → falls back to **default material**. Real materials require creating Render `Material` `App`-objects explicitly. Acceptable for a first cut. |
+| **Materials / colors** | reads `ViewObject.ShapeColor` etc. | No ViewObject colors → falls back to **default material**. Acceptable for Phase 1; real Render `Material` objects are a follow-up (§7). |
 
-Set the renderer binary path via FreeCAD params (no prefs UI needed):
+Two harmless headless artifacts worth knowing:
 
-```python
-App.ParamGet("User parameter:BaseApp/Preferences/Mod/Render/PovRay")\
-   .SetString("RenderExecPath", "/opt/homebrew/bin/povray")
-```
+- **"More than one camera" POV-Ray warning.** The workbench always injects a default
+  camera *and* emits our explicit camera; POV-Ray uses the last one, which is ours
+  (it lands in `RaytracingContent`, after the template's `RaytracingCamera` line), so
+  our `view=` wins. Verified by rendering the same part from `iso`/`front`/`top` and
+  confirming the images differ.
+- **SSL / virtualenv traceback on import.** On `import Render`, a background thread
+  tries to bootstrap a Python venv over the network (for optional features). In a
+  sandboxed/offline environment it fails with an SSL error and the thread dies — it
+  is non-fatal and never reaches stdout (worker stderr is discarded), so the JSON
+  protocol is unaffected.
 
-## 5. Proposed integration
+### Reuse note (corrects the proposal)
 
-Photoreal rendering must run **inside the FreeCAD process** (it needs the live
-document + the `Render` package), unlike the host-side NumPy rasterizer. So it
-is a new worker handler, not a change to `render.py`.
+The proposal said to "reuse `render.py`'s `_VIEWS` / `_camera_basis`." That is **not
+importable** from the worker: `render.py` is a host-side NumPy/Pillow module, and the
+`freecadcmd` worker imports only `FreeCAD`/`Part`/`ObjectsFem`/`Sketcher`. So the
+worker carries its own pure-`App.Vector` copy of the view table (`_RENDER_VIEWS`) and
+camera math (`_placement_from_view`), kept deliberately identical to `render.py`'s
+basis so the two render paths frame a part the same way.
 
-### 5.1 New worker handler — `driftpin/worker.py`
+## 5. Implemented integration
 
-```python
-@handler("render_photoreal")
-def _h_render_photoreal(p):
-    import Render
-    doc = _active_doc()
-    obj = _resolve(p["handle"])                      # existing handle -> object resolve
-    proj = Render.Project.create(doc, renderer=p.get("renderer", "Povray"))
-    cam = Render.Camera.create(doc)
-    cam.Placement = _placement_from_view(p, obj)     # reuse render.py view dirs + bbox fit
-    proj.Proxy.add_views([cam, obj])                 # camera + part as views
-    # optional: Render.SunskyLight.create(doc) if the template lacks lighting
-    out = proj.Proxy.render(wait_for_completion=True)
-    with open(out, "rb") as f:
-        return {"png_path": out, "png_base64": base64.b64encode(f.read()).decode()}
-```
+Photoreal rendering runs **inside the FreeCAD process** (it needs the live document
+and the `Render` package), so it is a worker handler, not a change to `render.py`.
 
-### 5.2 New MCP tool — `driftpin/mcp_server.py`
+### 5.1 Worker handler — [`driftpin/worker.py`](../driftpin/worker.py)
 
-Mirror `render_view`'s signature/return shape so it's a drop-in for agents:
+`@handler("render_photoreal")` (plus helpers `_placement_from_view`,
+`_resolve_renderer_exec`, and the `_RENDER_VIEWS` / `_RENDERERS` tables). Key design
+decisions beyond the API corrections in §3:
+
+- **Temp-document isolation.** The handler copies the target shape into a throwaway
+  `App` document, builds the Project/Camera/View graph *there*, renders, reads the
+  PNG, and closes the temp doc — restoring the previously active document. The user's
+  live model is never mutated and no Render objects leak into their saved `.FCStd`.
+  (Trade-off: it renders the *shape*, so ViewObject colors/materials are dropped —
+  which headless has none of anyway, per §4.)
+- **Cross-platform renderer resolution.** `_resolve_renderer_exec` finds the binary
+  via, in order: `DRIFTPIN_<RENDERER>_PATH` env override → path already set in FreeCAD
+  prefs → `PATH` (`shutil.which`, which honors Windows `PATHEXT`) → common per-OS
+  install dirs (`platform.system()`-keyed). It then writes the path into the FreeCAD
+  param the plugin reads. **The param key is `PovRayPath` in group
+  `User parameter:BaseApp/Preferences/Mod/Render`** — *not* `RenderExecPath` as the
+  proposal claimed, and the plugin does *not* fall back to `PATH`, so DriftPin must
+  set it.
+- Returns `{png_base64, png_path, renderer, view, width, height}`.
+
+### 5.2 MCP tool — [`driftpin/mcp_server.py`](../driftpin/mcp_server.py)
 
 ```python
 @mcp.tool()
 def render_photoreal(handle, renderer="Povray", view="iso", width=800, height=600):
-    """Photorealistic render of a shaped object via the FreeCAD Render workbench
-    (external renderer). Returns {png_base64, renderer, view}."""
-    return _call("render_photoreal", handle=handle, renderer=renderer,
-                 view=view, width=width, height=height)
+    """Photorealistic render via the FreeCAD Render workbench (external renderer).
+    Returns {png_base64, png_path, renderer, view, width, height}."""
+    return _call("render_photoreal", _timeout=600.0,
+                 handle=handle, renderer=renderer, view=view,
+                 width=width, height=height)
 ```
 
-## 6. Prerequisites (none present in dev env today)
+- **Worker-call timeout raised to 600 s for this call.** `Worker.call` defaults to a
+  120 s timeout (`client.py`); an external render legitimately takes seconds to
+  minutes, and hitting that default raises `WorkerDied` and respawns a fresh worker,
+  destroying the live document. `_call` now threads an optional `_timeout`, and
+  `render_photoreal` passes 600 s.
 
-1. Install the addon so `freecadcmd` auto-loads it:
+## 6. Prerequisites (cross-platform)
+
+1. **Install the addon** into the Mod dir FreeCAD actually reads. Don't hardcode it —
+   derive it from `App.getUserAppDataDir()` (it honors `$XDG_DATA_HOME` on Linux), so
+   the path varies by platform and even by shell sandbox:
+   - Linux: `~/.local/share/FreeCAD/Mod/Render` (or `$XDG_DATA_HOME/FreeCAD/Mod/Render`)
+   - macOS: `~/Library/Application Support/FreeCAD/Mod/Render`
+   - Windows: `%APPDATA%\FreeCAD\Mod\Render`
    ```bash
    git clone https://github.com/FreeCAD/FreeCAD-render \
-     "$HOME/Library/Application Support/FreeCAD/Mod/Render"
+     "$(<derived Mod dir>)/Render"
+   git -C "<…>/Render" checkout 08be2fe94b8a998323c8a5443f7f0afd0d05bed5   # pin
    ```
-   (or Addon Manager → "Render"). **Pin a commit** rather than tracking `master`.
-2. Install one renderer binary (POV-Ray recommended for the first cut).
-3. Set its `RenderExecPath` param (§4).
+   (or Addon Manager → "Render", then check out the pinned commit.)
+2. **Install one renderer binary** — POV-Ray for Phase 1:
+   `apt install povray` (Linux) · `brew install povray` (macOS) · official installer (Windows).
+3. **Nothing else** — DriftPin resolves the binary and sets `PovRayPath` itself (§5.1).
+   Override with `DRIFTPIN_POVRAY_PATH=/full/path/to/povray` if it lives somewhere odd.
 
-## 7. Risks & open questions for reviewers
+## 7. Resolved decisions & remaining follow-ups
 
-- **Upstream is unmaintained.** Do we pin + vendor, or fork under FreeCAD-org or
-  our own org? What FreeCAD version do we commit to supporting?
-- **Determinism.** Photoreal renders are not bit-reproducible (sampler noise,
-  thread count). This tool must therefore stay *out* of the reliability golden
-  tests — it is presentation-only. Agreed?
-- **CI.** No renderer binary in CI → this tool can't be smoke-tested the way
-  producers are. Do we gate it behind a nightly/optional lane, or leave it
-  un-CI'd and manually verified?
-- **Worker blocking.** `wait_for_completion=True` blocks the worker for the
-  duration of an external render (seconds to minutes). Do we need an async/job
-  variant so the worker isn't held hostage?
-- **Renderer choice.** Start POV-Ray-only, or design the handler renderer-agnostic
-  from day one (it nearly is — `renderer=` is already a param)?
-- **Materials.** First cut uses default material headless. Is that good enough to
-  ship, with explicit Render `Material` objects as a follow-up?
+Resolved (were open questions in the proposal):
+
+- **Determinism.** Photoreal renders are not bit-reproducible, so `render_photoreal`
+  stays *out* of the reliability/golden tests — it is presentation-only. Its tests
+  ([`tests/test_render_photoreal.py`](../tests/test_render_photoreal.py)) assert
+  invariants (valid PNG, non-blank, `view=` changes the image, live doc untouched).
+- **CI.** The tests **skip** when the addon/binary is absent (exit 0), so they're safe
+  everywhere; they only do real work on a box that provisions a renderer. They run in
+  the self-hosted suite (`tests/run_all.sh`), alongside `test_render.py` — *not* the
+  hosted nightly, which has neither Pillow nor a renderer.
+- **Worker blocking.** Mitigated for normal use by the 600 s call timeout (§5.2). A
+  true async/job variant remains a follow-up below.
+- **Renderer choice.** POV-Ray-first, but the handler is renderer-agnostic: adding one
+  is a single entry in the `_RENDERERS` registry (param key, default template, binary
+  names, per-OS dirs). Unknown renderers raise with clear guidance.
+
+Remaining follow-ups (not in Phase 1):
+
+- **Real materials.** Phase 1 uses the default material. A follow-up would create
+  Render `Material` `App`-objects and map DriftPin material metadata onto them.
+- **Other renderers.** Only POV-Ray is verified end-to-end. LuxCore (PBR) is the
+  natural next target for quality.
+- **Async/job variant.** For renders that exceed even 600 s, a non-blocking job API so
+  the worker isn't held hostage.
+- **Upstream risk.** Decide if/when to fork or re-host the unmaintained addon, and what
+  FreeCAD version range we commit to supporting (§2).

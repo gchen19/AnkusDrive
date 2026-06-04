@@ -28,9 +28,12 @@ def _ensure_worker() -> Worker:
     return _worker
 
 
-def _call(method: str, **params: Any) -> Any:
+def _call(method: str, _timeout: float | None = None, **params: Any) -> Any:
     try:
-        return _ensure_worker().call(method, **params)
+        worker = _ensure_worker()
+        if _timeout is not None:
+            return worker.call(method, _timeout=_timeout, **params)
+        return worker.call(method, **params)
     except WorkerError as e:
         raise RuntimeError(f"{e.type}: {e.remote_message}") from e
 
@@ -1847,6 +1850,35 @@ def render_views(
             "height": height,
         }
     return {"views": out, "vertices": len(mesh["vertices"]), "triangles": len(mesh["triangles"])}
+
+
+@mcp.tool()
+def render_photoreal(
+    handle: str,
+    renderer: str = "Povray",
+    view: str = "iso",
+    width: int = 800,
+    height: int = 600,
+) -> dict:
+    """Photorealistic render of a shaped object via the FreeCAD Render workbench
+    (an external renderer, e.g. POV-Ray) — a presentation-quality "nice picture",
+    unlike render_view's fast software-rasterized preview.
+
+    Requires the Render addon and a renderer binary to be installed (see
+    docs/RENDER_WORKBENCH.md); raises with install guidance otherwise. Renders in
+    an isolated temporary document, so the live model is never modified.
+
+    view: 'iso' | 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right' | 'side'.
+    Returns {png_base64, png_path, renderer, view, width, height}.
+
+    Presentation-only: output is not bit-reproducible, so it is kept out of the
+    reliability/golden tests. External renders can take seconds to minutes, so this
+    call uses an extended worker timeout.
+    """
+    return _call(
+        "render_photoreal", _timeout=600.0,
+        handle=handle, renderer=renderer, view=view, width=width, height=height,
+    )
 
 
 @mcp.tool()
