@@ -145,6 +145,14 @@ basis so the two render paths frame a part the same way.
 Photoreal rendering runs **inside the FreeCAD process** (it needs the live document
 and the `Render` package), so it is a worker handler, not a change to `render.py`.
 
+The whole material library rendered through `render_photoreal` (one part, iso view,
+POV-Ray):
+
+![render_photoreal material library — the same box ∪ cylinder rendered with each Render material card under POV-Ray](render_gallery.png)
+
+(Regenerate with the gallery script; only POV-Ray is in the sandbox, so the other
+renderers in §3 would need their binaries.)
+
 ### 5.1 Worker handler — [`driftpin/worker.py`](../driftpin/worker.py)
 
 `@handler("render_photoreal")` (plus helpers `_placement_from_view`,
