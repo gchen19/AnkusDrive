@@ -1900,6 +1900,226 @@ def _h_section_view(p):
     return out
 
 
+# --- airtight / enclosed-flow void analysis (issue #19) ----------------------
+#
+# An enclosed-flow part (a vacuum adapter, a manifold, a duct) is "correct" when
+# a single connected void joins its declared inlet to its declared outlet and is
+# bounded by solid everywhere else. check_shape's watertight verdict is necessary
+# but NOT sufficient: a watertight solid can still have a blocked path (a near-
+# zero "almond slit") or an unintended opening (an over-cut doorway) — the two
+# failure modes in issue #19. This computes the functional invariant via a pure-
+# BREP void analysis: build the void as padded_bbox.cut(part_with_ports_capped)
+# and let OCCT's boolean engine separate enclosed cavities (each its own entry in
+# .Solids) from ambient (the single large outside solid). A void open to ambient
+# fuses INTO ambient; an enclosed cavity falls out as a distinct solid. The
+# bottleneck is then an analytic slice-area sweep along the inlet->outlet axis.
+
+
+def _resolve_port_face(handle, shape, ref, label):
+    """A face reference (f_* tag, 'FaceN', or int index) -> (Face, 1-based index).
+    Mirrors the inline resolution in oring_groove / fillet_edges."""
+    if ref is None:
+        raise ValueError(f"{label} face reference is required")
+    if isinstance(ref, str) and ref.startswith("f_"):
+        idx = int(_h_resolve_face({"handle": handle, "tag": ref})["index"][len("Face"):])
+    elif isinstance(ref, str) and ref.startswith("Face"):
+        idx = int(ref[len("Face"):])
+    else:
+        idx = int(ref)
+    if idx < 1 or idx > len(shape.Faces):
+        raise ValueError(f"{label} face index {idx} out of range (1..{len(shape.Faces)})")
+    return shape.Faces[idx - 1], idx
+
+
+def _port_cap(part, face, label):
+    """A solid 'plug' that seals a port opening: the face's outer boundary filled
+    and extruded along the outward normal, with a small inward overlap so it fuses
+    into the part (abutting caps stay disjoint and break the boolean). Returns
+    (cap_solid, outward_normal)."""
+    n = _outward_normal(face)
+    try:
+        plate = Part.Face(face.OuterWire)
+    except Exception as e:
+        raise ValueError(
+            f"{label} port face is not cappable (need a planar opening rim): {e}"
+        )
+    depth = max(2.0, 0.05 * part.BoundBox.DiagonalLength)
+    overlap = 0.5  # inward overlap so fuse() merges the cap into the wall
+    inward = App.Vector(-n.x, -n.y, -n.z)
+    cap = plate.translated(inward * overlap).extrude(n * (overlap + depth))
+    return cap, n
+
+
+def _section_area_at(solid, axis, d):
+    """Sum of closed section-wire areas where `solid` meets the plane (axis, d).
+    Reuses the section_view slice pattern."""
+    area = 0.0
+    for w in solid.slice(axis, d):
+        if w.isClosed():
+            try:
+                area += Part.Face(w).Area
+            except Exception:
+                pass
+    return area
+
+
+@handler("check_airtight_path")
+def _h_check_airtight_path(p):
+    """Functional check for an enclosed-flow part: is there a single connected
+    void joining the declared inlet to the outlet, bounded by solid everywhere
+    else? This is what 'mostly airtight' means operationally, and it is what
+    check_shape's watertight verdict CANNOT tell you — a watertight solid can
+    still have a blocked path or a hidden leak. Pure inspection: mutates nothing.
+
+    inlet / outlet: a face reference on `handle` — an f_* tag, 'FaceN', or an int
+        index — naming each port OPENING (the rim face around the hole). The check
+        seals both ports with cap solids, builds the negative-space void as
+        padded_bbox.cut(capped), and classifies the result.
+    min_aperture_mm2 (optional): minimum acceptable bottleneck cross-section. When
+        given, a connected-but-pinched path (a near-zero 'almond slit') fails.
+    pad_mm (optional): bounding-box margin for the void box (default
+        max(2.0, 0.05*diagonal)).
+
+    Returns (lengths mm, areas mm², volumes mm³):
+      ok                   (bool)  connected AND not leaky AND aperture >= threshold
+      status               (str)   'airtight' | 'bottleneck' | 'blocked' | 'leaky'
+      connected            (bool)  one void joins inlet and outlet
+      leaky                (bool)  with both ports capped the cavity still reaches
+                                   ambient => an unintended opening exists
+      min_aperture_mm2     (float|null) narrowest section of the flow void
+      bottleneck_point     ([x,y,z]|null) a point on the narrowest section plane
+      flow_void_volume_mm3 (float|null) volume of the connecting void
+      void_components      (int)   number of void solids (ambient + enclosed)
+      inlet / outlet       (str)   the resolved 'FaceN' references
+      pad_mm               (float) the margin used
+    """
+    handle = p["handle"]
+    _, shape = _shape_of(handle)
+    if not shape.isValid():
+        raise RuntimeError(
+            "shape is not valid (run check_shape first); cannot build a reliable void"
+        )
+    fin, i_in = _resolve_port_face(handle, shape, p.get("inlet"), "inlet")
+    fout, i_out = _resolve_port_face(handle, shape, p.get("outlet"), "outlet")
+    if i_in == i_out:
+        raise ValueError("inlet and outlet resolve to the same face")
+    min_aperture = p.get("min_aperture_mm2")
+    if min_aperture is not None:
+        min_aperture = float(min_aperture)
+
+    incap, n_in = _port_cap(shape, fin, "inlet")
+    outcap, n_out = _port_cap(shape, fout, "outlet")
+    capped = shape.fuse(incap).fuse(outcap)
+    try:
+        capped = capped.removeSplitter()
+    except Exception:
+        pass
+
+    cb = capped.BoundBox
+    pad = float(p["pad_mm"]) if p.get("pad_mm") else max(2.0, 0.05 * cb.DiagonalLength)
+    big = Part.makeBox(
+        cb.XLength + 2 * pad, cb.YLength + 2 * pad, cb.ZLength + 2 * pad,
+        App.Vector(cb.XMin - pad, cb.YMin - pad, cb.ZMin - pad),
+    )
+    void = big.cut(capped)
+    solids = list(void.Solids)
+    if not solids:
+        raise RuntimeError("void computation produced no solids (degenerate geometry)")
+
+    # ambient = the single large outside void; tie-break by centroid so the pick
+    # is deterministic when two void solids happen to share a volume.
+    def _amb_key(i):
+        s = solids[i]
+        c = s.CenterOfMass
+        return (round(s.Volume, 6), round(c.x, 6), round(c.y, 6), round(c.z, 6))
+    amb_idx = max(range(len(solids)), key=_amb_key)
+    ambient = solids[amb_idx]
+    enclosed = [s for i, s in enumerate(solids) if i != amb_idx]
+
+    # interior probe points: just inside each opening, past the cap overlap.
+    def _interior(face, n):
+        c = face.CenterOfMass
+        return c - App.Vector(n.x, n.y, n.z) * 1.0
+    pin = _interior(fin, n_in)
+    pout = _interior(fout, n_out)
+    if capped.isInside(pin, 1e-6, True):
+        raise ValueError(
+            "inlet does not open into a void (not an opening, or wall too thick "
+            "behind the rim)"
+        )
+    if capped.isInside(pout, 1e-6, True):
+        raise ValueError(
+            "outlet does not open into a void (not an opening, or wall too thick "
+            "behind the rim)"
+        )
+
+    def _host(pt):
+        for i, s in enumerate(enclosed):
+            if s.isInside(pt, 1e-6, True):
+                return ("enclosed", i)
+        if ambient.isInside(pt, 1e-6, True):
+            return ("ambient", -1)
+        return ("none", -2)
+    hin, hout = _host(pin), _host(pout)
+
+    same_enclosed = hin[0] == "enclosed" and hin == hout
+    leaky = hin[0] == "ambient" or hout[0] == "ambient"
+    connected = same_enclosed or (hin[0] == "ambient" and hout[0] == "ambient")
+
+    min_ap = None
+    bottleneck = None
+    flow_vol = None
+    if same_enclosed:
+        fv = enclosed[hin[1]]
+        flow_vol = fv.Volume
+        axis = pout - pin
+        if axis.Length > 1e-9:
+            axis.normalize()
+            d0, d1 = pin.dot(axis), pout.dot(axis)
+            best = None
+            n_stations = 40
+            for k in range(1, n_stations):
+                d = d0 + (d1 - d0) * k / n_stations
+                a = _section_area_at(fv, axis, d)
+                if a > 1e-9 and (best is None or a < best[0]):
+                    best = (a, d)
+            if best is not None:
+                min_ap = best[0]
+                t = best[1] - d0
+                bottleneck = [
+                    round(pin.x + axis.x * t, 6),
+                    round(pin.y + axis.y * t, 6),
+                    round(pin.z + axis.z * t, 6),
+                ]
+
+    if leaky:
+        status = "leaky"
+    elif not connected:
+        status = "blocked"
+    elif min_aperture is not None and min_ap is not None and min_ap < min_aperture:
+        status = "bottleneck"
+    else:
+        status = "airtight"
+    ok = bool(
+        connected and not leaky
+        and (min_aperture is None or (min_ap is not None and min_ap >= min_aperture))
+    )
+
+    return {
+        "ok": ok,
+        "status": status,
+        "connected": bool(connected),
+        "leaky": bool(leaky),
+        "min_aperture_mm2": None if min_ap is None else round(min_ap, 6),
+        "bottleneck_point": bottleneck,
+        "flow_void_volume_mm3": None if flow_vol is None else round(flow_vol, 6),
+        "void_components": len(solids),
+        "inlet": f"Face{i_in}",
+        "outlet": f"Face{i_out}",
+        "pad_mm": round(pad, 6),
+    }
+
+
 @handler("list_faces")
 def _h_list_faces(p):
     _, shape = _shape_of(p["handle"])

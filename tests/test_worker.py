@@ -3489,6 +3489,113 @@ def test_every_add_command_has_a_producer_smoke():
     assert not stale, f"_ADD_NOT_SOLID names that aren't add_* tools anymore: {stale}"
 
 
+# --- check_airtight_path (issue #19): enclosed-flow void invariants -----------
+#
+# Synthetic adapters along +X: outer 40x20x20, 2mm walls, 16x16 through-bore.
+#   good    : clean cavity, both ends open  -> connected, no leak, aperture 256
+#   slit    : near-full divider w/ a 0.2mm slot -> connected but pinched (~3.2)
+#   blocked : full divider, no slot -> two separate cavities, no path
+#   leaky   : extra cut breaches the +Z wall -> cavity reaches ambient
+_ADAPTER_SRC = '''
+import Part, FreeCAD as App
+doc = App.ActiveDocument
+outer = Part.makeBox(40, 20, 20, App.Vector(0, -10, -10))
+bore = Part.makeBox(44, 16, 16, App.Vector(-2, -8, -8))
+part = outer.cut(bore)
+kind = {kind!r}
+if kind == "slit":
+    divider = Part.makeBox(2, 16, 16, App.Vector(19, -8, -8))
+    slit = Part.makeBox(2.2, 16, 0.2, App.Vector(18.9, -8, -0.1))
+    part = part.fuse(divider.cut(slit)).removeSplitter()
+elif kind == "blocked":
+    divider = Part.makeBox(2, 16, 16, App.Vector(19, -8, -8))
+    part = part.fuse(divider).removeSplitter()
+elif kind == "leaky":
+    hole = Part.makeBox(8, 8, 6, App.Vector(16, -4, 6))
+    part = part.cut(hole)
+f = doc.addObject("Part::Feature", "Adapter")
+f.Shape = part
+doc.recompute()
+'''
+
+
+def _build_adapter(w, kind):
+    """Build a synthetic adapter in a fresh doc; return (handle, inlet_tag,
+    outlet_tag). Ports are the outer end faces — pick by extreme-x centroid so a
+    breach/divider's inward-facing X faces (same normal) don't get chosen."""
+    w.call("new_document", name=f"air_{kind}")
+    reg = w.call("run_script", code=_ADAPTER_SRC.format(kind=kind))["registered"]
+    h = reg[0]["handle"]
+    inlet = w.call("query_faces", handle=h,
+                   predicate={"type": "planar", "normal_dir": [-1, 0, 0], "centroid_min": "x"})
+    outlet = w.call("query_faces", handle=h,
+                    predicate={"type": "planar", "normal_dir": [1, 0, 0], "centroid_max": "x"})
+    return h, inlet[0]["tag"], outlet[0]["tag"]
+
+
+def test_check_airtight_good():
+    """A clean adapter: inlet->outlet void is connected, sealed, full-bore."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "good")
+        r = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet,
+                   min_aperture_mm2=10.0)
+        assert r["connected"] is True, r
+        assert r["leaky"] is False, r
+        assert r["status"] == "airtight", r
+        assert r["ok"] is True, r
+        assert abs(r["min_aperture_mm2"] - 256.0) < 1.0, r
+
+
+def test_check_airtight_bottleneck_slit():
+    """The v2 failure: connected, but the slit pinches the path below threshold."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "slit")
+        r = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet,
+                   min_aperture_mm2=10.0)
+        assert r["connected"] is True, r
+        assert r["leaky"] is False, r
+        assert r["min_aperture_mm2"] < 10.0, r
+        assert r["status"] == "bottleneck", r
+        assert r["ok"] is False, r
+        # with no threshold, a pinched-but-connected path is acceptable
+        r2 = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet)
+        assert r2["ok"] is True and r2["status"] == "airtight", r2
+
+
+def test_check_airtight_leaky():
+    """The v3 failure: capping both ports still leaves the cavity open to ambient."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "leaky")
+        r = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet)
+        assert r["leaky"] is True, r
+        assert r["status"] == "leaky", r
+        assert r["ok"] is False, r
+
+
+def test_check_airtight_blocked():
+    """A full divider splits the bore: inlet and outlet are in separate cavities."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "blocked")
+        r = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet)
+        assert r["connected"] is False, r
+        assert r["leaky"] is False, r
+        assert r["status"] == "blocked", r
+        assert r["ok"] is False, r
+
+
+def test_check_airtight_same_face_rejected():
+    """inlet == outlet is a usage error, not a silent pass."""
+    with Worker() as w:
+        h, inlet, _ = _build_adapter(w, "good")
+        try:
+            w.call("check_airtight_path", handle=h, inlet=inlet, outlet=inlet)
+        except WorkerError as e:
+            assert "same face" in str(e).lower(), e
+        else:
+            assert False, "expected an error when inlet and outlet are the same face"
+        assert w.call("ping") == "pong", "worker poisoned by the rejected call"
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
