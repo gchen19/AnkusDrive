@@ -4540,6 +4540,37 @@ _RENDERERS = {
                         "luxcoreconsole), put it on PATH with its bundled libs reachable "
                         "(e.g. via LD_LIBRARY_PATH on Linux)",
     },
+    "Appleseed": {
+        # Headless -> batch -> the plugin reads AppleseedCliPath and runs the
+        # `appleseed.cli` console renderer (non-batch uses GUI AppleseedStudioPath).
+        "param_key": "AppleseedCliPath",
+        "template": "appleseed_standard.appleseed",
+        "binaries": ("appleseed.cli",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/appleseed/bin"),
+            "Darwin":  ("/usr/local/bin", "/Applications/appleseed/bin"),
+            "Windows": (r"C:\Program Files\appleseed\bin",),
+        },
+        "install_hint": "download an appleseed build from "
+                        "https://github.com/appleseedhq/appleseed/releases (provides "
+                        "appleseed.cli) and put it on PATH",
+    },
+    "Cycles": {
+        # Cycles uses one path (CyclesPath); batch mode adds `--background` so the
+        # standalone `cycles` renderer runs headless (no GUI window).
+        "param_key": "CyclesPath",
+        "template": "cycles_standard.xml",
+        "binaries": ("cycles",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/cycles"),
+            "Darwin":  ("/usr/local/bin",),
+            "Windows": (r"C:\Program Files\Cycles",),
+        },
+        "install_hint": "build or download the standalone Cycles renderer (the `cycles` "
+                        "CLI) and put it on PATH",
+    },
 }
 
 
@@ -4794,6 +4825,11 @@ def _h_render_photoreal(p):
 # session, like _handles.
 _render_jobs = {}
 
+# Cap on retained jobs so abandoned results don't accumulate base64 PNGs for the
+# whole worker session. Only finished (done/failed) jobs are evicted — a running
+# job holds an open temp document the renderer is still reading.
+_MAX_RENDER_JOBS = 16
+
 
 def _close_render_job_doc(job):
     name = job.pop("doc", None)
@@ -4802,6 +4838,19 @@ def _close_render_job_doc(job):
             App.closeDocument(name)
         except Exception:
             pass
+
+
+def _evict_render_jobs():
+    """Drop the oldest finished jobs while over the cap (insertion order = age).
+    Running jobs are never evicted."""
+    while len(_render_jobs) > _MAX_RENDER_JOBS:
+        victim = next(
+            (jid for jid, j in _render_jobs.items() if j["status"] != "running"),
+            None,
+        )
+        if victim is None:
+            break                                    # all running -> nothing to free
+        _close_render_job_doc(_render_jobs.pop(victim))
 
 
 def _refresh_render_job(job):
@@ -4864,6 +4913,7 @@ def _h_render_photoreal_submit(p):
         "width": req["width"],
         "height": req["height"],
     }
+    _evict_render_jobs()
     return {"job_id": job_id, "status": "running"}
 
 
@@ -4872,7 +4922,10 @@ def _h_render_job(p):
     """Poll an async render started by render_photoreal_submit. Returns
     {job_id, status} with status 'running' | 'done' | 'failed'. When 'done', also
     returns {png_base64, png_path, renderer, view, material, width, height}; when
-    'failed', {error}. The result stays available for repeat polls."""
+    'failed', {error}. The result stays available for repeat polls.
+
+    Pass discard=True to free the job once you have a terminal result (closes its
+    temp document and drops the cached PNG); ignored while still running."""
     job_id = p["job_id"]
     job = _render_jobs.get(job_id)
     if job is None:
@@ -4891,6 +4944,9 @@ def _h_render_job(p):
         })
     elif job["status"] == "failed":
         out["error"] = job.get("error", "render failed")
+    if p.get("discard") and job["status"] != "running":
+        _close_render_job_doc(job)                   # done/failed doc already closed; idempotent
+        _render_jobs.pop(job_id, None)
     return out
 
 

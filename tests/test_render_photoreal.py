@@ -131,15 +131,28 @@ def test_photoreal_unknown_material_errors():
         raise AssertionError("expected an error for an unknown material name")
 
 
-def test_photoreal_luxcore_renders():
-    """LuxCore is wired as an alternate renderer (batch/console mode). Skips when
-    luxcoreconsole is absent (a hand-fetched build); on a box that provides it, it
-    produces a non-blank PNG, exercising the same scene-export path as POV-Ray."""
+def _assert_alternate_renderer(renderer):
+    """Render a box with an alternate (non-default) renderer in batch/console mode.
+    Skips when that renderer's binary is absent (they are hand-fetched builds); on a
+    box that provides it, produces a non-blank PNG via the same scene-export path as
+    POV-Ray."""
     with Worker() as w:
         box = _box(w)
-        res = _photoreal(w, box["handle"], renderer="Luxcore", width=200, height=150)
-        assert res["renderer"] == "Luxcore"
-        assert _img(res).std() > 3, "LuxCore render looks blank"
+        res = _photoreal(w, box["handle"], renderer=renderer, width=200, height=150)
+        assert res["renderer"] == renderer
+        assert _img(res).std() > 3, f"{renderer} render looks blank"
+
+
+def test_photoreal_luxcore_renders():
+    _assert_alternate_renderer("Luxcore")
+
+
+def test_photoreal_appleseed_renders():
+    _assert_alternate_renderer("Appleseed")
+
+
+def test_photoreal_cycles_renders():
+    _assert_alternate_renderer("Cycles")
 
 
 def test_photoreal_isolates_live_document():
@@ -196,6 +209,76 @@ def test_render_job_unknown():
             assert "unknown render job" in e.remote_message, e.remote_message
             return
         raise AssertionError("expected an error for an unknown job id")
+
+
+def _drain_job(w, job_id, timeout=60.0):
+    """Poll a job until it leaves 'running'. Returns the last response."""
+    deadline = time.time() + timeout
+    res = None
+    while time.time() < deadline:
+        res = w.call("render_job", job_id=job_id, _timeout=30.0)
+        if res["status"] != "running":
+            return res
+        time.sleep(0.15)
+    return res
+
+
+def test_render_job_discard():
+    """discard=True frees a finished job: it returns the result once, then the job
+    is gone (closing its temp doc and dropping the cached PNG)."""
+    with Worker() as w:
+        box = _box(w)
+        try:
+            sub = w.call("render_photoreal_submit", handle=box["handle"],
+                         width=120, height=90, _timeout=60.0)
+        except WorkerError as e:
+            if any(m in e.remote_message for m in _UNAVAILABLE_MARKERS):
+                raise _Skip(e.remote_message.splitlines()[0])
+            raise
+        jid = sub["job_id"]
+        assert _drain_job(w, jid)["status"] == "done"
+        res = w.call("render_job", job_id=jid, discard=True, _timeout=30.0)
+        assert res["status"] == "done" and "png_base64" in res
+        try:
+            w.call("render_job", job_id=jid, _timeout=30.0)
+        except WorkerError as e:
+            assert "unknown render job" in e.remote_message
+            return
+        raise AssertionError("discarded job should be gone")
+
+
+def test_render_job_eviction():
+    """Finished jobs are bounded by the worker cap (_MAX_RENDER_JOBS = 16): once more
+    than the cap have finished, a further submit evicts the oldest (polling it returns
+    unknown) while a recent job is retained. Uses tiny images to stay fast."""
+    CAP = 16
+    with Worker() as w:
+        box = _box(w)
+
+        def submit():
+            return w.call("render_photoreal_submit", handle=box["handle"],
+                          width=48, height=36, _timeout=60.0)["job_id"]
+
+        try:
+            ids = [submit()]
+        except WorkerError as e:
+            if any(m in e.remote_message for m in _UNAVAILABLE_MARKERS):
+                raise _Skip(e.remote_message.splitlines()[0])
+            raise
+        for _ in range(CAP):                         # CAP + 1 jobs submitted
+            ids.append(submit())
+        for jid in ids:                              # make them all finished
+            _drain_job(w, jid)
+        submit()                                     # over the cap -> evict oldest finished
+
+        try:
+            w.call("render_job", job_id=ids[0], _timeout=30.0)
+            evicted = False
+        except WorkerError as e:
+            evicted = "unknown render job" in e.remote_message
+        assert evicted, "oldest finished job should have been evicted past the cap"
+        assert w.call("render_job", job_id=ids[-1], _timeout=30.0)["status"] != "running", \
+            "a recent job should still be retained"
 
 
 # --- runner -------------------------------------------------------------------

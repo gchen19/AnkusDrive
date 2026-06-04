@@ -11,10 +11,11 @@ The addon and a renderer binary are still *optional at runtime* — DriftPin boo
 and runs without them, and the tool returns clear install guidance if they are
 absent (the renderer-gated tests skip rather than fail). It supports the Render
 addon's material library (the `material` argument — Gold, Glass, Aluminium, …), a
-second renderer (LuxCore, `renderer="Luxcore"`), and a non-blocking job API
-(`render_photoreal_submit` + `render_job`) for long renders. What it does **not** yet
-do — more renderers (Appleseed, Cycles) — is tracked in §7 as follow-ups. This doc
-doubles as the design record and the operator's install guide for all three platforms.
+three more renderers (LuxCore, Appleseed, Cycles via `renderer=`), and a non-blocking
+job API (`render_photoreal_submit` + `render_job`, with `discard` + auto-eviction) for
+long renders. What it does **not** yet do — Ospray/pbrt-v4 and POV-Ray texture maps — is
+tracked in §7 as follow-ups. This doc doubles as the design record and the operator's
+install guide for all three platforms.
 
 ---
 
@@ -65,9 +66,9 @@ external renderer binary**:
 |---|---|---|
 | POV-Ray | `apt install povray` / `brew install povray` / official installer | **Default.** Single CLI binary, deterministic-ish, easiest. Lower photoreal ceiling. |
 | LuxCoreRender | hand-fetched standalone (provides `luxcoreconsole`) | **Supported** (`renderer="Luxcore"`, batch/console mode). Highest quality + PBR materials; heavier/slower headless. |
-| Appleseed | hand-fetched build | `appleseed.cli` headless renderer. |
-| Cycles (standalone) | hand-fetched build | Blender's engine; fiddliest to wire. |
-| Ospray / pbrt-v4 | hand-fetched | pbrt-v4 marked experimental upstream. |
+| Appleseed | hand-fetched build (provides `appleseed.cli`) | **Supported** (`renderer="Appleseed"`, batch/console mode). |
+| Cycles (standalone) | hand-fetched `cycles` CLI | **Supported** (`renderer="Cycles"`, batch adds `--background`). Blender's engine. |
+| Ospray / pbrt-v4 | hand-fetched | Not yet wired; pbrt-v4 marked experimental upstream. |
 
 The workbench itself rasterizes nothing — **it's a scene exporter + process
 launcher.** That is exactly what makes it embeddable in DriftPin's worker, given
@@ -215,6 +216,10 @@ non-blocking job API runs alongside the blocking `render_photoreal`:
   is unaffected.
 - Completion is detected from the executor thread (`is_alive()`), captured by diffing
   `threading.enumerate()` across the launch, with output-file existence as a fallback.
+- **Lifecycle / memory.** `render_job(job_id, discard=True)` frees a finished job on
+  demand (closes its temp doc, drops the cached PNG). As a backstop, finished jobs are
+  auto-evicted oldest-first once they exceed an internal cap (`_MAX_RENDER_JOBS`, 16);
+  running jobs are never evicted.
 
 ## 6. Prerequisites (cross-platform)
 
@@ -255,13 +260,15 @@ Resolved (were open questions in the proposal):
   common quick-render case.
 - **Renderer choice.** The handler is renderer-agnostic: adding one is a single entry
   in the `_RENDERERS` registry (param key, default template, binary names, per-OS dirs,
-  optional `batch` flag). POV-Ray and **LuxCore** are wired; unknown renderers raise
-  with clear guidance. LuxCore needs batch mode (`proj.BatchMode = True`) so the plugin
-  uses its headless `luxcoreconsole` binary. Its scene export + material translation are
-  verified headless via the addon's DryRun (a Gold box emits valid LuxCore SDL —
-  `scene.materials … type = metal2`); the `luxcoreconsole` binary itself is a
-  hand-fetched build, run on a provisioned box / CI rather than in the sandbox, on the
-  same code path POV-Ray is verified end-to-end on.
+  optional `batch` flag, install hint). **POV-Ray, LuxCore, Appleseed, and Cycles** are
+  wired; unknown renderers raise with clear, per-renderer guidance. The three
+  hand-fetched renderers run headless in batch mode (LuxCore/Appleseed use their console
+  binary; Cycles adds `--background`). Each one's scene export + material translation are
+  verified headless via the addon's DryRun (e.g. a Gold box emits valid LuxCore SDL —
+  `scene.materials … type = metal2`; valid Appleseed `<assembly>`/`<material>` XML;
+  valid Cycles `<shader>`/`<camera>` XML); the external binaries themselves run on a
+  provisioned box / CI rather than the sandbox, on the same code path POV-Ray is verified
+  end-to-end on.
 - **Materials.** Implemented — the `material` argument applies any of the addon's
   library cards (metals, glass, plastics, marble, …) via `View.Material`, verified
   visually (Gold renders yellow) and in tests. The card-driven `[Render]` sections are
@@ -269,11 +276,15 @@ Resolved (were open questions in the proposal):
   user-supplied colors/parameters beyond the shipped cards, and confirming textured
   cards (marble, terrazzo) render their image maps under POV-Ray specifically.
 
+- **Job lifecycle.** Resolved (§5.3): `render_job(discard=True)` frees a finished job on
+  demand, and finished jobs are auto-evicted past a cap, so the session stays bounded.
+
 Remaining follow-ups (not yet implemented):
 
-- **More renderers.** Appleseed and Cycles are the next candidates — each is a registry
-  entry plus its own binary, following the POV-Ray/LuxCore pattern.
-- **Job lifecycle.** Async jobs persist for the worker session; a future cleanup/expiry
-  (or explicit discard) would bound memory if very many large renders are submitted.
+- **More renderers.** Ospray and pbrt-v4 remain (pbrt-v4 is experimental upstream); each
+  is another `_RENDERERS` entry following the existing pattern.
+- **Textured materials under POV-Ray.** Solid cards (metals, glass, plastics) are
+  confirmed; image-textured cards (marble, terrazzo) import their texture objects but
+  their maps haven't been visually confirmed in the POV-Ray output specifically.
 - **Upstream risk.** Decide if/when to fork or re-host the unmaintained addon, and what
   FreeCAD version range we commit to supporting (§2).

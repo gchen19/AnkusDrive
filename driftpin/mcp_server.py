@@ -1912,14 +1912,18 @@ def render_photoreal_submit(
 
 
 @mcp.tool()
-def render_job(job_id: str) -> dict:
+def render_job(job_id: str, discard: bool = False) -> dict:
     """Poll an async render started by render_photoreal_submit.
 
     Returns {job_id, status} where status is 'running', 'done', or 'failed'. When
     'done', also returns {png_base64, png_path, renderer, view, material, width,
     height}; when 'failed', {error}. The result remains available for repeat polls.
+
+    Pass discard=True once you have a terminal result to free the job immediately
+    (drops the cached image and closes its temp document); ignored while running.
+    Jobs are also auto-evicted oldest-first once finished jobs exceed an internal cap.
     """
-    return _call("render_job", job_id=job_id)
+    return _call("render_job", job_id=job_id, discard=discard)
 
 
 @mcp.tool()
