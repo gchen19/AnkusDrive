@@ -2126,6 +2126,93 @@ def _h_check_airtight_path(p):
     }
 
 
+@handler("classify_face_sides")
+def _h_classify_face_sides(p):
+    """Inside-vs-outside topology: for every face, which void does its outward
+    side open into — an enclosed cavity (wetted) or ambient (exterior)? Answers
+    the "which faces are inside the airflow path" question from issue #19 and
+    auto-suggests a role per face. Pure inspection; mutates nothing.
+
+    Method: build the negative-space void (padded_bbox.cut(part)) and split it
+    into ambient (the one large outside solid) and any enclosed cavities; probe
+    each face just off its outward normal and see which it lands in. With
+    seal_ports=True (default) declared inlet/outlet roles (annotate_face) are
+    capped first, so an OPEN duct's bore reads as the enclosed flow cavity rather
+    than as ambient.
+
+    handle: the part. seal_ports: cap declared inlet/outlet before classifying.
+
+    Returns a list (one per face) of dicts:
+      tag / index      (str)   stable f_* tag and 'FaceN'
+      kind             (str)   surface kind (planar/cylindrical/…)
+      side             (str)   'interior' (bounds an enclosed void) | 'ambient' |
+                               'ambiguous' (probe inconclusive, e.g. a capped port)
+      suggested_role   (str)   'wetted' for interior, 'ambient' for exterior, else null
+      declared_role    (str)   the role already annotated on this face, if any
+    """
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    roles = _read_face_roles(obj)
+
+    solid = shape
+    if p.get("seal_ports", True):
+        caps = []
+        for name, e in roles.items():
+            if e.get("role") in ("inlet", "outlet"):
+                try:
+                    f, _ = _resolve_port_face(handle, shape, e["tag"], name)
+                    cap, _n = _port_cap(shape, f, name)
+                    caps.append(cap)
+                except Exception:
+                    pass  # a drifted/uncappable port just isn't sealed
+        for c in caps:
+            solid = solid.fuse(c)
+        if caps:
+            try:
+                solid = solid.removeSplitter()
+            except Exception:
+                pass
+
+    bb = solid.BoundBox
+    pad = max(2.0, 0.05 * bb.DiagonalLength)
+    big = Part.makeBox(
+        bb.XLength + 2 * pad, bb.YLength + 2 * pad, bb.ZLength + 2 * pad,
+        App.Vector(bb.XMin - pad, bb.YMin - pad, bb.ZMin - pad),
+    )
+    solids = list(big.cut(solid).Solids)
+    if not solids:
+        raise RuntimeError("void computation produced no solids (degenerate geometry)")
+
+    def _amb_key(i):
+        s = solids[i]
+        c = s.CenterOfMass
+        return (round(s.Volume, 6), round(c.x, 6), round(c.y, 6), round(c.z, 6))
+    amb_idx = max(range(len(solids)), key=_amb_key)
+    ambient = solids[amb_idx]
+    enclosed = [s for i, s in enumerate(solids) if i != amb_idx]
+
+    tag2role = {e["tag"]: e["role"] for e in roles.values() if "tag" in e}
+    eps = max(0.01, 1e-3 * bb.DiagonalLength)
+    out = []
+    for i, f in enumerate(shape.Faces):
+        sig = _face_signature(f)
+        tag = f"f_{_hash_sig(sig)}"
+        n = _outward_normal(f)
+        probe = f.CenterOfMass + App.Vector(n.x, n.y, n.z) * eps
+        if any(s.isInside(probe, 1e-6, True) for s in enclosed):
+            side, suggest = "interior", "wetted"
+        elif ambient.isInside(probe, 1e-6, True):
+            side, suggest = "ambient", "ambient"
+        else:
+            side, suggest = "ambiguous", None
+        item = {"tag": tag, "index": f"Face{i + 1}", "kind": sig["kind"],
+                "side": side, "suggested_role": suggest}
+        if tag in tag2role:
+            item["declared_role"] = tag2role[tag]
+        out.append(item)
+    return out
+
+
 @handler("list_faces")
 def _h_list_faces(p):
     _, shape = _shape_of(p["handle"])
@@ -4185,6 +4272,122 @@ def _h_list_face_roles(p):
             item["meta"] = e["meta"]
         out.append(item)
     return out
+
+
+# --- declared intent + re-runnable regression gate (issue #19) ---------------
+#
+# Record the functional invariants of a part ONCE, then re-run them after every
+# edit — the regression check the issue calls out as missing. The contract
+# composes the slice 1-3 primitives (check_shape, check_airtight_path, face-role
+# presence) and persists as a JSON property bag (DP_Intent), like DP_Interfaces /
+# DP_FaceRoles. verify_intent never raises on a failing invariant: a failure
+# becomes a {passed: False} row so the gate is safe to run in a loop.
+
+_INTENT_PROP = "DP_Intent"
+
+
+def _read_intent(obj):
+    """Declared intent contract for an object ({} if none)."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _INTENT_PROP in base.PropertiesList:
+        try:
+            return _json.loads(getattr(base, _INTENT_PROP) or "{}")
+        except Exception:
+            return {}
+    return {}
+
+
+@handler("declare_intent")
+def _h_declare_intent(p):
+    """Record the functional invariants a part must keep satisfying, so they can
+    be re-checked after every edit (see verify_intent). Persists in the .FCStd as
+    a JSON property bag (DP_Intent); one contract per part, re-declaring replaces.
+
+    contract keys (all optional, but declare at least one):
+      watertight     (bool)  require check_shape's watertight_solid verdict.
+      airtight_path  (dict)  {inlet, outlet, min_aperture_mm2?} — each port is a
+                             face tag / 'FaceN' / int / declared role-or-name.
+      required_faces (list)  face tags / 'FaceN' / declared role-or-names that
+                             must still resolve (catches a deleted/drifted face).
+
+    Returns {handle, contract} (the stored contract)."""
+    import json as _json
+    handle = p["handle"]
+    obj, _ = _shape_of(handle)
+    contract = dict(p.get("contract") or {})
+    if not contract:
+        raise ValueError("contract is empty; declare at least one invariant")
+    ap = contract.get("airtight_path")
+    if ap is not None and ("inlet" not in ap or "outlet" not in ap):
+        raise ValueError("airtight_path requires both 'inlet' and 'outlet'")
+    base = _shaped_top(obj)
+    if _INTENT_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _INTENT_PROP, "DriftPin",
+                         "declared functional intent (JSON)")
+    setattr(base, _INTENT_PROP, _json.dumps(contract))
+    base.Document.recompute()
+    return {"handle": handle, "contract": contract}
+
+
+@handler("verify_intent")
+def _h_verify_intent(p):
+    """Re-run every invariant declared with declare_intent — the regression gate
+    to run after each edit. Composes check_shape / check_airtight_path / face-role
+    resolution. Never raises on a failing invariant (a failure is a passed=False
+    row), so it is safe to call in a loop. Pure inspection; mutates nothing.
+
+    Returns {handle, ok, results} where results is a list of
+      {invariant, passed, detail} (one per declared invariant) and ok is True iff
+    every invariant passed."""
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    contract = _read_intent(obj)
+    if not contract:
+        raise ValueError(f"no intent declared on {handle!r} (use declare_intent first)")
+
+    results = []
+
+    def _add(name, fn):
+        try:
+            passed, detail = fn()
+        except Exception as e:
+            passed, detail = False, f"{type(e).__name__}: {e}"
+        results.append({"invariant": name, "passed": bool(passed), "detail": detail})
+
+    if contract.get("watertight"):
+        def _w():
+            r = _h_check_shape({"handle": handle})
+            return r["watertight_solid"], (
+                f"solids={r['solids']}, closed={r['closed']}, valid={r['valid']}")
+        _add("watertight", _w)
+
+    ap = contract.get("airtight_path")
+    if ap:
+        def _a():
+            r = _h_check_airtight_path({
+                "handle": handle, "inlet": ap["inlet"], "outlet": ap["outlet"],
+                "min_aperture_mm2": ap.get("min_aperture_mm2")})
+            return r["ok"], (
+                f"status={r['status']}, connected={r['connected']}, "
+                f"leaky={r['leaky']}, min_aperture_mm2={r['min_aperture_mm2']}")
+        _add("airtight_path", _a)
+
+    req = contract.get("required_faces")
+    if req:
+        def _r():
+            missing = []
+            for ref in req:
+                try:
+                    _resolve_port_face(handle, shape, ref, "required_face")
+                except Exception:
+                    missing.append(ref)
+            return (not missing), (
+                "all present" if not missing else f"missing/drifted: {missing}")
+        _add("required_faces", _r)
+
+    ok = all(r["passed"] for r in results) if results else True
+    return {"handle": handle, "ok": ok, "results": results}
 
 
 def _apply_mate(link, parent_link, child_iface, parent_iface):

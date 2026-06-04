@@ -3688,6 +3688,143 @@ def test_face_role_drift_detected():
         assert after[0]["present"] is False, after
 
 
+# --- classify_face_sides (issue #19, slice 3) --------------------------------
+
+def test_classify_face_sides_wetted_vs_ambient():
+    """With the declared ports sealed, the bore walls read as interior/wetted and
+    the outer walls as ambient; without sealing, the open bore has no enclosed
+    cavity so nothing is interior."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "good")
+        w.call("annotate_face", handle=h, face=inlet, role="inlet", name="window")
+        w.call("annotate_face", handle=h, face=outlet, role="outlet", name="barb")
+
+        sides = w.call("classify_face_sides", handle=h)  # seal_ports default True
+        n_interior = sum(1 for s in sides if s["side"] == "interior")
+        n_ambient = sum(1 for s in sides if s["side"] == "ambient")
+        assert n_interior >= 4, sides   # 4 inner bore walls
+        assert n_ambient >= 4, sides    # 4 outer walls
+        assert all(s["suggested_role"] == "wetted" for s in sides if s["side"] == "interior")
+        declared = {s["declared_role"] for s in sides if "declared_role" in s}
+        assert declared == {"inlet", "outlet"}, sides
+
+        unsealed = w.call("classify_face_sides", handle=h, seal_ports=False)
+        assert sum(1 for s in unsealed if s["side"] == "interior") == 0, unsealed
+
+
+# --- declare_intent / verify_intent (issue #19, slice 4) ---------------------
+
+def _build_annotated_adapter(w, kind):
+    h, inlet, outlet = _build_adapter(w, kind)
+    w.call("annotate_face", handle=h, face=inlet, role="inlet", name="window")
+    w.call("annotate_face", handle=h, face=outlet, role="outlet", name="barb")
+    return h
+
+
+def test_verify_intent_good_passes():
+    """A clean adapter satisfies watertight + airtight_path + required_faces."""
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "good")
+        w.call("declare_intent", handle=h, contract={
+            "watertight": True,
+            "airtight_path": {"inlet": "inlet", "outlet": "outlet", "min_aperture_mm2": 50.0},
+            "required_faces": ["window", "barb"],
+        })
+        r = w.call("verify_intent", handle=h)
+        assert r["ok"] is True, r
+        assert {x["invariant"] for x in r["results"]} == {"watertight", "airtight_path", "required_faces"}
+        assert all(x["passed"] for x in r["results"]), r
+
+
+def test_verify_intent_bottleneck_fails():
+    """The v2 slit keeps the solid watertight but fails the airtight_path gate."""
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "slit")
+        w.call("declare_intent", handle=h, contract={
+            "watertight": True,
+            "airtight_path": {"inlet": "inlet", "outlet": "outlet", "min_aperture_mm2": 50.0},
+        })
+        r = w.call("verify_intent", handle=h)
+        res = {x["invariant"]: x["passed"] for x in r["results"]}
+        assert res["watertight"] is True, r       # watertight is happy...
+        assert res["airtight_path"] is False, r    # ...but the path is pinched
+        assert r["ok"] is False, r
+
+
+def test_verify_intent_leaky_fails():
+    """The v3-style breach fails the airtight_path gate (leaky)."""
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "leaky")
+        w.call("declare_intent", handle=h, contract={
+            "airtight_path": {"inlet": "inlet", "outlet": "outlet"},
+        })
+        r = w.call("verify_intent", handle=h)
+        assert r["ok"] is False, r
+        ap = next(x for x in r["results"] if x["invariant"] == "airtight_path")
+        assert ap["passed"] is False and "leaky=True" in ap["detail"], ap
+
+
+def test_verify_intent_persists_across_save():
+    """Declared intent survives save -> reopen and re-runs in a fresh worker."""
+    import tempfile, os
+    path = os.path.join(tempfile.mkdtemp(), "intent.FCStd")
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "good")
+        w.call("declare_intent", handle=h, contract={
+            "watertight": True,
+            "airtight_path": {"inlet": "inlet", "outlet": "outlet", "min_aperture_mm2": 50.0},
+        })
+        w.call("save_document", path=path)
+    with Worker() as w2:
+        w2.call("open_document", path=path)
+        h2 = w2.call("register_handle", object="Adapter", prefix="p")["handle"]
+        r = w2.call("verify_intent", handle=h2)
+        assert r["ok"] is True, r
+
+
+def test_verify_intent_required_face_drift_fails():
+    """A required face that drifts/vanishes after an edit fails the gate."""
+    with Worker() as w:
+        w.call("new_document", name="reqdrift")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        h = box["handle"]
+        topz = w.call("query_faces", handle=h,
+                      predicate={"type": "planar", "normal_dir": [0, 0, 1]})[0]["tag"]
+        w.call("annotate_face", handle=h, face=topz, role="sealing", name="lid")
+        w.call("declare_intent", handle=h, contract={"required_faces": ["lid"]})
+        assert w.call("verify_intent", handle=h)["ok"] is True
+        w.call("run_script", code=(
+            "o = App.ActiveDocument.getObject('Box'); o.Width = 8.0; o.Length = 8.0; "
+            "App.ActiveDocument.recompute()"))
+        r = w.call("verify_intent", handle=h)
+        assert r["ok"] is False, r
+        rf = next(x for x in r["results"] if x["invariant"] == "required_faces")
+        assert rf["passed"] is False and "lid" in rf["detail"], rf
+
+
+def test_declare_intent_validation():
+    """Empty contract and a malformed airtight_path are rejected; verify needs a
+    declared contract."""
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "good")
+        for bad in ({}, {"airtight_path": {"inlet": "inlet"}}):
+            try:
+                w.call("declare_intent", handle=h, contract=bad)
+            except WorkerError:
+                pass
+            else:
+                assert False, f"expected rejection for contract={bad}"
+        w.call("new_document", name="nointent")
+        box = w.call("add_primitive", kind="box", w=5, d=5, h=5)
+        try:
+            w.call("verify_intent", handle=box["handle"])
+        except WorkerError as e:
+            assert "no intent" in str(e).lower(), e
+        else:
+            assert False, "expected verify_intent to require a declared contract"
+        assert w.call("ping") == "pong"
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

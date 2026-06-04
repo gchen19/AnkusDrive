@@ -921,6 +921,29 @@ def check_airtight_path(
 
 
 @mcp.tool()
+def classify_face_sides(handle: str, seal_ports: bool = True) -> list:
+    """Inside-vs-outside topology: for every face, decide whether its outward side
+    opens into an enclosed cavity (wetted) or ambient (exterior). Answers the
+    "which faces are inside the airflow path" question from issue #19 and suggests
+    a role per face. Inspection only; returns no handle, mutates nothing.
+
+    With seal_ports=True (default) any declared inlet/outlet roles (annotate_face)
+    are capped first, so an OPEN duct's bore reads as the enclosed flow cavity
+    rather than as ambient.
+
+    handle: the part. seal_ports: cap declared inlet/outlet before classifying.
+
+    Returns a list (one per face) of dicts:
+      tag / index    (str)  stable f_* tag and 'FaceN'
+      kind           (str)  surface kind (planar/cylindrical/…)
+      side           (str)  'interior' | 'ambient' | 'ambiguous'
+      suggested_role (str)  'wetted' for interior, 'ambient' for exterior, else null
+      declared_role  (str)  the role already annotated on this face, if any
+    """
+    return _call("classify_face_sides", handle=handle, seal_ports=seal_ports)
+
+
+@mcp.tool()
 def section_view(
     handle: str,
     plane: str = "XY",
@@ -1791,6 +1814,43 @@ def list_face_roles(handle: str) -> list:
       meta    (dict)  the verbatim metadata (only when set)
     """
     return _call("list_face_roles", handle=handle)
+
+
+@mcp.tool()
+def declare_intent(handle: str, contract: dict) -> dict:
+    """Record the functional invariants a part must keep satisfying, so they can
+    be re-checked after every edit (see verify_intent). Persists in the .FCStd as
+    a JSON property bag (DP_Intent); one contract per part — re-declaring replaces.
+
+    handle: the part.
+    contract: a dict with any of these (declare at least one):
+      watertight     (bool)  require check_shape's watertight_solid verdict.
+      airtight_path  (dict)  {inlet, outlet, min_aperture_mm2?}; each port is a
+                             face tag / 'FaceN' / int / declared role-or-name.
+      required_faces (list)  face tags / 'FaceN' / declared role-or-names that
+                             must still resolve (catches a deleted/drifted face).
+
+    Returns {handle, contract} — the stored contract."""
+    return _call("declare_intent", handle=handle, contract=contract)
+
+
+@mcp.tool()
+def verify_intent(handle: str) -> dict:
+    """Re-run every invariant declared with declare_intent — the regression gate
+    to run after each edit. Composes check_shape / check_airtight_path / face-role
+    resolution; never raises on a failing invariant (a failure is a passed=False
+    row), so it is safe to call in a loop. Inspection only; mutates nothing.
+
+    handle: the part (must have a declared intent contract).
+
+    Returns a dict:
+      handle   (str)
+      ok       (bool)  True iff every declared invariant passed
+      results  (list)  one {invariant, passed, detail} per declared invariant —
+                       invariant in {watertight, airtight_path, required_faces},
+                       detail a human-readable summary of what was measured
+    """
+    return _call("verify_intent", handle=handle)
 
 
 @mcp.tool()
