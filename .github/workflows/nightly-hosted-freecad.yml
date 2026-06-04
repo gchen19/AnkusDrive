@@ -21,11 +21,14 @@ name: Nightly (hosted FreeCAD)
 #   2. freecadcmd RESOLUTION. driftpin/client.py finds the binary via
 #      $DRIFTPIN_FREECADCMD -> shutil.which -> known paths. We export the conda
 #      binary's path explicitly so resolution doesn't depend on PATH activation.
-#   3. SCOPE. Only the FreeCAD-side worker tests run here (test_worker +
-#      test_mating_dims), plus the FreeCAD-free contracts as a baseline. The
-#      render/integration tests need Pillow and the .venv two-interpreter split
-#      that run_all.sh wires up, which this minimal env does not set up — they
-#      stay on the self-hosted suite.
+#   3. SCOPE. Runs the FreeCAD-side worker tests (test_worker + test_mating_dims)
+#      plus the FreeCAD-free contracts as a baseline. The FEM subset of
+#      test_worker shells out to the external CalculiX (`ccx`) solver, so we
+#      install conda-forge `calculix` too (it lands as a plain `ccx` on PATH,
+#      which FreeCAD 1.1's femtools.ccxtools resolves via shutil.which — no
+#      preference wiring needed). The render/integration tests need Pillow and
+#      the .venv two-interpreter split that run_all.sh wires up, which this
+#      minimal env does not set up — they stay on the self-hosted suite.
 #
 # Until a green run is observed, treat a red result here as "the fallback needs
 # iteration", not "the code is broken" (the self-hosted suite in test.yml is the
@@ -63,12 +66,20 @@ jobs:
           activate-environment: driftpin
           python-version: "3.11"
 
-      - name: Install FreeCAD 1.1 from conda-forge
+      - name: Install FreeCAD 1.1 + CalculiX from conda-forge
         run: |
-          conda install -y "freecad>=1.1,<1.2"
+          # calculix provides the `ccx` FEM solver FreeCAD shells out to; without
+          # it the test_worker FEM cases fail with "CalculiX binary not found".
+          # conda-forge installs it as $CONDA_PREFIX/bin/ccx, and FreeCAD 1.1's
+          # femtools.ccxtools falls back to shutil.which("ccx") when no
+          # ccxBinaryPath pref is set — so PATH presence is enough.
+          conda install -y "freecad>=1.1,<1.2" calculix
           echo "--- freecadcmd ---"
           which freecadcmd
           freecadcmd --version 2>&1 | head -3 || true
+          echo "--- ccx (CalculiX FEM solver) ---"
+          which ccx
+          ccx -v 2>&1 | head -2 || true
           echo "DRIFTPIN_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
 
       # The worker suite ships on main; the contracts (#8) and mating-dims (#11)
