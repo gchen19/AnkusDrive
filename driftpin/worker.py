@@ -4501,10 +4501,13 @@ _RENDER_VIEWS = {
     "side":   ((1.0, 0.0, 0.0),  (0.0, 0.0, 1.0)),  # alias for "right"
 }
 
-# Renderer registry. Phase 1 wires POV-Ray (verified end-to-end on Linux); adding
-# another renderer is a single dict entry: the FreeCAD param key its plugin reads
-# for the exec path, a default scene template shipped with the addon, candidate
-# binary names, and common install dirs per OS (platform.system() keys).
+# Renderer registry. Adding a renderer is a single dict entry: the FreeCAD param
+# key its plugin reads for the exec path, a default scene template shipped with the
+# addon, candidate binary names, common install dirs per OS (platform.system()
+# keys), and an optional `batch` flag (forces the project into batch mode so the
+# plugin uses its headless console binary). POV-Ray is verified end-to-end on Linux;
+# LuxCore's scene export + material translation are verified headless, with the
+# render binary itself driven on a provisioned box (it is a hand-fetched build).
 _RENDER_PARAM_GROUP = "User parameter:BaseApp/Preferences/Mod/Render"
 _RENDERERS = {
     "Povray": {
@@ -4517,6 +4520,25 @@ _RENDERERS = {
             "Windows": (r"C:\Program Files\POV-Ray\v3.7\bin",
                         r"C:\Program Files (x86)\POV-Ray\v3.7\bin"),
         },
+        "install_hint": "'apt install povray' (Linux), 'brew install povray' (macOS), "
+                        "or the official Windows installer",
+    },
+    "Luxcore": {
+        # Headless -> batch mode -> the plugin reads LuxCoreConsolePath and runs
+        # the `luxcoreconsole` CLI (the non-batch path uses the GUI LuxCorePath).
+        "param_key": "LuxCoreConsolePath",
+        "template": "luxcore_standard.cfg",
+        "binaries": ("luxcoreconsole",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/opt/LuxCore", "/opt/luxcorerender"),
+            "Darwin":  ("/Applications/LuxCore.app/Contents/MacOS", "/usr/local/bin"),
+            "Windows": (r"C:\Program Files\LuxCoreRender",),
+        },
+        "install_hint": "download a standalone build from "
+                        "https://github.com/LuxCoreRender/LuxCore/releases (provides "
+                        "luxcoreconsole), put it on PATH with its bundled libs reachable "
+                        "(e.g. via LD_LIBRARY_PATH on Linux)",
     },
 }
 
@@ -4590,8 +4612,7 @@ def _resolve_renderer_exec(renderer):
             return c
     raise RuntimeError(
         f"could not locate the {renderer} renderer binary (tried "
-        f"{list(spec['binaries'])}). Install it (POV-Ray: 'apt install povray' on "
-        "Linux, 'brew install povray' on macOS, or the Windows installer) or set "
+        f"{list(spec['binaries'])}). Install it — {spec['install_hint']} — or set "
         f"DRIFTPIN_{renderer.upper()}_PATH to its full path."
     )
 
@@ -4694,6 +4715,8 @@ def _h_render_photoreal(p):
         )
         proj.RenderWidth = width
         proj.RenderHeight = height
+        if _RENDERERS[renderer].get("batch") and hasattr(proj, "BatchMode"):
+            proj.BatchMode = True                    # headless console binary (e.g. LuxCore)
 
         _, cam, _ = Render.Camera.create(tmp)
         cam.Projection = "Perspective"

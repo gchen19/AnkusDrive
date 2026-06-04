@@ -131,6 +131,17 @@ def test_photoreal_unknown_material_errors():
         raise AssertionError("expected an error for an unknown material name")
 
 
+def test_photoreal_luxcore_renders():
+    """LuxCore is wired as an alternate renderer (batch/console mode). Skips when
+    luxcoreconsole is absent (a hand-fetched build); on a box that provides it, it
+    produces a non-blank PNG, exercising the same scene-export path as POV-Ray."""
+    with Worker() as w:
+        box = _box(w)
+        res = _photoreal(w, box["handle"], renderer="Luxcore", width=200, height=150)
+        assert res["renderer"] == "Luxcore"
+        assert _img(res).std() > 3, "LuxCore render looks blank"
+
+
 def test_photoreal_isolates_live_document():
     """Rendering must not mutate the caller's document. The handler renders in a
     throwaway temp doc, so the live doc's object list is unchanged afterwards."""

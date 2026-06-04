@@ -10,10 +10,11 @@ worker and the MCP server, verified on Linux with FreeCAD 1.1.0 + POV-Ray 3.7.
 The addon and a renderer binary are still *optional at runtime* — DriftPin boots
 and runs without them, and the tool returns clear install guidance if they are
 absent (the renderer-gated tests skip rather than fail). It supports the Render
-addon's material library (the `material` argument — Gold, Glass, Aluminium, …).
-What it does **not** yet do — renderers other than POV-Ray, and an async/job variant
-for very long renders — is tracked in §7 as follow-ups. This doc doubles as the
-design record and the operator's install guide for all three platforms.
+addon's material library (the `material` argument — Gold, Glass, Aluminium, …) and a
+second renderer, LuxCore (`renderer="Luxcore"`). What it does **not** yet do — more
+renderers (Appleseed, Cycles) and an async/job variant for very long renders — is
+tracked in §7 as follow-ups. This doc doubles as the design record and the operator's
+install guide for all three platforms.
 
 ---
 
@@ -62,8 +63,8 @@ external renderer binary**:
 
 | Renderer | Install (Linux / macOS / Windows) | Notes |
 |---|---|---|
-| POV-Ray | `apt install povray` / `brew install povray` / official installer | **Phase 1 default.** Single CLI binary, deterministic-ish, easiest. Lower photoreal ceiling. |
-| LuxCoreRender | hand-fetched build (all OSes) | Highest quality + PBR materials; heavier/slower headless. |
+| POV-Ray | `apt install povray` / `brew install povray` / official installer | **Default.** Single CLI binary, deterministic-ish, easiest. Lower photoreal ceiling. |
+| LuxCoreRender | hand-fetched standalone (provides `luxcoreconsole`) | **Supported** (`renderer="Luxcore"`, batch/console mode). Highest quality + PBR materials; heavier/slower headless. |
 | Appleseed | hand-fetched build | `appleseed.cli` headless renderer. |
 | Cycles (standalone) | hand-fetched build | Blender's engine; fiddliest to wire. |
 | Ospray / pbrt-v4 | hand-fetched | pbrt-v4 marked experimental upstream. |
@@ -225,9 +226,15 @@ Resolved (were open questions in the proposal):
   hosted nightly, which has neither Pillow nor a renderer.
 - **Worker blocking.** Mitigated for normal use by the 600 s call timeout (§5.2). A
   true async/job variant remains a follow-up below.
-- **Renderer choice.** POV-Ray-first, but the handler is renderer-agnostic: adding one
-  is a single entry in the `_RENDERERS` registry (param key, default template, binary
-  names, per-OS dirs). Unknown renderers raise with clear guidance.
+- **Renderer choice.** The handler is renderer-agnostic: adding one is a single entry
+  in the `_RENDERERS` registry (param key, default template, binary names, per-OS dirs,
+  optional `batch` flag). POV-Ray and **LuxCore** are wired; unknown renderers raise
+  with clear guidance. LuxCore needs batch mode (`proj.BatchMode = True`) so the plugin
+  uses its headless `luxcoreconsole` binary. Its scene export + material translation are
+  verified headless via the addon's DryRun (a Gold box emits valid LuxCore SDL —
+  `scene.materials … type = metal2`); the `luxcoreconsole` binary itself is a
+  hand-fetched build, run on a provisioned box / CI rather than in the sandbox, on the
+  same code path POV-Ray is verified end-to-end on.
 - **Materials.** Implemented — the `material` argument applies any of the addon's
   library cards (metals, glass, plastics, marble, …) via `View.Material`, verified
   visually (Gold renders yellow) and in tests. The card-driven `[Render]` sections are
@@ -237,8 +244,8 @@ Resolved (were open questions in the proposal):
 
 Remaining follow-ups (not yet implemented):
 
-- **Other renderers.** Only POV-Ray is verified end-to-end. LuxCore (PBR) is the
-  natural next target for quality.
+- **More renderers.** Appleseed and Cycles are the next candidates — each is a registry
+  entry plus its own binary, following the POV-Ray/LuxCore pattern.
 - **Async/job variant.** For renders that exceed even 600 s, a non-blocking job API so
   the worker isn't held hostage.
 - **Upstream risk.** Decide if/when to fork or re-host the unmaintained addon, and what
