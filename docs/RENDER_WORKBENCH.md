@@ -274,17 +274,18 @@ Resolved (were open questions in the proposal):
 - **Materials.** Implemented — the `material` argument applies any of the addon's
   library cards (metals, glass, plastics, marble, …) via `View.Material`, verified
   visually (Gold renders yellow) and in tests. The card-driven `[Render]` sections are
-  renderer-agnostic, so this carries to other renderers as they're added. *Follow-ups:*
-  user-supplied colors/parameters beyond the shipped cards, and confirming textured
-  cards (marble, terrazzo) render their image maps under POV-Ray specifically.
-
+  renderer-agnostic, so this carries to other renderers as they're added.
+- **Textured materials under POV-Ray.** Confirmed — the two image-mapped cards
+  (`GreenMarble`, `Terrazzo`) render their **colour** maps under POV-Ray (normal /
+  displacement maps are dropped, a POV-Ray-plugin limitation). Verified visually
+  2026-06-04; the repeatable procedure + pass criteria live in
+  [`RENDER_TEXTURE_CHECK.md`](RENDER_TEXTURE_CHECK.md). *Follow-up:* an optional
+  automated colour-variance proxy to regression-guard it (described in that runbook).
 - **Job lifecycle.** Resolved (§5.3): `render_job(discard=True)` frees a finished job on
   demand, and finished jobs are auto-evicted past a cap, so the session stays bounded.
 
 Remaining follow-ups (not yet implemented):
 
-- **Textured materials under POV-Ray.** Solid cards (metals, glass, plastics) are
-  confirmed; image-textured cards (marble, terrazzo) import their texture objects but
-  their maps haven't been visually confirmed in the POV-Ray output specifically.
+- **User-supplied materials.** Colours / PBR parameters beyond the shipped library cards.
 - **Upstream risk.** Decide if/when to fork or re-host the unmaintained addon, and what
   FreeCAD version range we commit to supporting (§2).
