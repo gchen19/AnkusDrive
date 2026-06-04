@@ -55,7 +55,13 @@ result with an empty `InList` (nothing consumes it) — same rule `add_part` use
 
 ## Test wiring
 
-These are **not yet referenced by the default test suite.** They will be wired
-as optional, skip-if-absent golden tests alongside `annotate_face` (Slice 2),
-kept out of the always-on CI gate (large/external); the synthetic fixtures in
-`tests/test_worker.py::test_check_airtight_*` remain the always-on regression.
+Wired as skip-if-absent golden tests in
+[`tests/test_golden_issue19.py`](../../test_golden_issue19.py) (run by
+`tests/run_all.sh`). Because the *delivered* parts are solid blanks with no
+realized cavity (see finding 1–3), the tests pin the pathology rather than a
+working flow path: all three read `watertight_solid=True`; `check_airtight_path`
+correctly refuses to certify the v2 solid blank ("does not open into a void");
+and the v3 doorway-not-integrated anomaly. Each test skips (not fails) if its
+fixture is absent. The synthetic fixtures in
+`tests/test_worker.py::test_check_airtight_*` remain the always-on positive/
+negative regression.
