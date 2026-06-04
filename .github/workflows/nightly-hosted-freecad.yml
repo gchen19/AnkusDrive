@@ -11,10 +11,13 @@ name: Nightly (hosted FreeCAD)
 # on demand to validate it (Actions tab -> "Nightly (hosted FreeCAD)" -> Run).
 #
 # KNOWN RISKS this has NOT been validated against (watch the first run):
-#   1. FreeCAD VERSION. tests/test_worker.py asserts the worker reports 1.1.x.
-#      conda-forge's `freecad` may resolve to a different minor (e.g. 1.0.x),
-#      which would fail those version asserts. We pin `freecad=1.1.*` first and
-#      only fall back to the newest available if the solver can't satisfy it.
+#   1. FreeCAD VERSION. tests/test_worker.py asserts the worker reports 1.1.x
+#      (major.minor) AND runs under Python 3.11. Verified 2026-06-03: conda-forge
+#      ships `freecad 1.1.0` with a linux-64 / py3.11 build, so installing
+#      `freecad>=1.1,<1.2` into this py3.11 env satisfies both asserts. The pin is
+#      bounded `<1.2` (no unversioned fallback) so that a future minor can't
+#      silently install and fail the version assert with a confusing message —
+#      an unsatisfiable solve will surface as a clear conda error instead.
 #   2. freecadcmd RESOLUTION. driftpin/client.py finds the binary via
 #      $DRIFTPIN_FREECADCMD -> shutil.which -> known paths. We export the conda
 #      binary's path explicitly so resolution doesn't depend on PATH activation.
@@ -62,7 +65,7 @@ jobs:
 
       - name: Install FreeCAD 1.1 from conda-forge
         run: |
-          conda install -y "freecad=1.1.*" || conda install -y freecad
+          conda install -y "freecad>=1.1,<1.2"
           echo "--- freecadcmd ---"
           which freecadcmd
           freecadcmd --version 2>&1 | head -3 || true
