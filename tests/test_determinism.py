@@ -137,6 +137,37 @@ def test_fem_results_within_tolerance():
     )
 
 
+_AIRTIGHT_SRC = '''
+import Part, FreeCAD as App
+doc = App.ActiveDocument
+part = Part.makeBox(40, 20, 20, App.Vector(0, -10, -10)).cut(
+    Part.makeBox(44, 16, 16, App.Vector(-2, -8, -8)))
+f = doc.addObject("Part::Feature", "Adapter"); f.Shape = part; doc.recompute()
+'''
+
+
+def _airtight_result(w):
+    w.call("new_document", name="air")
+    h = w.call("run_script", code=_AIRTIGHT_SRC)["registered"][0]["handle"]
+    inlet = w.call("query_faces", handle=h, predicate={
+        "type": "planar", "normal_dir": [-1, 0, 0], "centroid_min": "x"})[0]["tag"]
+    outlet = w.call("query_faces", handle=h, predicate={
+        "type": "planar", "normal_dir": [1, 0, 0], "centroid_max": "x"})[0]["tag"]
+    return w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet,
+                  min_aperture_mm2=10.0)
+
+
+def test_check_airtight_path_deterministic():
+    """check_airtight_path's BREP void analysis is bit-identical across worker
+    boots — guards the ambient-solid tie-break ordering and the slice-sweep
+    bottleneck float against hidden nondeterminism."""
+    with Worker() as w_a:
+        ra = _airtight_result(w_a)
+    with Worker() as w_b:
+        rb = _airtight_result(w_b)
+    assert ra == rb, f"check_airtight_path diverged:\n  A: {ra}\n  B: {rb}"
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

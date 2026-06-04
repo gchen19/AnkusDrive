@@ -22,6 +22,31 @@ Companion to the README. The README describes what *is*; this file describes wha
 
 ---
 
+## Functional invariants for enclosed-flow parts (issue #19, 2026-06-04)
+
+Shipped a "declared intent + verify" layer so an agent can check a part against
+what it is *for*, not just measure raw geometry — closing the gap where a
+watertight solid can still have a blocked or leaky flow path. Plan:
+[`docs/AIRTIGHT_INVARIANTS_PLAN.md`](AIRTIGHT_INVARIANTS_PLAN.md).
+
+- `check_airtight_path(inlet, outlet, min_aperture_mm2?)` — pure-BREP void
+  analysis (`padded_bbox.cut(part_with_ports_capped)` → `.Solids`): reports
+  `connected` / `leaky` / `min_aperture_mm2` with a `status` of
+  airtight | bottleneck | blocked | leaky.
+- `annotate_face` / `list_face_roles` — bind semantic roles
+  (inlet/outlet/sealing/wetted/ambient/mating) to stable `f_*` tags, persisted in
+  a `DP_FaceRoles` bag (mirrors `publish_interface`); drift-aware read-back.
+- `classify_face_sides` — inside-vs-outside (wetted/ambient) topology, sealing
+  declared ports so an open duct's bore reads as the enclosed cavity.
+- `declare_intent` / `verify_intent` — persist a contract (watertight,
+  airtight_path, required_faces) and re-run it after every edit; composes the
+  above, never raises on a failing invariant. The regression gate the issue
+  asked for.
+- Real v1/v2/v3 adapter `.FCStd` files staged as golden fixtures under
+  `tests/fixtures/issue19/`.
+
+---
+
 ## Current state (as of 2026-04-25)
 
 Working today:

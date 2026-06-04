@@ -850,6 +850,11 @@ def check_shape(handle: str) -> dict:
     NOT auto-repair. Use it as a guard after booleans/sweeps/imports to confirm
     you have one clean watertight solid.
 
+    Note: a watertight solid can still have a BLOCKED or LEAKY enclosed-flow path
+    — watertightness says the shell is closed, not that an internal channel is
+    unobstructed and leak-free. For ducts/manifolds/adapters use
+    check_airtight_path(inlet, outlet) to verify the flow path.
+
     handle: the object to inspect.
 
     Returns a dict (volumes in mm3):
@@ -869,6 +874,73 @@ def check_shape(handle: str) -> dict:
       check_error      (str)   present only if the diagnostic pass itself raised
     """
     return _call("check_shape", handle=handle)
+
+
+@mcp.tool()
+def check_airtight_path(
+    handle: str,
+    inlet: str | int,
+    outlet: str | int,
+    min_aperture_mm2: float | None = None,
+    pad_mm: float | None = None,
+) -> dict:
+    """Functional check for an enclosed-flow part (a vacuum adapter, manifold,
+    duct): is there a single connected void joining the inlet to the outlet,
+    bounded by solid everywhere else? This catches what `check_shape` cannot — a
+    watertight solid can still have a blocked flow path or a hidden leak.
+    Inspection only: measures, returns no handle, mutates nothing.
+
+    handle: the part to inspect.
+    inlet / outlet: a face reference naming each port OPENING (the rim face around
+      the hole) — an f_* tag, 'FaceN', int index, or a role/name declared with
+      annotate_face (e.g. "inlet"). Both ports are sealed with cap solids and the
+      negative-space void is analysed.
+    min_aperture_mm2: optional minimum acceptable bottleneck cross-section; a
+      connected-but-pinched path (a near-zero 'almond slit') then fails.
+    pad_mm: optional bounding-box margin (default max(2.0, 0.05*diagonal)).
+
+    Returns a dict (lengths mm, areas mm², volumes mm³):
+      ok                   (bool)  connected AND not leaky AND aperture >= threshold
+      status               (str)   'airtight' | 'bottleneck' | 'blocked' | 'leaky'
+      connected            (bool)  one void joins inlet and outlet
+      leaky                (bool)  with both ports capped the cavity still reaches
+                                   ambient, so an unintended opening exists
+      min_aperture_mm2     (float|null) narrowest section of the flow void
+      bottleneck_point     ([x,y,z]|null) a point on the narrowest section plane
+      flow_void_volume_mm3 (float|null) volume of the connecting void
+      void_components      (int)   number of void solids (ambient + enclosed)
+      inlet / outlet       (str)   the resolved 'FaceN' references
+      pad_mm               (float) the margin used
+    """
+    params = {"handle": handle, "inlet": inlet, "outlet": outlet}
+    if min_aperture_mm2 is not None:
+        params["min_aperture_mm2"] = min_aperture_mm2
+    if pad_mm is not None:
+        params["pad_mm"] = pad_mm
+    return _call("check_airtight_path", **params)
+
+
+@mcp.tool()
+def classify_face_sides(handle: str, seal_ports: bool = True) -> list:
+    """Inside-vs-outside topology: for every face, decide whether its outward side
+    opens into an enclosed cavity (wetted) or ambient (exterior). Answers the
+    "which faces are inside the airflow path" question from issue #19 and suggests
+    a role per face. Inspection only; returns no handle, mutates nothing.
+
+    With seal_ports=True (default) any declared inlet/outlet roles (annotate_face)
+    are capped first, so an OPEN duct's bore reads as the enclosed flow cavity
+    rather than as ambient.
+
+    handle: the part. seal_ports: cap declared inlet/outlet before classifying.
+
+    Returns a list (one per face) of dicts:
+      tag / index    (str)  stable f_* tag and 'FaceN'
+      kind           (str)  surface kind (planar/cylindrical/…)
+      side           (str)  'interior' | 'ambient' | 'ambiguous'
+      suggested_role (str)  'wetted' for interior, 'ambient' for exterior, else null
+      declared_role  (str)  the role already annotated on this face, if any
+    """
+    return _call("classify_face_sides", handle=handle, seal_ports=seal_ports)
 
 
 @mcp.tool()
@@ -1692,6 +1764,93 @@ def publish_interface(handle: str, name: str, frame: dict) -> dict:
     Persists in the component's .FCStd as a JSON property bag, so merge_assembly
     can mate against it later. Returns {handle, name, frame, interfaces}."""
     return _call("publish_interface", handle=handle, name=name, frame=frame)
+
+
+@mcp.tool()
+def annotate_face(
+    handle: str,
+    face: str | int,
+    role: str,
+    name: str | None = None,
+    meta: dict | None = None,
+) -> dict:
+    """Declare the semantic ROLE of a face — what it is FOR — so later edits can be
+    checked against intent instead of re-derived from raw geometry. The role binds
+    to the face's stable f_* tag and persists in the .FCStd as a JSON property bag
+    (same mechanism as publish_interface); it survives save/reopen. Once declared,
+    check_airtight_path accepts the role/name directly (e.g. inlet="inlet").
+
+    handle: the part.
+    face: an f_* tag, 'FaceN', or int index of the face to annotate.
+    role: one of 'inlet' | 'outlet' | 'sealing' | 'wetted' | 'ambient' | 'mating'.
+    name: optional unique label for this annotation (default: the role, then
+      role_2, role_3, …); re-using a name updates that annotation.
+    meta: optional dict stored verbatim (e.g. {"spec": "32mm hose"}).
+
+    Returns a dict: {handle, name (the annotation key used), role, tag (the f_*
+    the role is bound to), index ('FaceN' at annotation time), roles (sorted list
+    of all annotation names now on the part)}."""
+    params = {"handle": handle, "face": face, "role": role}
+    if name is not None:
+        params["name"] = name
+    if meta is not None:
+        params["meta"] = meta
+    return _call("annotate_face", **params)
+
+
+@mcp.tool()
+def list_face_roles(handle: str) -> list:
+    """Read back the semantic face roles declared on a part (see annotate_face).
+
+    Each entry re-resolves its stored tag against the CURRENT geometry, so a
+    drifted or deleted face is reported rather than silently resolving wrong.
+
+    Returns a list (sorted by name) of dicts:
+      name    (str)   the annotation key
+      role    (str)   inlet | outlet | sealing | wetted | ambient | mating
+      tag     (str)   the f_* face tag the role is bound to
+      present (bool)  whether that tag still resolves on the current shape
+      index   (str)   'FaceN' on the current shape (only when present)
+      meta    (dict)  the verbatim metadata (only when set)
+    """
+    return _call("list_face_roles", handle=handle)
+
+
+@mcp.tool()
+def declare_intent(handle: str, contract: dict) -> dict:
+    """Record the functional invariants a part must keep satisfying, so they can
+    be re-checked after every edit (see verify_intent). Persists in the .FCStd as
+    a JSON property bag (DP_Intent); one contract per part — re-declaring replaces.
+
+    handle: the part.
+    contract: a dict with any of these (declare at least one):
+      watertight     (bool)  require check_shape's watertight_solid verdict.
+      airtight_path  (dict)  {inlet, outlet, min_aperture_mm2?}; each port is a
+                             face tag / 'FaceN' / int / declared role-or-name.
+      required_faces (list)  face tags / 'FaceN' / declared role-or-names that
+                             must still resolve (catches a deleted/drifted face).
+
+    Returns {handle, contract} — the stored contract."""
+    return _call("declare_intent", handle=handle, contract=contract)
+
+
+@mcp.tool()
+def verify_intent(handle: str) -> dict:
+    """Re-run every invariant declared with declare_intent — the regression gate
+    to run after each edit. Composes check_shape / check_airtight_path / face-role
+    resolution; never raises on a failing invariant (a failure is a passed=False
+    row), so it is safe to call in a loop. Inspection only; mutates nothing.
+
+    handle: the part (must have a declared intent contract).
+
+    Returns a dict:
+      handle   (str)
+      ok       (bool)  True iff every declared invariant passed
+      results  (list)  one {invariant, passed, detail} per declared invariant —
+                       invariant in {watertight, airtight_path, required_faces},
+                       detail a human-readable summary of what was measured
+    """
+    return _call("verify_intent", handle=handle)
 
 
 @mcp.tool()

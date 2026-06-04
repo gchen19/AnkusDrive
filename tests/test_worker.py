@@ -3489,6 +3489,342 @@ def test_every_add_command_has_a_producer_smoke():
     assert not stale, f"_ADD_NOT_SOLID names that aren't add_* tools anymore: {stale}"
 
 
+# --- check_airtight_path (issue #19): enclosed-flow void invariants -----------
+#
+# Synthetic adapters along +X: outer 40x20x20, 2mm walls, 16x16 through-bore.
+#   good    : clean cavity, both ends open  -> connected, no leak, aperture 256
+#   slit    : near-full divider w/ a 0.2mm slot -> connected but pinched (~3.2)
+#   blocked : full divider, no slot -> two separate cavities, no path
+#   leaky   : extra cut breaches the +Z wall -> cavity reaches ambient
+_ADAPTER_SRC = '''
+import Part, FreeCAD as App
+doc = App.ActiveDocument
+outer = Part.makeBox(40, 20, 20, App.Vector(0, -10, -10))
+bore = Part.makeBox(44, 16, 16, App.Vector(-2, -8, -8))
+part = outer.cut(bore)
+kind = {kind!r}
+if kind == "slit":
+    divider = Part.makeBox(2, 16, 16, App.Vector(19, -8, -8))
+    slit = Part.makeBox(2.2, 16, 0.2, App.Vector(18.9, -8, -0.1))
+    part = part.fuse(divider.cut(slit)).removeSplitter()
+elif kind == "blocked":
+    divider = Part.makeBox(2, 16, 16, App.Vector(19, -8, -8))
+    part = part.fuse(divider).removeSplitter()
+elif kind == "leaky":
+    hole = Part.makeBox(8, 8, 6, App.Vector(16, -4, 6))
+    part = part.cut(hole)
+f = doc.addObject("Part::Feature", "Adapter")
+f.Shape = part
+doc.recompute()
+'''
+
+
+def _build_adapter(w, kind):
+    """Build a synthetic adapter in a fresh doc; return (handle, inlet_tag,
+    outlet_tag). Ports are the outer end faces — pick by extreme-x centroid so a
+    breach/divider's inward-facing X faces (same normal) don't get chosen."""
+    w.call("new_document", name=f"air_{kind}")
+    reg = w.call("run_script", code=_ADAPTER_SRC.format(kind=kind))["registered"]
+    h = reg[0]["handle"]
+    inlet = w.call("query_faces", handle=h,
+                   predicate={"type": "planar", "normal_dir": [-1, 0, 0], "centroid_min": "x"})
+    outlet = w.call("query_faces", handle=h,
+                    predicate={"type": "planar", "normal_dir": [1, 0, 0], "centroid_max": "x"})
+    return h, inlet[0]["tag"], outlet[0]["tag"]
+
+
+def test_check_airtight_good():
+    """A clean adapter: inlet->outlet void is connected, sealed, full-bore."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "good")
+        r = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet,
+                   min_aperture_mm2=10.0)
+        assert r["connected"] is True, r
+        assert r["leaky"] is False, r
+        assert r["status"] == "airtight", r
+        assert r["ok"] is True, r
+        assert abs(r["min_aperture_mm2"] - 256.0) < 1.0, r
+
+
+def test_check_airtight_bottleneck_slit():
+    """The v2 failure: connected, but the slit pinches the path below threshold."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "slit")
+        r = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet,
+                   min_aperture_mm2=10.0)
+        assert r["connected"] is True, r
+        assert r["leaky"] is False, r
+        assert r["min_aperture_mm2"] < 10.0, r
+        assert r["status"] == "bottleneck", r
+        assert r["ok"] is False, r
+        # with no threshold, a pinched-but-connected path is acceptable
+        r2 = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet)
+        assert r2["ok"] is True and r2["status"] == "airtight", r2
+
+
+def test_check_airtight_leaky():
+    """The v3 failure: capping both ports still leaves the cavity open to ambient."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "leaky")
+        r = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet)
+        assert r["leaky"] is True, r
+        assert r["status"] == "leaky", r
+        assert r["ok"] is False, r
+
+
+def test_check_airtight_blocked():
+    """A full divider splits the bore: inlet and outlet are in separate cavities."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "blocked")
+        r = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet)
+        assert r["connected"] is False, r
+        assert r["leaky"] is False, r
+        assert r["status"] == "blocked", r
+        assert r["ok"] is False, r
+
+
+def test_check_airtight_same_face_rejected():
+    """inlet == outlet is a usage error, not a silent pass."""
+    with Worker() as w:
+        h, inlet, _ = _build_adapter(w, "good")
+        try:
+            w.call("check_airtight_path", handle=h, inlet=inlet, outlet=inlet)
+        except WorkerError as e:
+            assert "same face" in str(e).lower(), e
+        else:
+            assert False, "expected an error when inlet and outlet are the same face"
+        assert w.call("ping") == "pong", "worker poisoned by the rejected call"
+
+
+# --- annotate_face / face roles (issue #19, slice 2) -------------------------
+
+def test_annotate_face_and_role_resolution():
+    """Declare inlet/outlet roles, read them back, and drive check_airtight_path
+    by role name — the result must match driving it by raw tag."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "good")
+        a = w.call("annotate_face", handle=h, face=inlet, role="inlet", name="window")
+        b = w.call("annotate_face", handle=h, face=outlet, role="outlet", name="barb")
+        assert a["role"] == "inlet" and a["tag"] == inlet, a
+        assert sorted(b["roles"]) == ["barb", "window"], b
+
+        roles = w.call("list_face_roles", handle=h)
+        assert {r["name"]: r["role"] for r in roles} == {"window": "inlet", "barb": "outlet"}
+        assert all(r["present"] for r in roles), roles
+
+        by_tag = w.call("check_airtight_path", handle=h, inlet=inlet, outlet=outlet)
+        by_role = w.call("check_airtight_path", handle=h, inlet="inlet", outlet="outlet")
+        by_name = w.call("check_airtight_path", handle=h, inlet="window", outlet="barb")
+        assert by_role == by_tag, (by_role, by_tag)
+        assert by_name == by_tag, (by_name, by_tag)
+        assert by_role["ok"] is True, by_role
+
+
+def test_annotate_face_persists_across_save():
+    """Roles are stored in the .FCStd and survive save -> reopen, and role-name
+    resolution still works in a fresh worker."""
+    import tempfile, os
+    path = os.path.join(tempfile.mkdtemp(), "annotated.FCStd")
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "good")
+        w.call("annotate_face", handle=h, face=inlet, role="inlet", name="window",
+               meta={"spec": "router window"})
+        w.call("annotate_face", handle=h, face=outlet, role="outlet", name="barb")
+        w.call("save_document", path=path)
+
+    with Worker() as w2:
+        w2.call("open_document", path=path)
+        h2 = w2.call("register_handle", object="Adapter", prefix="p")["handle"]
+        roles = w2.call("list_face_roles", handle=h2)
+        assert {r["name"] for r in roles} == {"window", "barb"}, roles
+        assert all(r["present"] for r in roles), roles
+        meta = next(r.get("meta") for r in roles if r["name"] == "window")
+        assert meta == {"spec": "router window"}, roles
+        res = w2.call("check_airtight_path", handle=h2, inlet="inlet", outlet="outlet")
+        assert res["connected"] is True and res["ok"] is True, res
+
+
+def test_annotate_face_invalid_role_rejected():
+    """An unknown role is a usage error listing the valid set, not a silent pass."""
+    with Worker() as w:
+        h, inlet, _ = _build_adapter(w, "good")
+        try:
+            w.call("annotate_face", handle=h, face=inlet, role="intlet")
+        except WorkerError as e:
+            assert "inlet" in str(e) and "intlet" in str(e), e
+        else:
+            assert False, "expected an error for an unknown role"
+        assert w.call("ping") == "pong"
+
+
+def test_annotate_face_autonames():
+    """Omitting name defaults to the role, then role_2, role_3 for repeats."""
+    with Worker() as w:
+        w.call("new_document", name="autoname")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        h = box["handle"]
+        faces = w.call("list_faces", handle=h)
+        a = w.call("annotate_face", handle=h, face=faces[0]["tag"], role="sealing")
+        b = w.call("annotate_face", handle=h, face=faces[1]["tag"], role="sealing")
+        assert a["name"] == "sealing" and b["name"] == "sealing_2", (a, b)
+
+
+def test_face_role_drift_detected():
+    """When an edit changes a tagged face, list_face_roles reports present=False —
+    the cheap drift signal the regression gate (slice 4) will build on."""
+    with Worker() as w:
+        w.call("new_document", name="drift")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        h = box["handle"]
+        topz = w.call("query_faces", handle=h,
+                      predicate={"type": "planar", "normal_dir": [0, 0, 1]})[0]["tag"]
+        w.call("annotate_face", handle=h, face=topz, role="sealing", name="lid")
+        assert w.call("list_face_roles", handle=h)[0]["present"] is True
+        # shrink the box: the annotated +Z face (area 100) no longer exists
+        w.call("run_script", code=(
+            "o = App.ActiveDocument.getObject('Box'); o.Width = 8.0; o.Length = 8.0; "
+            "App.ActiveDocument.recompute()"))
+        after = w.call("list_face_roles", handle=h)
+        assert after[0]["present"] is False, after
+
+
+# --- classify_face_sides (issue #19, slice 3) --------------------------------
+
+def test_classify_face_sides_wetted_vs_ambient():
+    """With the declared ports sealed, the bore walls read as interior/wetted and
+    the outer walls as ambient; without sealing, the open bore has no enclosed
+    cavity so nothing is interior."""
+    with Worker() as w:
+        h, inlet, outlet = _build_adapter(w, "good")
+        w.call("annotate_face", handle=h, face=inlet, role="inlet", name="window")
+        w.call("annotate_face", handle=h, face=outlet, role="outlet", name="barb")
+
+        sides = w.call("classify_face_sides", handle=h)  # seal_ports default True
+        n_interior = sum(1 for s in sides if s["side"] == "interior")
+        n_ambient = sum(1 for s in sides if s["side"] == "ambient")
+        assert n_interior >= 4, sides   # 4 inner bore walls
+        assert n_ambient >= 4, sides    # 4 outer walls
+        assert all(s["suggested_role"] == "wetted" for s in sides if s["side"] == "interior")
+        declared = {s["declared_role"] for s in sides if "declared_role" in s}
+        assert declared == {"inlet", "outlet"}, sides
+
+        unsealed = w.call("classify_face_sides", handle=h, seal_ports=False)
+        assert sum(1 for s in unsealed if s["side"] == "interior") == 0, unsealed
+
+
+# --- declare_intent / verify_intent (issue #19, slice 4) ---------------------
+
+def _build_annotated_adapter(w, kind):
+    h, inlet, outlet = _build_adapter(w, kind)
+    w.call("annotate_face", handle=h, face=inlet, role="inlet", name="window")
+    w.call("annotate_face", handle=h, face=outlet, role="outlet", name="barb")
+    return h
+
+
+def test_verify_intent_good_passes():
+    """A clean adapter satisfies watertight + airtight_path + required_faces."""
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "good")
+        w.call("declare_intent", handle=h, contract={
+            "watertight": True,
+            "airtight_path": {"inlet": "inlet", "outlet": "outlet", "min_aperture_mm2": 50.0},
+            "required_faces": ["window", "barb"],
+        })
+        r = w.call("verify_intent", handle=h)
+        assert r["ok"] is True, r
+        assert {x["invariant"] for x in r["results"]} == {"watertight", "airtight_path", "required_faces"}
+        assert all(x["passed"] for x in r["results"]), r
+
+
+def test_verify_intent_bottleneck_fails():
+    """The v2 slit keeps the solid watertight but fails the airtight_path gate."""
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "slit")
+        w.call("declare_intent", handle=h, contract={
+            "watertight": True,
+            "airtight_path": {"inlet": "inlet", "outlet": "outlet", "min_aperture_mm2": 50.0},
+        })
+        r = w.call("verify_intent", handle=h)
+        res = {x["invariant"]: x["passed"] for x in r["results"]}
+        assert res["watertight"] is True, r       # watertight is happy...
+        assert res["airtight_path"] is False, r    # ...but the path is pinched
+        assert r["ok"] is False, r
+
+
+def test_verify_intent_leaky_fails():
+    """The v3-style breach fails the airtight_path gate (leaky)."""
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "leaky")
+        w.call("declare_intent", handle=h, contract={
+            "airtight_path": {"inlet": "inlet", "outlet": "outlet"},
+        })
+        r = w.call("verify_intent", handle=h)
+        assert r["ok"] is False, r
+        ap = next(x for x in r["results"] if x["invariant"] == "airtight_path")
+        assert ap["passed"] is False and "leaky=True" in ap["detail"], ap
+
+
+def test_verify_intent_persists_across_save():
+    """Declared intent survives save -> reopen and re-runs in a fresh worker."""
+    import tempfile, os
+    path = os.path.join(tempfile.mkdtemp(), "intent.FCStd")
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "good")
+        w.call("declare_intent", handle=h, contract={
+            "watertight": True,
+            "airtight_path": {"inlet": "inlet", "outlet": "outlet", "min_aperture_mm2": 50.0},
+        })
+        w.call("save_document", path=path)
+    with Worker() as w2:
+        w2.call("open_document", path=path)
+        h2 = w2.call("register_handle", object="Adapter", prefix="p")["handle"]
+        r = w2.call("verify_intent", handle=h2)
+        assert r["ok"] is True, r
+
+
+def test_verify_intent_required_face_drift_fails():
+    """A required face that drifts/vanishes after an edit fails the gate."""
+    with Worker() as w:
+        w.call("new_document", name="reqdrift")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        h = box["handle"]
+        topz = w.call("query_faces", handle=h,
+                      predicate={"type": "planar", "normal_dir": [0, 0, 1]})[0]["tag"]
+        w.call("annotate_face", handle=h, face=topz, role="sealing", name="lid")
+        w.call("declare_intent", handle=h, contract={"required_faces": ["lid"]})
+        assert w.call("verify_intent", handle=h)["ok"] is True
+        w.call("run_script", code=(
+            "o = App.ActiveDocument.getObject('Box'); o.Width = 8.0; o.Length = 8.0; "
+            "App.ActiveDocument.recompute()"))
+        r = w.call("verify_intent", handle=h)
+        assert r["ok"] is False, r
+        rf = next(x for x in r["results"] if x["invariant"] == "required_faces")
+        assert rf["passed"] is False and "lid" in rf["detail"], rf
+
+
+def test_declare_intent_validation():
+    """Empty contract and a malformed airtight_path are rejected; verify needs a
+    declared contract."""
+    with Worker() as w:
+        h = _build_annotated_adapter(w, "good")
+        for bad in ({}, {"airtight_path": {"inlet": "inlet"}}):
+            try:
+                w.call("declare_intent", handle=h, contract=bad)
+            except WorkerError:
+                pass
+            else:
+                assert False, f"expected rejection for contract={bad}"
+        w.call("new_document", name="nointent")
+        box = w.call("add_primitive", kind="box", w=5, d=5, h=5)
+        try:
+            w.call("verify_intent", handle=box["handle"])
+        except WorkerError as e:
+            assert "no intent" in str(e).lower(), e
+        else:
+            assert False, "expected verify_intent to require a declared contract"
+        assert w.call("ping") == "pong"
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

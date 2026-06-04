@@ -1900,6 +1900,319 @@ def _h_section_view(p):
     return out
 
 
+# --- airtight / enclosed-flow void analysis (issue #19) ----------------------
+#
+# An enclosed-flow part (a vacuum adapter, a manifold, a duct) is "correct" when
+# a single connected void joins its declared inlet to its declared outlet and is
+# bounded by solid everywhere else. check_shape's watertight verdict is necessary
+# but NOT sufficient: a watertight solid can still have a blocked path (a near-
+# zero "almond slit") or an unintended opening (an over-cut doorway) — the two
+# failure modes in issue #19. This computes the functional invariant via a pure-
+# BREP void analysis: build the void as padded_bbox.cut(part_with_ports_capped)
+# and let OCCT's boolean engine separate enclosed cavities (each its own entry in
+# .Solids) from ambient (the single large outside solid). A void open to ambient
+# fuses INTO ambient; an enclosed cavity falls out as a distinct solid. The
+# bottleneck is then an analytic slice-area sweep along the inlet->outlet axis.
+
+
+def _resolve_port_face(handle, shape, ref, label):
+    """A face reference -> (Face, 1-based index). Accepts an f_* tag, a 'FaceN'
+    string, an int index, or — once roles are declared with annotate_face — a
+    face-role NAME or ROLE string (resolved through DP_FaceRoles via the stored
+    tag, so it survives edits). Mirrors the inline resolution in oring_groove."""
+    if ref is None:
+        raise ValueError(f"{label} face reference is required")
+    if isinstance(ref, str) and ref.startswith("f_"):
+        idx = int(_h_resolve_face({"handle": handle, "tag": ref})["index"][len("Face"):])
+    elif isinstance(ref, str) and ref.startswith("Face"):
+        idx = int(ref[len("Face"):])
+    else:
+        try:
+            idx = int(ref)
+        except (TypeError, ValueError):
+            idx = _resolve_face_role(handle, ref, label)
+    if idx < 1 or idx > len(shape.Faces):
+        raise ValueError(f"{label} face index {idx} out of range (1..{len(shape.Faces)})")
+    return shape.Faces[idx - 1], idx
+
+
+def _port_cap(part, face, label):
+    """A solid 'plug' that seals a port opening: the face's outer boundary filled
+    and extruded along the outward normal, with a small inward overlap so it fuses
+    into the part (abutting caps stay disjoint and break the boolean). Returns
+    (cap_solid, outward_normal)."""
+    n = _outward_normal(face)
+    try:
+        plate = Part.Face(face.OuterWire)
+    except Exception as e:
+        raise ValueError(
+            f"{label} port face is not cappable (need a planar opening rim): {e}"
+        )
+    depth = max(2.0, 0.05 * part.BoundBox.DiagonalLength)
+    overlap = 0.5  # inward overlap so fuse() merges the cap into the wall
+    inward = App.Vector(-n.x, -n.y, -n.z)
+    cap = plate.translated(inward * overlap).extrude(n * (overlap + depth))
+    return cap, n
+
+
+def _section_area_at(solid, axis, d):
+    """Sum of closed section-wire areas where `solid` meets the plane (axis, d).
+    Reuses the section_view slice pattern."""
+    area = 0.0
+    for w in solid.slice(axis, d):
+        if w.isClosed():
+            try:
+                area += Part.Face(w).Area
+            except Exception:
+                pass
+    return area
+
+
+@handler("check_airtight_path")
+def _h_check_airtight_path(p):
+    """Functional check for an enclosed-flow part: is there a single connected
+    void joining the declared inlet to the outlet, bounded by solid everywhere
+    else? This is what 'mostly airtight' means operationally, and it is what
+    check_shape's watertight verdict CANNOT tell you — a watertight solid can
+    still have a blocked path or a hidden leak. Pure inspection: mutates nothing.
+
+    inlet / outlet: a face reference on `handle` naming each port OPENING (the rim
+        face around the hole) — an f_* tag, 'FaceN', an int index, or a role/name
+        declared with annotate_face (e.g. "inlet"). The check seals both ports with
+        cap solids, builds the negative-space void as padded_bbox.cut(capped), and
+        classifies the result.
+    min_aperture_mm2 (optional): minimum acceptable bottleneck cross-section. When
+        given, a connected-but-pinched path (a near-zero 'almond slit') fails.
+    pad_mm (optional): bounding-box margin for the void box (default
+        max(2.0, 0.05*diagonal)).
+
+    Returns (lengths mm, areas mm², volumes mm³):
+      ok                   (bool)  connected AND not leaky AND aperture >= threshold
+      status               (str)   'airtight' | 'bottleneck' | 'blocked' | 'leaky'
+      connected            (bool)  one void joins inlet and outlet
+      leaky                (bool)  with both ports capped the cavity still reaches
+                                   ambient => an unintended opening exists
+      min_aperture_mm2     (float|null) narrowest section of the flow void
+      bottleneck_point     ([x,y,z]|null) a point on the narrowest section plane
+      flow_void_volume_mm3 (float|null) volume of the connecting void
+      void_components      (int)   number of void solids (ambient + enclosed)
+      inlet / outlet       (str)   the resolved 'FaceN' references
+      pad_mm               (float) the margin used
+    """
+    handle = p["handle"]
+    _, shape = _shape_of(handle)
+    if not shape.isValid():
+        raise RuntimeError(
+            "shape is not valid (run check_shape first); cannot build a reliable void"
+        )
+    fin, i_in = _resolve_port_face(handle, shape, p.get("inlet"), "inlet")
+    fout, i_out = _resolve_port_face(handle, shape, p.get("outlet"), "outlet")
+    if i_in == i_out:
+        raise ValueError("inlet and outlet resolve to the same face")
+    min_aperture = p.get("min_aperture_mm2")
+    if min_aperture is not None:
+        min_aperture = float(min_aperture)
+
+    incap, n_in = _port_cap(shape, fin, "inlet")
+    outcap, n_out = _port_cap(shape, fout, "outlet")
+    capped = shape.fuse(incap).fuse(outcap)
+    try:
+        capped = capped.removeSplitter()
+    except Exception:
+        pass
+
+    cb = capped.BoundBox
+    pad = float(p["pad_mm"]) if p.get("pad_mm") else max(2.0, 0.05 * cb.DiagonalLength)
+    big = Part.makeBox(
+        cb.XLength + 2 * pad, cb.YLength + 2 * pad, cb.ZLength + 2 * pad,
+        App.Vector(cb.XMin - pad, cb.YMin - pad, cb.ZMin - pad),
+    )
+    void = big.cut(capped)
+    solids = list(void.Solids)
+    if not solids:
+        raise RuntimeError("void computation produced no solids (degenerate geometry)")
+
+    # ambient = the single large outside void; tie-break by centroid so the pick
+    # is deterministic when two void solids happen to share a volume.
+    def _amb_key(i):
+        s = solids[i]
+        c = s.CenterOfMass
+        return (round(s.Volume, 6), round(c.x, 6), round(c.y, 6), round(c.z, 6))
+    amb_idx = max(range(len(solids)), key=_amb_key)
+    ambient = solids[amb_idx]
+    enclosed = [s for i, s in enumerate(solids) if i != amb_idx]
+
+    # interior probe points: just inside each opening, past the cap overlap.
+    def _interior(face, n):
+        c = face.CenterOfMass
+        return c - App.Vector(n.x, n.y, n.z) * 1.0
+    pin = _interior(fin, n_in)
+    pout = _interior(fout, n_out)
+    if capped.isInside(pin, 1e-6, True):
+        raise ValueError(
+            "inlet does not open into a void (not an opening, or wall too thick "
+            "behind the rim)"
+        )
+    if capped.isInside(pout, 1e-6, True):
+        raise ValueError(
+            "outlet does not open into a void (not an opening, or wall too thick "
+            "behind the rim)"
+        )
+
+    def _host(pt):
+        for i, s in enumerate(enclosed):
+            if s.isInside(pt, 1e-6, True):
+                return ("enclosed", i)
+        if ambient.isInside(pt, 1e-6, True):
+            return ("ambient", -1)
+        return ("none", -2)
+    hin, hout = _host(pin), _host(pout)
+
+    same_enclosed = hin[0] == "enclosed" and hin == hout
+    leaky = hin[0] == "ambient" or hout[0] == "ambient"
+    connected = same_enclosed or (hin[0] == "ambient" and hout[0] == "ambient")
+
+    min_ap = None
+    bottleneck = None
+    flow_vol = None
+    if same_enclosed:
+        fv = enclosed[hin[1]]
+        flow_vol = fv.Volume
+        axis = pout - pin
+        if axis.Length > 1e-9:
+            axis.normalize()
+            d0, d1 = pin.dot(axis), pout.dot(axis)
+            best = None
+            n_stations = 40
+            for k in range(1, n_stations):
+                d = d0 + (d1 - d0) * k / n_stations
+                a = _section_area_at(fv, axis, d)
+                if a > 1e-9 and (best is None or a < best[0]):
+                    best = (a, d)
+            if best is not None:
+                min_ap = best[0]
+                t = best[1] - d0
+                bottleneck = [
+                    round(pin.x + axis.x * t, 6),
+                    round(pin.y + axis.y * t, 6),
+                    round(pin.z + axis.z * t, 6),
+                ]
+
+    if leaky:
+        status = "leaky"
+    elif not connected:
+        status = "blocked"
+    elif min_aperture is not None and min_ap is not None and min_ap < min_aperture:
+        status = "bottleneck"
+    else:
+        status = "airtight"
+    ok = bool(
+        connected and not leaky
+        and (min_aperture is None or (min_ap is not None and min_ap >= min_aperture))
+    )
+
+    return {
+        "ok": ok,
+        "status": status,
+        "connected": bool(connected),
+        "leaky": bool(leaky),
+        "min_aperture_mm2": None if min_ap is None else round(min_ap, 6),
+        "bottleneck_point": bottleneck,
+        "flow_void_volume_mm3": None if flow_vol is None else round(flow_vol, 6),
+        "void_components": len(solids),
+        "inlet": f"Face{i_in}",
+        "outlet": f"Face{i_out}",
+        "pad_mm": round(pad, 6),
+    }
+
+
+@handler("classify_face_sides")
+def _h_classify_face_sides(p):
+    """Inside-vs-outside topology: for every face, which void does its outward
+    side open into — an enclosed cavity (wetted) or ambient (exterior)? Answers
+    the "which faces are inside the airflow path" question from issue #19 and
+    auto-suggests a role per face. Pure inspection; mutates nothing.
+
+    Method: build the negative-space void (padded_bbox.cut(part)) and split it
+    into ambient (the one large outside solid) and any enclosed cavities; probe
+    each face just off its outward normal and see which it lands in. With
+    seal_ports=True (default) declared inlet/outlet roles (annotate_face) are
+    capped first, so an OPEN duct's bore reads as the enclosed flow cavity rather
+    than as ambient.
+
+    handle: the part. seal_ports: cap declared inlet/outlet before classifying.
+
+    Returns a list (one per face) of dicts:
+      tag / index      (str)   stable f_* tag and 'FaceN'
+      kind             (str)   surface kind (planar/cylindrical/…)
+      side             (str)   'interior' (bounds an enclosed void) | 'ambient' |
+                               'ambiguous' (probe inconclusive, e.g. a capped port)
+      suggested_role   (str)   'wetted' for interior, 'ambient' for exterior, else null
+      declared_role    (str)   the role already annotated on this face, if any
+    """
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    roles = _read_face_roles(obj)
+
+    solid = shape
+    if p.get("seal_ports", True):
+        caps = []
+        for name, e in roles.items():
+            if e.get("role") in ("inlet", "outlet"):
+                try:
+                    f, _ = _resolve_port_face(handle, shape, e["tag"], name)
+                    cap, _n = _port_cap(shape, f, name)
+                    caps.append(cap)
+                except Exception:
+                    pass  # a drifted/uncappable port just isn't sealed
+        for c in caps:
+            solid = solid.fuse(c)
+        if caps:
+            try:
+                solid = solid.removeSplitter()
+            except Exception:
+                pass
+
+    bb = solid.BoundBox
+    pad = max(2.0, 0.05 * bb.DiagonalLength)
+    big = Part.makeBox(
+        bb.XLength + 2 * pad, bb.YLength + 2 * pad, bb.ZLength + 2 * pad,
+        App.Vector(bb.XMin - pad, bb.YMin - pad, bb.ZMin - pad),
+    )
+    solids = list(big.cut(solid).Solids)
+    if not solids:
+        raise RuntimeError("void computation produced no solids (degenerate geometry)")
+
+    def _amb_key(i):
+        s = solids[i]
+        c = s.CenterOfMass
+        return (round(s.Volume, 6), round(c.x, 6), round(c.y, 6), round(c.z, 6))
+    amb_idx = max(range(len(solids)), key=_amb_key)
+    ambient = solids[amb_idx]
+    enclosed = [s for i, s in enumerate(solids) if i != amb_idx]
+
+    tag2role = {e["tag"]: e["role"] for e in roles.values() if "tag" in e}
+    eps = max(0.01, 1e-3 * bb.DiagonalLength)
+    out = []
+    for i, f in enumerate(shape.Faces):
+        sig = _face_signature(f)
+        tag = f"f_{_hash_sig(sig)}"
+        n = _outward_normal(f)
+        probe = f.CenterOfMass + App.Vector(n.x, n.y, n.z) * eps
+        if any(s.isInside(probe, 1e-6, True) for s in enclosed):
+            side, suggest = "interior", "wetted"
+        elif ambient.isInside(probe, 1e-6, True):
+            side, suggest = "ambient", "ambient"
+        else:
+            side, suggest = "ambiguous", None
+        item = {"tag": tag, "index": f"Face{i + 1}", "kind": sig["kind"],
+                "side": side, "suggested_role": suggest}
+        if tag in tag2role:
+            item["declared_role"] = tag2role[tag]
+        out.append(item)
+    return out
+
+
 @handler("list_faces")
 def _h_list_faces(p):
     _, shape = _shape_of(p["handle"])
@@ -3824,6 +4137,257 @@ def _h_publish_interface(p):
     base.Document.recompute()
     return {"handle": p["handle"], "name": name, "frame": frame,
             "interfaces": sorted(ifaces.keys())}
+
+
+# --- semantic face roles (issue #19) -----------------------------------------
+#
+# Declare WHAT a face is FOR — "inlet", "outlet", "sealing", ... — so later edits
+# can be checked against intent instead of re-derived from raw geometry. Roles
+# bind to the stable f_* face tag (which survives edits) and persist as a JSON
+# property bag, mirroring publish_interface's DP_Interfaces exactly. The stored
+# signature snapshot lets a later check (verify_intent, slice 4) detect a tagged
+# face that has drifted or vanished. check_airtight_path resolves a role/name
+# string back to the current face through the stored tag.
+
+_FACEROLE_PROP = "DP_FaceRoles"
+_FACE_ROLES = ("inlet", "outlet", "sealing", "wetted", "ambient", "mating")
+
+
+def _read_face_roles(obj):
+    """Declared face-role dict for an object ({} if none)."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _FACEROLE_PROP in base.PropertiesList:
+        try:
+            return _json.loads(getattr(base, _FACEROLE_PROP) or "{}")
+        except Exception:
+            return {}
+    return {}
+
+
+def _unique_role_name(roles, role):
+    """A free key for a new annotation: the role itself, else role_2, role_3, …"""
+    if role not in roles:
+        return role
+    i = 2
+    while f"{role}_{i}" in roles:
+        i += 1
+    return f"{role}_{i}"
+
+
+def _resolve_face_role(handle, ref, label):
+    """Resolve a face-role NAME (preferred) or ROLE string to a current 1-based
+    face index via the stored tag. Raises if unknown or (for a role) ambiguous."""
+    roles = _read_face_roles(_resolve(handle))
+    if not roles:
+        raise ValueError(
+            f"{label}={ref!r} is not a face tag/'FaceN'/index, and no face roles "
+            f"are declared on {handle!r} (use annotate_face first)"
+        )
+    if ref in roles:
+        tag = roles[ref]["tag"]
+    else:
+        matches = [n for n, e in roles.items() if e.get("role") == ref]
+        if not matches:
+            raise ValueError(
+                f"{label}={ref!r}: no annotation with that name or role "
+                f"(declared: {sorted(roles)})"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"{label} role {ref!r} is ambiguous across {sorted(matches)}; "
+                f"pass a specific annotation name or a face tag"
+            )
+        tag = roles[matches[0]]["tag"]
+    return int(_h_resolve_face({"handle": handle, "tag": tag})["index"][len("Face"):])
+
+
+@handler("annotate_face")
+def _h_annotate_face(p):
+    """Declare the semantic ROLE of a face — what it is FOR — so edits can be
+    checked against intent. Persists in the .FCStd as a JSON property bag keyed by
+    a unique annotation name; survives save/reopen. The role binds to the face's
+    stable f_* tag, and a signature snapshot is stored so a later check can flag a
+    tagged face that has drifted or vanished.
+
+    handle: the part.
+    face: an f_* tag, 'FaceN', or int index of the face to annotate.
+    role: one of inlet | outlet | sealing | wetted | ambient | mating.
+    name: optional unique label for this annotation (default: the role, then
+        role_2, role_3, …). Re-using a name updates that annotation.
+    meta: optional dict stored verbatim (e.g. {"spec": "32mm hose", "od": 32}).
+
+    Returns {handle, name, role, tag, index, roles} — roles is the sorted list of
+    all annotation names now on the part."""
+    import json as _json
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    face, idx = _resolve_port_face(handle, shape, p.get("face"), "face")
+    role = p.get("role")
+    if role not in _FACE_ROLES:
+        raise ValueError(f"role {role!r} not in {list(_FACE_ROLES)}")
+    sig = _face_signature(face)
+    tag = f"f_{_hash_sig(sig)}"
+    roles = _read_face_roles(obj)
+    name = p.get("name") or _unique_role_name(roles, role)
+    entry = {"role": role, "tag": tag, "index": f"Face{idx}", "signature": sig}
+    meta = p.get("meta")
+    if meta:
+        entry["meta"] = meta
+    roles[name] = entry
+    base = _shaped_top(obj)
+    if _FACEROLE_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _FACEROLE_PROP, "DriftPin",
+                         "semantic face roles (JSON)")
+    setattr(base, _FACEROLE_PROP, _json.dumps(roles))
+    base.Document.recompute()
+    return {"handle": handle, "name": name, "role": role, "tag": tag,
+            "index": f"Face{idx}", "roles": sorted(roles)}
+
+
+@handler("list_face_roles")
+def _h_list_face_roles(p):
+    """Read back the semantic face roles declared on a part (see annotate_face).
+    Each entry re-resolves its stored tag against the CURRENT geometry, so
+    `present` is False when the tagged face has drifted or vanished since it was
+    annotated — the cheap drift signal the regression gate builds on.
+
+    Returns a list of {name, role, tag, present, index?, meta?}, sorted by name."""
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    roles = _read_face_roles(obj)
+    current = {f"f_{_hash_sig(_face_signature(f))}" for f in shape.Faces}
+    out = []
+    for name in sorted(roles):
+        e = roles[name]
+        tag = e.get("tag")
+        item = {"name": name, "role": e.get("role"), "tag": tag,
+                "present": tag in current}
+        if item["present"]:
+            try:
+                item["index"] = _h_resolve_face({"handle": handle, "tag": tag})["index"]
+            except Exception:
+                item["present"] = False
+        if "meta" in e:
+            item["meta"] = e["meta"]
+        out.append(item)
+    return out
+
+
+# --- declared intent + re-runnable regression gate (issue #19) ---------------
+#
+# Record the functional invariants of a part ONCE, then re-run them after every
+# edit — the regression check the issue calls out as missing. The contract
+# composes the slice 1-3 primitives (check_shape, check_airtight_path, face-role
+# presence) and persists as a JSON property bag (DP_Intent), like DP_Interfaces /
+# DP_FaceRoles. verify_intent never raises on a failing invariant: a failure
+# becomes a {passed: False} row so the gate is safe to run in a loop.
+
+_INTENT_PROP = "DP_Intent"
+
+
+def _read_intent(obj):
+    """Declared intent contract for an object ({} if none)."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _INTENT_PROP in base.PropertiesList:
+        try:
+            return _json.loads(getattr(base, _INTENT_PROP) or "{}")
+        except Exception:
+            return {}
+    return {}
+
+
+@handler("declare_intent")
+def _h_declare_intent(p):
+    """Record the functional invariants a part must keep satisfying, so they can
+    be re-checked after every edit (see verify_intent). Persists in the .FCStd as
+    a JSON property bag (DP_Intent); one contract per part, re-declaring replaces.
+
+    contract keys (all optional, but declare at least one):
+      watertight     (bool)  require check_shape's watertight_solid verdict.
+      airtight_path  (dict)  {inlet, outlet, min_aperture_mm2?} — each port is a
+                             face tag / 'FaceN' / int / declared role-or-name.
+      required_faces (list)  face tags / 'FaceN' / declared role-or-names that
+                             must still resolve (catches a deleted/drifted face).
+
+    Returns {handle, contract} (the stored contract)."""
+    import json as _json
+    handle = p["handle"]
+    obj, _ = _shape_of(handle)
+    contract = dict(p.get("contract") or {})
+    if not contract:
+        raise ValueError("contract is empty; declare at least one invariant")
+    ap = contract.get("airtight_path")
+    if ap is not None and ("inlet" not in ap or "outlet" not in ap):
+        raise ValueError("airtight_path requires both 'inlet' and 'outlet'")
+    base = _shaped_top(obj)
+    if _INTENT_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _INTENT_PROP, "DriftPin",
+                         "declared functional intent (JSON)")
+    setattr(base, _INTENT_PROP, _json.dumps(contract))
+    base.Document.recompute()
+    return {"handle": handle, "contract": contract}
+
+
+@handler("verify_intent")
+def _h_verify_intent(p):
+    """Re-run every invariant declared with declare_intent — the regression gate
+    to run after each edit. Composes check_shape / check_airtight_path / face-role
+    resolution. Never raises on a failing invariant (a failure is a passed=False
+    row), so it is safe to call in a loop. Pure inspection; mutates nothing.
+
+    Returns {handle, ok, results} where results is a list of
+      {invariant, passed, detail} (one per declared invariant) and ok is True iff
+    every invariant passed."""
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    contract = _read_intent(obj)
+    if not contract:
+        raise ValueError(f"no intent declared on {handle!r} (use declare_intent first)")
+
+    results = []
+
+    def _add(name, fn):
+        try:
+            passed, detail = fn()
+        except Exception as e:
+            passed, detail = False, f"{type(e).__name__}: {e}"
+        results.append({"invariant": name, "passed": bool(passed), "detail": detail})
+
+    if contract.get("watertight"):
+        def _w():
+            r = _h_check_shape({"handle": handle})
+            return r["watertight_solid"], (
+                f"solids={r['solids']}, closed={r['closed']}, valid={r['valid']}")
+        _add("watertight", _w)
+
+    ap = contract.get("airtight_path")
+    if ap:
+        def _a():
+            r = _h_check_airtight_path({
+                "handle": handle, "inlet": ap["inlet"], "outlet": ap["outlet"],
+                "min_aperture_mm2": ap.get("min_aperture_mm2")})
+            return r["ok"], (
+                f"status={r['status']}, connected={r['connected']}, "
+                f"leaky={r['leaky']}, min_aperture_mm2={r['min_aperture_mm2']}")
+        _add("airtight_path", _a)
+
+    req = contract.get("required_faces")
+    if req:
+        def _r():
+            missing = []
+            for ref in req:
+                try:
+                    _resolve_port_face(handle, shape, ref, "required_face")
+                except Exception:
+                    missing.append(ref)
+            return (not missing), (
+                "all present" if not missing else f"missing/drifted: {missing}")
+        _add("required_faces", _r)
+
+    ok = all(r["passed"] for r in results) if results else True
+    return {"handle": handle, "ok": ok, "results": results}
 
 
 def _apply_mate(link, parent_link, child_iface, parent_iface):
