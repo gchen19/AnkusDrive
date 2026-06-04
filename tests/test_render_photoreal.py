@@ -155,6 +155,14 @@ def test_photoreal_cycles_renders():
     _assert_alternate_renderer("Cycles")
 
 
+def test_photoreal_ospray_renders():
+    _assert_alternate_renderer("Ospray")
+
+
+def test_photoreal_pbrt_renders():
+    _assert_alternate_renderer("Pbrt")
+
+
 def test_photoreal_isolates_live_document():
     """Rendering must not mutate the caller's document. The handler renders in a
     throwaway temp doc, so the live doc's object list is unchanged afterwards."""

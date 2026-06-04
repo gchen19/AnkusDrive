@@ -4571,6 +4571,37 @@ _RENDERERS = {
         "install_hint": "build or download the standalone Cycles renderer (the `cycles` "
                         "CLI) and put it on PATH",
     },
+    "Ospray": {
+        # OSPRay Studio; batch mode adds a `batch` subcommand so ospStudio renders
+        # headless to an image instead of opening its viewer.
+        "param_key": "OspPath",
+        "template": "ospray_standard.sg",
+        "binaries": ("ospStudio",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/ospray_studio/bin"),
+            "Darwin":  ("/usr/local/bin", "/Applications/ospStudio.app/Contents/MacOS"),
+            "Windows": (r"C:\Program Files\Intel\OSPRay Studio\bin",),
+        },
+        "install_hint": "download OSPRay Studio from "
+                        "https://github.com/RenderKit/ospray_studio/releases (provides "
+                        "ospStudio) and put it on PATH",
+    },
+    "Pbrt": {
+        # pbrt-v4. batch is headless; non-batch streams frames to a 'tev' viewer.
+        # NOTE: pbrt-v4 support is marked experimental upstream in the addon.
+        "param_key": "PbrtPath",
+        "template": "pbrt_standard.pbrt",
+        "binaries": ("pbrt",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/pbrt/bin"),
+            "Darwin":  ("/usr/local/bin",),
+            "Windows": (r"C:\Program Files\pbrt\bin",),
+        },
+        "install_hint": "build pbrt-v4 from https://github.com/mmp/pbrt-v4 (provides "
+                        "pbrt) and put it on PATH — pbrt-v4 support is experimental upstream",
+    },
 }
 
 

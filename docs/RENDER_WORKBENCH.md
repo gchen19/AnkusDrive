@@ -11,11 +11,11 @@ The addon and a renderer binary are still *optional at runtime* — DriftPin boo
 and runs without them, and the tool returns clear install guidance if they are
 absent (the renderer-gated tests skip rather than fail). It supports the Render
 addon's material library (the `material` argument — Gold, Glass, Aluminium, …), a
-three more renderers (LuxCore, Appleseed, Cycles via `renderer=`), and a non-blocking
-job API (`render_photoreal_submit` + `render_job`, with `discard` + auto-eviction) for
-long renders. What it does **not** yet do — Ospray/pbrt-v4 and POV-Ray texture maps — is
-tracked in §7 as follow-ups. This doc doubles as the design record and the operator's
-install guide for all three platforms.
+all five other renderers the addon supports (LuxCore, Appleseed, Cycles, Ospray,
+pbrt-v4 via `renderer=`), and a non-blocking job API (`render_photoreal_submit` +
+`render_job`, with `discard` + auto-eviction) for long renders. The few remaining
+follow-ups (POV-Ray texture maps; the upstream fork decision) are tracked in §7. This
+doc doubles as the design record and the operator's install guide for all three platforms.
 
 ---
 
@@ -68,7 +68,8 @@ external renderer binary**:
 | LuxCoreRender | hand-fetched standalone (provides `luxcoreconsole`) | **Supported** (`renderer="Luxcore"`, batch/console mode). Highest quality + PBR materials; heavier/slower headless. |
 | Appleseed | hand-fetched build (provides `appleseed.cli`) | **Supported** (`renderer="Appleseed"`, batch/console mode). |
 | Cycles (standalone) | hand-fetched `cycles` CLI | **Supported** (`renderer="Cycles"`, batch adds `--background`). Blender's engine. |
-| Ospray / pbrt-v4 | hand-fetched | Not yet wired; pbrt-v4 marked experimental upstream. |
+| Ospray | hand-fetched OSPRay Studio (`ospStudio`) | **Supported** (`renderer="Ospray"`, batch subcommand). |
+| pbrt-v4 | hand-fetched `pbrt` | **Supported** (`renderer="Pbrt"`, batch/headless). pbrt-v4 marked experimental upstream. |
 
 The workbench itself rasterizes nothing — **it's a scene exporter + process
 launcher.** That is exactly what makes it embeddable in DriftPin's worker, given
@@ -260,15 +261,16 @@ Resolved (were open questions in the proposal):
   common quick-render case.
 - **Renderer choice.** The handler is renderer-agnostic: adding one is a single entry
   in the `_RENDERERS` registry (param key, default template, binary names, per-OS dirs,
-  optional `batch` flag, install hint). **POV-Ray, LuxCore, Appleseed, and Cycles** are
-  wired; unknown renderers raise with clear, per-renderer guidance. The three
-  hand-fetched renderers run headless in batch mode (LuxCore/Appleseed use their console
-  binary; Cycles adds `--background`). Each one's scene export + material translation are
-  verified headless via the addon's DryRun (e.g. a Gold box emits valid LuxCore SDL —
-  `scene.materials … type = metal2`; valid Appleseed `<assembly>`/`<material>` XML;
-  valid Cycles `<shader>`/`<camera>` XML); the external binaries themselves run on a
-  provisioned box / CI rather than the sandbox, on the same code path POV-Ray is verified
-  end-to-end on.
+  optional `batch` flag, install hint). **All six the addon supports are wired** —
+  POV-Ray (default) plus LuxCore, Appleseed, Cycles, Ospray, and pbrt-v4; unknown
+  renderers raise with clear, per-renderer guidance. The five hand-fetched renderers run
+  headless in batch mode (console binary, `--background`, or a `batch` subcommand as each
+  requires). Each one's scene export + material translation are verified headless via the
+  addon's DryRun (e.g. a Gold box emits valid LuxCore SDL — `scene.materials … type =
+  metal2`; Appleseed `<assembly>`/`<material>` XML; Cycles `<shader>`/`<camera>` XML;
+  pbrt `Material "conductor"`; Ospray `.sg` scene graph); the external binaries themselves
+  run on a provisioned box / CI rather than the sandbox, on the same code path POV-Ray is
+  verified end-to-end on.
 - **Materials.** Implemented — the `material` argument applies any of the addon's
   library cards (metals, glass, plastics, marble, …) via `View.Material`, verified
   visually (Gold renders yellow) and in tests. The card-driven `[Render]` sections are
@@ -281,8 +283,6 @@ Resolved (were open questions in the proposal):
 
 Remaining follow-ups (not yet implemented):
 
-- **More renderers.** Ospray and pbrt-v4 remain (pbrt-v4 is experimental upstream); each
-  is another `_RENDERERS` entry following the existing pattern.
 - **Textured materials under POV-Ray.** Solid cards (metals, glass, plastics) are
   confirmed; image-textured cards (marble, terrazzo) import their texture objects but
   their maps haven't been visually confirmed in the POV-Ray output specifically.
