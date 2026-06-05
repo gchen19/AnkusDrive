@@ -28,9 +28,12 @@ def _ensure_worker() -> Worker:
     return _worker
 
 
-def _call(method: str, **params: Any) -> Any:
+def _call(method: str, _timeout: float | None = None, **params: Any) -> Any:
     try:
-        return _ensure_worker().call(method, **params)
+        worker = _ensure_worker()
+        if _timeout is not None:
+            return worker.call(method, _timeout=_timeout, **params)
+        return worker.call(method, **params)
     except WorkerError as e:
         raise RuntimeError(f"{e.type}: {e.remote_message}") from e
 
@@ -2006,6 +2009,80 @@ def render_views(
             "height": height,
         }
     return {"views": out, "vertices": len(mesh["vertices"]), "triangles": len(mesh["triangles"])}
+
+
+@mcp.tool()
+def render_photoreal(
+    handle: str,
+    renderer: str = "Povray",
+    view: str = "iso",
+    material: str | None = None,
+    width: int = 800,
+    height: int = 600,
+) -> dict:
+    """Photorealistic render of a shaped object via the FreeCAD Render workbench
+    (an external renderer, e.g. POV-Ray) — a presentation-quality "nice picture",
+    unlike render_view's fast software-rasterized preview.
+
+    Requires the Render addon and a renderer binary to be installed (see
+    docs/RENDER_WORKBENCH.md); raises with install guidance otherwise. Renders in
+    an isolated temporary document, so the live model is never modified.
+
+    view: 'iso' | 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right' | 'side'.
+    material: optional Render material library card — e.g. 'Gold', 'Glass',
+        'Aluminium', 'GlossyPlastic', 'RoughPlastic', 'Iron', 'Brass'. Omitted
+        gives a neutral default material; an unknown name raises with the full list.
+    Returns {png_base64, png_path, renderer, view, material, width, height}.
+
+    Presentation-only: output is not bit-reproducible, so it is kept out of the
+    reliability/golden tests. External renders can take seconds to minutes, so this
+    call uses an extended worker timeout.
+    """
+    return _call(
+        "render_photoreal", _timeout=600.0,
+        handle=handle, renderer=renderer, view=view, material=material,
+        width=width, height=height,
+    )
+
+
+@mcp.tool()
+def render_photoreal_submit(
+    handle: str,
+    renderer: str = "Povray",
+    view: str = "iso",
+    material: str | None = None,
+    width: int = 800,
+    height: int = 600,
+) -> dict:
+    """Start a photorealistic render asynchronously; returns immediately with
+    {job_id, status} instead of blocking for the whole render.
+
+    Use this (rather than render_photoreal) for renders that may take a long time —
+    heavy materials/renderers, large images — so the worker stays responsive. The
+    external renderer runs in the background; poll render_job(job_id) until status is
+    'done' (then it returns the PNG) or 'failed'. Same arguments as render_photoreal;
+    requires the Render addon + a renderer binary (see docs/RENDER_WORKBENCH.md).
+    """
+    return _call(
+        "render_photoreal_submit",
+        handle=handle, renderer=renderer, view=view, material=material,
+        width=width, height=height,
+    )
+
+
+@mcp.tool()
+def render_job(job_id: str, discard: bool = False) -> dict:
+    """Poll an async render started by render_photoreal_submit.
+
+    Returns {job_id, status} where status is 'running', 'done', or 'failed'. When
+    'done', also returns {png_base64, png_path, renderer, view, material, width,
+    height}; when 'failed', {error}. The result remains available for repeat polls.
+
+    Pass discard=True once you have a terminal result to free the job immediately
+    (drops the cached image and closes its temp document); ignored while running.
+    Jobs are also auto-evicted oldest-first once finished jobs exceed an internal cap.
+    """
+    return _call("render_job", job_id=job_id, discard=discard)
 
 
 @mcp.tool()

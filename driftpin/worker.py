@@ -5037,6 +5037,514 @@ def _h_tessellate(p):
     }
 
 
+# --- photorealistic rendering (FreeCAD Render workbench) ----------------------
+#
+# Unlike render_view (the host-side NumPy rasterizer in driftpin/render.py),
+# photoreal rendering must run inside the FreeCAD process: it needs the live Part
+# shapes and the third-party `Render` workbench, which serializes the scene and
+# shells out to an external renderer binary (POV-Ray by default). It is therefore
+# a worker handler, not a change to render.py. See docs/RENDER_WORKBENCH.md.
+#
+# Install (cross-platform): clone https://github.com/FreeCAD/FreeCAD-render into
+# <App.getUserAppDataDir()>/Mod/Render (or via the Addon Manager), plus a renderer
+# binary. DriftPin locates the binary at call time and writes its path into the
+# FreeCAD param the Render plugin reads, so no preferences UI is needed.
+
+# View directions — (unit vector from bbox center toward the camera, up vector).
+# Mirrors driftpin/render.py's _VIEWS so render_view and render_photoreal frame a
+# part identically. Kept as a local copy because render.py is a host-side
+# (NumPy/Pillow) module the freecadcmd worker does not import.
+_RENDER_VIEWS = {
+    "iso":    ((1.0, 1.0, 1.0),  (0.0, 0.0, 1.0)),
+    "top":    ((0.0, 0.0, 1.0),  (0.0, 1.0, 0.0)),
+    "bottom": ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+    "front":  ((0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+    "back":   ((0.0, 1.0, 0.0),  (0.0, 0.0, 1.0)),
+    "right":  ((1.0, 0.0, 0.0),  (0.0, 0.0, 1.0)),
+    "left":   ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    "side":   ((1.0, 0.0, 0.0),  (0.0, 0.0, 1.0)),  # alias for "right"
+}
+
+# Renderer registry. Adding a renderer is a single dict entry: the FreeCAD param
+# key its plugin reads for the exec path, a default scene template shipped with the
+# addon, candidate binary names, common install dirs per OS (platform.system()
+# keys), and an optional `batch` flag (forces the project into batch mode so the
+# plugin uses its headless console binary). POV-Ray is verified end-to-end on Linux;
+# LuxCore's scene export + material translation are verified headless, with the
+# render binary itself driven on a provisioned box (it is a hand-fetched build).
+_RENDER_PARAM_GROUP = "User parameter:BaseApp/Preferences/Mod/Render"
+_RENDERERS = {
+    "Povray": {
+        "param_key": "PovRayPath",
+        "template": "povray_standard.pov",
+        "binaries": ("povray", "pvengine64", "pvengine"),
+        "dirs": {
+            "Linux":   ("/usr/bin", "/usr/local/bin"),
+            "Darwin":  ("/opt/homebrew/bin", "/usr/local/bin"),
+            "Windows": (r"C:\Program Files\POV-Ray\v3.7\bin",
+                        r"C:\Program Files (x86)\POV-Ray\v3.7\bin"),
+        },
+        "install_hint": "'apt install povray' (Linux), 'brew install povray' (macOS), "
+                        "or the official Windows installer",
+    },
+    "Luxcore": {
+        # Headless -> batch mode -> the plugin reads LuxCoreConsolePath and runs
+        # the `luxcoreconsole` CLI (the non-batch path uses the GUI LuxCorePath).
+        "param_key": "LuxCoreConsolePath",
+        "template": "luxcore_standard.cfg",
+        "binaries": ("luxcoreconsole",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/opt/LuxCore", "/opt/luxcorerender"),
+            "Darwin":  ("/Applications/LuxCore.app/Contents/MacOS", "/usr/local/bin"),
+            "Windows": (r"C:\Program Files\LuxCoreRender",),
+        },
+        "install_hint": "download a standalone build from "
+                        "https://github.com/LuxCoreRender/LuxCore/releases (provides "
+                        "luxcoreconsole), put it on PATH with its bundled libs reachable "
+                        "(e.g. via LD_LIBRARY_PATH on Linux)",
+    },
+    "Appleseed": {
+        # Headless -> batch -> the plugin reads AppleseedCliPath and runs the
+        # `appleseed.cli` console renderer (non-batch uses GUI AppleseedStudioPath).
+        "param_key": "AppleseedCliPath",
+        "template": "appleseed_standard.appleseed",
+        "binaries": ("appleseed.cli",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/appleseed/bin"),
+            "Darwin":  ("/usr/local/bin", "/Applications/appleseed/bin"),
+            "Windows": (r"C:\Program Files\appleseed\bin",),
+        },
+        "install_hint": "download an appleseed build from "
+                        "https://github.com/appleseedhq/appleseed/releases (provides "
+                        "appleseed.cli) and put it on PATH",
+    },
+    "Cycles": {
+        # Cycles uses one path (CyclesPath); batch mode adds `--background` so the
+        # standalone `cycles` renderer runs headless (no GUI window).
+        "param_key": "CyclesPath",
+        "template": "cycles_standard.xml",
+        "binaries": ("cycles",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/cycles"),
+            "Darwin":  ("/usr/local/bin",),
+            "Windows": (r"C:\Program Files\Cycles",),
+        },
+        "install_hint": "build or download the standalone Cycles renderer (the `cycles` "
+                        "CLI) and put it on PATH",
+    },
+    "Ospray": {
+        # OSPRay Studio; batch mode adds a `batch` subcommand so ospStudio renders
+        # headless to an image instead of opening its viewer.
+        "param_key": "OspPath",
+        "template": "ospray_standard.sg",
+        "binaries": ("ospStudio",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/ospray_studio/bin"),
+            "Darwin":  ("/usr/local/bin", "/Applications/ospStudio.app/Contents/MacOS"),
+            "Windows": (r"C:\Program Files\Intel\OSPRay Studio\bin",),
+        },
+        "install_hint": "download OSPRay Studio from "
+                        "https://github.com/RenderKit/ospray_studio/releases (provides "
+                        "ospStudio) and put it on PATH",
+    },
+    "Pbrt": {
+        # pbrt-v4. batch is headless; non-batch streams frames to a 'tev' viewer.
+        # NOTE: pbrt-v4 support is marked experimental upstream in the addon.
+        "param_key": "PbrtPath",
+        "template": "pbrt_standard.pbrt",
+        "binaries": ("pbrt",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/pbrt/bin"),
+            "Darwin":  ("/usr/local/bin",),
+            "Windows": (r"C:\Program Files\pbrt\bin",),
+        },
+        "install_hint": "build pbrt-v4 from https://github.com/mmp/pbrt-v4 (provides "
+                        "pbrt) and put it on PATH — pbrt-v4 support is experimental upstream",
+    },
+}
+
+
+def _placement_from_view(view, obj, fov_deg=45.0, margin=1.2):
+    """App.Placement that frames obj's bounding box from the named view.
+
+    Pure App.Vector math (no NumPy): builds the same orthonormal camera basis as
+    render.py's _camera_basis — the camera looks down its local -Z toward the bbox
+    center, local +Y is up, local +X is right — then steps back far enough that the
+    bounding sphere fits the vertical field of view. Returns a camera->world
+    App.Placement (App.Rotation(x, y, z) maps the local axes onto x/y/z).
+    """
+    import math
+    if view not in _RENDER_VIEWS:
+        raise ValueError(f"unknown view {view!r}; valid: {sorted(_RENDER_VIEWS)}")
+    cam_dir, up = _RENDER_VIEWS[view]
+    z = App.Vector(*cam_dir)
+    z.normalize()                                    # bbox center -> camera
+    x = App.Vector(*up).cross(z)
+    if x.Length < 1e-8:                              # up parallel to view dir
+        x = App.Vector(0.0, 1.0, 0.0).cross(z)
+        if x.Length < 1e-8:
+            x = App.Vector(1.0, 0.0, 0.0).cross(z)
+    x.normalize()
+    y = z.cross(x)
+    y.normalize()
+    bb = obj.Shape.BoundBox
+    center = App.Vector(bb.Center.x, bb.Center.y, bb.Center.z)
+    radius = (bb.DiagonalLength / 2.0) or 1.0
+    dist = (radius * margin) / math.tan(math.radians(fov_deg) / 2.0)
+    return App.Placement(center + z * dist, App.Rotation(x, y, z))
+
+
+def _resolve_renderer_exec(renderer):
+    """Locate the external renderer binary cross-platform and write its path into
+    the FreeCAD param the Render plugin reads. Returns the resolved path.
+
+    Resolution order: DRIFTPIN_<RENDERER>_PATH env override -> path already set in
+    FreeCAD prefs -> PATH (shutil.which, which honors Windows PATHEXT) -> common
+    per-OS install dirs. Raises RuntimeError with install guidance if not found.
+    """
+    import shutil
+    import platform
+    spec = _RENDERERS.get(renderer)
+    if spec is None:
+        raise RuntimeError(
+            f"renderer {renderer!r} is not wired in DriftPin yet (Phase 1 supports "
+            f"{sorted(_RENDERERS)}). Install it and set its path in FreeCAD's Render "
+            "preferences, or use renderer='Povray'."
+        )
+    params = App.ParamGet(_RENDER_PARAM_GROUP)
+    key = spec["param_key"]
+
+    candidates = []
+    if env_path := os.environ.get(f"DRIFTPIN_{renderer.upper()}_PATH"):
+        candidates.append(env_path)                  # 1) explicit env override
+    if existing := params.GetString(key, ""):
+        candidates.append(existing)                  # 2) already set in prefs
+    for name in spec["binaries"]:                    # 3) PATH
+        if found := shutil.which(name):
+            candidates.append(found)
+    for d in spec["dirs"].get(platform.system(), ()):  # 4) common install dirs
+        for name in spec["binaries"]:
+            for exe in (name, name + ".exe"):
+                candidates.append(os.path.join(d, exe))
+
+    for c in candidates:
+        if c and os.path.isfile(c):
+            params.SetString(key, c)
+            return c
+    raise RuntimeError(
+        f"could not locate the {renderer} renderer binary (tried "
+        f"{list(spec['binaries'])}). Install it — {spec['install_hint']} — or set "
+        f"DRIFTPIN_{renderer.upper()}_PATH to its full path."
+    )
+
+
+def _available_render_materials():
+    """Sorted names of the material library cards shipped with the Render addon
+    (e.g. 'Gold', 'Glass', 'Aluminium', 'GlossyPlastic'). Empty if the addon's
+    materials dir is missing. Assumes `import Render` has already succeeded."""
+    from Render.constants import WBMATERIALDIR
+    if not os.path.isdir(WBMATERIALDIR):
+        return []
+    suffix = ".FCMat"
+    return sorted(
+        f[: -len(suffix)] for f in os.listdir(WBMATERIALDIR) if f.endswith(suffix)
+    )
+
+
+def _apply_render_material(doc, view, material_name):
+    """Load a Render material library card by name and link it to `view`.
+
+    Parses the .FCMat card (case-sensitive INI, all sections flattened into one
+    dict — the exact logic the addon's material chooser uses), creates a Render
+    Material object, imports any image textures, and links it via the View's
+    Material property. Raises ValueError listing the valid names if the card is
+    unknown. Assumes `import Render` has already succeeded.
+    """
+    import configparser
+    from Render.constants import WBMATERIALDIR
+    from Render.material import make_material
+
+    path = os.path.join(WBMATERIALDIR, material_name + ".FCMat")
+    if not os.path.isfile(path):
+        raise ValueError(
+            f"unknown render material {material_name!r}; available: "
+            f"{_available_render_materials()}"
+        )
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = lambda s: s                 # material card keys are case-sensitive
+    parser.read(path)
+    card = {key: value for section in parser.values() for key, value in section.items()}
+
+    mat = make_material(name=material_name, doc=doc)
+    # import_textures is a no-op for solid cards (metals, glass, plastics) and
+    # extracts image textures into child objects for textured cards (marble, etc.).
+    mat.Material = mat.Proxy.import_textures(card, WBMATERIALDIR)
+    view.Material = mat
+    return mat
+
+
+def _require_render():
+    """Import the FreeCAD Render workbench, or raise with cross-platform install
+    guidance. Returns the Render module."""
+    try:
+        import Render
+        return Render
+    except Exception as e:
+        raise RuntimeError(
+            "FreeCAD Render workbench not importable. Install it by cloning "
+            "https://github.com/FreeCAD/FreeCAD-render into "
+            f"{os.path.join(App.getUserAppDataDir(), 'Mod', 'Render')} "
+            f"(or via the Addon Manager). Underlying error: {e!r}"
+        )
+
+
+def _parse_render_request(p):
+    """Validate render_photoreal params and resolve the renderer binary (setting
+    its FreeCAD param). Returns a dict of normalized parameters. Shared by the
+    blocking and async handlers."""
+    src = _resolve(p["handle"])
+    if not hasattr(src, "Shape"):
+        raise TypeError(f"handle {p['handle']!r} has no Shape to render")
+    width = int(p.get("width", 800))
+    height = int(p.get("height", 600))
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive")
+    renderer = p.get("renderer", "Povray")
+    exec_path = _resolve_renderer_exec(renderer)     # validates renderer + sets param
+    return {
+        "src": src,
+        "renderer": renderer,
+        "view": p.get("view", "iso"),
+        "width": width,
+        "height": height,
+        "material": p.get("material") or None,       # None -> default gray material
+        "template": p.get("template") or _RENDERERS[renderer]["template"],
+        "exec_path": exec_path,
+    }
+
+
+def _setup_render_project(tmp, req):
+    """Build the Render Project/Camera/View graph for req['src'] in document tmp.
+    Returns the project fpo (call proj.Proxy.render(...) on it). Shared by the
+    blocking and async handlers; assumes tmp is the active document."""
+    Render = _require_render()
+    feat = tmp.addObject("Part::Feature", "RenderTarget")
+    feat.Shape = req["src"].Shape.copy()
+    tmp.recompute()
+
+    proj_proxy, proj, _ = Render.Project.create(
+        tmp, renderer=req["renderer"], template=req["template"]
+    )
+    proj.RenderWidth = req["width"]
+    proj.RenderHeight = req["height"]
+    if _RENDERERS[req["renderer"]].get("batch") and hasattr(proj, "BatchMode"):
+        proj.BatchMode = True                        # headless console binary (e.g. LuxCore)
+
+    _, cam, _ = Render.Camera.create(tmp)
+    cam.Projection = "Perspective"
+    cam.Placement = _placement_from_view(req["view"], feat)
+
+    proj_proxy.add_views([cam, feat])
+    if req["material"]:
+        # add_views wraps feat in a View object; link the material to it.
+        for v in proj_proxy.all_views():
+            if getattr(v, "Source", None) is feat:
+                _apply_render_material(tmp, v, req["material"])
+    tmp.recompute()
+    return proj
+
+
+@handler("render_photoreal")
+def _h_render_photoreal(p):
+    """Photorealistic render of a shaped object via the FreeCAD Render workbench
+    (external renderer; POV-Ray by default). Renders in an isolated temporary
+    document so the live model is never mutated, then returns
+    {png_base64, png_path, renderer, view, material, width, height}.
+
+    Optional `material` names a Render material library card (e.g. 'Gold',
+    'Glass', 'Aluminium', 'GlossyPlastic'); omitted -> default gray material. An
+    unknown name raises ValueError listing the available cards.
+
+    Blocks until the render finishes; for long renders use render_photoreal_submit
+    + render_job. Presentation-only: photoreal output is not bit-reproducible
+    (sampler noise, thread count), so this stays out of the reliability/golden tests.
+    """
+    import base64
+    _require_render()
+    req = _parse_render_request(p)
+    # Render in an isolated temp document: build the scene there, render, then close
+    # it. Keeps the user's live document untouched (no Project/Camera/View objects
+    # leaking into their model or their saved .FCStd).
+    prev_active = App.ActiveDocument.Name if App.ActiveDocument else None
+    tmp = App.newDocument("driftpin_render")
+    try:
+        proj = _setup_render_project(tmp, req)
+        out = proj.Proxy.render(wait_for_completion=True)
+        if not out or not os.path.isfile(out):
+            raise RuntimeError(
+                f"renderer {req['renderer']!r} (exec {req['exec_path']!r}) produced "
+                "no output image. Check that the renderer runs headless on this "
+                "platform (see the FreeCAD report log)."
+            )
+        with open(out, "rb") as f:
+            data = f.read()
+        return {
+            "png_base64": base64.b64encode(data).decode("ascii"),
+            "png_path": out,
+            "renderer": req["renderer"],
+            "view": req["view"],
+            "material": req["material"],
+            "width": req["width"],
+            "height": req["height"],
+        }
+    finally:
+        try:
+            App.closeDocument(tmp.Name)
+        except Exception:
+            pass
+        if prev_active and App.getDocument(prev_active) is not None:
+            App.setActiveDocument(prev_active)
+
+
+# Async render jobs. render_photoreal_submit launches the external renderer via the
+# Render workbench's headless executor (RendererExecutorCli — a plain threading.Thread
+# that runs ONLY the renderer subprocess; the FreeCAD scene export already ran in the
+# calling thread before launch, so there is no cross-thread FreeCAD access). The job
+# keeps its temp document open until the result is collected, because the renderer
+# reads exported scene files from the doc's TransientDir. Jobs persist for the worker
+# session, like _handles.
+_render_jobs = {}
+
+# Cap on retained jobs so abandoned results don't accumulate base64 PNGs for the
+# whole worker session. Only finished (done/failed) jobs are evicted — a running
+# job holds an open temp document the renderer is still reading.
+_MAX_RENDER_JOBS = 16
+
+
+def _close_render_job_doc(job):
+    name = job.pop("doc", None)
+    if name and App.getDocument(name) is not None:
+        try:
+            App.closeDocument(name)
+        except Exception:
+            pass
+
+
+def _evict_render_jobs():
+    """Drop the oldest finished jobs while over the cap (insertion order = age).
+    Running jobs are never evicted."""
+    while len(_render_jobs) > _MAX_RENDER_JOBS:
+        victim = next(
+            (jid for jid, j in _render_jobs.items() if j["status"] != "running"),
+            None,
+        )
+        if victim is None:
+            break                                    # all running -> nothing to free
+        _close_render_job_doc(_render_jobs.pop(victim))
+
+
+def _refresh_render_job(job):
+    """Advance a running job: poll its executor thread, and once finished cache the
+    PNG (base64) and close the temp document. No-op for already-finished jobs."""
+    import base64
+    if job["status"] != "running":
+        return
+    thread = job.get("thread")
+    if thread is not None and thread.is_alive():
+        return                                       # renderer still running
+    out = job["out_path"]
+    if os.path.isfile(out) and os.path.getsize(out) > 0:
+        with open(out, "rb") as f:
+            job["png_base64"] = base64.b64encode(f.read()).decode("ascii")
+        job["status"] = "done"
+    elif thread is None and not os.path.isfile(out):
+        return                                       # untrackable + no output yet -> still running
+    else:
+        job["status"] = "failed"
+        job["error"] = (
+            f"renderer {job['renderer']!r} finished without producing an output image"
+        )
+    _close_render_job_doc(job)
+
+
+@handler("render_photoreal_submit")
+def _h_render_photoreal_submit(p):
+    """Start a photoreal render asynchronously and return immediately, so a long
+    external render does not block the worker. Same params as render_photoreal.
+    Returns {job_id, status}; poll render_job(job_id) for the result."""
+    import threading
+    _require_render()
+    req = _parse_render_request(p)
+    prev_active = App.ActiveDocument.Name if App.ActiveDocument else None
+    tmp = App.newDocument("driftpin_render")
+    try:
+        proj = _setup_render_project(tmp, req)
+        before = set(threading.enumerate())
+        out = proj.Proxy.render(wait_for_completion=False)   # launches executor thread
+        new_threads = [t for t in threading.enumerate() if t not in before]
+    except Exception:
+        try:
+            App.closeDocument(tmp.Name)
+        except Exception:
+            pass
+        raise
+    finally:
+        if prev_active and App.getDocument(prev_active) is not None:
+            App.setActiveDocument(prev_active)
+    job_id = _new_handle("render_job")
+    _render_jobs[job_id] = {
+        "status": "running",
+        "thread": new_threads[0] if new_threads else None,
+        "doc": tmp.Name,
+        "out_path": out,
+        "renderer": req["renderer"],
+        "view": req["view"],
+        "material": req["material"],
+        "width": req["width"],
+        "height": req["height"],
+    }
+    _evict_render_jobs()
+    return {"job_id": job_id, "status": "running"}
+
+
+@handler("render_job")
+def _h_render_job(p):
+    """Poll an async render started by render_photoreal_submit. Returns
+    {job_id, status} with status 'running' | 'done' | 'failed'. When 'done', also
+    returns {png_base64, png_path, renderer, view, material, width, height}; when
+    'failed', {error}. The result stays available for repeat polls.
+
+    Pass discard=True to free the job once you have a terminal result (closes its
+    temp document and drops the cached PNG); ignored while still running."""
+    job_id = p["job_id"]
+    job = _render_jobs.get(job_id)
+    if job is None:
+        raise KeyError(f"unknown render job: {job_id!r}")
+    _refresh_render_job(job)
+    out = {"job_id": job_id, "status": job["status"]}
+    if job["status"] == "done":
+        out.update({
+            "png_base64": job["png_base64"],
+            "png_path": job["out_path"],
+            "renderer": job["renderer"],
+            "view": job["view"],
+            "material": job["material"],
+            "width": job["width"],
+            "height": job["height"],
+        })
+    elif job["status"] == "failed":
+        out["error"] = job.get("error", "render failed")
+    if p.get("discard") and job["status"] != "running":
+        _close_render_job_doc(job)                   # done/failed doc already closed; idempotent
+        _render_jobs.pop(job_id, None)
+    return out
+
+
 # --- FEM (decomposed) ---------------------------------------------------------
 
 def _resolve_analysis(handle):
