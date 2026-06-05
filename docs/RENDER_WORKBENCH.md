@@ -246,8 +246,14 @@ non-blocking job API runs alongside the blocking `render_photoreal`:
    (or Addon Manager → "Render", then check out the pinned commit.)
 2. **Install one renderer binary** — POV-Ray for Phase 1:
    `apt install povray` (Linux) · `brew install povray` (macOS) · official installer (Windows).
+   For the alternate renderers, `scripts/install-renderers.sh` provisions the prebuilt
+   ones (Appleseed, LuxCore) with pinned-checksum downloads + PATH wrappers; see
+   [`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md) (OSPRay Studio, pbrt, Cycles
+   need a source build).
 3. **Nothing else** — DriftPin resolves the binary and sets `PovRayPath` itself (§5.1).
    Override with `DRIFTPIN_POVRAY_PATH=/full/path/to/povray` if it lives somewhere odd.
+   Call the `render_capabilities` MCP tool any time to see which renderers resolve right
+   now (and whether the addon imports) without attempting a render.
 
 ## 7. Resolved decisions & remaining follow-ups
 

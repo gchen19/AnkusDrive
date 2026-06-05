@@ -1,17 +1,41 @@
-# Provisioning the external renderers (planning doc — for a future session)
+# Provisioning the external renderers
 
-**Status: plan only. Nothing here is implemented yet.** This is a handoff so another
-session can install the five non-default renderers and make them usable by the agent,
-without re-deriving the wiring. The *code* side is already done and merged (PR #18):
-all six renderers are wired into `driftpin/worker.py`'s `_RENDERERS` registry and
-scene-export-verified headless. What's missing is the **binaries** — so today
-`render_photoreal(renderer="Luxcore"|"Appleseed"|"Cycles"|"Ospray"|"Pbrt")` returns
-*"could not locate the … renderer binary"* and the gated tests SKIP. POV-Ray is the
-only one installed (via `apt`) and verified end-to-end.
+**Status: discovery + provisioning tooling implemented; source-build renderers still
+pending.** The *code* side was done in PR #18 (all six renderers wired into
+`driftpin/worker.py`'s `_RENDERERS` registry, scene-export-verified headless). This
+pass added the two pieces §7 called for:
 
-Goal: install the other five and make them resolve for the agent, then watch the
-gated tests flip SKIP → PASS. See also [`RENDER_WORKBENCH.md`](RENDER_WORKBENCH.md)
-(architecture) and [`RENDER_TEXTURE_CHECK.md`](RENDER_TEXTURE_CHECK.md).
+- **`render_capabilities`** (MCP tool + `@handler`) — the agent now *discovers* which
+  renderers resolve right now and whether the Render addon imports, instead of
+  learning by trial-and-error. Done and tested (`test_render_capabilities`).
+- **`scripts/install-renderers.sh`** — idempotent, checksum-verified installer for the
+  prebuilt renderers; writes PATH wrappers (§3) that fix discovery *and* the bundled
+  `LD_LIBRARY_PATH`. Verified end-to-end offline: install → wrapper → the resolver
+  reports the renderer available via `render_capabilities`.
+
+What changed vs. the original plan (binaries were re-checked against the real release
+assets in June 2026 — see §4):
+
+- Of the "three prebuilt" renderers, only **two** actually ship a usable headless CLI:
+  **Appleseed** (`appleseed.cli`) and **LuxCore** — but LuxCore needs the **`-sdk`**
+  tarball (the plain standalone ships only `luxcoreui` + `pyluxcore`; the console
+  binary lives in the SDK), and v2.6 is the last release with a standalone build at all
+  (newer releases are pip wheels). The script installs both.
+- **OSPRay Studio has no prebuilt `ospStudio` binary** anywhere (no releases on
+  `ospray_studio`; the OSPRay SDK tarball ships the library + examples, not Studio). It
+  is therefore reclassified into the **build-from-source** group alongside pbrt-v4 and
+  Cycles (§7).
+
+So today, on a box with no extra binaries, `render_photoreal(renderer="Luxcore"|
+"Appleseed"|"Cycles"|"Ospray"|"Pbrt")` still returns *"could not locate …"* and the
+gated tests SKIP; POV-Ray (via `apt`) is the only one verified end-to-end. Run the
+install script on a provisioned box to flip Luxcore/Appleseed SKIP → PASS. See also
+[`RENDER_WORKBENCH.md`](RENDER_WORKBENCH.md) (architecture) and
+[`RENDER_TEXTURE_CHECK.md`](RENDER_TEXTURE_CHECK.md).
+
+> **Sandbox note.** Installing + wiring (download, checksum, unpack, wrapper, *discovery*)
+> is verified here; **executing** a hand-fetched renderer is left to a trusted/provisioned
+> environment (§8). The install script never runs the binaries.
 
 ---
 
@@ -75,13 +99,20 @@ the addon plugins read and what the registry expects.
 
 | Renderer (`renderer=`) | FreeCAD param | Binary name (wrapper) | Get it | Effort |
 |---|---|---|---|---|
-| `Ospray` | `OspPath` | `ospStudio` | prebuilt — RenderKit/ospray_studio releases | easy |
-| `Luxcore` | `LuxCoreConsolePath` | `luxcoreconsole` | prebuilt tarball — LuxCoreRender/LuxCore releases | easy |
-| `Appleseed` | `AppleseedCliPath` | `appleseed.cli` | prebuilt — appleseedhq/appleseed releases (older Linux build) | moderate |
+| `Appleseed` | `AppleseedCliPath` | `appleseed.cli` | **prebuilt** — appleseedhq/appleseed `2.1.0-beta` (2019, final build; `linux64-gcc74.zip`). Automated by `install-renderers.sh`. | easy |
+| `Luxcore` | `LuxCoreConsolePath` | `luxcoreconsole` | **prebuilt SDK** — LuxCoreRender/LuxCore `v2.6` `linux64-**sdk**.tar.bz2` (the plain standalone lacks `luxcoreconsole`; v2.6 is the last standalone — newer = wheels). Automated by `install-renderers.sh`. | easy |
+| `Ospray` | `OspPath` | `ospStudio` | **build from source** — no prebuilt `ospStudio` exists (no `ospray_studio` releases; the OSPRay SDK ships the lib, not Studio). CMake against the OSPRay SDK. | hard |
 | `Pbrt` | `PbrtPath` | `pbrt` | **build from source** (CMake) — mmp/pbrt-v4; experimental upstream | moderate |
 | `Cycles` | `CyclesPath` | `cycles` | **build from source** — Blender's engine; no standalone CLI ships | hard |
 
 (POV-Ray, for reference: `PovRayPath` → `povray`, `apt install povray`.)
+
+Pinned prebuilt assets (real SHA-256s, hardcoded in `scripts/install-renderers.sh`):
+
+| Renderer | Asset | SHA-256 |
+|---|---|---|
+| Appleseed | `appleseed-2.1.0-beta-0-g015adb503-linux64-gcc74.zip` | `e96fc907fa95b38c7be542b796fd783870da67612eb233bd4965c2ebec7335d2` |
+| LuxCore | `luxcorerender-v2.6-linux64-sdk.tar.bz2` | `c4a387ee65765b235d47c81c83e293ff584bd4da4b5e24fc89d651c8c1393393` |
 
 Each plugin's exact exec/batch handling is in
 `<App.getUserAppDataDir()>/Mod/Render/Render/renderers/<Renderer>.py` if details are
@@ -101,29 +132,36 @@ Pick one and apply it to the **MCP server launch env**:
 
 ## 6. Verification
 
+- **Discovery check (no binary needed, never skips):** `render_capabilities` (MCP tool)
+  reports `addon_importable` plus, per renderer, `available` + the resolved `path` (or an
+  `install_hint`). This is the fast "what's usable right now" probe — run it before and
+  after the install script to watch renderers flip to `available: true`. It resolves the
+  binary exactly as `render_photoreal` does but renders nothing and mutates no prefs.
 - **Pre-check without the binary (wiring only):** the addon's DryRun mode renders the
   scene files but skips the binary — used in PR #18 to confirm each renderer emits a
   valid scene. Good for sanity before a real install.
-- **Real check (the source of truth):** `\.venv/bin/python3 tests/test_render_photoreal.py`.
+- **Real check (the source of truth):** `.venv/bin/python3 tests/test_render_photoreal.py`.
   Each renderer's gated test flips **SKIP → PASS** once its binary resolves
   (`test_photoreal_{luxcore,appleseed,cycles,ospray,pbrt}_renders`).
 - **Agent check:** `render_photoreal(handle, renderer="X")` returns a PNG instead of
   "could not locate". A montage like `docs/render_gallery.png` can be regenerated to
   compare renderers side by side.
 
-## 7. Proposed work items (suggested order)
+## 7. Work items
 
-1. **`scripts/install-renderers.sh`** — fetch the three prebuilt renderers (OSPRay
-   Studio, LuxCore, Appleseed) into `/opt/<renderer>/`, then write the §3 wrappers to
-   `/usr/local/bin`. Idempotent; checksum the downloads. Cross-platform stubs for
-   macOS (Homebrew/dmg) and Windows (installer/zip) as follow-ons.
-2. **`render_capabilities` MCP tool** — list which renderers actually resolve right
-   now (plus whether the addon imports), so the agent *discovers* availability instead
-   of learning by trial-and-error. New worker handler + MCP tool; mirror the existing
-   registry-parity/contract conventions (`tests/test_contracts.py`). High value, small.
-3. **pbrt-v4 + Cycles from source** — CMake builds; document the build flags. These are
-   the long-pole items; treat as a separate phase.
-4. **Dockerfile (optional)** — an image with all renderers + libs baked in. Most
+1. ✅ **`scripts/install-renderers.sh`** — done. Fetches the prebuilt renderers into
+   `$PREFIX/<renderer>/` (default `/opt`), verifies pinned SHA-256s, and writes the §3
+   wrappers to `$BINDIR` (default `/usr/local/bin`). Idempotent; `--list` shows status;
+   macOS/Windows print guidance (follow-ons). **Scope correction:** only Appleseed +
+   LuxCore (`-sdk`) have usable prebuilt CLIs (§4); OSPRay Studio has no prebuilt and
+   moved to item 3.
+2. ✅ **`render_capabilities` MCP tool** — done. Worker `@handler` + `@mcp.tool()` (parity
+   per `tests/test_contracts.py`), tested by `test_render_capabilities`. Reports per-renderer
+   availability + addon import status + material cards, side-effect-free.
+3. ⬜ **OSPRay Studio + pbrt-v4 + Cycles from source** — CMake builds; document the build
+   flags. The long-pole items; a separate phase. (OSPRay Studio joined this group once it
+   turned out to have no prebuilt `ospStudio`, §4.)
+4. ⬜ **Dockerfile (optional)** — an image with all renderers + libs baked in. Most
    reproducible "make them available" path; sidesteps `LD_LIBRARY_PATH` entirely and is
    the natural home for a CI lane that exercises real renders.
 
@@ -152,13 +190,19 @@ Pick one and apply it to the **MCP server launch env**:
   hand-fetched binary (untrusted external code). Installing/wiring is fine; the final
   render needs a trusted/provisioned environment.
 
-## 9. Files this work will touch
+## 9. Files this work touched
 
-- `scripts/install-renderers.sh` (new), wrappers in `/usr/local/bin` (host).
-- `driftpin/worker.py` — only if adding `render_capabilities` or `LD_LIBRARY_PATH`
-  support; the `_RENDERERS` registry is already complete.
-- `driftpin/mcp_server.py` — `render_capabilities` tool (if pursued).
-- `tests/test_render_photoreal.py` — the gated renderer tests already exist; they'll
-  start passing as binaries land. Add a `render_capabilities` test if that tool ships.
-- `docs/` — update `RENDER_WORKBENCH.md` §6/§7 once renderers are provisioned; add a
-  Docker/CI note.
+- ✅ `scripts/install-renderers.sh` (new) — writes wrappers to `$BINDIR` (default
+  `/usr/local/bin`) and installs under `$PREFIX` (default `/opt`).
+- ✅ `driftpin/worker.py` — added `@handler("render_capabilities")`; refactored
+  `_resolve_renderer_exec` to share a side-effect-free `_find_renderer_exec` the probe
+  reuses. The `_RENDERERS` registry was already complete (unchanged).
+- ✅ `driftpin/mcp_server.py` — added the `render_capabilities` tool.
+- ✅ `tests/test_render_photoreal.py` — added `test_render_capabilities` (a pure probe,
+  so it never skips). The gated renderer tests still SKIP until binaries land on a box.
+- ⬜ `docs/` — `RENDER_WORKBENCH.md` notes the new tool + script; deeper §6/§7 updates and
+  a Docker/CI note wait until a provisioned box verifies a real Luxcore/Appleseed render.
+
+### Code hardening NOT needed (wrappers sufficed)
+The §3 wrappers handle `LD_LIBRARY_PATH` per renderer, so the optional resolver/`lib_dirs`
+or explicit-`env=` changes were not required. Revisit only if a wrapper-less path is wanted.

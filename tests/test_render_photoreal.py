@@ -16,6 +16,8 @@ Run:  .venv/bin/python3 tests/test_render_photoreal.py
 """
 import base64
 import io
+import os
+import shutil
 import sys
 import time
 import traceback
@@ -287,6 +289,41 @@ def test_render_job_eviction():
         assert evicted, "oldest finished job should have been evicted past the cap"
         assert w.call("render_job", job_id=ids[-1], _timeout=30.0)["status"] != "running", \
             "a recent job should still be retained"
+
+
+def test_render_capabilities():
+    """render_capabilities reports per-renderer availability + addon import status
+    WITHOUT rendering, so unlike the render tests it never skips — it's a pure probe
+    that simply reports what's installed. We assert the report is self-consistent and
+    cross-check each verdict against shutil.which for ground truth (the worker
+    inherits this process's PATH, so 'on PATH' agrees both sides)."""
+    with Worker() as w:
+        caps = w.call("render_capabilities", _timeout=60.0)
+        assert isinstance(caps["addon_importable"], bool)
+        assert caps["default_renderer"] == "Povray"
+
+        rends = caps["renderers"]
+        # Every registry renderer is reported (the six wired in Phase 1, incl. default).
+        assert "Povray" in rends and len(rends) >= 6, f"too few renderers: {list(rends)}"
+        # `available` is exactly the renderers flagged available, sorted.
+        assert caps["available"] == sorted(n for n, i in rends.items() if i["available"])
+
+        for name, info in rends.items():
+            assert isinstance(info["available"], bool)
+            assert info["param_key"] and info["binaries"], f"{name} missing param/binaries"
+            if info["available"]:
+                assert os.path.isfile(info["path"]), f"{name} marked available but path absent"
+            else:
+                assert info["install_hint"], f"{name} unavailable but no install_hint"
+            # Ground truth: a binary on PATH MUST be reported available.
+            if any(shutil.which(b) for b in info["binaries"]):
+                assert info["available"], f"{name} is on PATH but reported unavailable"
+
+        # Materials are listed iff the addon imports; otherwise an error is reported.
+        if caps["addon_importable"]:
+            assert isinstance(caps["materials"], list)
+        else:
+            assert caps.get("addon_error"), "addon not importable but no addon_error"
 
 
 # --- runner -------------------------------------------------------------------

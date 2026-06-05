@@ -5199,30 +5199,18 @@ def _placement_from_view(view, obj, fov_deg=45.0, margin=1.2):
     return App.Placement(center + z * dist, App.Rotation(x, y, z))
 
 
-def _resolve_renderer_exec(renderer):
-    """Locate the external renderer binary cross-platform and write its path into
-    the FreeCAD param the Render plugin reads. Returns the resolved path.
-
-    Resolution order: DRIFTPIN_<RENDERER>_PATH env override -> path already set in
-    FreeCAD prefs -> PATH (shutil.which, which honors Windows PATHEXT) -> common
-    per-OS install dirs. Raises RuntimeError with install guidance if not found.
-    """
+def _renderer_exec_candidates(renderer, spec):
+    """Ordered candidate paths for a renderer's binary, most-preferred first:
+    DRIFTPIN_<RENDERER>_PATH env override -> path already set in FreeCAD prefs ->
+    PATH (shutil.which, which honors Windows PATHEXT) -> common per-OS install dirs.
+    Pure lookup — no side effects, no existence check (the caller filters)."""
     import shutil
     import platform
-    spec = _RENDERERS.get(renderer)
-    if spec is None:
-        raise RuntimeError(
-            f"renderer {renderer!r} is not wired in DriftPin yet (Phase 1 supports "
-            f"{sorted(_RENDERERS)}). Install it and set its path in FreeCAD's Render "
-            "preferences, or use renderer='Povray'."
-        )
-    params = App.ParamGet(_RENDER_PARAM_GROUP)
     key = spec["param_key"]
-
     candidates = []
     if env_path := os.environ.get(f"DRIFTPIN_{renderer.upper()}_PATH"):
         candidates.append(env_path)                  # 1) explicit env override
-    if existing := params.GetString(key, ""):
+    if existing := App.ParamGet(_RENDER_PARAM_GROUP).GetString(key, ""):
         candidates.append(existing)                  # 2) already set in prefs
     for name in spec["binaries"]:                    # 3) PATH
         if found := shutil.which(name):
@@ -5231,11 +5219,40 @@ def _resolve_renderer_exec(renderer):
         for name in spec["binaries"]:
             for exe in (name, name + ".exe"):
                 candidates.append(os.path.join(d, exe))
+    return candidates
 
-    for c in candidates:
+
+def _find_renderer_exec(renderer):
+    """First existing candidate path for `renderer`'s binary, or None. No side
+    effects (does not touch FreeCAD prefs) — used by the capabilities probe to
+    report availability without committing a path."""
+    spec = _RENDERERS.get(renderer)
+    if spec is None:
+        return None
+    for c in _renderer_exec_candidates(renderer, spec):
         if c and os.path.isfile(c):
-            params.SetString(key, c)
             return c
+    return None
+
+
+def _resolve_renderer_exec(renderer):
+    """Locate the external renderer binary cross-platform and write its path into
+    the FreeCAD param the Render plugin reads. Returns the resolved path.
+
+    Resolution order is _find_renderer_exec's (env override -> prefs -> PATH ->
+    per-OS install dirs). Raises RuntimeError with install guidance if not found.
+    """
+    spec = _RENDERERS.get(renderer)
+    if spec is None:
+        raise RuntimeError(
+            f"renderer {renderer!r} is not wired in DriftPin yet (Phase 1 supports "
+            f"{sorted(_RENDERERS)}). Install it and set its path in FreeCAD's Render "
+            "preferences, or use renderer='Povray'."
+        )
+    found = _find_renderer_exec(renderer)
+    if found:
+        App.ParamGet(_RENDER_PARAM_GROUP).SetString(spec["param_key"], found)
+        return found
     raise RuntimeError(
         f"could not locate the {renderer} renderer binary (tried "
         f"{list(spec['binaries'])}). Install it — {spec['install_hint']} — or set "
@@ -5542,6 +5559,65 @@ def _h_render_job(p):
     if p.get("discard") and job["status"] != "running":
         _close_render_job_doc(job)                   # done/failed doc already closed; idempotent
         _render_jobs.pop(job_id, None)
+    return out
+
+
+@handler("render_capabilities")
+def _h_render_capabilities(p):
+    """Report which photoreal renderers are usable *right now* and whether the
+    FreeCAD Render addon imports, so a caller can pick a working renderer instead of
+    probing render_photoreal by trial and error.
+
+    For each renderer in the registry it resolves the binary the same way
+    render_photoreal does (DRIFTPIN_<R>_PATH env -> FreeCAD prefs -> PATH -> per-OS
+    install dirs) but WITHOUT mutating prefs or rendering anything. The addon check
+    is the lazy import render_photoreal performs on call (the worker boots without it).
+
+    Returns {addon_importable (bool), default_renderer, platform, available (sorted
+    names of ready renderers), renderers: {name: {available, param_key, batch,
+    binaries, and either path (resolved binary) or install_hint}}, materials (library
+    card names — only when the addon imports), addon_error (only when it does not)}.
+    """
+    import platform
+    addon_importable = True
+    addon_error = None
+    try:
+        _require_render()                            # lazy: same import render_photoreal does
+    except Exception as e:
+        addon_importable = False
+        addon_error = str(e)
+
+    renderers = {}
+    for name, spec in _RENDERERS.items():
+        path = _find_renderer_exec(name)             # side-effect-free probe
+        info = {
+            "available": path is not None,
+            "param_key": spec["param_key"],
+            "batch": bool(spec.get("batch", False)),
+            "binaries": list(spec["binaries"]),
+        }
+        if path is not None:
+            info["path"] = path
+        else:
+            info["install_hint"] = spec["install_hint"]
+        renderers[name] = info
+
+    out = {
+        "addon_importable": addon_importable,
+        "default_renderer": "Povray",
+        "platform": platform.system(),
+        "available": sorted(n for n, i in renderers.items() if i["available"]),
+        "renderers": renderers,
+    }
+    if addon_error is not None:
+        out["addon_error"] = addon_error
+    if addon_importable:
+        # Cheap listdir of the addon's material cards — discover materials too, not
+        # just renderers. Best-effort: never let it sink the whole capability probe.
+        try:
+            out["materials"] = _available_render_materials()
+        except Exception:
+            pass
     return out
 
 
