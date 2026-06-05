@@ -5,6 +5,9 @@ DriftPin grows a *photorealistic* render path by stitching in the third-party
 it as an MCP tool (`render_photoreal`) alongside the existing software-rasterized
 [`render_view`](../driftpin/render.py).
 
+> This is the architecture / design record. For the user-facing **support matrix,
+> installation, verification, and limitations**, see [`RENDERING.md`](RENDERING.md).
+
 **Status: Phase 1 implemented.** `render_photoreal` is wired end-to-end through the
 worker and the MCP server, verified on Linux with FreeCAD 1.1.0 + POV-Ray 3.7.
 The addon and a renderer binary are still *optional at runtime* — DriftPin boots

@@ -1,5 +1,9 @@
 # Provisioning the external renderers
 
+> For the user-facing support matrix, install instructions, and known limitations, start
+> with [`RENDERING.md`](RENDERING.md). This doc is the provisioning detail behind it.
+
+
 **Status: discovery + provisioning tooling implemented; source-build renderers still
 pending.** The *code* side was done in PR #18 (all six renderers wired into
 `driftpin/worker.py`'s `_RENDERERS` registry, scene-export-verified headless). This
