@@ -37,6 +37,15 @@ install script on a provisioned box to flip Luxcore/Appleseed SKIP → PASS. See
 > is verified here; **executing** a hand-fetched renderer is left to a trusted/provisioned
 > environment (§8). The install script never runs the binaries.
 
+The three currently-working renderers, same part + view + material, rendered through
+`render_photoreal` on a provisioned box (POV-Ray via apt; LuxCore + Appleseed via
+`scripts/install-renderers.sh`):
+
+![render_photoreal across renderers — the same box ∪ cylinder in Gold, rendered by POV-Ray, LuxCore and Appleseed](render_renderers_gallery.png)
+
+Regenerate with `.venv/bin/python3 scripts/render-gallery.py` — it renders whatever
+`render_capabilities` reports available, so the montage grows as Cycles/OSPRay/pbrt land.
+
 ---
 
 ## 1. How "available to the agent" resolves (read first)
@@ -194,6 +203,8 @@ Pick one and apply it to the **MCP server launch env**:
 
 - ✅ `scripts/install-renderers.sh` (new) — writes wrappers to `$BINDIR` (default
   `/usr/local/bin`) and installs under `$PREFIX` (default `/opt`).
+- ✅ `scripts/render-gallery.py` (new) + `docs/render_renderers_gallery.png` — renders
+  the example montage above across every available renderer.
 - ✅ `driftpin/worker.py` — added `@handler("render_capabilities")`; refactored
   `_resolve_renderer_exec` to share a side-effect-free `_find_renderer_exec` the probe
   reuses. The `_RENDERERS` registry was already complete (unchanged).
