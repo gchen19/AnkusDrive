@@ -5078,6 +5078,12 @@ _RENDERERS = {
         "param_key": "PovRayPath",
         "template": "povray_standard.pov",
         "binaries": ("povray", "pvengine64", "pvengine"),
+        # Headless: batch makes the plugin pass `-D` (no display). Without it the
+        # plugin passes `+D`, so POV-Ray tries to open a preview window with no X
+        # display and, once orphaned (worker gone, scene dir cleaned), busy-loops
+        # at 100% CPU instead of exiting. POV-Ray has no separate console binary,
+        # so batch here only flips the display flag (PovRayPath is read either way).
+        "batch": True,
         "dirs": {
             "Linux":   ("/usr/bin", "/usr/local/bin"),
             "Darwin":  ("/opt/homebrew/bin", "/usr/local/bin"),
