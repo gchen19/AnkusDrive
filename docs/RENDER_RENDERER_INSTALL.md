@@ -46,6 +46,26 @@ The three currently-working renderers, same part + view + material, rendered thr
 Regenerate with `.venv/bin/python3 scripts/render-gallery.py` — it renders whatever
 `render_capabilities` reports available, so the montage grows as Cycles/OSPRay/pbrt land.
 
+### The full material library, per renderer
+
+The original `docs/render_gallery.png` rendered every Render material card under POV-Ray
+only. `scripts/render-material-gallery.py` does that grid for *each* available renderer
+(one image per renderer), so the library can be compared across systems. A card that
+fails on a renderer is shown as a marked cell, so the grid honestly reflects support.
+
+| Renderer | Gallery | Materials rendered |
+|---|---|---|
+| POV-Ray   | `render_gallery_povray.png`    | 14 / 14 |
+| LuxCore   | `render_gallery_luxcore.png`   | 14 / 14 |
+| Appleseed | `render_gallery_appleseed.png` | 13 / 14 (the image-mapped **Terrazzo** card produces no output on the 2019 Appleseed build) |
+
+![POV-Ray material library](render_gallery_povray.png)
+![LuxCore material library](render_gallery_luxcore.png)
+![Appleseed material library](render_gallery_appleseed.png)
+
+Regenerate all: `.venv/bin/python3 scripts/render-material-gallery.py`
+(or `--renderer Luxcore` for one).
+
 ---
 
 ## 1. How "available to the agent" resolves (read first)
@@ -205,6 +225,8 @@ Pick one and apply it to the **MCP server launch env**:
   `/usr/local/bin`) and installs under `$PREFIX` (default `/opt`).
 - ✅ `scripts/render-gallery.py` (new) + `docs/render_renderers_gallery.png` — renders
   the example montage above across every available renderer.
+- ✅ `scripts/render-material-gallery.py` (new) + `docs/render_gallery_{povray,luxcore,appleseed}.png`
+  — the material library rendered as a grid per renderer.
 - ✅ `driftpin/worker.py` — added `@handler("render_capabilities")`; refactored
   `_resolve_renderer_exec` to share a side-effect-free `_find_renderer_exec` the probe
   reuses. The `_RENDERERS` registry was already complete (unchanged).
