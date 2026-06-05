@@ -185,6 +185,11 @@ EOF
   cp -a "$stage/$top/." "$dest/"
   rm -rf "$stage"
   [ -f "$real" ] || die "expected binary not found after extract: $real"
+  # Normalize permissions: some archives (e.g. the Appleseed 2019 zip) ship libs
+  # at mode 600, which cp -a preserves — then a non-root user can't load them when
+  # the install ran as root (loader: "cannot open shared object file"). a+rX makes
+  # every file readable and keeps execute on dirs + already-executable files.
+  chmod -R a+rX "$dest"
   chmod +x "$real" 2>/dev/null || true
 
   # Build an absolute LD_LIBRARY_PATH from the colon-separated relative lib dirs.
