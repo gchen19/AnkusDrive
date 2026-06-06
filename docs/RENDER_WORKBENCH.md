@@ -306,3 +306,50 @@ Remaining follow-ups (not yet implemented):
 - **User-supplied materials.** Colours / PBR parameters beyond the shipped library cards.
 - **Upstream risk.** Decide if/when to fork or re-host the unmaintained addon, and what
   FreeCAD version range we commit to supporting (§2).
+
+## 8. Future directions (proposed, not committed)
+
+Larger design directions that build *on top of* the shipped foundation (§5:
+`render_photoreal` + material-library cards + `render_capabilities`). These were
+sketched in the original pipeline proposal (PR #16, closed as superseded once the
+implementation diverged); they are preserved here as directions to weigh later, not
+as plans. The unifying principle is unchanged: **the agent speaks intent, never
+renderer syntax** — no POV-Ray finishes or LuxCore node graphs cross the tool boundary.
+
+- **Intent-based `render_scene` (scene + quality presets).** Today the agent picks
+  `renderer` / `view` / `material` / size and inherits whatever lighting the addon's
+  per-renderer template ships. A higher-level `render_scene(target, scene=…, quality=…)`
+  would layer over `render_photoreal` and let the agent name a *situation* instead:
+  - `scene` — a small set of renderer-neutral lighting/environment setups, each realized
+    as a workbench template + Light objects + groundplane + environment, e.g. `studio`
+    (soft 3-point key/fill/rim on a seamless backdrop), `workshop` (even matte spec
+    look), `outdoor` (sun + sky), `hdri` (image-based lighting from an `.hdr`),
+    `xray`/`section` (semi-transparent or cutaway).
+  - `quality` — a time budget (`draft` → `preview` → `final`) mapping to
+    samples / denoise / resolution-scale; the returned `samples` / `elapsed_s` let the
+    agent learn the trade-off and decide whether to re-render larger.
+  `render_capabilities` would grow to advertise the scene + quality menu (it already
+  advertises renderers + material cards), so the agent introspects the options instead
+  of guessing. **Note:** a proper `studio`/`workshop` scene also subsumes the current
+  OSPRay limitation — the stock `ospray_standard.sg` lights with only a dim ambient
+  light, and these scenes would add the directional/area lighting it lacks (see
+  [`RENDERING.md`](RENDERING.md) known limitations).
+
+- **Per-component CMF (Color / Material / Finish) via `set_appearance`.** Materials are
+  applied today from the addon's library cards at render time (`material=`). A
+  `set_appearance(handle, material=…, color=…, metallic=…, roughness=…, finish=…)` would
+  instead attach a **renderer-neutral material object** (`App::MaterialObjectPython`,
+  headless-creatable) that **persists in the `.FCStd`** — so appearance travels with the
+  part and `merge_assembly` preserves each component's look automatically, no central
+  re-skin. Two authoring modes: *builder-owned* (each component agent sets its own CMF,
+  fits the cold-builder model in [`MULTI_AGENT.md`](MULTI_AGENT.md)) and *coordinator
+  art-direction* (`cmf_overrides={component_id: {…}}` applied to the merged instances at
+  render time, e.g. "all brackets anodized black"). Open trade-off (the shipped path
+  chose library cards — §7): adopt the WB card names as the contract, or define our own
+  neutral PBR schema and translate. `set_appearance` would *extend* the card path, not
+  replace it.
+
+- **Assembly rendering.** `render_photoreal` renders a single handle. Rendering a whole
+  merged assembly — as one combined hero image and/or per-component contact sheets — is
+  the natural pairing with per-component CMF, and the point where the render path meets
+  the multi-agent assembly flow.
