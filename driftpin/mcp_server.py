@@ -2086,6 +2086,26 @@ def render_job(job_id: str, discard: bool = False) -> dict:
 
 
 @mcp.tool()
+def render_capabilities() -> dict:
+    """Report which photoreal renderers are usable right now, and whether the FreeCAD
+    Render addon imports — so you can pick a working renderer for render_photoreal
+    instead of discovering availability by trial and error.
+
+    Takes no arguments. Resolves each renderer's binary exactly as render_photoreal
+    would (DRIFTPIN_<R>_PATH env override -> FreeCAD prefs -> PATH -> per-OS install
+    dirs), but renders nothing and changes no settings.
+
+    Returns {addon_importable (bool), default_renderer ('Povray'), platform,
+    available (sorted list of ready renderer names for the `renderer=` argument),
+    renderers: {name: {available, param_key, batch, binaries, and either path (the
+    resolved binary) or install_hint}}, materials (library card names usable as
+    render_photoreal's material= argument, present only when the addon imports), and
+    addon_error (present only when the addon does not import)}.
+    """
+    return _call("render_capabilities")
+
+
+@mcp.tool()
 def fem_new_analysis(name: str = "Analysis") -> dict:
     """Create a Fem::FemAnalysis container. Returns {handle, name}."""
     return _call("fem_new_analysis", name=name)

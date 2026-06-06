@@ -5,6 +5,9 @@ DriftPin grows a *photorealistic* render path by stitching in the third-party
 it as an MCP tool (`render_photoreal`) alongside the existing software-rasterized
 [`render_view`](../driftpin/render.py).
 
+> This is the architecture / design record. For the user-facing **support matrix,
+> installation, verification, and limitations**, see [`RENDERING.md`](RENDERING.md).
+
 **Status: Phase 1 implemented.** `render_photoreal` is wired end-to-end through the
 worker and the MCP server, verified on Linux with FreeCAD 1.1.0 + POV-Ray 3.7.
 The addon and a renderer binary are still *optional at runtime* — DriftPin boots
@@ -246,8 +249,14 @@ non-blocking job API runs alongside the blocking `render_photoreal`:
    (or Addon Manager → "Render", then check out the pinned commit.)
 2. **Install one renderer binary** — POV-Ray for Phase 1:
    `apt install povray` (Linux) · `brew install povray` (macOS) · official installer (Windows).
+   For the alternate renderers, `scripts/install-renderers.sh` provisions the prebuilt
+   ones (Appleseed, LuxCore) with pinned-checksum downloads + PATH wrappers; see
+   [`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md) (OSPRay Studio, pbrt, Cycles
+   need a source build).
 3. **Nothing else** — DriftPin resolves the binary and sets `PovRayPath` itself (§5.1).
    Override with `DRIFTPIN_POVRAY_PATH=/full/path/to/povray` if it lives somewhere odd.
+   Call the `render_capabilities` MCP tool any time to see which renderers resolve right
+   now (and whether the addon imports) without attempting a render.
 
 ## 7. Resolved decisions & remaining follow-ups
 

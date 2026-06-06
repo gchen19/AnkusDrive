@@ -11,6 +11,7 @@ Usage:
 import json
 import os
 import shutil
+import signal
 import subprocess
 import threading
 from pathlib import Path
@@ -61,6 +62,11 @@ class Worker:
     ):
         self._stderr_buf = []
         stderr_dest = subprocess.PIPE if capture_stderr else subprocess.DEVNULL
+        # start_new_session=True (POSIX) puts freecadcmd in its own session/process
+        # group, so external renderer subprocesses it spawns (povray, luxcoreconsole,
+        # …) inherit that group. Orphaning on worker death does NOT change a process's
+        # group, so shutdown() can still sweep them with a single group kill — without
+        # it, a render in flight when the worker dies leaks a 100%-CPU orphan.
         self.proc = subprocess.Popen(
             [freecadcmd, worker_script],
             stdin=subprocess.PIPE,
@@ -68,7 +74,11 @@ class Worker:
             stderr=stderr_dest,
             bufsize=1,
             text=True,
+            start_new_session=(os.name == "posix"),
         )
+        # The session leader's PGID equals its PID; capture it now so we can group-kill
+        # later even after self.proc has been reaped (getpgid would then fail).
+        self._pgid = self.proc.pid if os.name == "posix" else None
         if capture_stderr:
             self._stderr_thread = threading.Thread(
                 target=self._drain_stderr, daemon=True,
@@ -131,8 +141,21 @@ class Worker:
             raise WorkerError(resp["error"])
         return resp["result"]
 
+    def _reap_group(self):
+        """SIGKILL the worker's whole process group, sweeping any renderer
+        subprocesses it spawned and left behind (e.g. an async render still running
+        when the worker exited). Safe to call repeatedly; a no-op if the group is
+        already empty. Run AFTER the worker leader itself is gone."""
+        if self._pgid is None:
+            return
+        try:
+            os.killpg(self._pgid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass  # group already empty, or not permitted — nothing to clean
+
     def shutdown(self, timeout=5.0):
         if self.proc.poll() is not None:
+            self._reap_group()                       # leader gone; sweep stragglers
             return
         try:
             self.proc.stdin.write(json.dumps({"id": "shutdown", "method": "shutdown"}) + "\n")
@@ -148,6 +171,10 @@ class Worker:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait()
+        finally:
+            # The worker exits without reaping renderer children it launched in
+            # background threads; sweep the process group so none are orphaned.
+            self._reap_group()
 
     def __enter__(self):
         return self
