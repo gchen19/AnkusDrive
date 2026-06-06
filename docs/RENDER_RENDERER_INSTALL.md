@@ -4,10 +4,16 @@
 > with [`RENDERING.md`](RENDERING.md). This doc is the provisioning detail behind it.
 
 
-**Status: discovery + provisioning tooling implemented; source-build renderers still
-pending.** The *code* side was done in PR #18 (all six renderers wired into
-`driftpin/worker.py`'s `_RENDERERS` registry, scene-export-verified headless). This
-pass added the two pieces §7 called for:
+**Status: all six renderers provisioned on Linux x86_64.** The *code* side was done in
+PR #18 (all six renderers wired into `driftpin/worker.py`'s `_RENDERERS` registry,
+scene-export-verified headless). The prebuilt pair (Appleseed, LuxCore) ship via
+`scripts/install-renderers.sh`; the three source-only renderers (pbrt-v4, Cycles,
+OSPRay Studio) now build via `scripts/build-renderers.sh` (§7 item 3). On a fully
+provisioned box `render_capabilities` reports all six available and the gated tests
+PASS — except OSPRay, which renders correctly but below the non-blank threshold on the
+addon's dim stock template (§4, and `RENDERING.md` known limitations).
+
+Originally this doc added the two pieces §7 first called for:
 
 - **`render_capabilities`** (MCP tool + `@handler`) — the agent now *discovers* which
   renderers resolve right now and whether the Render addon imports, instead of
@@ -41,14 +47,16 @@ install script on a provisioned box to flip Luxcore/Appleseed SKIP → PASS. See
 > is verified here; **executing** a hand-fetched renderer is left to a trusted/provisioned
 > environment (§8). The install script never runs the binaries.
 
-The three currently-working renderers, same part + view + material, rendered through
-`render_photoreal` on a provisioned box (POV-Ray via apt; LuxCore + Appleseed via
-`scripts/install-renderers.sh`):
+All six renderers, same part + view + material, rendered through `render_photoreal` on
+a fully provisioned box (POV-Ray via apt; LuxCore + Appleseed via
+`scripts/install-renderers.sh`; Cycles + OSPRay + pbrt via `scripts/build-renderers.sh`):
 
-![render_photoreal across renderers — the same box ∪ cylinder in Gold, rendered by POV-Ray, LuxCore and Appleseed](render_renderers_gallery.png)
+![render_photoreal across renderers — the same box ∪ cylinder in Gold, rendered by POV-Ray, LuxCore, Appleseed, Cycles, OSPRay and pbrt](render_renderers_gallery.png)
 
-Regenerate with `.venv/bin/python3 scripts/render-gallery.py` — it renders whatever
-`render_capabilities` reports available, so the montage grows as Cycles/OSPRay/pbrt land.
+OSPRay's panel is visibly darker than the others — its stock template lights the scene
+with only a dim ambient light (see §4 and `RENDERING.md` known limitations); the geometry
+and material are correct. Regenerate with `.venv/bin/python3 scripts/render-gallery.py` —
+it renders whatever `render_capabilities` reports available.
 
 ### The full material library, per renderer
 
@@ -62,10 +70,16 @@ fails on a renderer is shown as a marked cell, so the grid honestly reflects sup
 | POV-Ray   | `render_gallery_povray.png`    | 14 / 14 |
 | LuxCore   | `render_gallery_luxcore.png`   | 14 / 14 |
 | Appleseed | `render_gallery_appleseed.png` | 13 / 14 (the image-mapped **Terrazzo** card produces no output on the 2019 Appleseed build) |
+| Cycles    | `render_gallery_cycles.png`    | 14 / 14 |
+| OSPRay    | `render_gallery_ospray.png`    | 14 / 14 (all render, but dim — see the §4 note) |
+| pbrt      | `render_gallery_pbrt.png`      | 14 / 14 |
 
 ![POV-Ray material library](render_gallery_povray.png)
 ![LuxCore material library](render_gallery_luxcore.png)
 ![Appleseed material library](render_gallery_appleseed.png)
+![Cycles material library](render_gallery_cycles.png)
+![OSPRay material library](render_gallery_ospray.png)
+![pbrt material library](render_gallery_pbrt.png)
 
 Regenerate all: `.venv/bin/python3 scripts/render-material-gallery.py`
 (or `--renderer Luxcore` for one).
@@ -134,9 +148,9 @@ the addon plugins read and what the registry expects.
 |---|---|---|---|---|
 | `Appleseed` | `AppleseedCliPath` | `appleseed.cli` | **prebuilt** — appleseedhq/appleseed `2.1.0-beta` (2019, final build; `linux64-gcc74.zip`). Automated by `install-renderers.sh`. | easy |
 | `Luxcore` | `LuxCoreConsolePath` | `luxcoreconsole` | **prebuilt SDK** — LuxCoreRender/LuxCore `v2.6` `linux64-**sdk**.tar.bz2` (the plain standalone lacks `luxcoreconsole`; v2.6 is the last standalone — newer = wheels). Automated by `install-renderers.sh`. | easy |
-| `Ospray` | `OspPath` | `ospStudio` | **build from source** — no prebuilt `ospStudio` exists (no `ospray_studio` releases; the OSPRay SDK ships the lib, not Studio). CMake against the OSPRay SDK. | hard |
-| `Pbrt` | `PbrtPath` | `pbrt` | **build from source** (CMake) — mmp/pbrt-v4; experimental upstream | moderate |
-| `Cycles` | `CyclesPath` | `cycles` | **build from source** — Blender's engine; no standalone CLI ships | hard |
+| `Ospray` | `OspPath` | `ospStudio` | **build from source** — `scripts/build-renderers.sh ospray`. No prebuilt `ospStudio` exists (the OSPRay SDK ships the lib, not Studio); we build `RenderKit/ospray-studio` against the prebuilt OSPRay 3.2.0 SDK. *Renders dim* on the addon's stock template (§ known limitations). | hard |
+| `Pbrt` | `PbrtPath` | `pbrt` | **build from source** — `scripts/build-renderers.sh pbrt` (CMake; mmp/pbrt-v4 vendors its deps). Experimental upstream. | moderate |
+| `Cycles` | `CyclesPath` | `cycles` | **build from source** — `scripts/build-renderers.sh cycles`. Blender's engine; CPU standalone built against **system libraries** (no Blender precompiled-lib bundle needed). | hard |
 
 (POV-Ray, for reference: `PovRayPath` → `povray`, `apt install povray`.)
 
@@ -191,9 +205,53 @@ Pick one and apply it to the **MCP server launch env**:
 2. ✅ **`render_capabilities` MCP tool** — done. Worker `@handler` + `@mcp.tool()` (parity
    per `tests/test_contracts.py`), tested by `test_render_capabilities`. Reports per-renderer
    availability + addon import status + material cards, side-effect-free.
-3. ⬜ **OSPRay Studio + pbrt-v4 + Cycles from source** — CMake builds; document the build
-   flags. The long-pole items; a separate phase. (OSPRay Studio joined this group once it
-   turned out to have no prebuilt `ospStudio`, §4.)
+3. ✅ **OSPRay Studio + pbrt-v4 + Cycles from source** — done via
+   `scripts/build-renderers.sh` (companion to the prebuilt installer; same wrapper-on-PATH
+   discovery contract, §3). Idempotent; `--list` shows status; `--deps-only` just
+   apt-installs build deps. Built + verified end-to-end on Ubuntu 24.04 x86_64 (gcc 13,
+   CMake 3.28). The proven recipes:
+   - **pbrt-v4** (moderate) — `git clone --recursive mmp/pbrt-v4`, then
+     `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release` and `ninja pbrt imgtool`. Vendors its own
+     deps (OpenEXR, Ptex, …); CUDA auto-skipped → CPU build. Links only system libs, so the
+     PATH wrapper just execs (no `LD_LIBRARY_PATH`). Renders cleanly (test PASS).
+   - **Cycles** (hard) — `git clone --branch v4.2.0 blender/cycles`, **`rm -rf lib`** (the
+     repo carries empty `lib/linux_x64` submodule placeholders whose mere existence flips
+     Cycles' CMake into precompiled-lib mode and makes it ignore system paths → spurious
+     "Could NOT find ZLIB"). Then build the **CPU standalone against system libraries**:
+     `-DWITH_CYCLES_STANDALONE=ON -DWITH_CYCLES_STANDALONE_GUI=OFF` plus turn off the deps
+     Ubuntu doesn't package or that we don't need:
+     `-DWITH_CYCLES_OSL=OFF -DWITH_CYCLES_USD=OFF -DWITH_CYCLES_HYDRA_RENDER_DELEGATE=OFF`
+     `-DWITH_CYCLES_OPENSUBDIV=OFF -DWITH_CYCLES_OPENIMAGEDENOISE=OFF -DWITH_CYCLES_ALEMBIC=OFF`
+     `-DWITH_CYCLES_PATH_GUIDING=OFF -DWITH_CYCLES_NANOVDB=OFF`
+     `-DWITH_CYCLES_DEVICE_CUDA=OFF -DWITH_CYCLES_DEVICE_OPTIX=OFF -DWITH_CYCLES_DEVICE_HIP=OFF`
+     (keep `-DWITH_CYCLES_EMBREE=ON -DWITH_CYCLES_OPENVDB=ON`). apt deps: OpenImageIO,
+     OpenColorIO, Embree4, OpenEXR, TBB, Boost, pugixml, OpenVDB, blosc, png/jpeg/tiff.
+     Binary lands at `build/bin/cycles`; links only system libs. Renders cleanly (test PASS).
+   - **OSPRay Studio** (hard) — download Intel's prebuilt **OSPRay 3.2.0 SDK**
+     (`ospray-3.2.0.x86_64.linux.tar.gz`, bundles Embree/OpenVKL/rkcommon/TBB/OIDN), then
+     `git clone --recursive RenderKit/ospray-studio` (archived; master == v1.1.0, whose
+     CMake pins OSPRAY_VERSION 3.2.0 — matches) and configure with
+     `-DCMAKE_PREFIX_PATH=<sdk> -DBUILD_TESTING=OFF`. `find_package(ospray)` resolves from
+     the SDK (it's self-contained, `OSPRAY_INSTALL_DEPENDENCIES`); Studio FetchContent-builds
+     its own *static* rkcommon + TBB (it anticipates the clash with the SDK's shared
+     rkcommon). `ninja ospStudio` (needs `libglfw3-dev`; the binary is monolithic but its
+     `batch` subcommand runs headless — no DISPLAY). Install the binary + `libospray_sg.so` +
+     the SDK's `lib/*.so*` into `$PREFIX/ospray_studio/{bin,lib}` and write a wrapper that
+     sets `LD_LIBRARY_PATH=$PREFIX/ospray_studio/lib`. ⚠️ **Caveat:** the addon's stock
+     `ospray_standard.sg` lights the scene with a single dim ambient light
+     (`color [0.2,0.2,0.2]`), so OSPRay's image is correct but low-contrast — it does *not*
+     clear the gated test's non-blank threshold (std > 3). This is an addon-template trait,
+     not a build defect (the same scene renders bright on the other five). See
+     `RENDERING.md` known limitations.
+
+Pinned source revisions (hardcoded in `scripts/build-renderers.sh`):
+
+| Source | Pin | SHA-256 |
+|---|---|---|
+| pbrt-v4 (mmp/pbrt-v4) | commit `7154d82` | — (git) |
+| Cycles (blender/cycles) | tag `v4.2.0` | — (git) |
+| OSPRay Studio (RenderKit/ospray-studio) | commit `686ceff` (archived master) | — (git) |
+| OSPRay SDK | `ospray-3.2.0.x86_64.linux.tar.gz` | `d8670e69b4762e24f2aa83629af897e8f33ea1c724e17e613942c0ccc1c723be` |
 4. ⬜ **Dockerfile (optional)** — an image with all renderers + libs baked in. Most
    reproducible "make them available" path; sidesteps `LD_LIBRARY_PATH` entirely and is
    the natural home for a CI lane that exercises real renders.
@@ -226,11 +284,14 @@ Pick one and apply it to the **MCP server launch env**:
 ## 9. Files this work touched
 
 - ✅ `scripts/install-renderers.sh` (new) — writes wrappers to `$BINDIR` (default
-  `/usr/local/bin`) and installs under `$PREFIX` (default `/opt`).
-- ✅ `scripts/render-gallery.py` (new) + `docs/render_renderers_gallery.png` — renders
-  the example montage above across every available renderer.
-- ✅ `scripts/render-material-gallery.py` (new) + `docs/render_gallery_{povray,luxcore,appleseed}.png`
-  — the material library rendered as a grid per renderer.
+  `/usr/local/bin`) and installs under `$PREFIX` (default `/opt`). The *prebuilt* pair.
+- ✅ `scripts/build-renderers.sh` (new) — the *source-built* trio (pbrt-v4, Cycles,
+  OSPRay Studio). Same `$PREFIX`/`$BINDIR` wrapper contract; `--list`, `--deps-only`,
+  pinned revisions + the OSPRay SDK checksum. Item 3, above.
+- ✅ `scripts/render-gallery.py` + `docs/render_renderers_gallery.png` — the example
+  montage above, regenerated across all six available renderers.
+- ✅ `scripts/render-material-gallery.py` + `docs/render_gallery_{povray,luxcore,appleseed,cycles,ospray,pbrt}.png`
+  — the material library rendered as a grid per renderer (now all six).
 - ✅ `driftpin/worker.py` — added `@handler("render_capabilities")`; refactored
   `_resolve_renderer_exec` to share a side-effect-free `_find_renderer_exec` the probe
   reuses. The `_RENDERERS` registry was already complete (unchanged).
