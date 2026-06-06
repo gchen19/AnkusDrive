@@ -29,9 +29,9 @@ is obtainable.
 | **`Povray`**     | ✅ works (default) | `apt install povray` · `brew install povray` · Windows installer | Single CLI; fast; lower photoreal ceiling. |
 | **`Luxcore`**    | ✅ works | `scripts/install-renderers.sh` (LuxCore **v2.6 SDK**) | Highest quality + PBR; GI sampler noise on quick renders. Needs the `-sdk` build — the plain standalone lacks `luxcoreconsole`. |
 | **`Appleseed`**  | ✅ works (one material caveat — §6) | `scripts/install-renderers.sh` (Appleseed **2.1.0-beta**, 2019 final build) | Console renderer `appleseed.cli`. |
-| **`Cycles`**     | ⬜ not provisioned | **build from source** (Blender's engine; no standalone CLI ships) | Long-pole; separate phase. |
-| **`Ospray`**     | ⬜ not provisioned | **build from source** — no prebuilt `ospStudio` exists (the OSPRay SDK ships the library, not Studio) | Long-pole; separate phase. |
-| **`Pbrt`**       | ⬜ not provisioned | **build from source** ([mmp/pbrt-v4](https://github.com/mmp/pbrt-v4)) | pbrt-v4 support is experimental upstream. |
+| **`Cycles`**     | ✅ works | `scripts/build-renderers.sh cycles` (CPU standalone, built against system libs) | Blender's engine; no standalone CLI ships, so we compile it. |
+| **`Ospray`**     | ⚠️ builds + renders, but dim | `scripts/build-renderers.sh ospray` (OSPRay Studio vs the OSPRay 3.2.0 SDK) | Renders correct geometry but low-contrast on the stock template — see §6. |
+| **`Pbrt`**       | ✅ works | `scripts/build-renderers.sh pbrt` ([mmp/pbrt-v4](https://github.com/mmp/pbrt-v4)) | pbrt-v4 support is experimental upstream. |
 
 To see the live status on a given box, call the **`render_capabilities`** tool (§4) —
 it never renders, just reports what resolves right now.
@@ -81,10 +81,20 @@ Rootless: `PREFIX=~/r BINDIR=~/bin scripts/install-renderers.sh` (put `BINDIR` o
 > macOS/Windows are not automated yet — the script prints guidance. Install the binary
 > and put it on `PATH` under the registry name, or set `DRIFTPIN_<RENDERER>_PATH`.
 
-### Cycles / OSPRay Studio / pbrt-v4 (build from source)
-No usable prebuilt CLI is published. Build the renderer (CMake), then drop the binary —
-or a wrapper — on `PATH` under the registry name (`cycles`, `ospStudio`, `pbrt`). See
-[`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md) §7.
+### Cycles / OSPRay Studio / pbrt-v4 (build from source, automated)
+No usable prebuilt CLI is published, so these are compiled:
+```bash
+sudo scripts/build-renderers.sh              # all three ·  or: … pbrt / … cycles / … ospray
+scripts/build-renderers.sh --list            # show what's pinned + current status
+sudo scripts/build-renderers.sh --deps-only  # just apt-install the build dependencies
+```
+Like the prebuilt installer, it builds under a scratch dir, installs under `$PREFIX`
+(default `/opt`), and writes a `$BINDIR` wrapper named as the registry expects (`pbrt`,
+`cycles`, `ospStudio`); the OSPRay wrapper also exports `LD_LIBRARY_PATH` for the SDK's
+bundled libs. Idempotent (`FORCE=1` to rebuild). Pinned revisions + the OSPRay SDK
+checksum and the exact CMake flags are in
+[`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md) §7. Linux x86_64; needs git,
+cmake, ninja, a C++17 compiler, and apt for Cycles' system-library dependencies.
 
 ### How DriftPin finds a binary (and how to override)
 `render_photoreal` resolves a renderer in this order: **`DRIFTPIN_<RENDERER>_PATH` env →
@@ -127,6 +137,9 @@ The library rendered through each working renderer (one grid per renderer):
 | POV-Ray   | [`render_gallery_povray.png`](render_gallery_povray.png)       | 14/14 |
 | LuxCore   | [`render_gallery_luxcore.png`](render_gallery_luxcore.png)     | 14/14 |
 | Appleseed | [`render_gallery_appleseed.png`](render_gallery_appleseed.png) | 13/14 (§6) |
+| Cycles    | [`render_gallery_cycles.png`](render_gallery_cycles.png)       | 14/14 |
+| OSPRay    | [`render_gallery_ospray.png`](render_gallery_ospray.png)       | 14/14 (dim — §6) |
+| pbrt      | [`render_gallery_pbrt.png`](render_gallery_pbrt.png)           | 14/14 |
 
 Regenerate: `.venv/bin/python3 scripts/render-material-gallery.py` (all renderers) or
 `scripts/render-gallery.py` (one part across renderers). Both adapt to what's installed.
@@ -146,7 +159,17 @@ Regenerate: `.venv/bin/python3 scripts/render-material-gallery.py` (all renderer
   and LuxCore — so it is specific to Terrazzo **on Appleseed**. The gallery marks it with
   a "✗ did not render" cell. *Likely fix:* pre-provision the addon's render venv (or fix
   the host certificate chain) so the bootstrap succeeds without network access.
-- **Textured materials under POV-Ray render colour only.** The two image-mapped cards
+- **OSPRay renders dim / low-contrast on the stock template.** The addon's
+  `ospray_standard.sg` template lights the scene with a single *ambient* light at
+  `color [0.2, 0.2, 0.2]` and no directional/area light, so `renderer="Ospray"` produces a
+  correct but globally dark, low-contrast image. The same box renders bright on the other
+  five renderers (which ship brighter template lighting), so this is an addon-template
+  trait, not a problem with the built `ospStudio` binary. Consequence: OSPRay's gated test
+  (`test_photoreal_ospray_renders`) does **not** clear the non-blank threshold (image
+  std-dev ≈ 2.3 vs. the required > 3) — unlike the other renderers it would *fail* rather
+  than skip once `ospStudio` resolves. *Likely fix:* brighten the ambient light (or add a
+  sun/area light) in the OSPRay template — out of scope here since the template is a
+  shipped third-party addon resource. The two image-mapped cards
   (`GreenMarble`, `Terrazzo`) show their colour map; normal / displacement maps are
   dropped (a POV-Ray-plugin limitation). See
   [`RENDER_TEXTURE_CHECK.md`](RENDER_TEXTURE_CHECK.md).
