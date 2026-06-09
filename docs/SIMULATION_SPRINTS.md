@@ -22,7 +22,7 @@ negative is caught.
 |---|---|
 | 2 · Materials & selection | ✅ **shipped** — `material_get` / `material_select` / `material_list`, seed corpus + CC0 optical layer (Sellmeier `refractive_index_at`) |
 | 10 · Machine-element rating | ✅ **shipped** — bolt / bearing / spring / gear / belt / press-fit / seal, 12 hand-verified toys |
-| 1 · Tolerance & GD&T | 📋 specced (Appendix A) — **not built** (`analysis/tolerance.py` absent) |
+| 1 · Tolerance & GD&T | ✅ **shipped** — `tolerance_stackup` / `fit_check` / `fit_class` / `gdt_check`, 13 hand-verified toys (Sprint 1) |
 | 3 · Wear / fatigue / fracture | 📋 specced + toys — not built |
 | 4 · Thermal (lumped) | 📋 specced + toys — not built |
 | 9 · Design for X | 📋 specced + toys — not built |
@@ -30,8 +30,8 @@ negative is caught.
 | 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | 📋 specced — gated on async-solve infra |
 
 Pure-Python `analysis/` is FreeCAD-free and standalone-testable; that extension
-point is proven by families 2 and 10. The remaining P0 families slot into the same
-shape with zero new dependencies.
+point is proven by families 1, 2 and 10. The remaining P0 families slot into the
+same shape with zero new dependencies.
 
 ---
 
@@ -56,7 +56,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
 
 ## P0 — pure-Python, zero deps, no async (ship next)
 
-### Sprint 1 — Tolerance & GD&T
+### Sprint 1 — Tolerance & GD&T ✅ shipped
 - **Goal:** "Will these parts fit? Tighten which dim to hit 99.7%?"
 - **Tools:** `tolerance_stackup(chain, method, samples)` · `fit_check(hole, shaft)`
   · `fit_class(basic_size, fit)` · `gdt_check(feature, control, zone, datum_refs)`.
@@ -66,8 +66,11 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   Monte-Carlo `pct_in_spec` converges to RSS within ±0.3% at 10 000 samples; ISO 286
   `H7/g6` on Ø20 reproduces handbook deviations. **Negatives:** an interference pair
   → `fit_class:"interference"`, `prob_interference > 0`.
-- **Depends on:** nothing. **This is the recommended first sprint** — it's already
-  fully specced (Appendix A ships the scaffold) and is the last unbuilt P0 anchor.
+- **Depends on:** nothing. **Shipped** — `driftpin/analysis/tolerance.py` +
+  worker/MCP wiring + `tests/test_tolerance.py` (13 toys, incl. the §1 gap-stack
+  reproduction at Cpk≈1.49 and the ISO 286 H7/g6 handbook check). v1 `fit_class`
+  covers hole-basis H + clearance shaft letters (h, g, f, e); interference letters
+  (p, s, …) are the documented next extension.
 
 ### Sprint 2 — Wear / Fatigue / Fracture
 - **Goal:** turn a one-shot FEM stress into a durability verdict.

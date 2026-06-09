@@ -6402,6 +6402,30 @@ def _h_seal_check(p):
     return me.seal_check(**p)
 
 
+@handler("tolerance_stackup")
+def _h_tolerance_stackup(p):
+    from driftpin.analysis import tolerance
+    return tolerance.stackup(**p)
+
+
+@handler("fit_check")
+def _h_fit_check(p):
+    from driftpin.analysis import tolerance
+    return tolerance.fit_check(p["hole"], p["shaft"])
+
+
+@handler("fit_class")
+def _h_fit_class(p):
+    from driftpin.analysis import tolerance
+    return tolerance.fit_class(p["basic_size"], p.get("fit", "H7/g6"))
+
+
+@handler("gdt_check")
+def _h_gdt_check(p):
+    from driftpin.analysis import tolerance
+    return tolerance.gdt_check(**p)
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:

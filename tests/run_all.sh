@@ -27,6 +27,10 @@ echo "== Machine-element rating toys (pure-Python; no FreeCAD) =="
 python3 tests/test_machine_elements.py
 
 echo
+echo "== Tolerance & GD&T toys (pure-Python; no FreeCAD) =="
+python3 tests/test_tolerance.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

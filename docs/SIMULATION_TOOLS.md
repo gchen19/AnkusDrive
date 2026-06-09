@@ -62,10 +62,10 @@ flags leak into the tool surface.
 Each family lists: the agent question it answers · backend · new-dependency weight
 · proposed signatures (intent-encoded) · result schema sketch.
 
-### 1. Tolerance & GD&T  *(anchor — fully specced in Appendix A)*
+### 1. Tolerance & GD&T  *(anchor — shipped)*
 
 - **Answers:** "Will these parts fit? Tighten which dim to make the assembly fit 99.7%?"
-- **Backend:** pure-Python (numpy for Monte-Carlo, already a dep). **Weight: none.**
+- **Backend:** pure-Python (stdlib `random`/`statistics` for Monte-Carlo). **Weight: none.**
 - **Signatures:**
   ```
   tolerance_stackup(chain=[{name,nominal,plus,minus}, ...],
@@ -77,7 +77,13 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Result:** `{nominal, worstcase:{min,max}, rss:{sigma,min_3s,max_3s},
   montecarlo:{mean,std,cpk,pct_in_spec}}`; `fit_check` →
   `{fit_class, min_clearance, max_clearance, prob_interference}`.
-- The largest agent unlock for the smallest build. **Ships first.**
+- **Status: shipped (P0)** in `driftpin/analysis/tolerance.py` —
+  `tolerance_stackup`, `fit_check`, `fit_class`, `gdt_check`, with 13 two-sided
+  toys in `tests/test_tolerance.py`. Signed-deviation convention
+  (`plus`=upper, `minus`=lower, half-band = 3σ); stack links carry an optional
+  `direction` (±1) for gap/subtractive chains. `fit_class` v1 covers hole-basis H
+  with clearance shaft letters (h, g, f, e); interference letters extend the same
+  table next.
 
 ### 2. Materials & selection  *(foundational — many families cite it)*
 
@@ -331,7 +337,7 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
 
 **P0 — pure-Python, zero new deps, ship first.** Days each, no installs,
 immediately useful:
-1. **Tolerance / GD&T** (Appendix A) — validates the new `analysis/` extension point. *(scaffolded)*
+1. **Tolerance / GD&T** (Appendix A) — validates the new `analysis/` extension point. *(shipped)*
 2. **Materials DB** — foundational; unblocks fatigue, fracture, cost. *(shipped)*
 3. **Wear / fatigue / fracture** — turns FEM stress into durability.
 4. **DfM / DfA heuristics** + lumped thermal — grade against process, reuse existing tools.

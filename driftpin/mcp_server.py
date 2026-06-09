@@ -2549,6 +2549,74 @@ def seal_check(
                  application=application, max_gland_fill_pct=max_gland_fill_pct)
 
 
+@mcp.tool()
+def tolerance_stackup(
+    chain: list,
+    method: str = "worstcase",
+    samples: int = 10000,
+    spec_min: float | None = None,
+    spec_max: float | None = None,
+) -> dict:
+    """Stack a dimension chain. Each chain entry is {name, nominal, plus, minus}
+    with plus/minus the signed upper/lower deviations (plus>=minus; symmetric
+    shorthand {nominal, tol}); add direction:-1 for a subtractive/gap link.
+    method: worstcase | rss | montecarlo (each adds a deeper block). Half-bands
+    are read as 3-sigma; cpk/pct_in_spec use spec_min/spec_max if given, else the
+    worst-case bounds. Returns {nominal, worstcase:{min,max,spread},
+    rss:{sigma,min_3s,max_3s}, montecarlo:{mean,std,cpk,pct_in_spec,spec}}."""
+    params = {"chain": chain, "method": method, "samples": samples}
+    if spec_min is not None:
+        params["spec_min"] = spec_min
+    if spec_max is not None:
+        params["spec_max"] = spec_max
+    return _call("tolerance_stackup", **params)
+
+
+@mcp.tool()
+def fit_check(hole: dict, shaft: dict) -> dict:
+    """Classify a hole/shaft pair. hole and shaft are {nominal, plus, minus}
+    (signed deviations) or {nominal, tol}. Returns {fit_class:'clearance'|
+    'transition'|'interference', min_clearance, max_clearance, nominal_clearance,
+    prob_interference} (prob from a normal model with half-band = 3-sigma)."""
+    return _call("fit_check", hole=hole, shaft=shaft)
+
+
+@mcp.tool()
+def fit_class(basic_size: float, fit: str = "H7/g6") -> dict:
+    """ISO 286 limits for a fit code (e.g. 'H7/g6'), in mm. v1 covers a hole-basis
+    H with shaft clearance letters (h, g, f, e). Returns {basic_size, fit,
+    hole:{upper_dev,lower_dev,min,max}, shaft:{...}, fit_class, min_clearance,
+    max_clearance, prob_interference}. Errors on an out-of-table size (>500 mm) or
+    an unsupported code (non-H hole or interference shaft letter)."""
+    return _call("fit_class", basic_size=basic_size, fit=fit)
+
+
+@mcp.tool()
+def gdt_check(
+    control: str,
+    zone: float,
+    actual: float | None = None,
+    offset: dict | None = None,
+    mmc_bonus: float = 0.0,
+    datum_refs: list | None = None,
+) -> dict:
+    """Check a measured feature against a GD&T tolerance zone. control: position |
+    flatness | straightness | circularity | cylindricity | perpendicularity |
+    parallelism | angularity | concentricity | runout | total_runout |
+    profile_line | profile_surface. actual is the measured deviation; for position
+    pass offset={x,y} to use the diametral 2*hypot(x,y). mmc_bonus adds bonus
+    tolerance. Returns {control, zone, effective_zone, actual, margin, pass,
+    datum_refs}."""
+    params = {"control": control, "zone": zone, "mmc_bonus": mmc_bonus}
+    if actual is not None:
+        params["actual"] = actual
+    if offset is not None:
+        params["offset"] = offset
+    if datum_refs is not None:
+        params["datum_refs"] = datum_refs
+    return _call("gdt_check", **params)
+
+
 def run():
     mcp.run()
 
