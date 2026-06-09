@@ -28,12 +28,14 @@ def _ensure_worker() -> Worker:
     return _worker
 
 
-def _call(method: str, _timeout: float | None = None, **params: Any) -> Any:
+def _call(_method: str, _timeout: float | None = None, **params: Any) -> Any:
+    # _method is underscored so a tool param named `method` (e.g. tolerance_stackup)
+    # passes through **params instead of colliding with this positional argument.
     try:
         worker = _ensure_worker()
         if _timeout is not None:
-            return worker.call(method, _timeout=_timeout, **params)
-        return worker.call(method, **params)
+            return worker.call(_method, _timeout=_timeout, **params)
+        return worker.call(_method, **params)
     except WorkerError as e:
         raise RuntimeError(f"{e.type}: {e.remote_message}") from e
 
