@@ -105,8 +105,12 @@ echo "== MBD dynamics (PyBullet; skip if the mbd extra is absent) =="
 $VENV_PY tests/test_mbd.py
 
 echo
-echo "== Topology-optimization toys (SIMP; needs numpy) =="
+echo "== Topology-optimization toys (SIMP 2-D + 3-D; needs numpy) =="
 $VENV_PY tests/test_topology.py
+
+echo
+echo "== Advanced cross-family toys (exact-identity limit probes; needs numpy) =="
+$VENV_PY tests/test_toys_advanced.py
 
 echo
 echo "== Worker / FreeCAD-side tests =="
