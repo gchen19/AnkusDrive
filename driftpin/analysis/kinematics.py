@@ -183,7 +183,7 @@ def fourbar_position(ground: float, crank: float, coupler: float, rocker: float,
     O2 = (0.0, 0.0)
     O4 = (float(ground), 0.0)
     th2 = math.radians(theta2_deg)
-    A = (crank * math.cos(th2), crank * math.sin(th2))
+    A = (O2[0] + crank * math.cos(th2), O2[1] + crank * math.sin(th2))
     # 'open' = the non-crossed assembly (e.g. the parallelogram branch of a
     # parallelogram linkage, where the rocker tracks the crank).
     branch = -1 if config == "open" else 1
