@@ -156,6 +156,7 @@ every day.
 | Parametric components | `add_gear`, `add_rack`, `add_sprocket`, `add_pulley`, `add_spring`, `add_fastener`, `add_bearing`, `add_thread`, `list_thread_options` |
 | Metrology & inspection | `measure_distance`, `measure_angle`, `bounding_box`, `check_shape`, `section_view`, `min_clearance`, `envelope_check`, `interference_check` |
 | Generic property access | `get_object`, `set_property` |
+| Functional intent & invariants | `annotate_face`, `list_face_roles`, `classify_face_sides`, `check_airtight_path`, `declare_intent`, `verify_intent` |
 | Assembly & interfaces | `make_assembly`, `add_part`, `list_assembly_parts`, `merge_assembly`, `publish_interface`, `interface_align_check`, `assembly_lock`, `assembly_lock_check`, `bom_extract` |
 | Drawings | `make_drawing_page`, `add_projection_group`, `mass_properties` |
 | Visual feedback | `render_view`, `render_views` (8 preset views, multi-view sheets) |
@@ -285,7 +286,7 @@ tools) and the **multi-agent orchestration** layer.
 - **Multi-agent orchestration** — DriftPin ships the thin merge primitives + gates (`publish_interface`, `merge_assembly`, `interface_align_check`, `envelope_check`, `assembly_lock`/`_check`); the host-side reference coordinator (`orchestration/`) decomposes a brief, fans out per-component builders, merges, gates, and renegotiates. See [Multi-agent design](#multi-agent-design) and [`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md).
 - **Phase 3 intent-encoding additions** — `direction='into_body'|'away_from_body'` and `through='wall'|'body'` on pocket/hole (ray-cast wall depth handles hollow shells correctly); `intended_for='print'|'machine'|'drawing'` on hole drives ModelThread; `verify_feature` diffs actual-vs-expected volume change to catch silent failures; visibility hygiene at save hides consumed inputs; `register_handle` + `run_script` auto_register close the escape-hatch one-way trapdoor; `list_thread_options` surfaces the coupled ThreadType/ThreadSize enums dynamically; revolve has an OCCT pre-check that flags axis-coincident edges with an actionable error.
 - **Selection layer** — `list_faces` / `list_edges` / `query_faces` / `resolve_*` produce stable geometric tags that survive edits; FEM constraints take tags directly.
-- **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer; `render_view` / `render_views` return PNGs as MCP `ImageContent`.
+- **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer (`render_view` / `render_views` return PNGs as MCP `ImageContent`), plus photoreal `render_photoreal` via the FreeCAD Render addon + an external renderer (POV-Ray / LuxCore / Appleseed). Support matrix, install, and limitations: [`docs/RENDERING.md`](docs/RENDERING.md).
 - **Tests** — 153 test functions across worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent (M1+M2), runnable via `tests/run_all.sh`. Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](tests/RELIABILITY.md).
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and the

@@ -31,12 +31,20 @@ echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 
 echo
+echo "== Golden fixtures (issue #19 real adapters) =="
+python3 tests/test_golden_issue19.py
+
+echo
 echo "== Mating-dimension golden table =="
 python3 tests/test_mating_dims.py
 
 echo
 echo "== Render tests =="
 $VENV_PY tests/test_render.py
+
+echo
+echo "== Photoreal render tests (skip if Render addon / renderer absent) =="
+$VENV_PY tests/test_render_photoreal.py
 
 echo
 echo "== Cross-slice integration =="

@@ -1905,6 +1905,319 @@ def _h_section_view(p):
     return out
 
 
+# --- airtight / enclosed-flow void analysis (issue #19) ----------------------
+#
+# An enclosed-flow part (a vacuum adapter, a manifold, a duct) is "correct" when
+# a single connected void joins its declared inlet to its declared outlet and is
+# bounded by solid everywhere else. check_shape's watertight verdict is necessary
+# but NOT sufficient: a watertight solid can still have a blocked path (a near-
+# zero "almond slit") or an unintended opening (an over-cut doorway) — the two
+# failure modes in issue #19. This computes the functional invariant via a pure-
+# BREP void analysis: build the void as padded_bbox.cut(part_with_ports_capped)
+# and let OCCT's boolean engine separate enclosed cavities (each its own entry in
+# .Solids) from ambient (the single large outside solid). A void open to ambient
+# fuses INTO ambient; an enclosed cavity falls out as a distinct solid. The
+# bottleneck is then an analytic slice-area sweep along the inlet->outlet axis.
+
+
+def _resolve_port_face(handle, shape, ref, label):
+    """A face reference -> (Face, 1-based index). Accepts an f_* tag, a 'FaceN'
+    string, an int index, or — once roles are declared with annotate_face — a
+    face-role NAME or ROLE string (resolved through DP_FaceRoles via the stored
+    tag, so it survives edits). Mirrors the inline resolution in oring_groove."""
+    if ref is None:
+        raise ValueError(f"{label} face reference is required")
+    if isinstance(ref, str) and ref.startswith("f_"):
+        idx = int(_h_resolve_face({"handle": handle, "tag": ref})["index"][len("Face"):])
+    elif isinstance(ref, str) and ref.startswith("Face"):
+        idx = int(ref[len("Face"):])
+    else:
+        try:
+            idx = int(ref)
+        except (TypeError, ValueError):
+            idx = _resolve_face_role(handle, ref, label)
+    if idx < 1 or idx > len(shape.Faces):
+        raise ValueError(f"{label} face index {idx} out of range (1..{len(shape.Faces)})")
+    return shape.Faces[idx - 1], idx
+
+
+def _port_cap(part, face, label):
+    """A solid 'plug' that seals a port opening: the face's outer boundary filled
+    and extruded along the outward normal, with a small inward overlap so it fuses
+    into the part (abutting caps stay disjoint and break the boolean). Returns
+    (cap_solid, outward_normal)."""
+    n = _outward_normal(face)
+    try:
+        plate = Part.Face(face.OuterWire)
+    except Exception as e:
+        raise ValueError(
+            f"{label} port face is not cappable (need a planar opening rim): {e}"
+        )
+    depth = max(2.0, 0.05 * part.BoundBox.DiagonalLength)
+    overlap = 0.5  # inward overlap so fuse() merges the cap into the wall
+    inward = App.Vector(-n.x, -n.y, -n.z)
+    cap = plate.translated(inward * overlap).extrude(n * (overlap + depth))
+    return cap, n
+
+
+def _section_area_at(solid, axis, d):
+    """Sum of closed section-wire areas where `solid` meets the plane (axis, d).
+    Reuses the section_view slice pattern."""
+    area = 0.0
+    for w in solid.slice(axis, d):
+        if w.isClosed():
+            try:
+                area += Part.Face(w).Area
+            except Exception:
+                pass
+    return area
+
+
+@handler("check_airtight_path")
+def _h_check_airtight_path(p):
+    """Functional check for an enclosed-flow part: is there a single connected
+    void joining the declared inlet to the outlet, bounded by solid everywhere
+    else? This is what 'mostly airtight' means operationally, and it is what
+    check_shape's watertight verdict CANNOT tell you — a watertight solid can
+    still have a blocked path or a hidden leak. Pure inspection: mutates nothing.
+
+    inlet / outlet: a face reference on `handle` naming each port OPENING (the rim
+        face around the hole) — an f_* tag, 'FaceN', an int index, or a role/name
+        declared with annotate_face (e.g. "inlet"). The check seals both ports with
+        cap solids, builds the negative-space void as padded_bbox.cut(capped), and
+        classifies the result.
+    min_aperture_mm2 (optional): minimum acceptable bottleneck cross-section. When
+        given, a connected-but-pinched path (a near-zero 'almond slit') fails.
+    pad_mm (optional): bounding-box margin for the void box (default
+        max(2.0, 0.05*diagonal)).
+
+    Returns (lengths mm, areas mm², volumes mm³):
+      ok                   (bool)  connected AND not leaky AND aperture >= threshold
+      status               (str)   'airtight' | 'bottleneck' | 'blocked' | 'leaky'
+      connected            (bool)  one void joins inlet and outlet
+      leaky                (bool)  with both ports capped the cavity still reaches
+                                   ambient => an unintended opening exists
+      min_aperture_mm2     (float|null) narrowest section of the flow void
+      bottleneck_point     ([x,y,z]|null) a point on the narrowest section plane
+      flow_void_volume_mm3 (float|null) volume of the connecting void
+      void_components      (int)   number of void solids (ambient + enclosed)
+      inlet / outlet       (str)   the resolved 'FaceN' references
+      pad_mm               (float) the margin used
+    """
+    handle = p["handle"]
+    _, shape = _shape_of(handle)
+    if not shape.isValid():
+        raise RuntimeError(
+            "shape is not valid (run check_shape first); cannot build a reliable void"
+        )
+    fin, i_in = _resolve_port_face(handle, shape, p.get("inlet"), "inlet")
+    fout, i_out = _resolve_port_face(handle, shape, p.get("outlet"), "outlet")
+    if i_in == i_out:
+        raise ValueError("inlet and outlet resolve to the same face")
+    min_aperture = p.get("min_aperture_mm2")
+    if min_aperture is not None:
+        min_aperture = float(min_aperture)
+
+    incap, n_in = _port_cap(shape, fin, "inlet")
+    outcap, n_out = _port_cap(shape, fout, "outlet")
+    capped = shape.fuse(incap).fuse(outcap)
+    try:
+        capped = capped.removeSplitter()
+    except Exception:
+        pass
+
+    cb = capped.BoundBox
+    pad = float(p["pad_mm"]) if p.get("pad_mm") else max(2.0, 0.05 * cb.DiagonalLength)
+    big = Part.makeBox(
+        cb.XLength + 2 * pad, cb.YLength + 2 * pad, cb.ZLength + 2 * pad,
+        App.Vector(cb.XMin - pad, cb.YMin - pad, cb.ZMin - pad),
+    )
+    void = big.cut(capped)
+    solids = list(void.Solids)
+    if not solids:
+        raise RuntimeError("void computation produced no solids (degenerate geometry)")
+
+    # ambient = the single large outside void; tie-break by centroid so the pick
+    # is deterministic when two void solids happen to share a volume.
+    def _amb_key(i):
+        s = solids[i]
+        c = s.CenterOfMass
+        return (round(s.Volume, 6), round(c.x, 6), round(c.y, 6), round(c.z, 6))
+    amb_idx = max(range(len(solids)), key=_amb_key)
+    ambient = solids[amb_idx]
+    enclosed = [s for i, s in enumerate(solids) if i != amb_idx]
+
+    # interior probe points: just inside each opening, past the cap overlap.
+    def _interior(face, n):
+        c = face.CenterOfMass
+        return c - App.Vector(n.x, n.y, n.z) * 1.0
+    pin = _interior(fin, n_in)
+    pout = _interior(fout, n_out)
+    if capped.isInside(pin, 1e-6, True):
+        raise ValueError(
+            "inlet does not open into a void (not an opening, or wall too thick "
+            "behind the rim)"
+        )
+    if capped.isInside(pout, 1e-6, True):
+        raise ValueError(
+            "outlet does not open into a void (not an opening, or wall too thick "
+            "behind the rim)"
+        )
+
+    def _host(pt):
+        for i, s in enumerate(enclosed):
+            if s.isInside(pt, 1e-6, True):
+                return ("enclosed", i)
+        if ambient.isInside(pt, 1e-6, True):
+            return ("ambient", -1)
+        return ("none", -2)
+    hin, hout = _host(pin), _host(pout)
+
+    same_enclosed = hin[0] == "enclosed" and hin == hout
+    leaky = hin[0] == "ambient" or hout[0] == "ambient"
+    connected = same_enclosed or (hin[0] == "ambient" and hout[0] == "ambient")
+
+    min_ap = None
+    bottleneck = None
+    flow_vol = None
+    if same_enclosed:
+        fv = enclosed[hin[1]]
+        flow_vol = fv.Volume
+        axis = pout - pin
+        if axis.Length > 1e-9:
+            axis.normalize()
+            d0, d1 = pin.dot(axis), pout.dot(axis)
+            best = None
+            n_stations = 40
+            for k in range(1, n_stations):
+                d = d0 + (d1 - d0) * k / n_stations
+                a = _section_area_at(fv, axis, d)
+                if a > 1e-9 and (best is None or a < best[0]):
+                    best = (a, d)
+            if best is not None:
+                min_ap = best[0]
+                t = best[1] - d0
+                bottleneck = [
+                    round(pin.x + axis.x * t, 6),
+                    round(pin.y + axis.y * t, 6),
+                    round(pin.z + axis.z * t, 6),
+                ]
+
+    if leaky:
+        status = "leaky"
+    elif not connected:
+        status = "blocked"
+    elif min_aperture is not None and min_ap is not None and min_ap < min_aperture:
+        status = "bottleneck"
+    else:
+        status = "airtight"
+    ok = bool(
+        connected and not leaky
+        and (min_aperture is None or (min_ap is not None and min_ap >= min_aperture))
+    )
+
+    return {
+        "ok": ok,
+        "status": status,
+        "connected": bool(connected),
+        "leaky": bool(leaky),
+        "min_aperture_mm2": None if min_ap is None else round(min_ap, 6),
+        "bottleneck_point": bottleneck,
+        "flow_void_volume_mm3": None if flow_vol is None else round(flow_vol, 6),
+        "void_components": len(solids),
+        "inlet": f"Face{i_in}",
+        "outlet": f"Face{i_out}",
+        "pad_mm": round(pad, 6),
+    }
+
+
+@handler("classify_face_sides")
+def _h_classify_face_sides(p):
+    """Inside-vs-outside topology: for every face, which void does its outward
+    side open into — an enclosed cavity (wetted) or ambient (exterior)? Answers
+    the "which faces are inside the airflow path" question from issue #19 and
+    auto-suggests a role per face. Pure inspection; mutates nothing.
+
+    Method: build the negative-space void (padded_bbox.cut(part)) and split it
+    into ambient (the one large outside solid) and any enclosed cavities; probe
+    each face just off its outward normal and see which it lands in. With
+    seal_ports=True (default) declared inlet/outlet roles (annotate_face) are
+    capped first, so an OPEN duct's bore reads as the enclosed flow cavity rather
+    than as ambient.
+
+    handle: the part. seal_ports: cap declared inlet/outlet before classifying.
+
+    Returns a list (one per face) of dicts:
+      tag / index      (str)   stable f_* tag and 'FaceN'
+      kind             (str)   surface kind (planar/cylindrical/…)
+      side             (str)   'interior' (bounds an enclosed void) | 'ambient' |
+                               'ambiguous' (probe inconclusive, e.g. a capped port)
+      suggested_role   (str)   'wetted' for interior, 'ambient' for exterior, else null
+      declared_role    (str)   the role already annotated on this face, if any
+    """
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    roles = _read_face_roles(obj)
+
+    solid = shape
+    if p.get("seal_ports", True):
+        caps = []
+        for name, e in roles.items():
+            if e.get("role") in ("inlet", "outlet"):
+                try:
+                    f, _ = _resolve_port_face(handle, shape, e["tag"], name)
+                    cap, _n = _port_cap(shape, f, name)
+                    caps.append(cap)
+                except Exception:
+                    pass  # a drifted/uncappable port just isn't sealed
+        for c in caps:
+            solid = solid.fuse(c)
+        if caps:
+            try:
+                solid = solid.removeSplitter()
+            except Exception:
+                pass
+
+    bb = solid.BoundBox
+    pad = max(2.0, 0.05 * bb.DiagonalLength)
+    big = Part.makeBox(
+        bb.XLength + 2 * pad, bb.YLength + 2 * pad, bb.ZLength + 2 * pad,
+        App.Vector(bb.XMin - pad, bb.YMin - pad, bb.ZMin - pad),
+    )
+    solids = list(big.cut(solid).Solids)
+    if not solids:
+        raise RuntimeError("void computation produced no solids (degenerate geometry)")
+
+    def _amb_key(i):
+        s = solids[i]
+        c = s.CenterOfMass
+        return (round(s.Volume, 6), round(c.x, 6), round(c.y, 6), round(c.z, 6))
+    amb_idx = max(range(len(solids)), key=_amb_key)
+    ambient = solids[amb_idx]
+    enclosed = [s for i, s in enumerate(solids) if i != amb_idx]
+
+    tag2role = {e["tag"]: e["role"] for e in roles.values() if "tag" in e}
+    eps = max(0.01, 1e-3 * bb.DiagonalLength)
+    out = []
+    for i, f in enumerate(shape.Faces):
+        sig = _face_signature(f)
+        tag = f"f_{_hash_sig(sig)}"
+        n = _outward_normal(f)
+        probe = f.CenterOfMass + App.Vector(n.x, n.y, n.z) * eps
+        if any(s.isInside(probe, 1e-6, True) for s in enclosed):
+            side, suggest = "interior", "wetted"
+        elif ambient.isInside(probe, 1e-6, True):
+            side, suggest = "ambient", "ambient"
+        else:
+            side, suggest = "ambiguous", None
+        item = {"tag": tag, "index": f"Face{i + 1}", "kind": sig["kind"],
+                "side": side, "suggested_role": suggest}
+        if tag in tag2role:
+            item["declared_role"] = tag2role[tag]
+        out.append(item)
+    return out
+
+
 @handler("list_faces")
 def _h_list_faces(p):
     _, shape = _shape_of(p["handle"])
@@ -3831,6 +4144,257 @@ def _h_publish_interface(p):
             "interfaces": sorted(ifaces.keys())}
 
 
+# --- semantic face roles (issue #19) -----------------------------------------
+#
+# Declare WHAT a face is FOR — "inlet", "outlet", "sealing", ... — so later edits
+# can be checked against intent instead of re-derived from raw geometry. Roles
+# bind to the stable f_* face tag (which survives edits) and persist as a JSON
+# property bag, mirroring publish_interface's DP_Interfaces exactly. The stored
+# signature snapshot lets a later check (verify_intent, slice 4) detect a tagged
+# face that has drifted or vanished. check_airtight_path resolves a role/name
+# string back to the current face through the stored tag.
+
+_FACEROLE_PROP = "DP_FaceRoles"
+_FACE_ROLES = ("inlet", "outlet", "sealing", "wetted", "ambient", "mating")
+
+
+def _read_face_roles(obj):
+    """Declared face-role dict for an object ({} if none)."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _FACEROLE_PROP in base.PropertiesList:
+        try:
+            return _json.loads(getattr(base, _FACEROLE_PROP) or "{}")
+        except Exception:
+            return {}
+    return {}
+
+
+def _unique_role_name(roles, role):
+    """A free key for a new annotation: the role itself, else role_2, role_3, …"""
+    if role not in roles:
+        return role
+    i = 2
+    while f"{role}_{i}" in roles:
+        i += 1
+    return f"{role}_{i}"
+
+
+def _resolve_face_role(handle, ref, label):
+    """Resolve a face-role NAME (preferred) or ROLE string to a current 1-based
+    face index via the stored tag. Raises if unknown or (for a role) ambiguous."""
+    roles = _read_face_roles(_resolve(handle))
+    if not roles:
+        raise ValueError(
+            f"{label}={ref!r} is not a face tag/'FaceN'/index, and no face roles "
+            f"are declared on {handle!r} (use annotate_face first)"
+        )
+    if ref in roles:
+        tag = roles[ref]["tag"]
+    else:
+        matches = [n for n, e in roles.items() if e.get("role") == ref]
+        if not matches:
+            raise ValueError(
+                f"{label}={ref!r}: no annotation with that name or role "
+                f"(declared: {sorted(roles)})"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"{label} role {ref!r} is ambiguous across {sorted(matches)}; "
+                f"pass a specific annotation name or a face tag"
+            )
+        tag = roles[matches[0]]["tag"]
+    return int(_h_resolve_face({"handle": handle, "tag": tag})["index"][len("Face"):])
+
+
+@handler("annotate_face")
+def _h_annotate_face(p):
+    """Declare the semantic ROLE of a face — what it is FOR — so edits can be
+    checked against intent. Persists in the .FCStd as a JSON property bag keyed by
+    a unique annotation name; survives save/reopen. The role binds to the face's
+    stable f_* tag, and a signature snapshot is stored so a later check can flag a
+    tagged face that has drifted or vanished.
+
+    handle: the part.
+    face: an f_* tag, 'FaceN', or int index of the face to annotate.
+    role: one of inlet | outlet | sealing | wetted | ambient | mating.
+    name: optional unique label for this annotation (default: the role, then
+        role_2, role_3, …). Re-using a name updates that annotation.
+    meta: optional dict stored verbatim (e.g. {"spec": "32mm hose", "od": 32}).
+
+    Returns {handle, name, role, tag, index, roles} — roles is the sorted list of
+    all annotation names now on the part."""
+    import json as _json
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    face, idx = _resolve_port_face(handle, shape, p.get("face"), "face")
+    role = p.get("role")
+    if role not in _FACE_ROLES:
+        raise ValueError(f"role {role!r} not in {list(_FACE_ROLES)}")
+    sig = _face_signature(face)
+    tag = f"f_{_hash_sig(sig)}"
+    roles = _read_face_roles(obj)
+    name = p.get("name") or _unique_role_name(roles, role)
+    entry = {"role": role, "tag": tag, "index": f"Face{idx}", "signature": sig}
+    meta = p.get("meta")
+    if meta:
+        entry["meta"] = meta
+    roles[name] = entry
+    base = _shaped_top(obj)
+    if _FACEROLE_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _FACEROLE_PROP, "DriftPin",
+                         "semantic face roles (JSON)")
+    setattr(base, _FACEROLE_PROP, _json.dumps(roles))
+    base.Document.recompute()
+    return {"handle": handle, "name": name, "role": role, "tag": tag,
+            "index": f"Face{idx}", "roles": sorted(roles)}
+
+
+@handler("list_face_roles")
+def _h_list_face_roles(p):
+    """Read back the semantic face roles declared on a part (see annotate_face).
+    Each entry re-resolves its stored tag against the CURRENT geometry, so
+    `present` is False when the tagged face has drifted or vanished since it was
+    annotated — the cheap drift signal the regression gate builds on.
+
+    Returns a list of {name, role, tag, present, index?, meta?}, sorted by name."""
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    roles = _read_face_roles(obj)
+    current = {f"f_{_hash_sig(_face_signature(f))}" for f in shape.Faces}
+    out = []
+    for name in sorted(roles):
+        e = roles[name]
+        tag = e.get("tag")
+        item = {"name": name, "role": e.get("role"), "tag": tag,
+                "present": tag in current}
+        if item["present"]:
+            try:
+                item["index"] = _h_resolve_face({"handle": handle, "tag": tag})["index"]
+            except Exception:
+                item["present"] = False
+        if "meta" in e:
+            item["meta"] = e["meta"]
+        out.append(item)
+    return out
+
+
+# --- declared intent + re-runnable regression gate (issue #19) ---------------
+#
+# Record the functional invariants of a part ONCE, then re-run them after every
+# edit — the regression check the issue calls out as missing. The contract
+# composes the slice 1-3 primitives (check_shape, check_airtight_path, face-role
+# presence) and persists as a JSON property bag (DP_Intent), like DP_Interfaces /
+# DP_FaceRoles. verify_intent never raises on a failing invariant: a failure
+# becomes a {passed: False} row so the gate is safe to run in a loop.
+
+_INTENT_PROP = "DP_Intent"
+
+
+def _read_intent(obj):
+    """Declared intent contract for an object ({} if none)."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _INTENT_PROP in base.PropertiesList:
+        try:
+            return _json.loads(getattr(base, _INTENT_PROP) or "{}")
+        except Exception:
+            return {}
+    return {}
+
+
+@handler("declare_intent")
+def _h_declare_intent(p):
+    """Record the functional invariants a part must keep satisfying, so they can
+    be re-checked after every edit (see verify_intent). Persists in the .FCStd as
+    a JSON property bag (DP_Intent); one contract per part, re-declaring replaces.
+
+    contract keys (all optional, but declare at least one):
+      watertight     (bool)  require check_shape's watertight_solid verdict.
+      airtight_path  (dict)  {inlet, outlet, min_aperture_mm2?} — each port is a
+                             face tag / 'FaceN' / int / declared role-or-name.
+      required_faces (list)  face tags / 'FaceN' / declared role-or-names that
+                             must still resolve (catches a deleted/drifted face).
+
+    Returns {handle, contract} (the stored contract)."""
+    import json as _json
+    handle = p["handle"]
+    obj, _ = _shape_of(handle)
+    contract = dict(p.get("contract") or {})
+    if not contract:
+        raise ValueError("contract is empty; declare at least one invariant")
+    ap = contract.get("airtight_path")
+    if ap is not None and ("inlet" not in ap or "outlet" not in ap):
+        raise ValueError("airtight_path requires both 'inlet' and 'outlet'")
+    base = _shaped_top(obj)
+    if _INTENT_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _INTENT_PROP, "DriftPin",
+                         "declared functional intent (JSON)")
+    setattr(base, _INTENT_PROP, _json.dumps(contract))
+    base.Document.recompute()
+    return {"handle": handle, "contract": contract}
+
+
+@handler("verify_intent")
+def _h_verify_intent(p):
+    """Re-run every invariant declared with declare_intent — the regression gate
+    to run after each edit. Composes check_shape / check_airtight_path / face-role
+    resolution. Never raises on a failing invariant (a failure is a passed=False
+    row), so it is safe to call in a loop. Pure inspection; mutates nothing.
+
+    Returns {handle, ok, results} where results is a list of
+      {invariant, passed, detail} (one per declared invariant) and ok is True iff
+    every invariant passed."""
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    contract = _read_intent(obj)
+    if not contract:
+        raise ValueError(f"no intent declared on {handle!r} (use declare_intent first)")
+
+    results = []
+
+    def _add(name, fn):
+        try:
+            passed, detail = fn()
+        except Exception as e:
+            passed, detail = False, f"{type(e).__name__}: {e}"
+        results.append({"invariant": name, "passed": bool(passed), "detail": detail})
+
+    if contract.get("watertight"):
+        def _w():
+            r = _h_check_shape({"handle": handle})
+            return r["watertight_solid"], (
+                f"solids={r['solids']}, closed={r['closed']}, valid={r['valid']}")
+        _add("watertight", _w)
+
+    ap = contract.get("airtight_path")
+    if ap:
+        def _a():
+            r = _h_check_airtight_path({
+                "handle": handle, "inlet": ap["inlet"], "outlet": ap["outlet"],
+                "min_aperture_mm2": ap.get("min_aperture_mm2")})
+            return r["ok"], (
+                f"status={r['status']}, connected={r['connected']}, "
+                f"leaky={r['leaky']}, min_aperture_mm2={r['min_aperture_mm2']}")
+        _add("airtight_path", _a)
+
+    req = contract.get("required_faces")
+    if req:
+        def _r():
+            missing = []
+            for ref in req:
+                try:
+                    _resolve_port_face(handle, shape, ref, "required_face")
+                except Exception:
+                    missing.append(ref)
+            return (not missing), (
+                "all present" if not missing else f"missing/drifted: {missing}")
+        _add("required_faces", _r)
+
+    ok = all(r["passed"] for r in results) if results else True
+    return {"handle": handle, "ok": ok, "results": results}
+
+
 def _apply_mate(link, parent_link, child_iface, parent_iface):
     """Place `link` so its child_iface frame coincides with parent_link's
     parent_iface frame in world space: LinkPlacement = Pp · Fp · Fc⁻¹."""
@@ -4476,6 +5040,596 @@ def _h_tessellate(p):
         "triangles": [list(t) for t in tris],
         "bbox": [bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax],
     }
+
+
+# --- photorealistic rendering (FreeCAD Render workbench) ----------------------
+#
+# Unlike render_view (the host-side NumPy rasterizer in driftpin/render.py),
+# photoreal rendering must run inside the FreeCAD process: it needs the live Part
+# shapes and the third-party `Render` workbench, which serializes the scene and
+# shells out to an external renderer binary (POV-Ray by default). It is therefore
+# a worker handler, not a change to render.py. See docs/RENDER_WORKBENCH.md.
+#
+# Install (cross-platform): clone https://github.com/FreeCAD/FreeCAD-render into
+# <App.getUserAppDataDir()>/Mod/Render (or via the Addon Manager), plus a renderer
+# binary. DriftPin locates the binary at call time and writes its path into the
+# FreeCAD param the Render plugin reads, so no preferences UI is needed.
+
+# View directions — (unit vector from bbox center toward the camera, up vector).
+# Mirrors driftpin/render.py's _VIEWS so render_view and render_photoreal frame a
+# part identically. Kept as a local copy because render.py is a host-side
+# (NumPy/Pillow) module the freecadcmd worker does not import.
+_RENDER_VIEWS = {
+    "iso":    ((1.0, 1.0, 1.0),  (0.0, 0.0, 1.0)),
+    "top":    ((0.0, 0.0, 1.0),  (0.0, 1.0, 0.0)),
+    "bottom": ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+    "front":  ((0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+    "back":   ((0.0, 1.0, 0.0),  (0.0, 0.0, 1.0)),
+    "right":  ((1.0, 0.0, 0.0),  (0.0, 0.0, 1.0)),
+    "left":   ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    "side":   ((1.0, 0.0, 0.0),  (0.0, 0.0, 1.0)),  # alias for "right"
+}
+
+# Renderer registry. Adding a renderer is a single dict entry: the FreeCAD param
+# key its plugin reads for the exec path, a default scene template shipped with the
+# addon, candidate binary names, common install dirs per OS (platform.system()
+# keys), and an optional `batch` flag (forces the project into batch mode so the
+# plugin uses its headless console binary). POV-Ray is verified end-to-end on Linux;
+# LuxCore's scene export + material translation are verified headless, with the
+# render binary itself driven on a provisioned box (it is a hand-fetched build).
+_RENDER_PARAM_GROUP = "User parameter:BaseApp/Preferences/Mod/Render"
+_RENDERERS = {
+    "Povray": {
+        "param_key": "PovRayPath",
+        "template": "povray_standard.pov",
+        "binaries": ("povray", "pvengine64", "pvengine"),
+        # Headless: batch makes the plugin pass `-D` (no display). Without it the
+        # plugin passes `+D`, so POV-Ray tries to open a preview window with no X
+        # display and, once orphaned (worker gone, scene dir cleaned), busy-loops
+        # at 100% CPU instead of exiting. POV-Ray has no separate console binary,
+        # so batch here only flips the display flag (PovRayPath is read either way).
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/bin", "/usr/local/bin"),
+            "Darwin":  ("/opt/homebrew/bin", "/usr/local/bin"),
+            "Windows": (r"C:\Program Files\POV-Ray\v3.7\bin",
+                        r"C:\Program Files (x86)\POV-Ray\v3.7\bin"),
+        },
+        "install_hint": "'apt install povray' (Linux), 'brew install povray' (macOS), "
+                        "or the official Windows installer",
+    },
+    "Luxcore": {
+        # Headless -> batch mode -> the plugin reads LuxCoreConsolePath and runs
+        # the `luxcoreconsole` CLI (the non-batch path uses the GUI LuxCorePath).
+        "param_key": "LuxCoreConsolePath",
+        "template": "luxcore_standard.cfg",
+        "binaries": ("luxcoreconsole",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/opt/LuxCore", "/opt/luxcorerender"),
+            "Darwin":  ("/Applications/LuxCore.app/Contents/MacOS", "/usr/local/bin"),
+            "Windows": (r"C:\Program Files\LuxCoreRender",),
+        },
+        "install_hint": "download a standalone build from "
+                        "https://github.com/LuxCoreRender/LuxCore/releases (provides "
+                        "luxcoreconsole), put it on PATH with its bundled libs reachable "
+                        "(e.g. via LD_LIBRARY_PATH on Linux)",
+    },
+    "Appleseed": {
+        # Headless -> batch -> the plugin reads AppleseedCliPath and runs the
+        # `appleseed.cli` console renderer (non-batch uses GUI AppleseedStudioPath).
+        "param_key": "AppleseedCliPath",
+        "template": "appleseed_standard.appleseed",
+        "binaries": ("appleseed.cli",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/appleseed/bin"),
+            "Darwin":  ("/usr/local/bin", "/Applications/appleseed/bin"),
+            "Windows": (r"C:\Program Files\appleseed\bin",),
+        },
+        "install_hint": "download an appleseed build from "
+                        "https://github.com/appleseedhq/appleseed/releases (provides "
+                        "appleseed.cli) and put it on PATH",
+    },
+    "Cycles": {
+        # Cycles uses one path (CyclesPath); batch mode adds `--background` so the
+        # standalone `cycles` renderer runs headless (no GUI window).
+        "param_key": "CyclesPath",
+        "template": "cycles_standard.xml",
+        "binaries": ("cycles",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/cycles"),
+            "Darwin":  ("/usr/local/bin",),
+            "Windows": (r"C:\Program Files\Cycles",),
+        },
+        "install_hint": "build or download the standalone Cycles renderer (the `cycles` "
+                        "CLI) and put it on PATH",
+    },
+    "Ospray": {
+        # OSPRay Studio; batch mode adds a `batch` subcommand so ospStudio renders
+        # headless to an image instead of opening its viewer.
+        "param_key": "OspPath",
+        "template": "ospray_standard.sg",
+        "binaries": ("ospStudio",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/ospray_studio/bin"),
+            "Darwin":  ("/usr/local/bin", "/Applications/ospStudio.app/Contents/MacOS"),
+            "Windows": (r"C:\Program Files\Intel\OSPRay Studio\bin",),
+        },
+        "install_hint": "download OSPRay Studio from "
+                        "https://github.com/RenderKit/ospray_studio/releases (provides "
+                        "ospStudio) and put it on PATH",
+    },
+    "Pbrt": {
+        # pbrt-v4. batch is headless; non-batch streams frames to a 'tev' viewer.
+        # NOTE: pbrt-v4 support is marked experimental upstream in the addon.
+        "param_key": "PbrtPath",
+        "template": "pbrt_standard.pbrt",
+        "binaries": ("pbrt",),
+        "batch": True,
+        "dirs": {
+            "Linux":   ("/usr/local/bin", "/usr/bin", "/opt/pbrt/bin"),
+            "Darwin":  ("/usr/local/bin",),
+            "Windows": (r"C:\Program Files\pbrt\bin",),
+        },
+        "install_hint": "build pbrt-v4 from https://github.com/mmp/pbrt-v4 (provides "
+                        "pbrt) and put it on PATH — pbrt-v4 support is experimental upstream",
+    },
+}
+
+
+def _placement_from_view(view, obj, fov_deg=45.0, margin=1.2):
+    """App.Placement that frames obj's bounding box from the named view.
+
+    Pure App.Vector math (no NumPy): builds the same orthonormal camera basis as
+    render.py's _camera_basis — the camera looks down its local -Z toward the bbox
+    center, local +Y is up, local +X is right — then steps back far enough that the
+    bounding sphere fits the vertical field of view. Returns a camera->world
+    App.Placement (App.Rotation(x, y, z) maps the local axes onto x/y/z).
+    """
+    import math
+    if view not in _RENDER_VIEWS:
+        raise ValueError(f"unknown view {view!r}; valid: {sorted(_RENDER_VIEWS)}")
+    cam_dir, up = _RENDER_VIEWS[view]
+    z = App.Vector(*cam_dir)
+    z.normalize()                                    # bbox center -> camera
+    x = App.Vector(*up).cross(z)
+    if x.Length < 1e-8:                              # up parallel to view dir
+        x = App.Vector(0.0, 1.0, 0.0).cross(z)
+        if x.Length < 1e-8:
+            x = App.Vector(1.0, 0.0, 0.0).cross(z)
+    x.normalize()
+    y = z.cross(x)
+    y.normalize()
+    bb = obj.Shape.BoundBox
+    center = App.Vector(bb.Center.x, bb.Center.y, bb.Center.z)
+    radius = (bb.DiagonalLength / 2.0) or 1.0
+    dist = (radius * margin) / math.tan(math.radians(fov_deg) / 2.0)
+    return App.Placement(center + z * dist, App.Rotation(x, y, z))
+
+
+def _renderer_exec_candidates(renderer, spec):
+    """Ordered candidate paths for a renderer's binary, most-preferred first:
+    DRIFTPIN_<RENDERER>_PATH env override -> path already set in FreeCAD prefs ->
+    PATH (shutil.which, which honors Windows PATHEXT) -> common per-OS install dirs.
+    Pure lookup — no side effects, no existence check (the caller filters)."""
+    import shutil
+    import platform
+    key = spec["param_key"]
+    candidates = []
+    if env_path := os.environ.get(f"DRIFTPIN_{renderer.upper()}_PATH"):
+        candidates.append(env_path)                  # 1) explicit env override
+    if existing := App.ParamGet(_RENDER_PARAM_GROUP).GetString(key, ""):
+        candidates.append(existing)                  # 2) already set in prefs
+    for name in spec["binaries"]:                    # 3) PATH
+        if found := shutil.which(name):
+            candidates.append(found)
+    for d in spec["dirs"].get(platform.system(), ()):  # 4) common install dirs
+        for name in spec["binaries"]:
+            for exe in (name, name + ".exe"):
+                candidates.append(os.path.join(d, exe))
+    return candidates
+
+
+def _find_renderer_exec(renderer):
+    """First existing candidate path for `renderer`'s binary, or None. No side
+    effects (does not touch FreeCAD prefs) — used by the capabilities probe to
+    report availability without committing a path."""
+    spec = _RENDERERS.get(renderer)
+    if spec is None:
+        return None
+    for c in _renderer_exec_candidates(renderer, spec):
+        if c and os.path.isfile(c):
+            return c
+    return None
+
+
+def _resolve_renderer_exec(renderer):
+    """Locate the external renderer binary cross-platform and write its path into
+    the FreeCAD param the Render plugin reads. Returns the resolved path.
+
+    Resolution order is _find_renderer_exec's (env override -> prefs -> PATH ->
+    per-OS install dirs). Raises RuntimeError with install guidance if not found.
+    """
+    spec = _RENDERERS.get(renderer)
+    if spec is None:
+        raise RuntimeError(
+            f"renderer {renderer!r} is not wired in DriftPin yet (Phase 1 supports "
+            f"{sorted(_RENDERERS)}). Install it and set its path in FreeCAD's Render "
+            "preferences, or use renderer='Povray'."
+        )
+    found = _find_renderer_exec(renderer)
+    if found:
+        App.ParamGet(_RENDER_PARAM_GROUP).SetString(spec["param_key"], found)
+        return found
+    raise RuntimeError(
+        f"could not locate the {renderer} renderer binary (tried "
+        f"{list(spec['binaries'])}). Install it — {spec['install_hint']} — or set "
+        f"DRIFTPIN_{renderer.upper()}_PATH to its full path."
+    )
+
+
+def _available_render_materials():
+    """Sorted names of the material library cards shipped with the Render addon
+    (e.g. 'Gold', 'Glass', 'Aluminium', 'GlossyPlastic'). Empty if the addon's
+    materials dir is missing. Assumes `import Render` has already succeeded."""
+    from Render.constants import WBMATERIALDIR
+    if not os.path.isdir(WBMATERIALDIR):
+        return []
+    suffix = ".FCMat"
+    return sorted(
+        f[: -len(suffix)] for f in os.listdir(WBMATERIALDIR) if f.endswith(suffix)
+    )
+
+
+def _apply_render_material(doc, view, material_name):
+    """Load a Render material library card by name and link it to `view`.
+
+    Parses the .FCMat card (case-sensitive INI, all sections flattened into one
+    dict — the exact logic the addon's material chooser uses), creates a Render
+    Material object, imports any image textures, and links it via the View's
+    Material property. Raises ValueError listing the valid names if the card is
+    unknown. Assumes `import Render` has already succeeded.
+    """
+    import configparser
+    from Render.constants import WBMATERIALDIR
+    from Render.material import make_material
+
+    path = os.path.join(WBMATERIALDIR, material_name + ".FCMat")
+    if not os.path.isfile(path):
+        raise ValueError(
+            f"unknown render material {material_name!r}; available: "
+            f"{_available_render_materials()}"
+        )
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = lambda s: s                 # material card keys are case-sensitive
+    parser.read(path)
+    card = {key: value for section in parser.values() for key, value in section.items()}
+
+    mat = make_material(name=material_name, doc=doc)
+    # import_textures is a no-op for solid cards (metals, glass, plastics) and
+    # extracts image textures into child objects for textured cards (marble, etc.).
+    mat.Material = mat.Proxy.import_textures(card, WBMATERIALDIR)
+    view.Material = mat
+    return mat
+
+
+def _require_render():
+    """Import the FreeCAD Render workbench, or raise with cross-platform install
+    guidance. Returns the Render module."""
+    try:
+        import Render
+        return Render
+    except Exception as e:
+        raise RuntimeError(
+            "FreeCAD Render workbench not importable. Install it by cloning "
+            "https://github.com/FreeCAD/FreeCAD-render into "
+            f"{os.path.join(App.getUserAppDataDir(), 'Mod', 'Render')} "
+            f"(or via the Addon Manager). Underlying error: {e!r}"
+        )
+
+
+def _parse_render_request(p):
+    """Validate render_photoreal params and resolve the renderer binary (setting
+    its FreeCAD param). Returns a dict of normalized parameters. Shared by the
+    blocking and async handlers."""
+    src = _resolve(p["handle"])
+    if not hasattr(src, "Shape"):
+        raise TypeError(f"handle {p['handle']!r} has no Shape to render")
+    width = int(p.get("width", 800))
+    height = int(p.get("height", 600))
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive")
+    renderer = p.get("renderer", "Povray")
+    exec_path = _resolve_renderer_exec(renderer)     # validates renderer + sets param
+    return {
+        "src": src,
+        "renderer": renderer,
+        "view": p.get("view", "iso"),
+        "width": width,
+        "height": height,
+        "material": p.get("material") or None,       # None -> default gray material
+        "template": p.get("template") or _RENDERERS[renderer]["template"],
+        "exec_path": exec_path,
+    }
+
+
+def _setup_render_project(tmp, req):
+    """Build the Render Project/Camera/View graph for req['src'] in document tmp.
+    Returns the project fpo (call proj.Proxy.render(...) on it). Shared by the
+    blocking and async handlers; assumes tmp is the active document."""
+    Render = _require_render()
+    feat = tmp.addObject("Part::Feature", "RenderTarget")
+    feat.Shape = req["src"].Shape.copy()
+    tmp.recompute()
+
+    proj_proxy, proj, _ = Render.Project.create(
+        tmp, renderer=req["renderer"], template=req["template"]
+    )
+    proj.RenderWidth = req["width"]
+    proj.RenderHeight = req["height"]
+    if _RENDERERS[req["renderer"]].get("batch") and hasattr(proj, "BatchMode"):
+        proj.BatchMode = True                        # headless console binary (e.g. LuxCore)
+
+    _, cam, _ = Render.Camera.create(tmp)
+    cam.Projection = "Perspective"
+    cam.Placement = _placement_from_view(req["view"], feat)
+
+    proj_proxy.add_views([cam, feat])
+    if req["material"]:
+        # add_views wraps feat in a View object; link the material to it.
+        for v in proj_proxy.all_views():
+            if getattr(v, "Source", None) is feat:
+                _apply_render_material(tmp, v, req["material"])
+    tmp.recompute()
+    return proj
+
+
+@handler("render_photoreal")
+def _h_render_photoreal(p):
+    """Photorealistic render of a shaped object via the FreeCAD Render workbench
+    (external renderer; POV-Ray by default). Renders in an isolated temporary
+    document so the live model is never mutated, then returns
+    {png_base64, png_path, renderer, view, material, width, height}.
+
+    Optional `material` names a Render material library card (e.g. 'Gold',
+    'Glass', 'Aluminium', 'GlossyPlastic'); omitted -> default gray material. An
+    unknown name raises ValueError listing the available cards.
+
+    Blocks until the render finishes; for long renders use render_photoreal_submit
+    + render_job. Presentation-only: photoreal output is not bit-reproducible
+    (sampler noise, thread count), so this stays out of the reliability/golden tests.
+    """
+    import base64
+    _require_render()
+    req = _parse_render_request(p)
+    # Render in an isolated temp document: build the scene there, render, then close
+    # it. Keeps the user's live document untouched (no Project/Camera/View objects
+    # leaking into their model or their saved .FCStd).
+    prev_active = App.ActiveDocument.Name if App.ActiveDocument else None
+    tmp = App.newDocument("driftpin_render")
+    try:
+        proj = _setup_render_project(tmp, req)
+        out = proj.Proxy.render(wait_for_completion=True)
+        if not out or not os.path.isfile(out):
+            raise RuntimeError(
+                f"renderer {req['renderer']!r} (exec {req['exec_path']!r}) produced "
+                "no output image. Check that the renderer runs headless on this "
+                "platform (see the FreeCAD report log)."
+            )
+        with open(out, "rb") as f:
+            data = f.read()
+        return {
+            "png_base64": base64.b64encode(data).decode("ascii"),
+            "png_path": out,
+            "renderer": req["renderer"],
+            "view": req["view"],
+            "material": req["material"],
+            "width": req["width"],
+            "height": req["height"],
+        }
+    finally:
+        try:
+            App.closeDocument(tmp.Name)
+        except Exception:
+            pass
+        if prev_active and App.getDocument(prev_active) is not None:
+            App.setActiveDocument(prev_active)
+
+
+# Async render jobs. render_photoreal_submit launches the external renderer via the
+# Render workbench's headless executor (RendererExecutorCli — a plain threading.Thread
+# that runs ONLY the renderer subprocess; the FreeCAD scene export already ran in the
+# calling thread before launch, so there is no cross-thread FreeCAD access). The job
+# keeps its temp document open until the result is collected, because the renderer
+# reads exported scene files from the doc's TransientDir. Jobs persist for the worker
+# session, like _handles.
+_render_jobs = {}
+
+# Cap on retained jobs so abandoned results don't accumulate base64 PNGs for the
+# whole worker session. Only finished (done/failed) jobs are evicted — a running
+# job holds an open temp document the renderer is still reading.
+_MAX_RENDER_JOBS = 16
+
+
+def _close_render_job_doc(job):
+    name = job.pop("doc", None)
+    if name and App.getDocument(name) is not None:
+        try:
+            App.closeDocument(name)
+        except Exception:
+            pass
+
+
+def _evict_render_jobs():
+    """Drop the oldest finished jobs while over the cap (insertion order = age).
+    Running jobs are never evicted."""
+    while len(_render_jobs) > _MAX_RENDER_JOBS:
+        victim = next(
+            (jid for jid, j in _render_jobs.items() if j["status"] != "running"),
+            None,
+        )
+        if victim is None:
+            break                                    # all running -> nothing to free
+        _close_render_job_doc(_render_jobs.pop(victim))
+
+
+def _refresh_render_job(job):
+    """Advance a running job: poll its executor thread, and once finished cache the
+    PNG (base64) and close the temp document. No-op for already-finished jobs."""
+    import base64
+    if job["status"] != "running":
+        return
+    thread = job.get("thread")
+    if thread is not None and thread.is_alive():
+        return                                       # renderer still running
+    out = job["out_path"]
+    if os.path.isfile(out) and os.path.getsize(out) > 0:
+        with open(out, "rb") as f:
+            job["png_base64"] = base64.b64encode(f.read()).decode("ascii")
+        job["status"] = "done"
+    elif thread is None and not os.path.isfile(out):
+        return                                       # untrackable + no output yet -> still running
+    else:
+        job["status"] = "failed"
+        job["error"] = (
+            f"renderer {job['renderer']!r} finished without producing an output image"
+        )
+    _close_render_job_doc(job)
+
+
+@handler("render_photoreal_submit")
+def _h_render_photoreal_submit(p):
+    """Start a photoreal render asynchronously and return immediately, so a long
+    external render does not block the worker. Same params as render_photoreal.
+    Returns {job_id, status}; poll render_job(job_id) for the result."""
+    import threading
+    _require_render()
+    req = _parse_render_request(p)
+    prev_active = App.ActiveDocument.Name if App.ActiveDocument else None
+    tmp = App.newDocument("driftpin_render")
+    try:
+        proj = _setup_render_project(tmp, req)
+        before = set(threading.enumerate())
+        out = proj.Proxy.render(wait_for_completion=False)   # launches executor thread
+        new_threads = [t for t in threading.enumerate() if t not in before]
+    except Exception:
+        try:
+            App.closeDocument(tmp.Name)
+        except Exception:
+            pass
+        raise
+    finally:
+        if prev_active and App.getDocument(prev_active) is not None:
+            App.setActiveDocument(prev_active)
+    job_id = _new_handle("render_job")
+    _render_jobs[job_id] = {
+        "status": "running",
+        "thread": new_threads[0] if new_threads else None,
+        "doc": tmp.Name,
+        "out_path": out,
+        "renderer": req["renderer"],
+        "view": req["view"],
+        "material": req["material"],
+        "width": req["width"],
+        "height": req["height"],
+    }
+    _evict_render_jobs()
+    return {"job_id": job_id, "status": "running"}
+
+
+@handler("render_job")
+def _h_render_job(p):
+    """Poll an async render started by render_photoreal_submit. Returns
+    {job_id, status} with status 'running' | 'done' | 'failed'. When 'done', also
+    returns {png_base64, png_path, renderer, view, material, width, height}; when
+    'failed', {error}. The result stays available for repeat polls.
+
+    Pass discard=True to free the job once you have a terminal result (closes its
+    temp document and drops the cached PNG); ignored while still running."""
+    job_id = p["job_id"]
+    job = _render_jobs.get(job_id)
+    if job is None:
+        raise KeyError(f"unknown render job: {job_id!r}")
+    _refresh_render_job(job)
+    out = {"job_id": job_id, "status": job["status"]}
+    if job["status"] == "done":
+        out.update({
+            "png_base64": job["png_base64"],
+            "png_path": job["out_path"],
+            "renderer": job["renderer"],
+            "view": job["view"],
+            "material": job["material"],
+            "width": job["width"],
+            "height": job["height"],
+        })
+    elif job["status"] == "failed":
+        out["error"] = job.get("error", "render failed")
+    if p.get("discard") and job["status"] != "running":
+        _close_render_job_doc(job)                   # done/failed doc already closed; idempotent
+        _render_jobs.pop(job_id, None)
+    return out
+
+
+@handler("render_capabilities")
+def _h_render_capabilities(p):
+    """Report which photoreal renderers are usable *right now* and whether the
+    FreeCAD Render addon imports, so a caller can pick a working renderer instead of
+    probing render_photoreal by trial and error.
+
+    For each renderer in the registry it resolves the binary the same way
+    render_photoreal does (DRIFTPIN_<R>_PATH env -> FreeCAD prefs -> PATH -> per-OS
+    install dirs) but WITHOUT mutating prefs or rendering anything. The addon check
+    is the lazy import render_photoreal performs on call (the worker boots without it).
+
+    Returns {addon_importable (bool), default_renderer, platform, available (sorted
+    names of ready renderers), renderers: {name: {available, param_key, batch,
+    binaries, and either path (resolved binary) or install_hint}}, materials (library
+    card names — only when the addon imports), addon_error (only when it does not)}.
+    """
+    import platform
+    addon_importable = True
+    addon_error = None
+    try:
+        _require_render()                            # lazy: same import render_photoreal does
+    except Exception as e:
+        addon_importable = False
+        addon_error = str(e)
+
+    renderers = {}
+    for name, spec in _RENDERERS.items():
+        path = _find_renderer_exec(name)             # side-effect-free probe
+        info = {
+            "available": path is not None,
+            "param_key": spec["param_key"],
+            "batch": bool(spec.get("batch", False)),
+            "binaries": list(spec["binaries"]),
+        }
+        if path is not None:
+            info["path"] = path
+        else:
+            info["install_hint"] = spec["install_hint"]
+        renderers[name] = info
+
+    out = {
+        "addon_importable": addon_importable,
+        "default_renderer": "Povray",
+        "platform": platform.system(),
+        "available": sorted(n for n, i in renderers.items() if i["available"]),
+        "renderers": renderers,
+    }
+    if addon_error is not None:
+        out["addon_error"] = addon_error
+    if addon_importable:
+        # Cheap listdir of the addon's material cards — discover materials too, not
+        # just renderers. Best-effort: never let it sink the whole capability probe.
+        try:
+            out["materials"] = _available_render_materials()
+        except Exception:
+            pass
+    return out
 
 
 # --- FEM (decomposed) ---------------------------------------------------------

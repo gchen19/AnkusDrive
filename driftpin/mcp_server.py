@@ -28,9 +28,12 @@ def _ensure_worker() -> Worker:
     return _worker
 
 
-def _call(method: str, **params: Any) -> Any:
+def _call(method: str, _timeout: float | None = None, **params: Any) -> Any:
     try:
-        return _ensure_worker().call(method, **params)
+        worker = _ensure_worker()
+        if _timeout is not None:
+            return worker.call(method, _timeout=_timeout, **params)
+        return worker.call(method, **params)
     except WorkerError as e:
         raise RuntimeError(f"{e.type}: {e.remote_message}") from e
 
@@ -850,6 +853,11 @@ def check_shape(handle: str) -> dict:
     NOT auto-repair. Use it as a guard after booleans/sweeps/imports to confirm
     you have one clean watertight solid.
 
+    Note: a watertight solid can still have a BLOCKED or LEAKY enclosed-flow path
+    — watertightness says the shell is closed, not that an internal channel is
+    unobstructed and leak-free. For ducts/manifolds/adapters use
+    check_airtight_path(inlet, outlet) to verify the flow path.
+
     handle: the object to inspect.
 
     Returns a dict (volumes in mm3):
@@ -869,6 +877,73 @@ def check_shape(handle: str) -> dict:
       check_error      (str)   present only if the diagnostic pass itself raised
     """
     return _call("check_shape", handle=handle)
+
+
+@mcp.tool()
+def check_airtight_path(
+    handle: str,
+    inlet: str | int,
+    outlet: str | int,
+    min_aperture_mm2: float | None = None,
+    pad_mm: float | None = None,
+) -> dict:
+    """Functional check for an enclosed-flow part (a vacuum adapter, manifold,
+    duct): is there a single connected void joining the inlet to the outlet,
+    bounded by solid everywhere else? This catches what `check_shape` cannot — a
+    watertight solid can still have a blocked flow path or a hidden leak.
+    Inspection only: measures, returns no handle, mutates nothing.
+
+    handle: the part to inspect.
+    inlet / outlet: a face reference naming each port OPENING (the rim face around
+      the hole) — an f_* tag, 'FaceN', int index, or a role/name declared with
+      annotate_face (e.g. "inlet"). Both ports are sealed with cap solids and the
+      negative-space void is analysed.
+    min_aperture_mm2: optional minimum acceptable bottleneck cross-section; a
+      connected-but-pinched path (a near-zero 'almond slit') then fails.
+    pad_mm: optional bounding-box margin (default max(2.0, 0.05*diagonal)).
+
+    Returns a dict (lengths mm, areas mm², volumes mm³):
+      ok                   (bool)  connected AND not leaky AND aperture >= threshold
+      status               (str)   'airtight' | 'bottleneck' | 'blocked' | 'leaky'
+      connected            (bool)  one void joins inlet and outlet
+      leaky                (bool)  with both ports capped the cavity still reaches
+                                   ambient, so an unintended opening exists
+      min_aperture_mm2     (float|null) narrowest section of the flow void
+      bottleneck_point     ([x,y,z]|null) a point on the narrowest section plane
+      flow_void_volume_mm3 (float|null) volume of the connecting void
+      void_components      (int)   number of void solids (ambient + enclosed)
+      inlet / outlet       (str)   the resolved 'FaceN' references
+      pad_mm               (float) the margin used
+    """
+    params = {"handle": handle, "inlet": inlet, "outlet": outlet}
+    if min_aperture_mm2 is not None:
+        params["min_aperture_mm2"] = min_aperture_mm2
+    if pad_mm is not None:
+        params["pad_mm"] = pad_mm
+    return _call("check_airtight_path", **params)
+
+
+@mcp.tool()
+def classify_face_sides(handle: str, seal_ports: bool = True) -> list:
+    """Inside-vs-outside topology: for every face, decide whether its outward side
+    opens into an enclosed cavity (wetted) or ambient (exterior). Answers the
+    "which faces are inside the airflow path" question from issue #19 and suggests
+    a role per face. Inspection only; returns no handle, mutates nothing.
+
+    With seal_ports=True (default) any declared inlet/outlet roles (annotate_face)
+    are capped first, so an OPEN duct's bore reads as the enclosed flow cavity
+    rather than as ambient.
+
+    handle: the part. seal_ports: cap declared inlet/outlet before classifying.
+
+    Returns a list (one per face) of dicts:
+      tag / index    (str)  stable f_* tag and 'FaceN'
+      kind           (str)  surface kind (planar/cylindrical/…)
+      side           (str)  'interior' | 'ambient' | 'ambiguous'
+      suggested_role (str)  'wetted' for interior, 'ambient' for exterior, else null
+      declared_role  (str)  the role already annotated on this face, if any
+    """
+    return _call("classify_face_sides", handle=handle, seal_ports=seal_ports)
 
 
 @mcp.tool()
@@ -1695,6 +1770,93 @@ def publish_interface(handle: str, name: str, frame: dict) -> dict:
 
 
 @mcp.tool()
+def annotate_face(
+    handle: str,
+    face: str | int,
+    role: str,
+    name: str | None = None,
+    meta: dict | None = None,
+) -> dict:
+    """Declare the semantic ROLE of a face — what it is FOR — so later edits can be
+    checked against intent instead of re-derived from raw geometry. The role binds
+    to the face's stable f_* tag and persists in the .FCStd as a JSON property bag
+    (same mechanism as publish_interface); it survives save/reopen. Once declared,
+    check_airtight_path accepts the role/name directly (e.g. inlet="inlet").
+
+    handle: the part.
+    face: an f_* tag, 'FaceN', or int index of the face to annotate.
+    role: one of 'inlet' | 'outlet' | 'sealing' | 'wetted' | 'ambient' | 'mating'.
+    name: optional unique label for this annotation (default: the role, then
+      role_2, role_3, …); re-using a name updates that annotation.
+    meta: optional dict stored verbatim (e.g. {"spec": "32mm hose"}).
+
+    Returns a dict: {handle, name (the annotation key used), role, tag (the f_*
+    the role is bound to), index ('FaceN' at annotation time), roles (sorted list
+    of all annotation names now on the part)}."""
+    params = {"handle": handle, "face": face, "role": role}
+    if name is not None:
+        params["name"] = name
+    if meta is not None:
+        params["meta"] = meta
+    return _call("annotate_face", **params)
+
+
+@mcp.tool()
+def list_face_roles(handle: str) -> list:
+    """Read back the semantic face roles declared on a part (see annotate_face).
+
+    Each entry re-resolves its stored tag against the CURRENT geometry, so a
+    drifted or deleted face is reported rather than silently resolving wrong.
+
+    Returns a list (sorted by name) of dicts:
+      name    (str)   the annotation key
+      role    (str)   inlet | outlet | sealing | wetted | ambient | mating
+      tag     (str)   the f_* face tag the role is bound to
+      present (bool)  whether that tag still resolves on the current shape
+      index   (str)   'FaceN' on the current shape (only when present)
+      meta    (dict)  the verbatim metadata (only when set)
+    """
+    return _call("list_face_roles", handle=handle)
+
+
+@mcp.tool()
+def declare_intent(handle: str, contract: dict) -> dict:
+    """Record the functional invariants a part must keep satisfying, so they can
+    be re-checked after every edit (see verify_intent). Persists in the .FCStd as
+    a JSON property bag (DP_Intent); one contract per part — re-declaring replaces.
+
+    handle: the part.
+    contract: a dict with any of these (declare at least one):
+      watertight     (bool)  require check_shape's watertight_solid verdict.
+      airtight_path  (dict)  {inlet, outlet, min_aperture_mm2?}; each port is a
+                             face tag / 'FaceN' / int / declared role-or-name.
+      required_faces (list)  face tags / 'FaceN' / declared role-or-names that
+                             must still resolve (catches a deleted/drifted face).
+
+    Returns {handle, contract} — the stored contract."""
+    return _call("declare_intent", handle=handle, contract=contract)
+
+
+@mcp.tool()
+def verify_intent(handle: str) -> dict:
+    """Re-run every invariant declared with declare_intent — the regression gate
+    to run after each edit. Composes check_shape / check_airtight_path / face-role
+    resolution; never raises on a failing invariant (a failure is a passed=False
+    row), so it is safe to call in a loop. Inspection only; mutates nothing.
+
+    handle: the part (must have a declared intent contract).
+
+    Returns a dict:
+      handle   (str)
+      ok       (bool)  True iff every declared invariant passed
+      results  (list)  one {invariant, passed, detail} per declared invariant —
+                       invariant in {watertight, airtight_path, required_faces},
+                       detail a human-readable summary of what was measured
+    """
+    return _call("verify_intent", handle=handle)
+
+
+@mcp.tool()
 def interface_align_check(assembly: str, pairs: list, tol_mm: float = 1e-3) -> list:
     """Gate: verify declared interface pairs coincide in world space — the
     "do the OTHER interfaces line up?" check for multi-interface mates. After the
@@ -1847,6 +2009,100 @@ def render_views(
             "height": height,
         }
     return {"views": out, "vertices": len(mesh["vertices"]), "triangles": len(mesh["triangles"])}
+
+
+@mcp.tool()
+def render_photoreal(
+    handle: str,
+    renderer: str = "Povray",
+    view: str = "iso",
+    material: str | None = None,
+    width: int = 800,
+    height: int = 600,
+) -> dict:
+    """Photorealistic render of a shaped object via the FreeCAD Render workbench
+    (an external renderer, e.g. POV-Ray) — a presentation-quality "nice picture",
+    unlike render_view's fast software-rasterized preview.
+
+    Requires the Render addon and a renderer binary to be installed (see
+    docs/RENDER_WORKBENCH.md); raises with install guidance otherwise. Renders in
+    an isolated temporary document, so the live model is never modified.
+
+    view: 'iso' | 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right' | 'side'.
+    material: optional Render material library card — e.g. 'Gold', 'Glass',
+        'Aluminium', 'GlossyPlastic', 'RoughPlastic', 'Iron', 'Brass'. Omitted
+        gives a neutral default material; an unknown name raises with the full list.
+    Returns {png_base64, png_path, renderer, view, material, width, height}.
+
+    Presentation-only: output is not bit-reproducible, so it is kept out of the
+    reliability/golden tests. External renders can take seconds to minutes, so this
+    call uses an extended worker timeout.
+    """
+    return _call(
+        "render_photoreal", _timeout=600.0,
+        handle=handle, renderer=renderer, view=view, material=material,
+        width=width, height=height,
+    )
+
+
+@mcp.tool()
+def render_photoreal_submit(
+    handle: str,
+    renderer: str = "Povray",
+    view: str = "iso",
+    material: str | None = None,
+    width: int = 800,
+    height: int = 600,
+) -> dict:
+    """Start a photorealistic render asynchronously; returns immediately with
+    {job_id, status} instead of blocking for the whole render.
+
+    Use this (rather than render_photoreal) for renders that may take a long time —
+    heavy materials/renderers, large images — so the worker stays responsive. The
+    external renderer runs in the background; poll render_job(job_id) until status is
+    'done' (then it returns the PNG) or 'failed'. Same arguments as render_photoreal;
+    requires the Render addon + a renderer binary (see docs/RENDER_WORKBENCH.md).
+    """
+    return _call(
+        "render_photoreal_submit",
+        handle=handle, renderer=renderer, view=view, material=material,
+        width=width, height=height,
+    )
+
+
+@mcp.tool()
+def render_job(job_id: str, discard: bool = False) -> dict:
+    """Poll an async render started by render_photoreal_submit.
+
+    Returns {job_id, status} where status is 'running', 'done', or 'failed'. When
+    'done', also returns {png_base64, png_path, renderer, view, material, width,
+    height}; when 'failed', {error}. The result remains available for repeat polls.
+
+    Pass discard=True once you have a terminal result to free the job immediately
+    (drops the cached image and closes its temp document); ignored while running.
+    Jobs are also auto-evicted oldest-first once finished jobs exceed an internal cap.
+    """
+    return _call("render_job", job_id=job_id, discard=discard)
+
+
+@mcp.tool()
+def render_capabilities() -> dict:
+    """Report which photoreal renderers are usable right now, and whether the FreeCAD
+    Render addon imports — so you can pick a working renderer for render_photoreal
+    instead of discovering availability by trial and error.
+
+    Takes no arguments. Resolves each renderer's binary exactly as render_photoreal
+    would (DRIFTPIN_<R>_PATH env override -> FreeCAD prefs -> PATH -> per-OS install
+    dirs), but renders nothing and changes no settings.
+
+    Returns {addon_importable (bool), default_renderer ('Povray'), platform,
+    available (sorted list of ready renderer names for the `renderer=` argument),
+    renderers: {name: {available, param_key, batch, binaries, and either path (the
+    resolved binary) or install_hint}}, materials (library card names usable as
+    render_photoreal's material= argument, present only when the addon imports), and
+    addon_error (present only when the addon does not import)}.
+    """
+    return _call("render_capabilities")
 
 
 @mcp.tool()
