@@ -2861,6 +2861,48 @@ def thermal_transient_submit(
 
 
 @mcp.tool()
+def thermal_radiation_submit(
+    t1_c: float | None = None,
+    t2_c: float | None = None,
+    emissivity_1: float = 0.8,
+    emissivity_2: float = 0.8,
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+    width_m: float = 1.0,
+    gap_m: float = 0.01,
+    plate_thickness_m: float = 0.01,
+    n_x: int = 80,
+    k_plate: float = 400.0,
+) -> dict:
+    """Diffuse-gray radiation FEM via Elmer, asynchronous — the radiation sibling of
+    thermal_transient_submit. Requires ElmerSolver + the ViewFactors binary (apt
+    `elmerfem-csc` / conda); when absent this returns {ok:false, reason, install}
+    rather than raising. Two modes:
+
+    - **Build the two-plate enclosure case** (no case prep): pass `t1_c`, `t2_c` (°C)
+      and the two surface emissivities `emissivity_1`/`emissivity_2` (default 0.8). The
+      handler writes a 2-D pair of parallel plates radiating across an unmeshed vacuum
+      gap, runs ViewFactors then ElmerSolver, and extracts the net radiative exchange —
+      directly gated against the exact two infinite parallel plates oracle
+      q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) (`oracle_ratio` ≈ 1). Mesh/geometry knobs: `width_m`,
+      `gap_m`, `plate_thickness_m`, `n_x`, `k_plate`.
+    - **Run a prepared `case_dir`** containing its `.sif` + mesh (ViewFactors is run
+      first when no factor file is present).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, case_dir, stdout_tail} plus, for the plate case,
+    {flux_w_m2, q_net_w, two_plate_flux_w_m2, oracle_ratio, t1_c, t2_c, emissivity_1,
+    emissivity_2} (or {scalars_final} for a prepared case)."""
+    params = {"emissivity_1": emissivity_1, "emissivity_2": emissivity_2, "sif": sif,
+              "width_m": width_m, "gap_m": gap_m,
+              "plate_thickness_m": plate_thickness_m, "n_x": n_x, "k_plate": k_plate}
+    for key, v in (("t1_c", t1_c), ("t2_c", t2_c), ("case_dir", case_dir)):
+        if v is not None:
+            params[key] = v
+    return _call("thermal_radiation_submit", **params)
+
+
+@mcp.tool()
 def cfd_pipe_flow(
     diameter_mm: float,
     length_mm: float,

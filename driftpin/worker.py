@@ -7264,6 +7264,128 @@ def _h_thermal_transient_submit(p):
                              "half_thickness_mm": p["half_thickness_mm"]})
 
 
+@handler("thermal_radiation_submit")
+def _h_thermal_radiation_submit(p):
+    """Diffuse-gray radiation FEM via Elmer, OFF the MCP channel — the radiation
+    sibling of thermal_transient_submit. Degrades to {ok:false, reason, install} when
+    ElmerSolver is absent (never raises on a miss).
+
+    Two ways to drive it:
+      * **Build the two-plate enclosure case** — pass `t1_c`, `t2_c` and the two
+        emissivities (`emissivity_1`, `emissivity_2`, default 0.8). The handler writes
+        a 2-D two-parallel-plate case (each plate held isothermal, their facing faces
+        radiating across an unmeshed vacuum gap), runs **ViewFactors then ElmerSolver**,
+        and SaveScalars-extracts the net radiative exchange — directly gateable against
+        thermal_radiation's two-plate oracle q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1). Geometry/
+        mesh knobs: `width_m` (1.0), `gap_m` (0.01), `plate_thickness_m` (0.01), `n_x`
+        (80), `k_plate` (400).
+      * **Run a prepared `case_dir`** — a directory with its `.sif`+mesh+view factors;
+        the handler runs ElmerSolver there (ViewFactors too if a *.dat is missing) and
+        parses the scalar flux.
+
+    The background job runs ONLY the ViewFactors/ElmerSolver subprocesses (never touches
+    FreeCAD). Returns the degradation dict, or {job_id, status, cache_hit}; poll
+    job_result for {ok, returncode, solver, case_dir, stdout_tail} plus, for the plate
+    case, {flux_w_m2, q_net_w, two_plate_flux_w_m2, oracle_ratio, t1_c, t2_c,
+    emissivity_1, emissivity_2}."""
+    import shutil
+
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    from driftpin import jobs
+    elmer_bin = info["path"]
+    vf_bin = shutil.which("ViewFactors") or os.path.join(
+        os.path.dirname(elmer_bin), "ViewFactors")
+    case_dir = p.get("case_dir")
+
+    if case_dir:                                     # --- prepared case directory ---
+        if not os.path.isdir(case_dir):
+            raise ValueError(f"case_dir {case_dir!r} is not a directory")
+        sif = p.get("sif", "case.sif")
+        import glob as _glob
+        key = jobs.content_key("thermal_radiation",
+                               {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+        def _work():
+            import subprocess
+            if not _glob.glob(os.path.join(case_dir, "*ViewFactors*")):
+                subprocess.run([vf_bin, sif], cwd=case_dir, capture_output=True, text=True)
+            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                                  capture_output=True, text=True)
+            return {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "case_dir": case_dir,
+                "scalars_final": _parse_elmer_scalars(case_dir),
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+
+        return jobs.submit("thermal_radiation", _work, key=key,
+                           meta={"case_dir": case_dir})
+
+    if p.get("t1_c") is None or p.get("t2_c") is None:
+        raise ValueError(
+            "provide a prepared `case_dir`, or the two-plate params (t1_c, t2_c, and "
+            "optionally emissivity_1/emissivity_2) to build the radiation enclosure "
+            "case gated against the σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) oracle")
+
+    # --- build the two-plate diffuse-gray enclosure case from physical params -----
+    plates = {
+        "t1_c": float(p["t1_c"]),
+        "t2_c": float(p["t2_c"]),
+        "emissivity_1": float(p.get("emissivity_1", 0.8)),
+        "emissivity_2": float(p.get("emissivity_2", 0.8)),
+        "width_m": float(p.get("width_m", 1.0)),
+        "gap_m": float(p.get("gap_m", 0.01)),
+        "plate_thickness_m": float(p.get("plate_thickness_m", 0.01)),
+        "n_x": int(p.get("n_x", 80)),
+        "k_plate": float(p.get("k_plate", 400.0)),
+    }
+    key = jobs.content_key("thermal_radiation", {"plates": plates})
+
+    def _work():
+        import subprocess
+        import tempfile
+        from driftpin.analysis import elmer as _elmer
+        from driftpin.analysis import thermal as _thermal
+        cdir = tempfile.mkdtemp(prefix="elmer_rad_")
+        built = _elmer.write_radiation_plates_case(cdir, **plates)
+        vf = subprocess.run([vf_bin, built["sif"]], cwd=cdir,
+                            capture_output=True, text=True)
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                              capture_output=True, text=True)
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "viewfactors_returncode": vf.returncode,
+            "solver": "elmer",
+            "case_dir": cdir,
+            "t1_c": plates["t1_c"], "t2_c": plates["t2_c"],
+            "emissivity_1": plates["emissivity_1"],
+            "emissivity_2": plates["emissivity_2"],
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        orc = _thermal.radiation_exchange(
+            plates["t1_c"], plates["t2_c"], plates["emissivity_1"],
+            plates["emissivity_2"], area_1_m2=built["area_1_m2"],
+            area_2_m2=built["area_1_m2"])
+        out["two_plate_flux_w_m2"] = orc["two_plate_flux_w_m2"]
+        parsed = _elmer.parse_radiation_flux(cdir, built["scalars"], built["area_1_m2"])
+        if parsed:
+            out["q_net_w"] = round(parsed["q_net_w"], 6)
+            out["flux_w_m2"] = round(parsed["flux_w_m2"], 6)
+            if orc["two_plate_flux_w_m2"] != 0:
+                out["oracle_ratio"] = round(
+                    parsed["flux_w_m2"] / orc["two_plate_flux_w_m2"], 5)
+        return out
+
+    return jobs.submit("thermal_radiation", _work, key=key,
+                       meta={"mode": "plates", "t1_c": plates["t1_c"],
+                             "t2_c": plates["t2_c"]})
+
+
 # --- CFD (family 6 P2; OpenFOAM/SU2-backed) -----------------------------------
 
 def _run_foam(case_dir, argv_list, env_bashrc):

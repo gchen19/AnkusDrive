@@ -24,6 +24,10 @@ Four examples, each a kickoff gate:
     (``optics_raytrace``) is gated against Snell when the ``optics`` wheel resolves in
     the worker, else reported as degraded — the oracle gate still runs (it needs no
     solver), so D is the one example that never SKIPs.
+  * **E — radiation thermal** (§M2): ``thermal_radiation_submit`` builds two parallel
+    plates and runs **ElmerSolver + ViewFactors** (diffuse-gray enclosure radiation);
+    the net flux must match the exact two infinite parallel plates exchange
+    q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) within 2%, for symmetric and asymmetric emissivities.
 
 Each example **degrades gracefully**: a missing solver (ElmerSolver / OpenFOAM) or a
 worker that lacks NumPy is reported as SKIP, not a failure, so the script is safe to
@@ -192,6 +196,35 @@ def example_optics(w, log):
         "oracle gate still runs")
     log(f"  GATE Snell/Fresnel/TIR/energy oracle exact: {'PASS' if oracle_ok else 'FAIL'}")
     return oracle_ok
+
+
+def example_radiation(w, log):
+    """§M2 — Elmer diffuse-gray two-plate radiation vs the σ-exchange closed form."""
+    log("### Example E — thermal_radiation_submit (ElmerSolver + ViewFactors) vs 2-plate σ-exchange  (§M2)")
+    sub = w.call("thermal_radiation_submit", t1_c=500, t2_c=100,
+                 emissivity_1=0.8, emissivity_2=0.8)
+    if not _submitted(sub):
+        log(f"  SKIP — ElmerSolver not installed ({sub.get('install', '')})")
+        return None
+    res = _poll(w, sub["job_id"])["result"]
+    if not res.get("ok") or res.get("oracle_ratio") is None:
+        log(f"  FAIL — solve did not produce a flux: {str(res)[:200]}")
+        return False
+    log("- two parallel plates T₁=500°C, T₂=100°C, ε₁=ε₂=0.8 (gap 10 mm)")
+    log(f"- ElmerSolver (Diffuse Gray + ViewFactors): net flux {res['flux_w_m2']:.1f} W/m²")
+    log(f"- two-plate σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1): {res['two_plate_flux_w_m2']:.1f} W/m² "
+        f"→ oracle_ratio {res['oracle_ratio']}")
+    sigma_ok = 0.98 <= res["oracle_ratio"] <= 1.02
+
+    # Asymmetric emissivity exercises the 1/ε₁+1/ε₂−1 denominator, not just ε₁=ε₂.
+    asym = _poll(w, w.call("thermal_radiation_submit", t1_c=450, t2_c=50,
+                           emissivity_1=0.5, emissivity_2=0.9)["job_id"])["result"]
+    asym_ok = asym.get("oracle_ratio") is not None and 0.98 <= asym["oracle_ratio"] <= 1.02
+    log(f"- asymmetric ε₁=0.5, ε₂=0.9: Elmer {asym.get('flux_w_m2', float('nan')):.1f} vs "
+        f"oracle {asym.get('two_plate_flux_w_m2', float('nan')):.1f} W/m² → "
+        f"oracle_ratio {asym.get('oracle_ratio')}")
+    log(f"  GATE both oracle_ratios within 2%: {'PASS' if sigma_ok and asym_ok else 'FAIL'}")
+    return sigma_ok and asym_ok
 
 
 # --- figures (--plots) --------------------------------------------------------
@@ -432,8 +465,72 @@ def _plot_optics(outdir):
     return ro is not None
 
 
+def _run_elmer_radiation(t1_c, t2_c, e1, e2):
+    """Build + run the two-plate Elmer radiation case (ViewFactors then ElmerSolver),
+    return the solved net flux (W/m²), or None on failure. Used by the figure."""
+    import os
+    import subprocess
+    import tempfile
+    from driftpin import solvers
+    from driftpin.analysis import elmer
+    d = tempfile.mkdtemp(prefix="rad_fig_")
+    built = elmer.write_radiation_plates_case(d, t1_c=t1_c, t2_c=t2_c,
+                                              emissivity_1=e1, emissivity_2=e2, n_x=80)
+    elmer_bin = solvers.find_solver("elmer")["path"]
+    import shutil as _sh
+    vf = _sh.which("ViewFactors") or os.path.join(os.path.dirname(elmer_bin), "ViewFactors")
+    subprocess.run([vf, built["sif"]], cwd=d, capture_output=True, text=True)
+    subprocess.run([elmer_bin, built["sif"]], cwd=d, capture_output=True, text=True)
+    parsed = elmer.parse_radiation_flux(d, built["scalars"], built["area_1_m2"])
+    return parsed["flux_w_m2"] if parsed else None
+
+
+def _plot_radiation(outdir):
+    """Panel E: Elmer diffuse-gray two-plate flux over the σ(T⁴) law (temperature sweep)
+    and the 1/ε denominator (emissivity sweep), each on the exact two-plate oracle line.
+    Needs ElmerSolver; returns False (skip) when absent."""
+    from driftpin import solvers
+    if not solvers.is_available("elmer"):
+        return False
+    import matplotlib.pyplot as plt
+    from driftpin.analysis import thermal as _thermal
+    fig, axes = plt.subplots(1, 2, figsize=(9.4, 4.0))
+
+    # (left) net flux vs hot-plate temperature, T2=100C, eps=0.8 — the σ(T1^4-T2^4) law.
+    T2, e1, e2 = 100.0, 0.8, 0.8
+    T1s = [200, 300, 400, 500, 600, 700]
+    orc = [_thermal.radiation_exchange(t, T2, e1, e2)["two_plate_flux_w_m2"] for t in T1s]
+    elm = [_run_elmer_radiation(t, T2, e1, e2) for t in T1s]
+    ax = axes[0]
+    ax.plot(T1s, orc, "-", color="C3", lw=2, label="two-plate oracle  σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1)")
+    ax.plot(T1s, elm, "o", color="C0", ms=7, mfc="white", label="ElmerSolver (Diffuse Gray)")
+    ax.set_xlabel("hot plate T₁ (°C),  T₂ = 100 °C")
+    ax.set_ylabel("net radiative flux (W/m²)")
+    ax.set_title(f"σ(T⁴) law  (ε₁=ε₂={e1})", fontsize=9, weight="bold")
+    ax.legend(fontsize=7.5, loc="upper left"); ax.grid(True, ls=":", alpha=0.4)
+
+    # (right) net flux vs emissivity (eps1=eps2=eps), T1=500/T2=100 — the gray denominator.
+    eps = [0.3, 0.45, 0.6, 0.75, 0.9, 1.0]
+    orc2 = [_thermal.radiation_exchange(500, 100, e, e)["two_plate_flux_w_m2"] for e in eps]
+    elm2 = [_run_elmer_radiation(500, 100, e, e) for e in eps]
+    ax = axes[1]
+    ax.plot(eps, orc2, "-", color="C3", lw=2, label="oracle  q ∝ 1/(2/ε−1)")
+    ax.plot(eps, elm2, "s", color="C2", ms=7, mfc="white", label="ElmerSolver")
+    ax.set_xlabel("surface emissivity  ε₁ = ε₂")
+    ax.set_ylabel("net radiative flux (W/m²)")
+    ax.set_title("gray-body denominator  (T₁=500, T₂=100 °C)", fontsize=9, weight="bold")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(True, ls=":", alpha=0.4)
+
+    fig.suptitle("Example E — Elmer diffuse-gray radiation vs the two-plate σ-exchange  (§M2)",
+                 fontsize=11, weight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(f"{outdir}/radiation.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
 def make_plots(outdir):
-    """Generate the four result figures into ``outdir``; skip a panel when its solver
+    """Generate the five result figures into ``outdir``; skip a panel when its solver
     is absent. matplotlib is imported lazily so the gated run needs no plotting deps."""
     import os
     try:
@@ -450,6 +547,7 @@ def make_plots(outdir):
     print("  openfoam.png " + ("✓" if _plot_cfd(outdir) else "SKIP (OpenFOAM absent)"))
     print("  optics.png " + ("✓ (with rayoptics overlay)" if _plot_optics(outdir)
                              else "✓ (oracle only — rayoptics absent)"))
+    print("  radiation.png " + ("✓" if _plot_radiation(outdir) else "SKIP (ElmerSolver absent)"))
 
 
 def main():
@@ -472,7 +570,8 @@ def main():
         for name, fn in (("topology", example_topology),
                          ("thermal", example_thermal),
                          ("cfd", example_cfd),
-                         ("optics", example_optics)):
+                         ("optics", example_optics),
+                         ("radiation", example_radiation)):
             try:
                 results[name] = fn(w, log)
             except Exception as e:  # one example failing must not abort the rest

@@ -143,19 +143,30 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Answers:** "How hot does it get after 5 min? Does radiation matter?"
 - **Backend:** lumped-mass quick estimates pure-Python; transient / radiation via
   Elmer or OpenFOAM `chtMultiRegionFoam`. **Weight: none (lumped) → heavy (CFD-class).**
-- **Signatures:**
+- **Signatures (implemented):**
   ```
   thermal_lumped(mass_g, c_p, power_w, h_conv, area_mm2, t_ambient_c, duration_s)
-  thermal_transient(analysis, duration_s, dt_s)        # Elmer-backed, later phase
-  thermal_radiation(analysis, emissivity, view_factors)
+  thermal_transient_1d(half_thickness_mm, h_conv, duration_s, k, rho, cp, …)  # Heisler oracle
+  thermal_transient_submit(half_thickness_mm|case_dir, …)        # Elmer 1-D slab, async
+  thermal_radiation_submit(t1_c, t2_c, emissivity_1, emissivity_2, …)  # Elmer enclosure, async
+    -> {ok:false, reason, install}                               # when ElmerSolver absent
+     | {job_id, status, cache_hit}  # poll job_result for {ok, flux_w_m2, q_net_w,
+       two_plate_flux_w_m2, oracle_ratio (≈1), t1_c, t2_c, emissivity_1, emissivity_2}
   ```
 - CCX already covers steady-state conduction via `fem_thermal_results`; this fills
   the *time* and *radiation* gaps. Lumped version ships in the pure-Python wave.
-- **Status: lumped shipped (P0)** in `driftpin/analysis/thermal.py` —
-  `thermal_lumped` (first-order RC: ΔT_ss, τ, T(t), plus an h_rad-vs-h_conv
-  radiation screen), 5 two-sided toys in `tests/test_thermal.py` (τ=450 s,
-  T(300 s)=55.4 °C against the exact exponential). `thermal_transient` /
-  `thermal_radiation` (Elmer/CFD-backed) stay P2.
+- **Status: lumped + transient + radiation shipped.** `thermal_lumped` (P0; first-order
+  RC: ΔT_ss, τ, T(t), plus an h_rad-vs-h_conv radiation screen). `thermal_transient_*`
+  (P2 M4; Elmer 1-D plane-wall vs the one-term Heisler oracle to <0.1%). **`thermal_radiation_submit`
+  (P3 M2):** Elmer **diffuse-gray** two-plate enclosure radiation (ViewFactors + HeatSolver),
+  gated against the exact two infinite parallel plates exchange
+  q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) — `oracle_ratio` lands within ~0.2% (residual is
+  finite-plate edge leakage), and the small-ΔT limit matches `thermal_lumped`'s h_rad
+  screen. The exact closed form is `analysis/thermal.radiation_exchange` (general
+  two-surface network + the two-plate limit); the Elmer case builder is
+  `analysis/elmer.write_radiation_plates_case`. Acceptance: **Example E** +
+  `radiation.png`; oracle gates in `tests/test_thermal.py`, the ElmerSolver gate in
+  `tests/test_elmer.py`.
 
 ### 5. Structural extensions
 

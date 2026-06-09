@@ -97,6 +97,73 @@ def thermal_lumped(
     }
 
 
+def radiation_exchange(
+    t1_c: float,
+    t2_c: float,
+    emissivity_1: float = 0.8,
+    emissivity_2: float = 0.8,
+    area_1_m2: float = 1.0,
+    area_2_m2: float | None = None,
+    view_factor: float = 1.0,
+) -> dict:
+    """Net gray-body radiative heat exchange between two diffuse surfaces — the exact
+    closed-form oracle the Elmer ``thermal_radiation`` solve is gated against.
+
+    The general two-surface enclosure (radiation resistance network) net heat *rate*
+    from surface 1 to surface 2 is
+
+        Q₁₂ = σ·(T₁⁴ − T₂⁴) / [ (1−ε₁)/(ε₁·A₁) + 1/(A₁·F₁₂) + (1−ε₂)/(ε₂·A₂) ]
+
+    with absolute temperatures and the Stefan–Boltzmann σ. ``flux_w_m2`` is Q₁₂/A₁.
+    The headline anchor is the **two infinite parallel plates** limit — F₁₂ = 1 and
+    A₁ = A₂ — where this collapses to the kickoff's
+
+        q = σ·(T₁⁴ − T₂⁴) / (1/ε₁ + 1/ε₂ − 1).
+
+    ``two_plate_flux_w_m2`` always reports that limit (independent of the areas/F).
+    Temperatures are °C (converted to K internally); areas m², F₁₂ the surface-1→2
+    view factor in (0, 1]. Returns {t1_k, t2_k, view_factor, area_1_m2, area_2_m2,
+    q_net_w, flux_w_m2, two_plate_flux_w_m2, h_rad_w_m2k}. Raises ValueError on a
+    non-positive emissivity/area/F or an emissivity > 1."""
+    if not (0.0 < emissivity_1 <= 1.0 and 0.0 < emissivity_2 <= 1.0):
+        raise ValueError("emissivities must be in (0, 1]")
+    if area_1_m2 <= 0 or (area_2_m2 is not None and area_2_m2 <= 0):
+        raise ValueError("areas must be > 0")
+    if not 0.0 < view_factor <= 1.0:
+        raise ValueError("view_factor must be in (0, 1]")
+    a1 = float(area_1_m2)
+    a2 = float(area_2_m2) if area_2_m2 is not None else a1
+    t1_k = t1_c + 273.15
+    t2_k = t2_c + 273.15
+    sigma = _STEFAN_BOLTZMANN
+
+    resistance = ((1.0 - emissivity_1) / (emissivity_1 * a1)
+                  + 1.0 / (a1 * view_factor)
+                  + (1.0 - emissivity_2) / (emissivity_2 * a2))
+    q_net = sigma * (t1_k ** 4 - t2_k ** 4) / resistance      # watts, 1 -> 2
+    flux = q_net / a1                                         # W/m² of surface 1
+
+    two_plate = sigma * (t1_k ** 4 - t2_k ** 4) / (
+        1.0 / emissivity_1 + 1.0 / emissivity_2 - 1.0)
+
+    # Linearized radiative HTC about the two temps (the thermal_lumped h_rad screen):
+    # q ≈ h_rad·ΔT as ΔT → 0, with h_rad = ε_eff·σ·(T₁²+T₂²)(T₁+T₂).
+    eps_eff = 1.0 / (1.0 / emissivity_1 + 1.0 / emissivity_2 - 1.0)
+    h_rad = eps_eff * sigma * (t1_k * t1_k + t2_k * t2_k) * (t1_k + t2_k)
+
+    return {
+        "t1_k": round(t1_k, 4),
+        "t2_k": round(t2_k, 4),
+        "view_factor": round(view_factor, 6),
+        "area_1_m2": round(a1, 8),
+        "area_2_m2": round(a2, 8),
+        "q_net_w": round(q_net, 6),
+        "flux_w_m2": round(flux, 6),
+        "two_plate_flux_w_m2": round(two_plate, 6),
+        "h_rad_w_m2k": round(h_rad, 6),
+    }
+
+
 def _thermal_property(explicit, card, *keys):
     """Resolve a thermal property (SI) from an explicit value/quantity-string, else
     the named Materials-DB card keys. Returns the number or None."""

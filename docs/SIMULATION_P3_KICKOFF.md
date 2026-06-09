@@ -163,7 +163,10 @@ M1  Optics         ✅ analysis/optics.py (Snell/Fresnel/TIR oracle + energy-clo
                        optics_moldability_check (geometric: draft + ray-cast undercut).
                        Gated: Snell 19.60°, Fresnel 3.88%, TIR θc 42.13°, energy Σ=1;
                        rayoptics matches Snell to <1e-6°. Example D + optics.png.
-M2  Radiation thermal  ⏳ thermal_radiation (Elmer enclosure) vs 2-plate σ-exchange
+M2  Radiation thermal  ✅ thermal_radiation_submit (Elmer diffuse-gray enclosure +
+                       ViewFactors) vs the 2-plate σ(T⁴)/(1/ε₁+1/ε₂−1) exchange —
+                       oracle_ratio ~0.998 (sym + asym ε); analysis/thermal.radiation_exchange
+                       + analysis/elmer.write_radiation_plates_case. Example E + radiation.png.
 M3  CFD external   ⏳ cfd_external_flow_submit builder + Stokes/Blasius drag oracle
 M4  Geometry bridge ⏳ FreeCAD solid → Gmsh/ElmerGrid (Elmer) · STL/snappyHexMesh
                        (OpenFOAM); relative gate: meshed-from-FreeCAD == parametric

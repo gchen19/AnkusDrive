@@ -122,6 +122,65 @@ def test_transient_1d_errors():
         raise AssertionError("expected ValueError for zero thickness")
 
 
+# --- radiation exchange (P3 M2 oracle) ----------------------------------------
+
+_SIGMA = 5.670374419e-8
+
+
+def test_radiation_two_plate_closed_form():
+    # §M2 anchor: T1=500C, T2=100C, eps1=eps2=0.8 -> q = sigma*dT4/(1/e1+1/e2-1).
+    r = th.radiation_exchange(500, 100, 0.8, 0.8)
+    expected = _SIGMA * (773.15 ** 4 - 373.15 ** 4) / (1 / 0.8 + 1 / 0.8 - 1)
+    assert abs(r["flux_w_m2"] - expected) < 1e-3, (r["flux_w_m2"], expected)
+    # with F=1 and equal areas the general network IS the two-plate limit
+    assert abs(r["flux_w_m2"] - r["two_plate_flux_w_m2"]) < 1e-6, r
+
+
+def test_radiation_black_surroundings_is_emissive_power():
+    # eps2 = 1 (black surround) collapses to q = eps1*sigma*(T1^4 - T2^4).
+    r = th.radiation_exchange(500, 100, 0.7, 1.0)
+    expected = 0.7 * _SIGMA * (773.15 ** 4 - 373.15 ** 4)
+    assert abs(r["flux_w_m2"] - expected) < 1e-3, (r["flux_w_m2"], expected)
+
+
+def test_radiation_lower_emissivity_lowers_flux():
+    hi = th.radiation_exchange(500, 100, 0.9, 0.9)["flux_w_m2"]
+    lo = th.radiation_exchange(500, 100, 0.3, 0.3)["flux_w_m2"]
+    assert lo < hi, (lo, hi)
+    # zero net exchange at equal temperatures
+    assert abs(th.radiation_exchange(200, 200, 0.8, 0.5)["flux_w_m2"]) < 1e-9
+
+
+def test_radiation_general_enclosure_area_ratio():
+    # general two-surface network: a larger surface 2 raises the exchange toward the
+    # black-cavity limit; with A2=A1 it is the two-plate form.
+    eq = th.radiation_exchange(400, 25, 0.6, 0.6, area_1_m2=1.0, area_2_m2=1.0)
+    big = th.radiation_exchange(400, 25, 0.6, 0.6, area_1_m2=1.0, area_2_m2=100.0)
+    assert abs(eq["flux_w_m2"] - eq["two_plate_flux_w_m2"]) < 1e-6, eq
+    assert big["flux_w_m2"] > eq["flux_w_m2"], (big["flux_w_m2"], eq["flux_w_m2"])
+
+
+def test_radiation_hrad_is_small_dt_limit():
+    # as ΔT→0 the net flux linearizes to h_rad·ΔT (the thermal_lumped screen form).
+    r = th.radiation_exchange(100.5, 99.5, 0.9, 0.9)   # ΔT = 1 K
+    assert abs(r["flux_w_m2"] - r["h_rad_w_m2k"] * 1.0) < 1e-3, r
+
+
+def test_radiation_input_validation():
+    for bad in (
+        lambda: th.radiation_exchange(500, 100, 1.5, 0.8),     # emissivity > 1
+        lambda: th.radiation_exchange(500, 100, 0.0, 0.8),     # emissivity 0
+        lambda: th.radiation_exchange(500, 100, 0.8, 0.8, view_factor=1.5),
+        lambda: th.radiation_exchange(500, 100, 0.8, 0.8, area_1_m2=0),
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
