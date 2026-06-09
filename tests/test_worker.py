@@ -909,10 +909,11 @@ def test_fem_cantilever():
 
 def _build_cantilever_fem(w, length=200.0, width=20.0, height=10.0,
                           mesh_size=10.0, fix_face_norm=(-1, 0, 0),
-                          extra_constraints=None):
+                          extra_constraints=None, element_order=None):
     """Helper: build a steel cantilever beam with the -X face fixed.
     Returns {analysis, box, mesh} handles. Does NOT run the solver.
-    extra_constraints: callable(w, analysis_h, box_h) for adding more constraints."""
+    extra_constraints: callable(w, analysis_h, box_h) for adding more constraints.
+    element_order: '1st'/'2nd' passed through to fem_mesh ('2nd' for modal accuracy)."""
     w.call("new_document", name="cant_helper")
     box = w.call("add_primitive", kind="box", w=length, d=width, h=height)
     fixed_face = w.call(
@@ -948,35 +949,44 @@ def _build_cantilever_fem(w, length=200.0, width=20.0, height=10.0,
     )
     if extra_constraints is not None:
         extra_constraints(w, analysis["handle"], box["handle"])
-    mesh = w.call(
-        "fem_mesh",
-        analysis=analysis["handle"], body=box["handle"],
-        char_length=mesh_size, _timeout=120.0,
-    )
+    mesh_kw = {"analysis": analysis["handle"], "body": box["handle"],
+               "char_length": mesh_size, "_timeout": 120.0}
+    if element_order is not None:
+        mesh_kw["element_order"] = element_order
+    mesh = w.call("fem_mesh", **mesh_kw)
     return {"analysis": analysis["handle"], "box": box["handle"], "mesh": mesh["handle"]}
 
 
 def test_fem_modal_cantilever():
-    """Modal analysis of a steel cantilever 200×20×10mm. Verifies the modal
-    pipeline runs end-to-end and returns N positive, ascending frequencies in
-    a reasonable range. Strict analytical-match is unrealistic on this stocky
-    beam (L/h=20) where Euler-Bernoulli over-predicts; we verify shape, not
-    point value."""
+    """Modal analysis of a slender steel cantilever (300×30×10mm, L/h=30) gated against
+    the exact Euler-Bernoulli oracle (beam_modal). With 2nd-order tets the CalculiX
+    fundamental lands within 3% of beam theory — linear tets (the old default) shear-
+    lock and overshoot ~50%, which is why this used to only check shape. The 2nd
+    bending mode (oracle mode 2) also appears among the eigenfrequencies."""
     with Worker() as w:
-        h = _build_cantilever_fem(w, length=200, width=20, height=10, mesh_size=10)
-        w.call("fem_modal", analysis=h["analysis"], n_modes=3)
+        orc = w.call("beam_modal", length_mm=300, width_mm=30, height_mm=10,
+                     boundary="cantilever", n_modes=2, youngs_gpa=210,
+                     density_kg_m3=7900)
+        h = _build_cantilever_fem(w, length=300, width=30, height=10, mesh_size=6.0,
+                                  element_order="2nd")
+        w.call("fem_modal", analysis=h["analysis"], n_modes=6)
         w.call("fem_run", analysis=h["analysis"],
                workdir="/tmp/driftpin_modal", _timeout=300.0)
-        results = w.call("fem_modal_results", analysis=h["analysis"])
-        freqs = results["frequencies_hz"]
-        assert len(freqs) == 3, f"expected 3 modes, got {len(freqs)}: {freqs}"
-        assert all(f > 0 for f in freqs), f"all freqs must be positive: {freqs}"
+        freqs = w.call("fem_modal_results", analysis=h["analysis"])["frequencies_hz"]
+        assert len(freqs) == 6 and all(f > 0 for f in freqs), freqs
         assert freqs == sorted(freqs), f"freqs must ascend: {freqs}"
-        # Steel cantilever 200×20×10: first bending freq ~200-500 Hz.
-        assert 50 < freqs[0] < 2000, (
-            f"first frequency {freqs[0]:.1f} Hz out of plausible range"
-        )
-        print(f"    modal freqs: {[f'{f:.1f}' for f in freqs]} Hz")
+        f1_oracle = orc["first_mode_hz"]
+        ratio = freqs[0] / f1_oracle
+        assert 0.97 <= ratio <= 1.05, (
+            f"fundamental {freqs[0]:.1f} Hz vs E-B oracle {f1_oracle:.1f} Hz "
+            f"(ratio {ratio:.3f}) — outside 3% gate")
+        # the 2nd cantilever bending mode (oracle mode 2) must appear among the modes
+        # (other low modes are the stiffer in-plane bend / torsion, which interleave)
+        f2_oracle = orc["frequencies_hz"][1]
+        assert any(abs(f / f2_oracle - 1.0) < 0.05 for f in freqs), (
+            f"oracle 2nd bending {f2_oracle:.1f} Hz not found in {[round(f,1) for f in freqs]}")
+        print(f"    modal: ccx {[f'{f:.1f}' for f in freqs[:4]]} Hz; "
+              f"fundamental vs E-B {f1_oracle:.1f} Hz → ratio {ratio:.3f}")
 
 
 def test_fem_buckling_column():

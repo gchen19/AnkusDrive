@@ -109,6 +109,61 @@ def test_input_errors():
             raise AssertionError("expected ValueError on bad input")
 
 
+# --- beam natural frequencies (P3 M6 modal oracle) ----------------------------
+
+def test_beam_cantilever_matches_euler_bernoulli():
+    import math
+    # steel cantilever L=300, b=30, h=10 mm, E=210 GPa, ρ=7900: hand f1 = 92.54 Hz
+    r = vib.beam_natural_frequencies(300, 30, 10, "cantilever", n_modes=3,
+                                     youngs_gpa=210, density_kg_m3=7900)
+    L, b, h, E, rho = 0.3, 0.03, 0.01, 210e9, 7900.0
+    I, A = b * h ** 3 / 12.0, b * h
+    f1 = (1.8751041 ** 2) / (2 * math.pi) * math.sqrt(E * I / (rho * A * L ** 4))
+    assert abs(r["first_mode_hz"] - f1) < 1e-2, (r["first_mode_hz"], f1)
+    assert abs(r["first_mode_hz"] - 92.54) < 0.1, r["first_mode_hz"]
+    # higher modes follow (βL_n/βL_1)²
+    assert abs(r["frequencies_hz"][1] / r["frequencies_hz"][0]
+               - (4.6940911 / 1.8751041) ** 2) < 1e-3, r
+
+
+def test_beam_simply_supported_is_n_squared():
+    r = vib.beam_natural_frequencies(300, 30, 10, "simply_supported", n_modes=4,
+                                     youngs_gpa=70, density_kg_m3=2700)
+    f1 = r["frequencies_hz"][0]
+    for n, f in enumerate(r["frequencies_hz"], start=1):
+        assert abs(f / f1 - n * n) < 1e-4, (n, f, f1)     # pinned-pinned: f_n ∝ n²
+
+
+def test_beam_thinner_is_lower_freq_and_material_lookup():
+    thick = vib.beam_natural_frequencies(300, 30, 20, "cantilever", n_modes=1,
+                                         youngs_gpa=210, density_kg_m3=7900)
+    thin = vib.beam_natural_frequencies(300, 30, 10, "cantilever", n_modes=1,
+                                        youngs_gpa=210, density_kg_m3=7900)
+    # f ∝ height (I ∝ h³, A ∝ h → f ∝ h): halving height halves the frequency
+    assert abs(thick["first_mode_hz"] / thin["first_mode_hz"] - 2.0) < 1e-3, (thick, thin)
+    # material name resolves E and ρ from the DB
+    m = vib.beam_natural_frequencies(300, 30, 10, "cantilever", n_modes=1,
+                                     material="AL6061-T6")
+    assert m["first_mode_hz"] > 0 and m["youngs_gpa"] > 0 and m["density_kg_m3"] > 0, m
+
+
+def test_beam_input_errors():
+    for bad in (
+        lambda: vib.beam_natural_frequencies(0, 30, 10, youngs_gpa=210, density_kg_m3=7900),
+        lambda: vib.beam_natural_frequencies(300, 30, 10, "noplace", youngs_gpa=210,
+                                             density_kg_m3=7900),
+        lambda: vib.beam_natural_frequencies(300, 30, 10, n_modes=9, youngs_gpa=210,
+                                             density_kg_m3=7900),       # >5 modes
+        lambda: vib.beam_natural_frequencies(300, 30, 10),             # no material
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError on bad beam input")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

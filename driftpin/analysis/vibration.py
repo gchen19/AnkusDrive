@@ -89,6 +89,95 @@ def miles_grms(f_n: float, w_g2_hz: float, q: float) -> float:
     return math.sqrt(_HALF_PI * f_n * max(w_g2_hz, 0.0) * q)
 
 
+# Dimensionless eigenvalues (βL)_n of the Euler–Bernoulli beam by boundary condition
+# — roots of the mode-shape characteristic equation. The natural frequencies are
+# f_n = (βL)_n² / (2π) · sqrt(E·I / (ρ·A·L⁴)).
+_BEAM_BETA_L = {
+    # clamped–free: roots of cos(βL)·cosh(βL) = −1
+    "cantilever":       (1.8751041, 4.6940911, 7.8547574, 10.9955407, 14.1371684),
+    # pinned–pinned: βL = nπ (exact)
+    "simply_supported": (math.pi, 2 * math.pi, 3 * math.pi, 4 * math.pi, 5 * math.pi),
+    # clamped–clamped / free–free (same nonzero roots): cos(βL)·cosh(βL) = 1
+    "clamped_clamped":  (4.7300408, 7.8532046, 10.9956078, 14.1371655, 17.2787596),
+    "free_free":        (4.7300408, 7.8532046, 10.9956078, 14.1371655, 17.2787596),
+    # clamped–pinned: tan(βL) = tanh(βL)
+    "clamped_pinned":   (3.9266023, 7.0685827, 10.2101761, 13.3517688, 16.4933614),
+}
+
+
+def beam_natural_frequencies(
+    length_mm: float,
+    width_mm: float,
+    height_mm: float,
+    boundary: str = "cantilever",
+    n_modes: int = 3,
+    youngs_gpa: float | None = None,
+    density_kg_m3: float | None = None,
+    material: str | None = None,
+) -> dict:
+    """Exact Euler–Bernoulli natural frequencies of a uniform rectangular beam — the
+    closed-form oracle the FEM modal solve (``fem_modal`` / CalculiX) is gated against.
+
+    The transverse-bending frequencies are f_n = (βL)_n²/(2π)·sqrt(E·I/(ρ·A·L⁴)), where
+    (βL)_n are the boundary-condition eigenvalues (``cantilever``, ``simply_supported``,
+    ``clamped_clamped``, ``free_free``, ``clamped_pinned``). The beam bends in the
+    ``height`` direction, so I = width·height³/12 and A = width·height. Slender-beam
+    theory: accurate while L ≫ height (thick beams need a Timoshenko shear correction;
+    higher modes drift first).
+
+    E from ``youngs_gpa`` or a Materials-DB ``material``; ρ from ``density_kg_m3`` or the
+    material. Lengths mm. Returns {boundary, n_modes, frequencies_hz, beta_l,
+    first_mode_hz, youngs_gpa, density_kg_m3, area_mm2, I_mm4, slenderness}. Raises
+    ValueError on bad geometry, unknown boundary, n_modes>5, or unresolved E/ρ."""
+    if boundary not in _BEAM_BETA_L:
+        raise ValueError(f"boundary must be one of {sorted(_BEAM_BETA_L)}")
+    if length_mm <= 0 or width_mm <= 0 or height_mm <= 0:
+        raise ValueError("length_mm, width_mm, height_mm must be > 0")
+    betas = _BEAM_BETA_L[boundary]
+    if not 1 <= n_modes <= len(betas):
+        raise ValueError(f"n_modes must be in 1..{len(betas)} for {boundary!r}")
+
+    E, rho = _resolve_beam_material(youngs_gpa, density_kg_m3, material)
+    L = length_mm / 1000.0
+    b = width_mm / 1000.0
+    h = height_mm / 1000.0
+    A = b * h                                            # m²
+    I = b * h ** 3 / 12.0                                # m⁴ (bending in height)
+    coeff = math.sqrt(E * I / (rho * A * L ** 4)) / (2.0 * math.pi)
+    freqs = [round((bl * bl) * coeff, 4) for bl in betas[:n_modes]]
+    return {
+        "boundary": boundary,
+        "n_modes": n_modes,
+        "frequencies_hz": freqs,
+        "beta_l": [round(bl, 6) for bl in betas[:n_modes]],
+        "first_mode_hz": freqs[0],
+        "youngs_gpa": round(E / 1e9, 4),
+        "density_kg_m3": round(rho, 3),
+        "area_mm2": round(A * 1e6, 4),
+        "I_mm4": round(I * 1e12, 4),
+        "slenderness": round(length_mm / height_mm, 3),
+    }
+
+
+def _resolve_beam_material(youngs_gpa, density_kg_m3, material):
+    """(E [Pa], ρ [kg/m³]) from explicit youngs_gpa/density_kg_m3, else a Materials-DB
+    card by name. Raises ValueError if neither resolves both."""
+    E = youngs_gpa * 1e9 if youngs_gpa is not None else None
+    rho = float(density_kg_m3) if density_kg_m3 is not None else None
+    if (E is None or rho is None) and material:
+        from . import materials
+        card = materials.get(material)
+        if E is None:
+            e_gpa = materials.numeric(card, "youngs_gpa")
+            E = e_gpa * 1e9 if e_gpa else None
+        if rho is None:
+            rho = materials.numeric(card, "density_kg_m3")
+    if not E or not rho:
+        raise ValueError(
+            "provide youngs_gpa + density_kg_m3, or a material with both")
+    return E, rho
+
+
 def random_vibration(
     frequencies_hz,
     psd_profile,
