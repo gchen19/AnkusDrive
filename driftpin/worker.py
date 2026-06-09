@@ -6550,6 +6550,141 @@ def _h_slice_estimate(p):
     return slicing.slice_estimate(**p)
 
 
+# --- multibody dynamics / kinematics (family 8) -------------------------------
+# Two surfaces: mechanism_kinematics is the closed-form, solver-free gate (Grübler
+# DOF, Grashof, slider-crank stroke = 2R, four-bar sweep) in analysis/kinematics.py;
+# mechanism_simulate_submit runs the PyBullet dynamics (analysis/mbd.py) off the MCP
+# channel via jobs.py, degrading through _require_solver when the wheel is absent.
+
+@handler("mechanism_kinematics")
+def _h_mechanism_kinematics(p):
+    """Closed-form planar mechanism kinematics — exact, no external solver. Dispatches
+    on `mechanism`: 'fourbar' (ground/crank/coupler/rocker) -> {mobility_dof, grashof,
+    reachable, coupler_path, reachable_bbox_mm, n_reached}; 'slider_crank'
+    (crank_mm/conrod_mm[/wrist_offset_mm]) -> {stroke_mm (=2R inline), x_tdc_mm,
+    x_bdc_mm, inline_stroke_exact}; 'gruebler' (n_links + joints) -> {mobility_dof}.
+    See driftpin.analysis.kinematics."""
+    from driftpin.analysis import kinematics as kin
+    mech = p.get("mechanism", "fourbar")
+    if mech == "slider_crank":
+        return kin.slider_crank(
+            crank_mm=p["crank_mm"], conrod_mm=p["conrod_mm"],
+            n_steps=int(p.get("n_steps", 360)),
+            wrist_offset_mm=float(p.get("wrist_offset_mm", 0.0)))
+    if mech == "fourbar":
+        grashof = kin.grashof_classify(crank=p["crank"], coupler=p["coupler"],
+                                       rocker=p["rocker"], ground=p["ground"])
+        sweep = kin.fourbar_sweep(
+            ground=p["ground"], crank=p["crank"], coupler=p["coupler"],
+            rocker=p["rocker"], config=p.get("config", "open"),
+            n_steps=int(p.get("n_steps", 72)),
+            coupler_point=tuple(p.get("coupler_point", (0.5, 0.0))))
+        return {"mobility_dof": kin.gruebler_dof(4, [{"type": "revolute"}] * 4),
+                "grashof": grashof, **sweep}
+    if mech == "gruebler":
+        return {"mobility_dof": kin.gruebler_dof(
+            int(p["n_links"]), p.get("joints", []), planar=bool(p.get("planar", True)))}
+    raise ValueError(
+        f"unknown mechanism {mech!r}; use 'fourbar', 'slider_crank', or 'gruebler'")
+
+
+def _mbd_to_si_spec(links, drivers, obstacles=None, base=None):
+    """Convert a physical-unit (mm / g / deg·s⁻¹) link/driver/obstacle description to
+    the SI spec driftpin.analysis.mbd.run_mbd expects. Pure unit math, FreeCAD-free —
+    runs on the main thread to build the background job's payload."""
+    import math as _m
+
+    def hx(box_mm):                                  # full box dims (mm) -> half extents (m)
+        return [float(b) / 2.0 / 1000.0 for b in box_mm]
+
+    def mm2m(v):
+        return [float(x) / 1000.0 for x in v]
+
+    si_links = [{
+        "name": lk.get("name"),
+        "half_extents_m": hx(lk["box_mm"]),
+        "mass_kg": float(lk.get("mass_g", 0.0)) / 1000.0,
+        "parent": int(lk.get("parent", -1)),
+        "joint_type": lk.get("joint_type", "revolute"),
+        "joint_axis": lk.get("joint_axis", [0, 0, 1]),
+        "joint_pos_m": mm2m(lk.get("joint_at_mm", [0, 0, 0])),
+        "com_m": mm2m(lk.get("com_mm", [0, 0, 0])),
+    } for lk in links]
+
+    si_drivers = []
+    for d in drivers or []:
+        if "rate_dps" in d:
+            vel = float(d["rate_dps"]) * _m.pi / 180.0      # revolute -> rad/s
+        elif "rate_mm_s" in d:
+            vel = float(d["rate_mm_s"]) / 1000.0            # prismatic -> m/s
+        else:
+            vel = float(d.get("target_velocity", 0.0))
+        si_drivers.append({"link": int(d["link"]), "target_velocity": vel,
+                           "max_force": float(d.get("max_force", 1e3))})
+
+    si_obstacles = [{"half_extents_m": hx(o["box_mm"]),
+                     "pos_m": mm2m(o.get("at_mm", [0, 0, 0]))}
+                    for o in (obstacles or [])]
+    spec = {"links": si_links, "drivers": si_drivers, "obstacles": si_obstacles}
+    if base is not None:
+        spec["base"] = {"half_extents_m": hx(base.get("box_mm", [10, 10, 10])),
+                        "mass_kg": float(base.get("mass_g", 0.0)) / 1000.0,
+                        "pos_m": mm2m(base.get("at_mm", [0, 0, 0]))}
+    return spec
+
+
+@handler("mechanism_simulate_submit")
+def _h_mechanism_simulate_submit(p):
+    """Simulate a rigid-link mechanism's dynamics with PyBullet, OFF the MCP channel.
+
+    `links` is a tree of {name, box_mm, mass_g, parent (index, −1 = fixed base),
+    joint_type ('revolute'|'prismatic'|'fixed'), joint_axis, joint_at_mm (in the
+    parent frame), com_mm}; `drivers` drive a link's joint (rate_dps for revolute,
+    rate_mm_s for prismatic); optional `obstacles` and `base`. The closed-form
+    `mobility_dof` (Grübler) is computed on the main thread and always returned.
+
+    Degrades when PyBullet is absent: returns {ok:false, reason, install, mobility_dof,
+    n_links} instead of submitting. Otherwise exports the SI spec on the main thread
+    and runs the solve in a background job (FreeCAD-free), returning {job_id, status,
+    cache_hit, mobility_dof}; poll job_result for {trajectories, max_torques,
+    collisions_through_motion, reachable_envelope, mobility_dof}."""
+    from driftpin import jobs
+    from driftpin.analysis import kinematics as kin
+    from driftpin.analysis import mbd
+
+    links = p["links"]
+    drivers = p.get("drivers", [])
+    duration_s = float(p.get("duration_s", 1.0))
+    dt_s = float(p.get("dt_s", 1.0 / 240.0))
+    gravity = list(p.get("gravity", [0.0, 0.0, -9.81]))
+
+    # closed-form mobility (Grübler) — main thread, no solver. Count each link's
+    # parent joint plus any loop-closure joints.
+    joints = [{"type": lk.get("joint_type", "revolute")} for lk in links]
+    joints += [{"type": lc.get("type", "revolute")} for lc in (p.get("loop_closures") or [])]
+    n_links = len(links) + 1                          # + ground/base
+    mobility = kin.gruebler_dof(n_links, joints)
+
+    info = _require_solver("pybullet")
+    if not info["ok"]:                                # graceful degradation
+        return {**info, "mobility_dof": mobility, "n_links": n_links}
+
+    spec = _mbd_to_si_spec(links, drivers, p.get("obstacles"), p.get("base"))
+    key = jobs.content_key("mechanism_simulate",
+                           {"spec": spec, "duration_s": duration_s,
+                            "dt_s": dt_s, "gravity": gravity})
+
+    def _work():
+        out = mbd.run_mbd(spec, duration_s=duration_s, dt_s=dt_s, gravity=tuple(gravity))
+        out["mobility_dof"] = mobility
+        return out
+
+    res = jobs.submit("mechanism_simulate", _work, key=key,
+                      meta={"n_links": n_links, "duration_s": duration_s})
+    res["mobility_dof"] = mobility
+    return res
+
+
 # --- generic async jobs (driftpin.jobs) ---------------------------------------
 # A reusable submit/poll facility for long solves that must not block the MCP
 # channel. async_demo_submit is the reference implementation; job_status /

@@ -2894,6 +2894,78 @@ def slice_estimate(
 
 
 @mcp.tool()
+def mechanism_kinematics(
+    mechanism: str = "fourbar",
+    crank: float | None = None,
+    coupler: float | None = None,
+    rocker: float | None = None,
+    ground: float | None = None,
+    crank_mm: float | None = None,
+    conrod_mm: float | None = None,
+    wrist_offset_mm: float = 0.0,
+    n_links: int | None = None,
+    joints: list | None = None,
+    config: str = "open",
+    n_steps: int | None = None,
+    planar: bool = True,
+) -> dict:
+    """Closed-form planar mechanism kinematics — exact, NO external solver (the static
+    pre-check / gate for mechanism_simulate_submit). Pick `mechanism`:
+
+    - 'fourbar': link lengths crank/coupler/rocker/ground -> {mobility_dof (=1),
+      grashof: {condition, type, input_crank_fully_rotates, shortest}, reachable,
+      n_reached, coupler_path [[x,y]...], reachable_bbox_mm}. `config` 'open'|'crossed'.
+    - 'slider_crank': crank_mm/conrod_mm (+ wrist_offset_mm) -> {stroke_mm (exactly 2·R
+      in-line, independent of conrod), x_tdc_mm, x_bdc_mm, inline_stroke_exact}.
+    - 'gruebler': n_links (incl. ground) + joints ([{type}...]) -> {mobility_dof}.
+
+    Returns the per-mechanism dict above. Raises on an unknown mechanism or a link set
+    that cannot close."""
+    params = {"mechanism": mechanism, "config": config, "planar": planar,
+              "wrist_offset_mm": wrist_offset_mm}
+    for k, v in (("crank", crank), ("coupler", coupler), ("rocker", rocker),
+                 ("ground", ground), ("crank_mm", crank_mm), ("conrod_mm", conrod_mm),
+                 ("n_links", n_links), ("joints", joints), ("n_steps", n_steps)):
+        if v is not None:
+            params[k] = v
+    return _call("mechanism_kinematics", **params)
+
+
+@mcp.tool()
+def mechanism_simulate_submit(
+    links: list,
+    drivers: list | None = None,
+    duration_s: float = 1.0,
+    dt_s: float = 1.0 / 240.0,
+    gravity: list | None = None,
+    obstacles: list | None = None,
+    base: dict | None = None,
+    loop_closures: list | None = None,
+) -> dict:
+    """Simulate a rigid-link mechanism's DYNAMICS with PyBullet, asynchronously (the
+    MBD family; requires the `mbd` extra — `pip install 'driftpin[mbd]'`). Use
+    mechanism_kinematics first for the exact closed-form gates (DOF, Grashof, stroke).
+
+    `links` is a tree: [{name, box_mm:[lx,ly,lz], mass_g, parent (link index, −1 =
+    fixed base), joint_type ('revolute'|'prismatic'|'fixed'), joint_axis:[x,y,z],
+    joint_at_mm:[x,y,z] (in the parent frame), com_mm:[x,y,z]}]. `drivers`:
+    [{link, rate_dps}] (revolute) or [{link, rate_mm_s}] (prismatic). Optional
+    `obstacles` ([{box_mm, at_mm}]) for through-motion contact, `base`, `gravity`
+    (m/s², default [0,0,−9.81]), `dt_s`, `duration_s`.
+
+    Returns immediately. If PyBullet is absent: {ok:false, reason, install,
+    mobility_dof, n_links}. Otherwise {job_id, status, cache_hit, mobility_dof}; poll
+    job_result(job_id) for {trajectories, max_torques, collisions_through_motion (with
+    the sim time of each contact), reachable_envelope {bbox_mm}, mobility_dof}."""
+    params = {"links": links, "duration_s": duration_s, "dt_s": dt_s}
+    for k, v in (("drivers", drivers), ("gravity", gravity), ("obstacles", obstacles),
+                 ("base", base), ("loop_closures", loop_closures)):
+        if v is not None:
+            params[k] = v
+    return _call("mechanism_simulate_submit", **params)
+
+
+@mcp.tool()
 def async_demo_submit(duration_s: float = 0.5, value: float = 1.0) -> dict:
     """Reference async long-solve: launch a job that runs OFF the MCP channel and
     return immediately, so a multi-minute solve never blocks the worker. (This demo

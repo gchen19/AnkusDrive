@@ -155,7 +155,7 @@ M0  Provisioning glue   ✅ solve_capabilities · _require_solver · install-sol
                              skeleton · driftpin[mbd|cfd|topology|optics] extras ·
                              the degradation contract + its CI test (solver absent)
 M1  Structural (no new dep)   random_vibration (Miles) ✅ · contact_setup ⬜
-M2  MBD                       mechanism_simulate_submit (PyBullet) — first external family
+M2  MBD                ✅ mechanism_simulate_submit (PyBullet) + mechanism_kinematics
 M3  Topology                  topology_optimize_submit — returns geometry
 M4  Transient thermal         thermal_transient_submit (Elmer)
 M5  CFD                       cfd_internal_flow_submit / cfd_external_flow_submit (OpenFOAM)
@@ -170,6 +170,18 @@ M5  CFD                       cfd_internal_flow_submit / cfd_external_flow_submi
 > `random_vibration` landed — [`driftpin/analysis/vibration.py`](../driftpin/analysis/vibration.py)
 > + [`tests/test_vibration.py`](../tests/test_vibration.py) (Miles toy: f_n=312 Hz,
 > W=0.01, Q=10 → 7.0 g). Still open: `contact_setup`, then M2–M5.
+>
+> **Status (branch `feat/sim-p2-mbd`, stacked on the above):** M2 landed — the first
+> external family, proving the M0 provisioning glue end-to-end.
+> [`driftpin/analysis/kinematics.py`](../driftpin/analysis/kinematics.py) is the
+> closed-form, solver-free gate (Grübler DOF, Grashof, slider-crank stroke = 2R,
+> four-bar sweep) behind the `mechanism_kinematics` tool;
+> [`driftpin/analysis/mbd.py`](../driftpin/analysis/mbd.py) is the PyBullet executor
+> behind `mechanism_simulate_submit` (async via `jobs.py`, `_require_solver('pybullet')`
+> degradation). Toys: [`tests/test_kinematics.py`](../tests/test_kinematics.py) (exact,
+> fast lane) + [`tests/test_mbd.py`](../tests/test_mbd.py) (pendulum torque = m·g·L/2,
+> swept envelope, through-motion contact; skips when PyBullet is absent). Still open:
+> `contact_setup` (M1), then M3–M5.
 
 Each Mn is a vertical slice in the established pattern: a module/handler/tool, the
 `*_submit` wired through `jobs.py`, a graceful-degradation path, and the two-sided
