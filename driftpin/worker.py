@@ -7544,14 +7544,109 @@ def _h_cfd_internal_flow_submit(p):
         "validation case")
 
 
+def _cfd_flat_plate_submit(p):
+    """Build the 2-D laminar flat-plate case, run blockMesh+simpleFoam and integrate
+    the wall-shear drag — the kickoff's external-flow Blasius gate. Degrades cleanly
+    when OpenFOAM is absent. Returns the solved drag/Cd next to the analytic
+    `flat_plate_drag` (Blasius Cf=1.328/√Re_L) reference; the solve runs OFF the MCP
+    channel and never touches FreeCAD. Drag is read straight from the converged U field
+    (OpenFOAM force function objects abort with a 'sha1' IOstream error in this build)."""
+    info = _require_solver("openfoam")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    from driftpin import jobs, solvers
+    from driftpin.analysis import cfd as _cfd
+
+    velocity = p.get("velocity_m_s")
+    if velocity is None:
+        raise ValueError("provide velocity_m_s to build the flat-plate validation case")
+    velocity = float(velocity)
+    plate_length_mm = float(p.get("plate_length_mm", 100.0))
+    L = plate_length_mm / 1000.0
+    mu, rho = _cfd._fluid_props(p.get("fluid", "air-20c"),
+                                p.get("mu_pa_s"), p.get("rho_kg_m3"))
+    nu = mu / rho
+    thickness_m = 0.002
+    nx_plate = int(p.get("nx_plate", 160))
+    n_y = int(p.get("n_y", 140))
+    grading_y = float(p.get("grading_y", 3000.0))
+    height_m = float(p.get("height_m", 1.5))
+    end_time = int(p.get("end_time", 3000))
+
+    bl = _cfd.flat_plate_drag(length_mm=plate_length_mm, velocity_m_s=velocity,
+                              width_mm=thickness_m * 1000.0, mu_pa_s=mu, rho_kg_m3=rho)
+    env_bashrc = solvers.openfoam_bashrc()
+    key = jobs.content_key("cfd_external_flow", {"plate": {
+        "L": L, "U": velocity, "nu": nu, "rho": rho, "nxp": nx_plate, "ny": n_y,
+        "gy": grading_y, "H": height_m, "et": end_time}})
+
+    def _work():
+        import tempfile
+        from driftpin.analysis import openfoam as _of
+        cdir = tempfile.mkdtemp(prefix="foam_plate_")
+        built = _of.write_flat_plate_case(
+            cdir, velocity_m_s=velocity, nu_m2_s=nu, plate_length_m=L,
+            thickness_m=thickness_m, nx_plate=nx_plate, n_y=n_y, grading_y=grading_y,
+            height_m=height_m, end_time=end_time)
+        rc, tail = _run_foam(cdir, [["blockMesh"], ["simpleFoam"]], env_bashrc)
+        out = {
+            "ok": rc == 0,
+            "returncode": rc,
+            "solver": "openfoam",
+            "kind": "external",
+            "body": "flat_plate",
+            "case_dir": cdir,
+            "reynolds_l": round(built["reynolds_l"], 3),
+            "laminar": bl["laminar"],
+            "cf_blasius": bl["cf_avg"],
+            "drag_blasius_n": round(bl["drag_force_n"], 9),
+            "stdout_tail": tail,
+        }
+        parsed = _of.parse_flat_plate_drag(
+            cdir, rho_kg_m3=rho, nu_m2_s=nu, velocity_m_s=velocity, plate_length_m=L,
+            thickness_m=thickness_m, nx_plate=nx_plate, nx_upstream=built["nx_upstream"],
+            n_y=n_y, grading_y=grading_y, height_m=height_m)
+        if parsed:
+            out["drag_force_n"] = round(parsed["drag_force_n"], 9)
+            out["drag_momentum_n"] = round(parsed["drag_momentum_n"], 9)
+            out["cd"] = round(parsed["cd"], 6)
+            out["cf_solved"] = round(parsed["cf_solved"], 6)
+            out["n_cells"] = parsed["n_cells"]
+            if bl["cf_avg"] > 0:
+                out["blasius_ratio"] = round(parsed["cf_solved"] / bl["cf_avg"], 4)
+        return out
+
+    return jobs.submit("cfd_external_flow", _work, key=key,
+                       meta={"mode": "flat_plate", "plate_length_mm": plate_length_mm,
+                             "velocity_m_s": velocity})
+
+
 @handler("cfd_external_flow_submit")
 def _h_cfd_external_flow_submit(p):
-    """External-flow CFD (drag / lift) via OpenFOAM or SU2, OFF the MCP channel. Same
-    degradation + prepared-`case_dir` execution contract as cfd_internal_flow_submit
-    (the forces vs pressure-drop distinction lives in the case's functionObjects).
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
-    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
-    return _openfoam_submit(p, "external")
+    """External-flow CFD (drag) via OpenFOAM or SU2, OFF the MCP channel. Degrades to
+    {ok:false, reason, install} when no CFD solver resolves (never raises).
+
+    Two ways to drive it:
+      * **Build the flat-plate validation case** — pass `velocity_m_s` (and optionally
+        `plate_length_mm`, a `fluid` name or `mu_pa_s`+`rho_kg_m3`, mesh knobs). The
+        handler builds a 2-D laminar flat plate (clean leading edge: slip→plate→slip),
+        runs blockMesh+simpleFoam, integrates the wall-shear drag from the converged U
+        field, and returns the solved Cd next to the Blasius reference Cf=1.328/√Re_L —
+        the kickoff's external gate (`blasius_ratio` ~ 1, within ~15%).
+      * **Run a prepared OpenFOAM `case_dir`** containing its own mesh + dictionaries.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. For
+    the flat-plate case: {ok, returncode, reynolds_l, cd, cf_solved, cf_blasius,
+    blasius_ratio, drag_force_n, drag_momentum_n, drag_blasius_n, n_cells, case_dir}.
+    For a prepared case: {ok, returncode, solver, application, case_dir, kind,
+    stdout_tail}."""
+    if p.get("case_dir"):
+        return _openfoam_submit(p, "external")
+    if p.get("velocity_m_s") is not None:
+        return _cfd_flat_plate_submit(p)
+    raise ValueError(
+        "provide a prepared `case_dir`, or the flat-plate params (velocity_m_s, and "
+        "optionally plate_length_mm/fluid) to build the Blasius validation case")
 
 
 # --- generic async jobs (driftpin.jobs) ---------------------------------------

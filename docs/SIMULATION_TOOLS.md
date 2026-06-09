@@ -182,19 +182,34 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - `topology_optimize` *returns geometry*, not just numbers — the one family here
   that closes the loop back into the modeller.
 
-### 6. Fluids / CFD
+### 6. Fluids / CFD  ✅ shipped (P2 M5 internal; P3 M3 external)
 
 - **Answers:** "What's the pressure drop through this manifold? Drag on this housing?"
-- **Backend:** OpenFOAM (via CfdOF or directly) / SU2; Elmer for light cases.
-  **Weight: heavy** (large install, long solves) — **later phase.**
-- **Signatures:**
+- **Backend:** OpenFOAM (`blockMesh`+`simpleFoam`, laminar) / SU2; the exact analytic
+  oracles are pure-Python in [`analysis/cfd.py`](../driftpin/analysis/cfd.py).
+- **Signatures (implemented):**
   ```
-  cfd_internal_flow(model, inlet={flow_or_pressure}, outlet, fluid)
-    -> {pressure_drop_pa, flow_rate, recirculation_zones}
-  cfd_external_flow(model, velocity, fluid)
-    -> {drag_n, lift_n, cd, cl}
+  cfd_pipe_flow(diameter_mm, length_mm, flow_rate_lpm|velocity_m_s, fluid)  # Hagen–Poiseuille oracle
+  cfd_internal_flow_submit(diameter_mm,length_mm,…|case_dir)  # OpenFOAM pipe, async
+    -> {ok, reynolds, pressure_drop_pa, hagen_poiseuille_pa, hp_ratio (≈1), …}
+  cfd_external_flow_submit(velocity_m_s, plate_length_mm, fluid, …|case_dir)  # OpenFOAM flat plate, async
+    -> {ok:false, reason, install}                            # when no CFD solver resolves
+     | {job_id, status, cache_hit}  # poll job_result for {ok, reynolds_l, cd, cf_solved,
+       cf_blasius, blasius_ratio (≈1, ~15%), drag_force_n, drag_momentum_n, n_cells}
   ```
-- Gated on the async/long-solve work (below) — a CFD run can't block the MCP channel.
+- **External-flow oracles** (`analysis/cfd.py`): **Stokes sphere** Cd = 24/Re,
+  F = 6πμUR (exact at Re≪1) and the **laminar flat plate** (Blasius
+  Cf = 1.328/√Re_L). The external builder (P3 M3) builds a 2-D flat plate with a clean
+  leading edge (slip→plate→slip, far-field top), runs simpleFoam, and integrates the
+  **wall-shear drag straight from the converged U field** — OpenFOAM's force /
+  wallShearStress function objects abort with a `sha1` IOstream error in this build, so
+  drag is read from fields (τ_w ≈ μ·u₁/y₁ over the plate; trailing-edge momentum
+  thickness as a cross-check), gating Cd vs Blasius within ~15% (it lands ~9% high and
+  converges with Re). Acceptance: **Example F** + `external.png`; oracle gates in
+  `tests/test_cfd.py`, the simpleFoam gate (Blasius + U^1.5 law) in
+  `tests/test_openfoam.py`.
+- Long solves run async via [`jobs.py`](../driftpin/jobs.py) so a CFD run never blocks
+  the MCP channel.
 
 ### 7. Optics  ✅ shipped (P3 M1)
 

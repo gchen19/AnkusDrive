@@ -2974,19 +2974,40 @@ def cfd_internal_flow_submit(
 
 @mcp.tool()
 def cfd_external_flow_submit(
+    velocity_m_s: float | None = None,
+    plate_length_mm: float | None = None,
+    fluid: str = "air-20c",
+    mu_pa_s: float | None = None,
+    rho_kg_m3: float | None = None,
     case_dir: str | None = None,
     application: str | None = None,
     model: str | None = None,
+    nx_plate: int = 160,
+    n_y: int = 140,
+    end_time: int = 3000,
 ) -> dict:
-    """External-flow CFD (drag / lift) via OpenFOAM or SU2, asynchronous. Same contract
-    as cfd_internal_flow_submit: degrades to {ok:false, reason, install} when no CFD
-    solver resolves, else runs the solver app in a prepared `case_dir` in the background
-    (forces vs pressure-drop extraction lives in the case's functionObjects).
+    """External-flow CFD (drag) via OpenFOAM or SU2, asynchronous. Requires an OpenFOAM
+    (apt/conda) or SU2 binary; when none resolves this returns {ok:false, reason,
+    install} rather than raising. Two modes:
 
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    - **Build the flat-plate validation case** (no case prep): pass `velocity_m_s`, with
+      optional `plate_length_mm` (default 100), a `fluid` name ('air-20c','water-20c',…)
+      or explicit `mu_pa_s`+`rho_kg_m3`, and mesh knobs `nx_plate`/`n_y`/`end_time`. The
+      handler builds a 2-D laminar flat plate with a clean leading edge (slip→plate→slip,
+      far-field top), runs blockMesh+simpleFoam, integrates the wall-shear drag straight
+      from the converged U field (OpenFOAM's force function objects abort with a 'sha1'
+      IOstream error in this build), and returns the solved Cd next to the Blasius
+      reference Cf=1.328/√Re_L — the kickoff's external gate (`blasius_ratio`≈1, ~15%).
+    - **Run a prepared OpenFOAM `case_dir`** (optionally an `application`).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Flat
+    plate: {ok, returncode, reynolds_l, cd, cf_solved, cf_blasius, blasius_ratio,
+    drag_force_n, drag_momentum_n, drag_blasius_n, n_cells, case_dir}. Prepared case:
     {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
-    params = {}
-    for k, v in (("case_dir", case_dir), ("application", application), ("model", model)):
+    params = {"fluid": fluid, "nx_plate": nx_plate, "n_y": n_y, "end_time": end_time}
+    for k, v in (("velocity_m_s", velocity_m_s), ("plate_length_mm", plate_length_mm),
+                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3), ("case_dir", case_dir),
+                 ("application", application), ("model", model)):
         if v is not None:
             params[k] = v
     return _call("cfd_external_flow_submit", **params)

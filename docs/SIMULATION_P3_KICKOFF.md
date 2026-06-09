@@ -167,7 +167,10 @@ M2  Radiation thermal  ✅ thermal_radiation_submit (Elmer diffuse-gray enclosur
                        ViewFactors) vs the 2-plate σ(T⁴)/(1/ε₁+1/ε₂−1) exchange —
                        oracle_ratio ~0.998 (sym + asym ε); analysis/thermal.radiation_exchange
                        + analysis/elmer.write_radiation_plates_case. Example E + radiation.png.
-M3  CFD external   ⏳ cfd_external_flow_submit builder + Stokes/Blasius drag oracle
+M3  CFD external   ✅ cfd_external_flow_submit flat-plate builder (blockMesh+simpleFoam,
+                       clean LE) + Stokes/Blasius drag oracle (analysis/cfd.py). Drag
+                       read from the U field (force function objects abort 'sha1' here);
+                       blasius_ratio ~1.09 (within 15%) + U^1.5 law. Example F + external.png.
 M4  Geometry bridge ⏳ FreeCAD solid → Gmsh/ElmerGrid (Elmer) · STL/snappyHexMesh
                        (OpenFOAM); relative gate: meshed-from-FreeCAD == parametric
 M5  3-D topology   ⏳ 3-D SIMP + real load cases/keep-outs → topology_to_solid (3-D)

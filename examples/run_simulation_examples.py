@@ -28,6 +28,11 @@ Four examples, each a kickoff gate:
     plates and runs **ElmerSolver + ViewFactors** (diffuse-gray enclosure radiation);
     the net flux must match the exact two infinite parallel plates exchange
     q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) within 2%, for symmetric and asymmetric emissivities.
+  * **F — external CFD** (§M3): ``cfd_external_flow_submit`` builds a 2-D laminar flat
+    plate and runs **blockMesh + simpleFoam**; the wall-shear drag (read straight from
+    the U field — OpenFOAM's force function objects abort on this build) must match the
+    Blasius friction coefficient Cf=1.328/√Re_L within 15%, and the drag must follow
+    the U^1.5 law.
 
 Each example **degrades gracefully**: a missing solver (ElmerSolver / OpenFOAM) or a
 worker that lacks NumPy is reported as SKIP, not a failure, so the script is safe to
@@ -225,6 +230,35 @@ def example_radiation(w, log):
         f"oracle_ratio {asym.get('oracle_ratio')}")
     log(f"  GATE both oracle_ratios within 2%: {'PASS' if sigma_ok and asym_ok else 'FAIL'}")
     return sigma_ok and asym_ok
+
+
+def example_external(w, log):
+    """§M3 — OpenFOAM flat plate vs Blasius friction drag, plus the U^1.5 scaling."""
+    log("### Example F — cfd_external_flow_submit (blockMesh+simpleFoam) vs Blasius drag  (§M3)")
+    sub = w.call("cfd_external_flow_submit", velocity_m_s=1.5, plate_length_mm=100,
+                 fluid="air-20c")
+    if not _submitted(sub):
+        log(f"  SKIP — OpenFOAM not installed ({sub.get('install', '')})")
+        return None
+    res = _poll(w, sub["job_id"])["result"]
+    if not res.get("ok") or res.get("blasius_ratio") is None:
+        log(f"  FAIL — solve did not produce a drag: {str(res)[:200]}")
+        return False
+    log(f"- flat plate L=100 mm, U=1.5 m/s air → Re_L {res['reynolds_l']} "
+        f"({'laminar' if res['laminar'] else 'turbulent'}), {res['n_cells']} cells")
+    log(f"- simpleFoam wall-shear drag: Cd {res['cf_solved']} (drag {res['drag_force_n']:.3e} N, "
+        f"momentum-deficit cross-check {res['drag_momentum_n']:.3e} N)")
+    log(f"- Blasius Cf=1.328/√Re_L: {res['cf_blasius']} → blasius_ratio {res['blasius_ratio']}")
+    bl_ok = 0.85 <= res["blasius_ratio"] <= 1.15
+
+    # Blasius friction drag ∝ U^1.5 — a second solve at 2U must scale by 2^1.5.
+    hi = _poll(w, w.call("cfd_external_flow_submit", velocity_m_s=3.0,
+                         plate_length_mm=100, fluid="air-20c")["job_id"])["result"]
+    scale = hi["drag_force_n"] / res["drag_force_n"]
+    scale_ok = abs(scale - 2.0 ** 1.5) / (2.0 ** 1.5) < 0.1
+    log(f"- U^1.5 law: drag(3 m/s)/drag(1.5 m/s) = {scale:.3f} (expect 2^1.5 = {2.0**1.5:.3f})")
+    log(f"  GATE blasius_ratio within 15% and U^1.5 scaling: {'PASS' if bl_ok and scale_ok else 'FAIL'}")
+    return bl_ok and scale_ok
 
 
 # --- figures (--plots) --------------------------------------------------------
@@ -529,8 +563,55 @@ def _plot_radiation(outdir):
     return True
 
 
+def _plot_external(outdir):
+    """Panel F: solved flat-plate Cd over a Reynolds sweep on the Blasius
+    Cf=1.328/√Re_L line. Needs OpenFOAM; returns False (skip) when absent."""
+    from driftpin import solvers
+    if not solvers.is_available("openfoam"):
+        return False
+    import math as _m
+    import subprocess
+    import tempfile
+    import matplotlib.pyplot as plt
+    from driftpin.analysis import cfd, openfoam
+    nu, rho, L = 1.5e-5, 1.2, 0.1
+    bashrc = solvers.openfoam_bashrc()
+    src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
+    Us = [0.75, 1.0, 1.5, 2.5, 4.0]
+    Re, cd_cfd, cf_blasius = [], [], []
+    for U in Us:
+        d = tempfile.mkdtemp(prefix="foam_plate_fig_")
+        built = openfoam.write_flat_plate_case(d, velocity_m_s=U, nu_m2_s=nu, plate_length_m=L)
+        subprocess.run(["bash", "-c", src + "blockMesh >bm 2>&1 && simpleFoam >sf 2>&1"],
+                       cwd=d, capture_output=True, text=True)
+        got = openfoam.parse_flat_plate_drag(
+            d, rho_kg_m3=rho, nu_m2_s=nu, velocity_m_s=U, plate_length_m=L,
+            thickness_m=built["thickness_m"], nx_plate=built["nx_plate"],
+            nx_upstream=built["nx_upstream"], n_y=built["n_y"],
+            grading_y=built["grading_y"], height_m=built["height_m"])
+        Re.append(built["reynolds_l"])
+        cd_cfd.append(got["cf_solved"] if got else float("nan"))
+        cf_blasius.append(cfd.flat_plate_drag(length_mm=L * 1000, velocity_m_s=U,
+                                              mu_pa_s=nu * rho, rho_kg_m3=rho)["cf_avg"])
+    fig, ax = plt.subplots(figsize=(7.2, 4.2))
+    Re_line = sorted(Re)
+    ax.plot(Re_line, [1.328 / _m.sqrt(r) for r in Re_line], "-", color="C2", lw=2,
+            label="Blasius  Cf = 1.328/√Re_L")
+    ax.plot(Re, cd_cfd, "o", color="C1", ms=8, label="simpleFoam (wall-shear Cd)")
+    ax.set_xlabel("plate Reynolds number  Re_L")
+    ax.set_ylabel("average skin-friction coefficient  C_f")
+    ax.set_title("Example F — OpenFOAM flat plate vs Blasius friction drag  (§M3)",
+                 weight="bold", fontsize=11)
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/external.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
 def make_plots(outdir):
-    """Generate the five result figures into ``outdir``; skip a panel when its solver
+    """Generate the six result figures into ``outdir``; skip a panel when its solver
     is absent. matplotlib is imported lazily so the gated run needs no plotting deps."""
     import os
     try:
@@ -548,6 +629,7 @@ def make_plots(outdir):
     print("  optics.png " + ("✓ (with rayoptics overlay)" if _plot_optics(outdir)
                              else "✓ (oracle only — rayoptics absent)"))
     print("  radiation.png " + ("✓" if _plot_radiation(outdir) else "SKIP (ElmerSolver absent)"))
+    print("  external.png " + ("✓" if _plot_external(outdir) else "SKIP (OpenFOAM absent)"))
 
 
 def main():
@@ -571,7 +653,8 @@ def main():
                          ("thermal", example_thermal),
                          ("cfd", example_cfd),
                          ("optics", example_optics),
-                         ("radiation", example_radiation)):
+                         ("radiation", example_radiation),
+                         ("external", example_external)):
             try:
                 results[name] = fn(w, log)
             except Exception as e:  # one example failing must not abort the rest
