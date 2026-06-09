@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "generated_from": "refractiveindex.info-database v2026-05-24",
+  "note": "Optical cards extracted by tools/extract_optical_corpus.py from the refractiveindex.info-database submodule (CC0). Merged field-wise onto seed.json by the materials loader. Regenerate after bumping the submodule tag.",
+  "materials": [
+    {
+      "name": "F2",
+      "category": "glass",
+      "refractive_index": "1.62004",
+      "dispersion_formula": "formula 2",
+      "dispersion_coefficients": [
+        0.0,
+        1.34533359,
+        0.00997743871,
+        0.209073176,
+        0.0470450767,
+        0.937357162,
+        111.886764
+      ],
+      "wavelength_range_um": "0.32 2.5",
+      "abbe_number": "36.37",
+      "Density": "3599 kg/m^3",
+      "cte": "8.2e-06 1/K",
+      "basis": "vendor",
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/F2.yml (CC0)"
+    },
+    {
+      "name": "Fused-Silica",
+      "category": "glass",
+      "refractive_index": "1.45846",
+      "dispersion_formula": "formula 1",
+      "dispersion_coefficients": [
+        0.0,
+        0.6961663,
+        0.0684043,
+        0.4079426,
+        0.1162414,
+        0.8974794,
+        9.896161
+      ],
+      "wavelength_range_um": "0.21 6.7",
+      "basis": "vendor",
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/main/SiO2/nk/Malitson.yml (CC0)"
+    },
+    {
+      "name": "N-BK7",
+      "category": "glass",
+      "refractive_index": "1.5168",
+      "dispersion_formula": "formula 2",
+      "dispersion_coefficients": [
+        0.0,
+        1.03961212,
+        0.00600069867,
+        0.231792344,
+        0.0200179144,
+        1.01046945,
+        103.560653
+      ],
+      "wavelength_range_um": "0.3 2.5",
+      "abbe_number": "64.17",
+      "Density": "2510 kg/m^3",
+      "cte": "7.1e-06 1/K",
+      "basis": "vendor",
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/N-BK7.yml (CC0)"
+    },
+    {
+      "name": "N-SF11",
+      "category": "glass",
+      "refractive_index": "1.78472",
+      "dispersion_formula": "formula 2",
+      "dispersion_coefficients": [
+        0.0,
+        1.73759695,
+        0.013188707,
+        0.313747346,
+        0.0623068142,
+        1.89878101,
+        155.23629
+      ],
+      "wavelength_range_um": "0.37 2.5",
+      "abbe_number": "25.68",
+      "Density": "3224 kg/m^3",
+      "cte": "8.52e-06 1/K",
+      "basis": "vendor",
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/N-SF11.yml (CC0)"
+    },
+    {
+      "name": "PMMA",
+      "category": "polymer",
+      "refractive_index": "1.49062",
+      "dispersion_formula": "formula 2",
+      "dispersion_coefficients": [
+        0.0,
+        1.1819,
+        0.011313
+      ],
+      "wavelength_range_um": "0.4368 1.052",
+      "basis": "vendor",
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C5H8O2)n - poly(methyl methacrylate)/nk/Sultanova.yml (CC0)"
+    },
+    {
+      "name": "Polycarbonate",
+      "category": "polymer",
+      "refractive_index": "1.58476",
+      "dispersion_formula": "formula 2",
+      "dispersion_coefficients": [
+        0.0,
+        1.4182,
+        0.021304
+      ],
+      "wavelength_range_um": "0.4368 1.052",
+      "basis": "vendor",
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C16H14O3)n - polycarbonate/nk/Sultanova.yml (CC0)"
+    },
+    {
+      "name": "Polystyrene",
+      "category": "polymer",
+      "refractive_index": "1.59163",
+      "dispersion_formula": "formula 2",
+      "dispersion_coefficients": [
+        0.0,
+        1.4435,
+        0.020216
+      ],
+      "wavelength_range_um": "0.4368 1.052",
+      "basis": "vendor",
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C8H8)n - polystyrene/nk/Sultanova.yml (CC0)"
+    }
+  ]
+}

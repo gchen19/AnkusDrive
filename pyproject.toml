@@ -84,4 +84,4 @@ include = ["driftpin*"]
 exclude = ["tests*", "scratch*", "example*", "docs*"]
 
 [tool.setuptools.package-data]
-driftpin = ["worker.py"]
+driftpin = ["worker.py", "analysis/materials/*.json"]
