@@ -157,6 +157,7 @@ M0  Provisioning glue   ✅ solve_capabilities · _require_solver · install-sol
 M1  Structural (no new dep)   random_vibration (Miles) ✅ · contact_setup ✅
 M2  MBD                ✅ mechanism_simulate_submit (PyBullet) + mechanism_kinematics
 M3  Topology           ✅ topology_optimize_submit (in-house SIMP) — returns geometry
+                          ✅ topology_to_solid — density field → fused FreeCAD solid
 M4  Transient thermal  ✅ thermal_transient_1d (analytic) + thermal_transient_submit (Elmer)
 M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,external}_flow_submit
 ```
@@ -195,6 +196,26 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 > degrade cleanly when the binary is absent (verified) and run only on the provisioned
 > runner. **The P2 tier (M0–M5) is complete; the heavy-solver case-from-FreeCAD export
 > and topology→solid reconstruction remain as follow-ons.**
+>
+> **Status (branch `feat/sim-p2-topo-solid`, stacked on the above):** the
+> topology→solid follow-on landed — `topology_to_solid` closes the loop back into
+> the modeller. The pure-Python core `density_to_rects`
+> ([`driftpin/analysis/topology.py`](../driftpin/analysis/topology.py)) thresholds a
+> `topology_optimize_submit` density grid and run-length-merges each row into maximal
+> solid spans (so the kernel fuses O(runs), not O(cells), boxes); the
+> `topology_to_solid` worker handler ([`driftpin/worker.py`](../driftpin/worker.py))
+> tiles each span as a `cell_mm`×`thickness_mm` box, `multiFuse`+`removeSplitter`s
+> them into one static `Part::Feature`, and reports `{volume, mass_fraction, n_solids,
+> bbox_mm, …}`. It runs **synchronously** (it builds geometry — unlike the `*_submit`
+> solves it does NOT touch `jobs.py`), the modeller-side counterpart to the async
+> optimizer. Toys: [`test_topology.py`](../tests/test_topology.py) gates
+> `density_to_rects` (run merging, thresholding, validation) on the fast lane;
+> [`test_worker.py`](../tests/test_worker.py) gates the live reconstruction
+> end-to-end (full grid cell-tiled exactly, a holed frame, a split-load-path two-solid
+> result, and the all-void-threshold clean error). Verified end-to-end: a real SIMP
+> run's density reconstructs to a valid solid whose thresholded mass fraction is
+> ≤ `keep_fraction` (the SIMULATION_EXAMPLES §5 geometric gate). **Only the
+> heavy-solver case-from-FreeCAD export (Elmer/OpenFOAM/SU2) now remains as a P2 follow-on.**
 
 Each Mn is a vertical slice in the established pattern: a module/handler/tool, the
 `*_submit` wired through `jobs.py`, a graceful-degradation path, and the two-sided
