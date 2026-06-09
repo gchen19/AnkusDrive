@@ -22,9 +22,12 @@ Each example **degrades gracefully**: a missing solver (ElmerSolver / OpenFOAM) 
 worker that lacks NumPy is reported as SKIP, not a failure, so the script is safe to
 run on any box. Exit status is non-zero only if a gate that actually ran FAILS.
 
-Run:  python3 examples/run_simulation_examples.py
-Needs: a working FreeCAD ``Worker`` (``freecadcmd``); ElmerSolver and OpenFOAM for B/C
-(``solve_capabilities`` reports what resolves) — see docs/SIMULATION_P2_KICKOFF.md.
+Run (gated examples, needs FreeCAD + the solvers):
+    python3 examples/run_simulation_examples.py
+
+Regenerate the result figures in ``examples/results/`` (needs matplotlib + the solvers,
+but NOT FreeCAD — the plots are built straight from the analysis modules):
+    python3 examples/run_simulation_examples.py --plots [OUTDIR]
 """
 import math
 import sys
@@ -141,7 +144,155 @@ def example_cfd(w, log):
     return hp_ok and d4_ok
 
 
+# --- figures (--plots) --------------------------------------------------------
+#
+# Built straight from the analysis modules (no FreeCAD worker), so they need only
+# matplotlib + NumPy + the relevant solver. Each panel mirrors one gated example.
+
+def _plot_topology(outdir):
+    """Panel A: the SIMP density field and the topology_to_solid reconstruction."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from driftpin.analysis import topology as topo
+    r = topo.simp_topology_2d(nelx=30, nely=10, keep_fraction=0.4, rmin=1.4, max_iter=22)
+    dec = topo.density_to_rects(r["density"], threshold=0.5)
+    nelx, nely = dec["nelx"], dec["nely"]
+    fig, axes = plt.subplots(2, 1, figsize=(7.2, 4.4))
+    axes[0].imshow(np.array(r["density"]), cmap="gray_r", origin="upper", aspect="equal", vmin=0, vmax=1)
+    axes[0].set_title(f"SIMP density field  (mass_fraction {r['mass_fraction']:.3f}, "
+                      f"compliance {r['compliance_initial']:.0f}→{r['compliance']:.0f})", fontsize=9)
+    axes[0].set_xticks([]); axes[0].set_yticks([])
+    for (i0, j, w_) in dec["rects"]:
+        axes[1].add_patch(plt.Rectangle((i0, j), w_, 1, facecolor="#1f4e79", edgecolor="none"))
+    axes[1].set_xlim(0, nelx); axes[1].set_ylim(0, nely); axes[1].invert_yaxis(); axes[1].set_aspect("equal")
+    recon = dec["solid_cells"] / (nelx * nely)
+    axes[1].set_title(f"topology_to_solid (threshold 0.5) → {len(dec['rects'])} fused boxes, "
+                      f"mass_fraction {recon:.3f} ≤ keep 0.4", fontsize=9)
+    axes[1].set_xticks([]); axes[1].set_yticks([])
+    fig.suptitle("Example A — topology optimize → topology_to_solid  (§5)", fontsize=11, weight="bold")
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/topology.png", dpi=130)
+    plt.close(fig)
+
+
+def _plot_thermal(outdir):
+    """Panel B: the Elmer slab cooling curves over the centre/surface Heisler lines."""
+    from driftpin import solvers
+    if not solvers.is_available("elmer"):
+        return False
+    import os
+    import subprocess
+    import tempfile
+    import matplotlib.pyplot as plt
+    from driftpin.analysis import elmer
+    L, k, rho, cp, h, ti, ta = 0.02, 15.0, 8000.0, 500.0, 375.0, 100.0, 25.0
+    alpha = k / (rho * cp)
+    dur, nsteps = 1.0 * L * L / alpha, 200
+    dt = dur / nsteps
+    d = tempfile.mkdtemp()
+    built = elmer.write_slab_transient_case(
+        d, half_thickness_m=L, k=k, rho=rho, cp=cp, h_conv=h, t_initial_c=ti,
+        t_ambient_c=ta, duration_s=dur, n_elements=40, n_steps=nsteps)
+    subprocess.run([solvers.find_solver("elmer")["path"], built["sif"]],
+                   cwd=d, capture_output=True, text=True)
+    rows = [ln.split() for ln in open(os.path.join(d, "scalars.dat")) if ln.strip()]
+    center = [float(c[0]) for c in rows]
+    surface = [float(c[1]) for c in rows]
+    t = [(i + 1) * dt for i in range(len(rows))]
+    fo = [alpha * tt / (L * L) for tt in t]
+    hc, hs = [], []
+    for tt in t:
+        o = thermal.thermal_transient_1d(half_thickness_mm=L * 1000, h_conv=h, duration_s=tt,
+                                         k=k, rho=rho, cp=cp, t_initial_c=ti, t_ambient_c=ta)
+        hc.append(o["t_center_c"]); hs.append(o["t_surface_c"])
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    ax.plot(fo, hc, "-", color="C0", lw=2, label="Heisler centre (analytic)")
+    ax.plot(fo, hs, "-", color="C3", lw=2, label="Heisler surface (analytic)")
+    ax.plot(fo[5::10], center[5::10], "o", color="C0", ms=5, mfc="white", label="ElmerSolver centre")
+    ax.plot(fo[5::10], surface[5::10], "s", color="C3", ms=5, mfc="white", label="ElmerSolver surface")
+    ax.axvline(0.2, ls=":", color="gray")
+    ax.text(0.205, 30, "one-term valid Fo≥0.2", fontsize=8, color="gray")
+    ax.set_xlabel("Fourier number  Fo = αt/L²")
+    ax.set_ylabel("Temperature (°C)")
+    ax.set_title("Example B — Elmer slab cooling vs Heisler oracle  (§4)", weight="bold", fontsize=11)
+    ax.legend(fontsize=9, loc="upper right")
+    ax.grid(True, ls=":", alpha=0.4)
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/elmer.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
+def _plot_cfd(outdir):
+    """Panel C: solved Δp over a diameter sweep on the Hagen–Poiseuille D⁻⁴ line."""
+    from driftpin import solvers
+    if not solvers.is_available("openfoam"):
+        return False
+    import math as _m
+    import subprocess
+    import tempfile
+    import matplotlib.pyplot as plt
+    from driftpin.analysis import cfd, openfoam
+    nu, rho = 1.0038e-6, 998.2
+    Q = 50.0 * nu * _m.pi * 0.010 / 4.0                # fixed flow; Re=50 at D=10mm
+    Ds = [4.0, 6.0, 8.0, 10.0, 12.0, 14.0]
+    bashrc = solvers.openfoam_bashrc()
+    dp_cfd, dp_hp = [], []
+    for Dmm in Ds:
+        D = Dmm / 1000.0
+        U = Q / (_m.pi * D * D / 4.0)
+        d = tempfile.mkdtemp()
+        openfoam.write_pipe_case(d, diameter_m=D, length_m=0.4, velocity_m_s=U,
+                                 nu_m2_s=nu, n_axial=80, n_radial=10, end_time=4000)
+        src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
+        subprocess.run(["bash", "-c", src + "blockMesh >log 2>&1 && simpleFoam >log2 2>&1"],
+                       cwd=d, capture_output=True, text=True)
+        parsed = openfoam.parse_pressure_drop(d, rho_kg_m3=rho)
+        dp_cfd.append(parsed["dp_developed_pa"] if parsed else float("nan"))
+        dp_hp.append(cfd.pipe_pressure_drop(diameter_mm=Dmm, length_mm=400.0, velocity_m_s=U,
+                                            mu_pa_s=nu * rho, rho_kg_m3=rho)["hagen_poiseuille_pa"])
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    ax.loglog(Ds, dp_hp, "-", color="C2", lw=2, label="Hagen–Poiseuille  Δp ∝ D⁻⁴")
+    ax.loglog(Ds, dp_cfd, "o", color="C1", ms=7, label="simpleFoam (developed Δp)")
+    ax.set_xlabel("pipe diameter  D (mm)")
+    ax.set_ylabel("pressure drop  Δp (Pa)")
+    ax.set_title("Example C — OpenFOAM pipe vs Hagen–Poiseuille, fixed flow  (§6)",
+                 weight="bold", fontsize=11)
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/openfoam.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
+def make_plots(outdir):
+    """Generate the three result figures into ``outdir``; skip a panel when its solver
+    is absent. matplotlib is imported lazily so the gated run needs no plotting deps."""
+    import os
+    try:
+        import matplotlib
+    except ImportError:
+        print("matplotlib is required for --plots: pip install matplotlib")
+        sys.exit(2)
+    matplotlib.use("Agg")
+    os.makedirs(outdir, exist_ok=True)
+    print(f"writing figures to {outdir}/ …")
+    _plot_topology(outdir)
+    print("  topology.png ✓")
+    print("  elmer.png " + ("✓" if _plot_thermal(outdir) else "SKIP (ElmerSolver absent)"))
+    print("  openfoam.png " + ("✓" if _plot_cfd(outdir) else "SKIP (OpenFOAM absent)"))
+
+
 def main():
+    args = sys.argv[1:]
+    if "--plots" in args:
+        i = args.index("--plots")
+        outdir = (args[i + 1] if i + 1 < len(args) and not args[i + 1].startswith("-")
+                  else str(Path(__file__).resolve().parent / "results"))
+        make_plots(outdir)
+        return
+
     lines = []
     def log(s=""):
         lines.append(s)
