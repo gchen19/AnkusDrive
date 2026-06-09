@@ -6740,6 +6740,45 @@ def _h_mechanism_simulate_submit(p):
     return res
 
 
+# --- topology optimization (family 5; in-house SIMP, no external solver) ------
+
+@handler("topology_optimize_submit")
+def _h_topology_optimize_submit(p):
+    """Minimum-compliance topology optimization (in-house NumPy SIMP — no external
+    solver), run OFF the MCP channel because each iteration solves an FE system.
+    Optimizes a 2-D rectangular design domain (nelx×nely unit cells) to the stiffest
+    layout subject to Σdensity = keep_fraction (held exactly by the OC update).
+    Default BCs: left edge clamped + unit downward load at the right-edge mid-height
+    (override `fixed_dofs` / `load`=[dof_index, value]).
+
+    Returns {job_id, status, cache_hit}; poll job_result for {density (nely×nelx grid
+    0..1 — this is geometry), mass_fraction, compliance, compliance_initial,
+    iterations, converged, gray_fraction}. Pure-Python background body (no FreeCAD)."""
+    from driftpin import jobs
+    from driftpin.analysis import topology as topo
+    nelx = int(p.get("nelx", 60))
+    nely = int(p.get("nely", 20))
+    keep_fraction = float(p.get("keep_fraction", 0.4))
+    penal = float(p.get("penal", 3.0))
+    rmin = float(p.get("rmin", 1.5))
+    max_iter = int(p.get("max_iter", 60))
+    tol = float(p.get("tol", 0.01))
+    load = p.get("load")
+    fixed_dofs = p.get("fixed_dofs")
+    key = jobs.content_key("topology_optimize", {
+        "nelx": nelx, "nely": nely, "keep_fraction": keep_fraction, "penal": penal,
+        "rmin": rmin, "max_iter": max_iter, "tol": tol, "load": load,
+        "fixed_dofs": fixed_dofs})
+
+    def _work():
+        return topo.simp_topology_2d(
+            nelx=nelx, nely=nely, keep_fraction=keep_fraction, penal=penal,
+            rmin=rmin, max_iter=max_iter, tol=tol, load=load, fixed_dofs=fixed_dofs)
+
+    return jobs.submit("topology_optimize", _work, key=key,
+                       meta={"nelx": nelx, "nely": nely, "keep_fraction": keep_fraction})
+
+
 # --- generic async jobs (driftpin.jobs) ---------------------------------------
 # A reusable submit/poll facility for long solves that must not block the MCP
 # channel. async_demo_submit is the reference implementation; job_status /

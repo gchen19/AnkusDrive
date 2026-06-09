@@ -2993,6 +2993,39 @@ def mechanism_simulate_submit(
 
 
 @mcp.tool()
+def topology_optimize_submit(
+    nelx: int = 60,
+    nely: int = 20,
+    keep_fraction: float = 0.4,
+    penal: float = 3.0,
+    rmin: float = 1.5,
+    max_iter: int = 60,
+    tol: float = 0.01,
+    load: list | None = None,
+    fixed_dofs: list | None = None,
+) -> dict:
+    """Minimum-compliance topology optimization (in-house SIMP; NO external solver),
+    asynchronous because each iteration solves an FE system. Optimizes a 2-D
+    rectangular design domain (`nelx`×`nely` unit cells) to the stiffest layout that
+    holds Σdensity = `keep_fraction` (the Optimality-Criteria update holds it exactly);
+    `penal` is the SIMP penalty (≈3), `rmin` the cone filter radius. Default BCs: left
+    edge clamped + unit downward load at the right-edge mid-height (override
+    `fixed_dofs` / `load`=[dof_index, value]).
+
+    Returns immediately {job_id, status, cache_hit}; poll job_result for {density
+    (nely×nelx grid 0..1 — this IS geometry), mass_fraction (==keep_fraction),
+    compliance, compliance_initial, iterations, converged, gray_fraction}. Threshold
+    + voxel→solid back in the modeller, then gate with mass_properties (mass ≤
+    keep_fraction·original) and interference_check vs keep-outs."""
+    params = {"nelx": nelx, "nely": nely, "keep_fraction": keep_fraction,
+              "penal": penal, "rmin": rmin, "max_iter": max_iter, "tol": tol}
+    for k, v in (("load", load), ("fixed_dofs", fixed_dofs)):
+        if v is not None:
+            params[k] = v
+    return _call("topology_optimize_submit", **params)
+
+
+@mcp.tool()
 def async_demo_submit(duration_s: float = 0.5, value: float = 1.0) -> dict:
     """Reference async long-solve: launch a job that runs OFF the MCP channel and
     return immediately, so a multi-minute solve never blocks the worker. (This demo
