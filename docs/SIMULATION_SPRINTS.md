@@ -25,13 +25,14 @@ negative is caught.
 | 1 · Tolerance & GD&T | ✅ **shipped** — `tolerance_stackup` / `fit_check` / `fit_class` / `gdt_check`, 13 hand-verified toys (Sprint 1) |
 | 3 · Wear / fatigue / fracture | ✅ **shipped** — `fatigue_check` / `fracture_check` / `wear_estimate` / `creep_flag`, 9 hand-verified toys (Sprint 2) |
 | 4 · Thermal (lumped) | ✅ **shipped** — `thermal_lumped` (RC transient + radiation screen), 5 hand-verified toys (Sprint 3) |
-| 9 · Design for X | 📋 specced + toys — not built |
+| 9 · Design for X | ✅ **shipped (v1 explicit-input)** — `dfm_check` / `dfa_check` / `pack_check` / `cost_estimate` / `slice_estimate`, 21 hand-verified toys (Sprints 3–4) |
 | 7 · Optics | 📋 specced; optical **corpus already shipped** with family 2 |
 | 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | 📋 specced — gated on async-solve infra |
 
 Pure-Python `analysis/` is FreeCAD-free and standalone-testable; that extension
-point is proven by families 1, 2, 3 and 10. The remaining P0 families slot into
-the same shape with zero new dependencies.
+point is proven by families 1, 2, 3, 4-lumped, 9 and 10 — **82 two-sided toys**
+across nine suites. The remaining work (async infra, external solvers) is a
+different shape, not more of the same.
 
 ---
 
@@ -89,18 +90,20 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   for static overload, past-critical-crack, and missing material data). Strengths,
   endurance, toughness and service temp read from the Materials DB with overrides.
 
-### Sprint 3 — Lumped thermal + Design-for-X heuristics 🟡 partial
+### Sprint 3 — Lumped thermal + Design-for-X heuristics ✅ shipped
 - **Goal:** "How hot after 5 min? Grade this part for its process and cost."
-- **Tools:** `thermal_lumped` ✅ shipped · `dfm_check` · `dfa_check` · `pack_check` ·
-  `cost_estimate` (remaining).
-- **Status:** the pure-Python, closed-form member — **`thermal_lumped`** — shipped
-  in `driftpin/analysis/thermal.py` with 5 toys (`tests/test_thermal.py`). The DfX
-  members are deferred because they are a different shape: `dfm_check` / `dfa_check`
-  / `pack_check` *read geometry* (faces, draft, the assembly graph, bbox) so they
-  run worker-side and need FreeCAD fixtures rather than the pure-Python toy harness;
-  `cost_estimate`'s only exact anchor is `material_cost = volume × density × price`
-  (the process/tooling model is heuristic, partly P1). Best tackled as a dedicated
-  geometry-fixture sprint.
+- **Tools:** `thermal_lumped` · `dfm_check` · `dfa_check` · `pack_check` ·
+  `cost_estimate` — all shipped.
+- **Status:** `thermal_lumped` in `analysis/thermal.py` (5 toys); `dfm_check` /
+  `dfa_check` / `pack_check` in `analysis/dfx.py` and `cost_estimate` in
+  `analysis/cost.py` (15 toys total) built in parallel. **Design decision:** the DfX
+  checks ship as **v1 explicit-input** functions — `dfm_check` takes pre-computed
+  face draft angles, `pack_check`/`cost_estimate` take a bbox/volume — exactly as
+  `tolerance.py` takes an explicit chain. This keeps them in the FreeCAD-free toy
+  harness; reading those summaries off a `Shape` (via `draft`/`thickness`/
+  `query_faces`/`mass_properties`) is the v2 wiring. `cost_estimate`'s
+  `material_cost = volume·density·price` is exact; its process/tooling model is a
+  documented heuristic.
 - **Backend / deps:** pure-Python. None new.
 - **Reuses:** existing `draft`, `thickness`, `query_faces`, `interference_check`,
   `mass_properties`, `envelope_check` + Materials DB price/density.
@@ -114,15 +117,19 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
 
 ## P1 — one external CLI each, bounded runtime
 
-### Sprint 4 — Slicer estimate
-- **Tools:** `slice_estimate(model, profile, material)` → print time, support volume,
-  layers, filament mass.
-- **Backend / deps:** PrusaSlicer / OrcaSlicer / CuraEngine CLI on exported STL,
-  behind an optional extra; **degrade gracefully** when the CLI is absent.
-- **Acceptance:** `filament_g == mass_g` for a solid 100%-infill print
-  (density·volume); drops ~proportionally at 20% infill; print time rises
-  draft→standard→fine. **Negative:** missing CLI returns the
-  `{ok:false, reason:"solver not installed"}` dict, not a stack trace.
+### Sprint 4 — Slicer estimate 🟡 first-order shipped
+- **Tools:** `slice_estimate(volume_mm3, bbox_mm, material, infill_fraction,
+  layer_height_mm, …)` → mass, filament, deposited volume, layer count, print time.
+- **Status:** the **analytic first-order estimator** shipped in
+  `analysis/slicing.py` (6 toys, `tests/test_slicing.py`) — `filament_g == mass_g`
+  at 100% infill, `layer_count = ceil(height/layer_height)`, print time from nozzle
+  volumetric flow. The **external-CLI upgrade** (PrusaSlicer/OrcaSlicer on an
+  exported STL, behind an optional extra with graceful degradation — adding real
+  supports, travel/accel, per-feature speeds) is still pending.
+- **Acceptance (met):** `filament_g == mass_g` for a solid 100%-infill print;
+  strictly less filament at 20% infill; finer layer height → more layers + longer
+  print. **CLI-upgrade negative (pending):** missing CLI returns
+  `{ok:false, reason:"slicer not installed"}`, not a stack trace.
 
 ### Sprint 5 — Optics
 - **Tools:** `optics_raytrace(model, source_config, n_refractive, n_rays)` ·

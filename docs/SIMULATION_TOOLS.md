@@ -249,6 +249,16 @@ process. Several reuse existing DriftPin tools directly.
   cost_estimate(model, process, material, quantity)
     -> {material_cost, process_cost, unit_cost, breakdown}
   ```
+- **Status: shipped (P0, v1 explicit-input)** — `dfm_check` (draft/undercut/min-wall
+  from explicit face descriptors), `dfa_check` (Boothroyd-lite), `pack_check`
+  (carton fit + dimensional weight) in `driftpin/analysis/dfx.py`; `cost_estimate`
+  (exact `material_cost = volume·density·price` + a per-process machine-time model)
+  in `cost.py`; `slice_estimate` (first-order FDM estimate; a PrusaSlicer/OrcaSlicer
+  CLI on STL is the P1 upgrade) in `slicing.py`. 21 two-sided toys across
+  `tests/test_dfx.py` / `test_cost.py` / `test_slicing.py`. v1 takes **explicit**
+  geometry summaries (face draft angles, bbox, volume) like `tolerance.py` takes an
+  explicit chain; reading those off a `Shape` (via `draft`/`thickness`/`query_faces`/
+  `mass_properties`) is the v2 wiring.
 
 ### 10. Machine-element rating  *(highest leverage on existing tools)*
 
@@ -351,11 +361,11 @@ immediately useful:
 1. **Tolerance / GD&T** (Appendix A) — validates the new `analysis/` extension point. *(shipped)*
 2. **Materials DB** — foundational; unblocks fatigue, fracture, cost. *(shipped)*
 3. **Wear / fatigue / fracture** — turns FEM stress into durability. *(shipped)*
-4. **DfM / DfA heuristics** + lumped thermal — grade against process, reuse existing tools.
+4. **DfM / DfA heuristics** + lumped thermal — grade against process, reuse existing tools. *(shipped: dfm/dfa/pack/cost + thermal_lumped)*
 5. **Machine-element rating** — closed-form life/SF on the existing `add_*` component tools. *(shipped: bolt, bearing, spring, gear, belt, press-fit, seal)*
 
 **P1 — external CLI, self-contained.** One new tool dependency each, bounded runtime:
-5. **Slicer estimate** (PrusaSlicer/OrcaSlicer CLI on STL).
+5. **Slicer estimate** (PrusaSlicer/OrcaSlicer CLI on STL). *(first-order analytic `slice_estimate` shipped; CLI upgrade pending)*
 6. **Optics** (wrap `~/diffuser`).
 7. **Cost** rollup (depends on Materials DB + a process-time model).
 

@@ -2737,6 +2737,112 @@ def thermal_lumped(
     return _call("thermal_lumped", **params)
 
 
+@mcp.tool()
+def dfm_check(
+    faces: list,
+    pull_axis: str = "+z",
+    process: str = "injection",
+    min_wall_mm: float | None = None,
+    min_draft_deg: float = 1.0,
+) -> dict:
+    """Screen a part for manufacturability against a pull/tool axis. `faces` is a
+    list of {name, draft_deg, wall_mm?} — draft_deg relative to pull_axis (0 = a
+    vertical wall needing draft; <0 = a re-entrant undercut). draft_violations are
+    0≤draft<min_draft_deg, undercut_faces are draft<0, min_wall_violations are
+    wall_mm<min_wall_mm (defaults by process: injection 1.0, cnc 0.5, sheet/fdm
+    0.8). Returns {process, pull_axis, min_wall_mm, draft_violations, undercut_faces,
+    min_wall_violations, score, pass}."""
+    params = {"faces": faces, "pull_axis": pull_axis, "process": process,
+              "min_draft_deg": min_draft_deg}
+    if min_wall_mm is not None:
+        params["min_wall_mm"] = min_wall_mm
+    return _call("dfm_check", **params)
+
+
+@mcp.tool()
+def dfa_check(
+    part_count: int,
+    fastener_count: int = 0,
+    unique_part_count: int | None = None,
+    insertion_axes: int = 1,
+    symmetric_fraction: float = 0.0,
+) -> dict:
+    """Grade an assembly (Boothroyd-Dewhurst-lite). assembly_efficiency =
+    theoretical_min/(part_count+fastener_count) (theoretical_min = unique_part_count
+    or 1); assembly_score scales that by a handling penalty from insertion_axes/
+    symmetry and decreases monotonically as part/fastener count rises. Returns
+    {part_count, fastener_count, insertion_axes, handling_difficulty,
+    assembly_efficiency, assembly_score, symmetry_score}."""
+    params = {"part_count": part_count, "fastener_count": fastener_count,
+              "insertion_axes": insertion_axes, "symmetric_fraction": symmetric_fraction}
+    if unique_part_count is not None:
+        params["unique_part_count"] = unique_part_count
+    return _call("dfa_check", **params)
+
+
+@mcp.tool()
+def pack_check(
+    part_bbox_mm: list,
+    carton_mm: list,
+    mass_g: float,
+    dim_factor: float = 5000.0,
+) -> dict:
+    """Check a part against a shipping carton + compute billable weight.
+    part_bbox_mm/carton_mm are [l,w,h] mm; `fits` allows reorientation (sorted-dim
+    compare). void_fraction = 1−vol(part)/vol(carton); dim_weight_kg =
+    vol(carton cm³)/dim_factor (default 5000 metric DIM); billable_weight_kg =
+    max(actual, dimensional). Returns {fits, void_fraction, dim_weight_kg,
+    actual_mass_kg, billable_weight_kg, pass}."""
+    return _call("pack_check", part_bbox_mm=part_bbox_mm, carton_mm=carton_mm,
+                 mass_g=mass_g, dim_factor=dim_factor)
+
+
+@mcp.tool()
+def cost_estimate(
+    volume_mm3: float,
+    material: str,
+    process: str = "cnc",
+    quantity: int = 1,
+    tooling_usd: float = 0.0,
+    machine_rate_usd_hr: float = 60.0,
+    setup_min: float = 10.0,
+    scrap_fraction: float = 0.0,
+) -> dict:
+    """Per-unit cost rollup (Design for Cost). material_cost = volume·density·price
+    ·(1+scrap) from the Materials DB (process: cnc | fdm | casting | injection).
+    process_cost = amortized setup + per-process machine time; tooling amortized
+    over quantity, so unit_cost falls as quantity rises. Returns {material_cost,
+    process_cost, tooling_amortized, unit_cost, mass_kg, breakdown}. Errors on an
+    unknown material/process or non-positive volume/quantity."""
+    return _call("cost_estimate", volume_mm3=volume_mm3, material=material,
+                 process=process, quantity=quantity, tooling_usd=tooling_usd,
+                 machine_rate_usd_hr=machine_rate_usd_hr, setup_min=setup_min,
+                 scrap_fraction=scrap_fraction)
+
+
+@mcp.tool()
+def slice_estimate(
+    volume_mm3: float,
+    bbox_mm: list,
+    material: str = "PLA",
+    infill_fraction: float = 1.0,
+    layer_height_mm: float = 0.2,
+    wall_fraction: float = 0.35,
+    print_speed_mm_s: float = 50.0,
+    nozzle_mm: float = 0.4,
+) -> dict:
+    """First-order FDM slice estimate (analytic; a real PrusaSlicer/OrcaSlicer CLI
+    is the P1 upgrade). mass_g = volume·density (Materials DB); deposited =
+    volume·(wall_fraction + infill·(1−wall_fraction)) so at 100% infill filament_g
+    == mass_g; layer_count = ceil(bbox height/layer_height); print_time from nozzle
+    volumetric flow. Returns {mass_g, filament_g, deposited_volume_mm3, layer_count,
+    print_time_min, infill_fraction}."""
+    return _call("slice_estimate", volume_mm3=volume_mm3, bbox_mm=bbox_mm,
+                 material=material, infill_fraction=infill_fraction,
+                 layer_height_mm=layer_height_mm, wall_fraction=wall_fraction,
+                 print_speed_mm_s=print_speed_mm_s, nozzle_mm=nozzle_mm)
+
+
 def run():
     mcp.run()
 

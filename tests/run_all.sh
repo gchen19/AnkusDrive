@@ -39,6 +39,18 @@ echo "== Lumped transient thermal toys (pure-Python; no FreeCAD) =="
 python3 tests/test_thermal.py
 
 echo
+echo "== Design-for-X toys (DfM/DfA/packaging; pure-Python; no FreeCAD) =="
+python3 tests/test_dfx.py
+
+echo
+echo "== Design-for-Cost toys (pure-Python; no FreeCAD) =="
+python3 tests/test_cost.py
+
+echo
+echo "== FDM slice-estimate toys (pure-Python; no FreeCAD) =="
+python3 tests/test_slicing.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

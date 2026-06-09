@@ -6456,6 +6456,36 @@ def _h_thermal_lumped(p):
     return thermal.thermal_lumped(**p)
 
 
+@handler("dfm_check")
+def _h_dfm_check(p):
+    from driftpin.analysis import dfx
+    return dfx.dfm_check(**p)
+
+
+@handler("dfa_check")
+def _h_dfa_check(p):
+    from driftpin.analysis import dfx
+    return dfx.dfa_check(**p)
+
+
+@handler("pack_check")
+def _h_pack_check(p):
+    from driftpin.analysis import dfx
+    return dfx.pack_check(**p)
+
+
+@handler("cost_estimate")
+def _h_cost_estimate(p):
+    from driftpin.analysis import cost
+    return cost.cost_estimate(**p)
+
+
+@handler("slice_estimate")
+def _h_slice_estimate(p):
+    from driftpin.analysis import slicing
+    return slicing.slice_estimate(**p)
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:
