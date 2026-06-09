@@ -2844,6 +2844,76 @@ def thermal_transient_submit(
 
 
 @mcp.tool()
+def cfd_pipe_flow(
+    diameter_mm: float,
+    length_mm: float,
+    flow_rate_lpm: float | None = None,
+    velocity_m_s: float | None = None,
+    fluid: str = "water-20c",
+    mu_pa_s: float | None = None,
+    rho_kg_m3: float | None = None,
+) -> dict:
+    """Analytic straight-pipe pressure drop (NO solver) — the fast internal-flow screen
+    and the exact gate the OpenFOAM cfd_internal_flow solve is checked against. Laminar
+    (Re<2300) is Hagen–Poiseuille Δp = 128·μ·L·Q/(π·D⁴) with its D⁴ scaling; turbulent
+    uses smooth-pipe Blasius. Give flow as `flow_rate_lpm` or `velocity_m_s`; fluid μ,ρ
+    from a name ('water-20c','air-20c','oil-sae30-20c','glycerin-20c') or explicit
+    `mu_pa_s`+`rho_kg_m3`.
+
+    Returns {reynolds, regime, velocity_m_s, flow_rate_m3_s, friction_factor,
+    pressure_drop_pa, wall_shear_pa, hagen_poiseuille_pa, laminar}."""
+    params = {"diameter_mm": diameter_mm, "length_mm": length_mm, "fluid": fluid}
+    for k, v in (("flow_rate_lpm", flow_rate_lpm), ("velocity_m_s", velocity_m_s),
+                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3)):
+        if v is not None:
+            params[k] = v
+    return _call("cfd_pipe_flow", **params)
+
+
+@mcp.tool()
+def cfd_internal_flow_submit(
+    case_dir: str | None = None,
+    application: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """Internal-flow CFD (pressure drop / recirculation) via OpenFOAM or SU2,
+    asynchronous (heavy solve runs on the provisioned runner). Requires an OpenFOAM
+    (apt/conda) or SU2 binary; when none resolves this returns {ok:false, reason,
+    install} rather than raising. Provide a prepared OpenFOAM `case_dir` (optionally an
+    `application` to run, e.g. 'simpleFoam'/'foamRun'); it runs the solver there in the
+    background. (The exact analytic screen with no solver is cfd_pipe_flow; building the
+    case from a FreeCAD `model` is a follow-on.)
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    params = {}
+    for k, v in (("case_dir", case_dir), ("application", application), ("model", model)):
+        if v is not None:
+            params[k] = v
+    return _call("cfd_internal_flow_submit", **params)
+
+
+@mcp.tool()
+def cfd_external_flow_submit(
+    case_dir: str | None = None,
+    application: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """External-flow CFD (drag / lift) via OpenFOAM or SU2, asynchronous. Same contract
+    as cfd_internal_flow_submit: degrades to {ok:false, reason, install} when no CFD
+    solver resolves, else runs the solver app in a prepared `case_dir` in the background
+    (forces vs pressure-drop extraction lives in the case's functionObjects).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    params = {}
+    for k, v in (("case_dir", case_dir), ("application", application), ("model", model)):
+        if v is not None:
+            params[k] = v
+    return _call("cfd_external_flow_submit", **params)
+
+
+@mcp.tool()
 def random_vibration(
     psd_profile: list,
     analysis: str | None = None,

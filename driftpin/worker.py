@@ -6586,6 +6586,18 @@ def _h_thermal_transient_1d(p):
     return thermal.thermal_transient_1d(**p)
 
 
+@handler("cfd_pipe_flow")
+def _h_cfd_pipe_flow(p):
+    """Analytic straight-pipe pressure drop (no solver) — Hagen–Poiseuille in the
+    laminar regime (the exact CFD gate) and Blasius for smooth turbulent. The fast
+    internal-flow screen and the oracle the OpenFOAM cfd_internal_flow solve is gated
+    against. See driftpin.analysis.cfd. Returns {reynolds, regime, velocity_m_s,
+    flow_rate_m3_s, friction_factor, pressure_drop_pa, wall_shear_pa,
+    hagen_poiseuille_pa, laminar}."""
+    from driftpin.analysis import cfd
+    return cfd.pipe_pressure_drop(**p)
+
+
 @handler("dfm_check")
 def _h_dfm_check(p):
     from driftpin.analysis import dfx
@@ -6851,6 +6863,75 @@ def _h_thermal_transient_submit(p):
 
     return jobs.submit("thermal_transient", _work, key=key,
                        meta={"case_dir": case_dir, "duration_s": p.get("duration_s")})
+
+
+# --- CFD (family 6 P2; OpenFOAM/SU2-backed) -----------------------------------
+
+def _openfoam_submit(p, kind):
+    """Shared OpenFOAM/SU2 runner for the cfd_*_flow_submit handlers. Degrades to the
+    structured dict when no CFD solver resolves; otherwise runs the solver app in a
+    prepared OpenFOAM `case_dir` as a background subprocess. ``kind`` ('internal' |
+    'external') only labels the job/meta — the parse is the same run summary, since
+    pressure-drop vs force extraction lives in the case's functionObjects."""
+    info = _require_solver("openfoam")
+    if not info["ok"]:
+        info_su2 = _require_solver("su2")             # SU2 is the documented alternative
+        if not info_su2["ok"]:
+            return info                               # report the primary solver's hint
+        info = info_su2
+    import shutil
+    from driftpin import jobs
+    case_dir = p.get("case_dir")
+    if not case_dir or not os.path.isdir(case_dir):
+        raise ValueError(
+            f"cfd_{kind}_flow_submit needs a prepared CFD `case_dir`. Building the "
+            "case from a FreeCAD model is a follow-on; the analytic internal-flow "
+            "screen with no solver is cfd_pipe_flow.")
+    # which application to run: explicit override, else the resolved binary
+    app = p.get("application") or os.path.basename(info["path"])
+    solver_bin = info["path"] if not p.get("application") else (shutil.which(app) or app)
+    key = jobs.content_key(f"cfd_{kind}_flow",
+                           {"case_dir": os.path.abspath(case_dir), "app": app})
+
+    def _work():
+        import subprocess
+        proc = subprocess.run([solver_bin], cwd=case_dir, capture_output=True, text=True)
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": info["name"],
+            "application": app,
+            "case_dir": case_dir,
+            "kind": kind,
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+
+    return jobs.submit(f"cfd_{kind}_flow", _work, key=key,
+                       meta={"case_dir": case_dir, "kind": kind, "application": app})
+
+
+@handler("cfd_internal_flow_submit")
+def _h_cfd_internal_flow_submit(p):
+    """Internal-flow CFD (pressure drop / recirculation) via OpenFOAM or SU2, OFF the
+    MCP channel. Degrades to {ok:false, reason, install} when no CFD solver resolves —
+    the locally-verified gate; the heavy solve runs only on the provisioned runner.
+    When present, runs the solver app in a prepared OpenFOAM `case_dir` in a background
+    subprocess. (The exact laminar oracle with no solver is cfd_pipe_flow;
+    FreeCAD-model→case meshing is a follow-on.)
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    return _openfoam_submit(p, "internal")
+
+
+@handler("cfd_external_flow_submit")
+def _h_cfd_external_flow_submit(p):
+    """External-flow CFD (drag / lift) via OpenFOAM or SU2, OFF the MCP channel. Same
+    degradation + prepared-`case_dir` execution contract as cfd_internal_flow_submit
+    (the forces vs pressure-drop distinction lives in the case's functionObjects).
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    return _openfoam_submit(p, "external")
 
 
 # --- generic async jobs (driftpin.jobs) ---------------------------------------

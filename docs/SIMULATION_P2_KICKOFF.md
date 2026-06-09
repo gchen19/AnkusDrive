@@ -154,11 +154,11 @@ solves + large install → last, fully behind `driftpin[cfd]` and the async path
 M0  Provisioning glue   ✅ solve_capabilities · _require_solver · install-solvers.sh
                              skeleton · driftpin[mbd|cfd|topology|optics] extras ·
                              the degradation contract + its CI test (solver absent)
-M1  Structural (no new dep)   random_vibration (Miles) ✅ · contact_setup ⬜
+M1  Structural (no new dep)   random_vibration (Miles) ✅ · contact_setup ✅
 M2  MBD                ✅ mechanism_simulate_submit (PyBullet) + mechanism_kinematics
-M3  Topology                  topology_optimize_submit — returns geometry
-M4  Transient thermal         thermal_transient_submit (Elmer)
-M5  CFD                       cfd_internal_flow_submit / cfd_external_flow_submit (OpenFOAM)
+M3  Topology           ✅ topology_optimize_submit (in-house SIMP) — returns geometry
+M4  Transient thermal  ✅ thermal_transient_1d (analytic) + thermal_transient_submit (Elmer)
+M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,external}_flow_submit
 ```
 
 > **Status (branch `feat/sim-p2-provisioning`):** M0 landed —
@@ -180,8 +180,21 @@ M5  CFD                       cfd_internal_flow_submit / cfd_external_flow_submi
 > behind `mechanism_simulate_submit` (async via `jobs.py`, `_require_solver('pybullet')`
 > degradation). Toys: [`tests/test_kinematics.py`](../tests/test_kinematics.py) (exact,
 > fast lane) + [`tests/test_mbd.py`](../tests/test_mbd.py) (pendulum torque = m·g·L/2,
-> swept envelope, through-motion contact; skips when PyBullet is absent). Still open:
-> `contact_setup` (M1), then M3–M5.
+> swept envelope, through-motion contact; skips when PyBullet is absent).
+>
+> **Status (branch `feat/sim-p2-remaining`, stacked on the above):** the rest of the
+> P2 tier landed — M1 `contact_setup` (CCX surface contact + nonlinear flag), M3
+> `topology_optimize_submit` (in-house NumPy SIMP — no new dep — in
+> [`driftpin/analysis/topology.py`](../driftpin/analysis/topology.py)), M4
+> `thermal_transient_1d` (analytic Heisler oracle) + `thermal_transient_submit`
+> (Elmer), M5 `cfd_pipe_flow` (Hagen–Poiseuille) + `cfd_{internal,external}_flow_submit`
+> (OpenFOAM/SU2). The pure-Python oracles (SIMP volume/compliance, 1-D transient vs
+> lumped, Hagen–Poiseuille + D⁴) are gated on the fast lane
+> ([`test_topology.py`](../tests/test_topology.py), [`test_cfd.py`](../tests/test_cfd.py),
+> [`test_thermal.py`](../tests/test_thermal.py)); the Elmer/OpenFOAM **execution** paths
+> degrade cleanly when the binary is absent (verified) and run only on the provisioned
+> runner. **The P2 tier (M0–M5) is complete; the heavy-solver case-from-FreeCAD export
+> and topology→solid reconstruction remain as follow-ons.**
 
 Each Mn is a vertical slice in the established pattern: a module/handler/tool, the
 `*_submit` wired through `jobs.py`, a graceful-degradation path, and the two-sided
