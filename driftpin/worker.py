@@ -6450,6 +6450,12 @@ def _h_creep_flag(p):
     return durability.creep_flag(**p)
 
 
+@handler("thermal_lumped")
+def _h_thermal_lumped(p):
+    from driftpin.analysis import thermal
+    return thermal.thermal_lumped(**p)
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:

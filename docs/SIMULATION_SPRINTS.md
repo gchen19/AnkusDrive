@@ -24,7 +24,7 @@ negative is caught.
 | 10 · Machine-element rating | ✅ **shipped** — bolt / bearing / spring / gear / belt / press-fit / seal, 12 hand-verified toys |
 | 1 · Tolerance & GD&T | ✅ **shipped** — `tolerance_stackup` / `fit_check` / `fit_class` / `gdt_check`, 13 hand-verified toys (Sprint 1) |
 | 3 · Wear / fatigue / fracture | ✅ **shipped** — `fatigue_check` / `fracture_check` / `wear_estimate` / `creep_flag`, 9 hand-verified toys (Sprint 2) |
-| 4 · Thermal (lumped) | 📋 specced + toys — not built |
+| 4 · Thermal (lumped) | ✅ **shipped** — `thermal_lumped` (RC transient + radiation screen), 5 hand-verified toys (Sprint 3) |
 | 9 · Design for X | 📋 specced + toys — not built |
 | 7 · Optics | 📋 specced; optical **corpus already shipped** with family 2 |
 | 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | 📋 specced — gated on async-solve infra |
@@ -89,10 +89,18 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   for static overload, past-critical-crack, and missing material data). Strengths,
   endurance, toughness and service temp read from the Materials DB with overrides.
 
-### Sprint 3 — Lumped thermal + Design-for-X heuristics
+### Sprint 3 — Lumped thermal + Design-for-X heuristics 🟡 partial
 - **Goal:** "How hot after 5 min? Grade this part for its process and cost."
-- **Tools:** `thermal_lumped` · `dfm_check` · `dfa_check` · `pack_check` ·
-  `cost_estimate`.
+- **Tools:** `thermal_lumped` ✅ shipped · `dfm_check` · `dfa_check` · `pack_check` ·
+  `cost_estimate` (remaining).
+- **Status:** the pure-Python, closed-form member — **`thermal_lumped`** — shipped
+  in `driftpin/analysis/thermal.py` with 5 toys (`tests/test_thermal.py`). The DfX
+  members are deferred because they are a different shape: `dfm_check` / `dfa_check`
+  / `pack_check` *read geometry* (faces, draft, the assembly graph, bbox) so they
+  run worker-side and need FreeCAD fixtures rather than the pure-Python toy harness;
+  `cost_estimate`'s only exact anchor is `material_cost = volume × density × price`
+  (the process/tooling model is heuristic, partly P1). Best tackled as a dedicated
+  geometry-fixture sprint.
 - **Backend / deps:** pure-Python. None new.
 - **Reuses:** existing `draft`, `thickness`, `query_faces`, `interference_check`,
   `mass_properties`, `envelope_check` + Materials DB price/density.

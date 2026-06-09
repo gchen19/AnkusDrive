@@ -35,6 +35,10 @@ echo "== Wear / fatigue / fracture toys (pure-Python; no FreeCAD) =="
 python3 tests/test_durability.py
 
 echo
+echo "== Lumped transient thermal toys (pure-Python; no FreeCAD) =="
+python3 tests/test_thermal.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

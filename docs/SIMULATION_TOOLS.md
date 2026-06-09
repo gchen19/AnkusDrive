@@ -151,6 +151,11 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - CCX already covers steady-state conduction via `fem_thermal_results`; this fills
   the *time* and *radiation* gaps. Lumped version ships in the pure-Python wave.
+- **Status: lumped shipped (P0)** in `driftpin/analysis/thermal.py` —
+  `thermal_lumped` (first-order RC: ΔT_ss, τ, T(t), plus an h_rad-vs-h_conv
+  radiation screen), 5 two-sided toys in `tests/test_thermal.py` (τ=450 s,
+  T(300 s)=55.4 °C against the exact exponential). `thermal_transient` /
+  `thermal_radiation` (Elmer/CFD-backed) stay P2.
 
 ### 5. Structural extensions
 

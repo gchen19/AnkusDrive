@@ -2707,6 +2707,34 @@ def creep_flag(
     return _call("creep_flag", **params)
 
 
+@mcp.tool()
+def thermal_lumped(
+    mass_g: float,
+    power_w: float,
+    h_conv: float,
+    area_mm2: float,
+    c_p: str | float | None = None,
+    material: str | None = None,
+    t_ambient_c: float = 25.0,
+    duration_s: float | None = None,
+    emissivity: float = 0.8,
+) -> dict:
+    """Lumped first-order transient warm-up (no mesh). ΔT_ss = P/(h·A),
+    τ = m·c_p/(h·A), T(t) = T_amb + ΔT_ss·(1−e^(−t/τ)). c_p is an explicit
+    value/quantity-string ('900 J/kg/K') or read from `material`. With duration_s
+    the temperature + fraction-of-steady reached are returned. A radiation screen
+    flags when the steady-state radiative HTC exceeds h_conv. Returns
+    {t_ambient_c, delta_t_steady_k, t_steady_c, time_constant_s, t_final_c,
+    reached_steady_pct, h_rad_w_m2k, radiation_significant}."""
+    params = {"mass_g": mass_g, "power_w": power_w, "h_conv": h_conv,
+              "area_mm2": area_mm2, "t_ambient_c": t_ambient_c,
+              "emissivity": emissivity}
+    for k, v in (("c_p", c_p), ("material", material), ("duration_s", duration_s)):
+        if v is not None:
+            params[k] = v
+    return _call("thermal_lumped", **params)
+
+
 def run():
     mcp.run()
 
