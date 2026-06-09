@@ -122,12 +122,15 @@ class Worker:
         except json.JSONDecodeError as e:
             raise WorkerDied(f"non-JSON on stdout (stdio hygiene broken): {line!r}") from e
 
-    def call(self, method, _timeout=120.0, **params):
+    def call(self, _method, _timeout=120.0, **params):
+        # _method/_timeout are underscored (like the worker protocol's reserved
+        # keys) so a tool param of the same name — e.g. tolerance_stackup(method=)
+        # — rides through **params without colliding with the positional arg.
         if self.proc.poll() is not None:
             raise WorkerDied(f"worker exited with code {self.proc.returncode}")
         self._id += 1
         mid = f"r{self._id}"
-        req = {"id": mid, "method": method, "params": params}
+        req = {"id": mid, "method": _method, "params": params}
         try:
             self.proc.stdin.write(json.dumps(req) + "\n")
             self.proc.stdin.flush()

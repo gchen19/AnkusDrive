@@ -6402,6 +6402,135 @@ def _h_seal_check(p):
     return me.seal_check(**p)
 
 
+@handler("tolerance_stackup")
+def _h_tolerance_stackup(p):
+    from driftpin.analysis import tolerance
+    return tolerance.stackup(**p)
+
+
+@handler("fit_check")
+def _h_fit_check(p):
+    from driftpin.analysis import tolerance
+    return tolerance.fit_check(p["hole"], p["shaft"])
+
+
+@handler("fit_class")
+def _h_fit_class(p):
+    from driftpin.analysis import tolerance
+    return tolerance.fit_class(p["basic_size"], p.get("fit", "H7/g6"))
+
+
+@handler("gdt_check")
+def _h_gdt_check(p):
+    from driftpin.analysis import tolerance
+    return tolerance.gdt_check(**p)
+
+
+@handler("fatigue_check")
+def _h_fatigue_check(p):
+    from driftpin.analysis import durability
+    return durability.fatigue_check(**p)
+
+
+@handler("fracture_check")
+def _h_fracture_check(p):
+    from driftpin.analysis import durability
+    return durability.fracture_check(**p)
+
+
+@handler("wear_estimate")
+def _h_wear_estimate(p):
+    from driftpin.analysis import durability
+    return durability.wear_estimate(**p)
+
+
+@handler("creep_flag")
+def _h_creep_flag(p):
+    from driftpin.analysis import durability
+    return durability.creep_flag(**p)
+
+
+@handler("thermal_lumped")
+def _h_thermal_lumped(p):
+    from driftpin.analysis import thermal
+    return thermal.thermal_lumped(**p)
+
+
+@handler("dfm_check")
+def _h_dfm_check(p):
+    from driftpin.analysis import dfx
+    return dfx.dfm_check(**p)
+
+
+@handler("dfa_check")
+def _h_dfa_check(p):
+    from driftpin.analysis import dfx
+    return dfx.dfa_check(**p)
+
+
+@handler("pack_check")
+def _h_pack_check(p):
+    from driftpin.analysis import dfx
+    return dfx.pack_check(**p)
+
+
+@handler("cost_estimate")
+def _h_cost_estimate(p):
+    from driftpin.analysis import cost
+    return cost.cost_estimate(**p)
+
+
+@handler("slice_estimate")
+def _h_slice_estimate(p):
+    from driftpin.analysis import slicing
+    return slicing.slice_estimate(**p)
+
+
+# --- generic async jobs (driftpin.jobs) ---------------------------------------
+# A reusable submit/poll facility for long solves that must not block the MCP
+# channel. async_demo_submit is the reference implementation; job_status /
+# job_result / job_list are the shared poll surface every future *_submit reuses.
+# The submitted callable runs on a background thread, so it must not touch FreeCAD
+# (see driftpin/jobs.py) — for an FEM/CFD solve, background only the solver
+# subprocess the way render_photoreal_submit does, then read results on the main
+# thread once the job is done.
+
+@handler("async_demo_submit")
+def _h_async_demo_submit(p):
+    """Reference long-solve: a FreeCAD-free background job that 'computes' for
+    duration_s then returns a deterministic result. Returns {job_id, status,
+    cache_hit}; identical (duration_s, value) is a content-hash cache hit."""
+    import time as _time
+    from driftpin import jobs
+    duration = float(p.get("duration_s", 0.5))
+    value = float(p.get("value", 1.0))
+    key = jobs.content_key("async_demo", {"duration_s": duration, "value": value})
+
+    def _work():
+        _time.sleep(duration)
+        return {"value": value, "squared": value * value, "duration_s": duration}
+
+    return jobs.submit("async_demo", _work, key=key, meta={"duration_s": duration})
+
+
+@handler("job_status")
+def _h_job_status(p):
+    from driftpin import jobs
+    return jobs.status(p["job_id"])
+
+
+@handler("job_result")
+def _h_job_result(p):
+    from driftpin import jobs
+    return jobs.result(p["job_id"], discard=bool(p.get("discard", False)))
+
+
+@handler("job_list")
+def _h_job_list(p):
+    from driftpin import jobs
+    return jobs.list_jobs()
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:

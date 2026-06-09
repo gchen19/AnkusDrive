@@ -27,6 +27,34 @@ echo "== Machine-element rating toys (pure-Python; no FreeCAD) =="
 python3 tests/test_machine_elements.py
 
 echo
+echo "== Tolerance & GD&T toys (pure-Python; no FreeCAD) =="
+python3 tests/test_tolerance.py
+
+echo
+echo "== Wear / fatigue / fracture toys (pure-Python; no FreeCAD) =="
+python3 tests/test_durability.py
+
+echo
+echo "== Lumped transient thermal toys (pure-Python; no FreeCAD) =="
+python3 tests/test_thermal.py
+
+echo
+echo "== Design-for-X toys (DfM/DfA/packaging; pure-Python; no FreeCAD) =="
+python3 tests/test_dfx.py
+
+echo
+echo "== Design-for-Cost toys (pure-Python; no FreeCAD) =="
+python3 tests/test_cost.py
+
+echo
+echo "== FDM slice-estimate toys (pure-Python; no FreeCAD) =="
+python3 tests/test_slicing.py
+
+echo
+echo "== Async job-registry toys (pure-Python; no FreeCAD) =="
+python3 tests/test_jobs.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

@@ -28,12 +28,14 @@ def _ensure_worker() -> Worker:
     return _worker
 
 
-def _call(method: str, _timeout: float | None = None, **params: Any) -> Any:
+def _call(_method: str, _timeout: float | None = None, **params: Any) -> Any:
+    # _method is underscored so a tool param named `method` (e.g. tolerance_stackup)
+    # passes through **params instead of colliding with this positional argument.
     try:
         worker = _ensure_worker()
         if _timeout is not None:
-            return worker.call(method, _timeout=_timeout, **params)
-        return worker.call(method, **params)
+            return worker.call(_method, _timeout=_timeout, **params)
+        return worker.call(_method, **params)
     except WorkerError as e:
         raise RuntimeError(f"{e.type}: {e.remote_message}") from e
 
@@ -2547,6 +2549,332 @@ def seal_check(
     return _call("seal_check", cross_section_dia_mm=cross_section_dia_mm,
                  groove_depth_mm=groove_depth_mm, groove_width_mm=groove_width_mm,
                  application=application, max_gland_fill_pct=max_gland_fill_pct)
+
+
+@mcp.tool()
+def tolerance_stackup(
+    chain: list,
+    method: str = "worstcase",
+    samples: int = 10000,
+    spec_min: float | None = None,
+    spec_max: float | None = None,
+) -> dict:
+    """Stack a dimension chain. Each chain entry is {name, nominal, plus, minus}
+    with plus/minus the signed upper/lower deviations (plus>=minus; symmetric
+    shorthand {nominal, tol}); add direction:-1 for a subtractive/gap link.
+    method: worstcase | rss | montecarlo (each adds a deeper block). Half-bands
+    are read as 3-sigma; cpk/pct_in_spec use spec_min/spec_max if given, else the
+    worst-case bounds. Returns {nominal, worstcase:{min,max,spread},
+    rss:{sigma,min_3s,max_3s}, montecarlo:{mean,std,cpk,pct_in_spec,spec}}."""
+    params = {"chain": chain, "method": method, "samples": samples}
+    if spec_min is not None:
+        params["spec_min"] = spec_min
+    if spec_max is not None:
+        params["spec_max"] = spec_max
+    return _call("tolerance_stackup", **params)
+
+
+@mcp.tool()
+def fit_check(hole: dict, shaft: dict) -> dict:
+    """Classify a hole/shaft pair. hole and shaft are {nominal, plus, minus}
+    (signed deviations) or {nominal, tol}. Returns {fit_class:'clearance'|
+    'transition'|'interference', min_clearance, max_clearance, nominal_clearance,
+    prob_interference} (prob from a normal model with half-band = 3-sigma)."""
+    return _call("fit_check", hole=hole, shaft=shaft)
+
+
+@mcp.tool()
+def fit_class(basic_size: float, fit: str = "H7/g6") -> dict:
+    """ISO 286 limits for a fit code (e.g. 'H7/g6'), in mm. v1 covers a hole-basis
+    H with shaft clearance letters (h, g, f, e). Returns {basic_size, fit,
+    hole:{upper_dev,lower_dev,min,max}, shaft:{...}, fit_class, min_clearance,
+    max_clearance, prob_interference}. Errors on an out-of-table size (>500 mm) or
+    an unsupported code (non-H hole or interference shaft letter)."""
+    return _call("fit_class", basic_size=basic_size, fit=fit)
+
+
+@mcp.tool()
+def gdt_check(
+    control: str,
+    zone: float,
+    actual: float | None = None,
+    offset: dict | None = None,
+    mmc_bonus: float = 0.0,
+    datum_refs: list | None = None,
+) -> dict:
+    """Check a measured feature against a GD&T tolerance zone. control: position |
+    flatness | straightness | circularity | cylindricity | perpendicularity |
+    parallelism | angularity | concentricity | runout | total_runout |
+    profile_line | profile_surface. actual is the measured deviation; for position
+    pass offset={x,y} to use the diametral 2*hypot(x,y). mmc_bonus adds bonus
+    tolerance. Returns {control, zone, effective_zone, actual, margin, pass,
+    datum_refs}."""
+    params = {"control": control, "zone": zone, "mmc_bonus": mmc_bonus}
+    if actual is not None:
+        params["actual"] = actual
+    if offset is not None:
+        params["offset"] = offset
+    if datum_refs is not None:
+        params["datum_refs"] = datum_refs
+    return _call("gdt_check", **params)
+
+
+@mcp.tool()
+def fatigue_check(
+    stress_range_mpa: float,
+    mean_stress_mpa: float = 0.0,
+    cycles: float = 1_000_000.0,
+    material: str = "Steel-1045",
+    endurance_mpa: float | None = None,
+    uts_mpa: float | None = None,
+) -> dict:
+    """Rate fatigue life (S-N Basquin + Goodman mean-stress correction). σ_a =
+    stress_range/2; infinite-life SF = 1/(σ_a/σ_e + σ_m/σ_uts); finite life from
+    an equivalent fully-reversed amplitude on a log-log S-N line. σ_e/σ_uts come
+    from the material (or overrides). pass = survives `cycles` (σ_ar ≤ σ_e ⇒
+    infinite life); a tensile mean ≥ σ_uts fails outright. Returns
+    {stress_amplitude_mpa, mean_stress_mpa, endurance_mpa, uts_mpa,
+    equiv_reversed_mpa, safety_factor, life_cycles, required_cycles, pass,
+    governing_mode, endurance_basis}."""
+    params = {"stress_range_mpa": stress_range_mpa, "mean_stress_mpa": mean_stress_mpa,
+              "cycles": cycles, "material": material}
+    if endurance_mpa is not None:
+        params["endurance_mpa"] = endurance_mpa
+    if uts_mpa is not None:
+        params["uts_mpa"] = uts_mpa
+    return _call("fatigue_check", **params)
+
+
+@mcp.tool()
+def fracture_check(
+    stress_mpa: float,
+    crack_len_mm: float,
+    material: str = "Steel-1045",
+    geometry_factor: float = 1.12,
+    fracture_toughness_mpa_sqrt_m: float | None = None,
+) -> dict:
+    """Rate brittle fracture (LEFM): K = Y·σ·√(π·a) vs K_IC. a is crack length in
+    mm; Y (geometry_factor) defaults 1.12 (edge crack), 1.0 for a centre crack.
+    K_IC from the material (or override). Critical crack a_c = (K_IC/(Y·σ))²/π.
+    Returns {k_applied_mpa_sqrt_m, k_ic_mpa_sqrt_m, geometry_factor, safety_factor,
+    margin, critical_crack_mm, pass}; a crack past a_c gives SF<1 and margin<0."""
+    params = {"stress_mpa": stress_mpa, "crack_len_mm": crack_len_mm,
+              "material": material, "geometry_factor": geometry_factor}
+    if fracture_toughness_mpa_sqrt_m is not None:
+        params["fracture_toughness_mpa_sqrt_m"] = fracture_toughness_mpa_sqrt_m
+    return _call("fracture_check", **params)
+
+
+@mcp.tool()
+def wear_estimate(
+    load_n: float,
+    sliding_dist_m: float,
+    material_pair: list | None = None,
+    wear_coef: float | None = None,
+    hardness_mpa: float | None = None,
+    apparent_area_mm2: float | None = None,
+    max_depth_mm: float | None = None,
+) -> dict:
+    """Estimate sliding wear (Archard): V = k·F·s/H. k (wear_coef) is empirical —
+    pass it, or it's looked up by the material_pair's category pair (order-of-
+    magnitude). H (hardness_mpa) defaults to Tabor 3·σ_y of the softer member.
+    With apparent_area_mm2 a mean depth is reported and gated by max_depth_mm.
+    Returns {wear_coef, hardness_mpa, volume_loss_mm3, depth_loss_mm, coef_basis,
+    hardness_basis, pass}."""
+    params = {"load_n": load_n, "sliding_dist_m": sliding_dist_m}
+    for k, v in (("material_pair", material_pair), ("wear_coef", wear_coef),
+                 ("hardness_mpa", hardness_mpa),
+                 ("apparent_area_mm2", apparent_area_mm2),
+                 ("max_depth_mm", max_depth_mm)):
+        if v is not None:
+            params[k] = v
+    return _call("wear_estimate", **params)
+
+
+@mcp.tool()
+def creep_flag(
+    stress_mpa: float,
+    temp_c: float,
+    material: str = "Steel-1045",
+    max_service_temp_c: float | None = None,
+) -> dict:
+    """Screen for creep risk: compare operating temperature to the material's max
+    service temperature (Materials DB, or an override). A screen, not a
+    Larson-Miller life model. pass = below the service limit. Returns
+    {operating_temp_c, service_temp_c, margin_c, stress_mpa, creep_risk, pass,
+    reason}."""
+    params = {"stress_mpa": stress_mpa, "temp_c": temp_c, "material": material}
+    if max_service_temp_c is not None:
+        params["max_service_temp_c"] = max_service_temp_c
+    return _call("creep_flag", **params)
+
+
+@mcp.tool()
+def thermal_lumped(
+    mass_g: float,
+    power_w: float,
+    h_conv: float,
+    area_mm2: float,
+    c_p: str | float | None = None,
+    material: str | None = None,
+    t_ambient_c: float = 25.0,
+    duration_s: float | None = None,
+    emissivity: float = 0.8,
+) -> dict:
+    """Lumped first-order transient warm-up (no mesh). ΔT_ss = P/(h·A),
+    τ = m·c_p/(h·A), T(t) = T_amb + ΔT_ss·(1−e^(−t/τ)). c_p is an explicit
+    value/quantity-string ('900 J/kg/K') or read from `material`. With duration_s
+    the temperature + fraction-of-steady reached are returned. A radiation screen
+    flags when the steady-state radiative HTC exceeds h_conv. Returns
+    {t_ambient_c, delta_t_steady_k, t_steady_c, time_constant_s, t_final_c,
+    reached_steady_pct, h_rad_w_m2k, radiation_significant}."""
+    params = {"mass_g": mass_g, "power_w": power_w, "h_conv": h_conv,
+              "area_mm2": area_mm2, "t_ambient_c": t_ambient_c,
+              "emissivity": emissivity}
+    for k, v in (("c_p", c_p), ("material", material), ("duration_s", duration_s)):
+        if v is not None:
+            params[k] = v
+    return _call("thermal_lumped", **params)
+
+
+@mcp.tool()
+def dfm_check(
+    faces: list,
+    pull_axis: str = "+z",
+    process: str = "injection",
+    min_wall_mm: float | None = None,
+    min_draft_deg: float = 1.0,
+) -> dict:
+    """Screen a part for manufacturability against a pull/tool axis. `faces` is a
+    list of {name, draft_deg, wall_mm?} — draft_deg relative to pull_axis (0 = a
+    vertical wall needing draft; <0 = a re-entrant undercut). draft_violations are
+    0≤draft<min_draft_deg, undercut_faces are draft<0, min_wall_violations are
+    wall_mm<min_wall_mm (defaults by process: injection 1.0, cnc 0.5, sheet/fdm
+    0.8). Returns {process, pull_axis, min_wall_mm, draft_violations, undercut_faces,
+    min_wall_violations, score, pass}."""
+    params = {"faces": faces, "pull_axis": pull_axis, "process": process,
+              "min_draft_deg": min_draft_deg}
+    if min_wall_mm is not None:
+        params["min_wall_mm"] = min_wall_mm
+    return _call("dfm_check", **params)
+
+
+@mcp.tool()
+def dfa_check(
+    part_count: int,
+    fastener_count: int = 0,
+    unique_part_count: int | None = None,
+    insertion_axes: int = 1,
+    symmetric_fraction: float = 0.0,
+) -> dict:
+    """Grade an assembly (Boothroyd-Dewhurst-lite). assembly_efficiency =
+    theoretical_min/(part_count+fastener_count) (theoretical_min = unique_part_count
+    or 1); assembly_score scales that by a handling penalty from insertion_axes/
+    symmetry and decreases monotonically as part/fastener count rises. Returns
+    {part_count, fastener_count, insertion_axes, handling_difficulty,
+    assembly_efficiency, assembly_score, symmetry_score}."""
+    params = {"part_count": part_count, "fastener_count": fastener_count,
+              "insertion_axes": insertion_axes, "symmetric_fraction": symmetric_fraction}
+    if unique_part_count is not None:
+        params["unique_part_count"] = unique_part_count
+    return _call("dfa_check", **params)
+
+
+@mcp.tool()
+def pack_check(
+    part_bbox_mm: list,
+    carton_mm: list,
+    mass_g: float,
+    dim_factor: float = 5000.0,
+) -> dict:
+    """Check a part against a shipping carton + compute billable weight.
+    part_bbox_mm/carton_mm are [l,w,h] mm; `fits` allows reorientation (sorted-dim
+    compare). void_fraction = 1−vol(part)/vol(carton); dim_weight_kg =
+    vol(carton cm³)/dim_factor (default 5000 metric DIM); billable_weight_kg =
+    max(actual, dimensional). Returns {fits, void_fraction, dim_weight_kg,
+    actual_mass_kg, billable_weight_kg, pass}."""
+    return _call("pack_check", part_bbox_mm=part_bbox_mm, carton_mm=carton_mm,
+                 mass_g=mass_g, dim_factor=dim_factor)
+
+
+@mcp.tool()
+def cost_estimate(
+    volume_mm3: float,
+    material: str,
+    process: str = "cnc",
+    quantity: int = 1,
+    tooling_usd: float = 0.0,
+    machine_rate_usd_hr: float = 60.0,
+    setup_min: float = 10.0,
+    scrap_fraction: float = 0.0,
+) -> dict:
+    """Per-unit cost rollup (Design for Cost). material_cost = volume·density·price
+    ·(1+scrap) from the Materials DB (process: cnc | fdm | casting | injection).
+    process_cost = amortized setup + per-process machine time; tooling amortized
+    over quantity, so unit_cost falls as quantity rises. Returns {material_cost,
+    process_cost, tooling_amortized, unit_cost, mass_kg, breakdown}. Errors on an
+    unknown material/process or non-positive volume/quantity."""
+    return _call("cost_estimate", volume_mm3=volume_mm3, material=material,
+                 process=process, quantity=quantity, tooling_usd=tooling_usd,
+                 machine_rate_usd_hr=machine_rate_usd_hr, setup_min=setup_min,
+                 scrap_fraction=scrap_fraction)
+
+
+@mcp.tool()
+def slice_estimate(
+    volume_mm3: float,
+    bbox_mm: list,
+    material: str = "PLA",
+    infill_fraction: float = 1.0,
+    layer_height_mm: float = 0.2,
+    wall_fraction: float = 0.35,
+    print_speed_mm_s: float = 50.0,
+    nozzle_mm: float = 0.4,
+) -> dict:
+    """First-order FDM slice estimate (analytic; a real PrusaSlicer/OrcaSlicer CLI
+    is the P1 upgrade). mass_g = volume·density (Materials DB); deposited =
+    volume·(wall_fraction + infill·(1−wall_fraction)) so at 100% infill filament_g
+    == mass_g; layer_count = ceil(bbox height/layer_height); print_time from nozzle
+    volumetric flow. Returns {mass_g, filament_g, deposited_volume_mm3, layer_count,
+    print_time_min, infill_fraction}."""
+    return _call("slice_estimate", volume_mm3=volume_mm3, bbox_mm=bbox_mm,
+                 material=material, infill_fraction=infill_fraction,
+                 layer_height_mm=layer_height_mm, wall_fraction=wall_fraction,
+                 print_speed_mm_s=print_speed_mm_s, nozzle_mm=nozzle_mm)
+
+
+@mcp.tool()
+def async_demo_submit(duration_s: float = 0.5, value: float = 1.0) -> dict:
+    """Reference async long-solve: launch a job that runs OFF the MCP channel and
+    return immediately, so a multi-minute solve never blocks the worker. (This demo
+    just computes for duration_s then returns a deterministic result; a real
+    FEM/CFD solve plugs into the same facility — see driftpin/jobs.py.) Returns
+    {job_id, status, cache_hit}; poll with job_status / job_result. A re-submit with
+    identical (duration_s, value) is a content-hash cache hit (no recompute)."""
+    return _call("async_demo_submit", duration_s=duration_s, value=value)
+
+
+@mcp.tool()
+def job_status(job_id: str) -> dict:
+    """Lightweight poll of any async job (from an *_submit tool). Returns {job_id,
+    kind, status: 'running'|'done'|'failed', elapsed_s, meta} (+ error when failed)
+    WITHOUT the result payload — cheap to call in a loop."""
+    return _call("job_status", job_id=job_id)
+
+
+@mcp.tool()
+def job_result(job_id: str, discard: bool = False) -> dict:
+    """Fetch an async job's outcome. Returns {job_id, kind, status, elapsed_s,
+    result (when done) | error (when failed)}; while running neither is set.
+    discard=True frees a terminal job (and its cache entry) once you have it."""
+    return _call("job_result", job_id=job_id, discard=discard)
+
+
+@mcp.tool()
+def job_list() -> dict:
+    """List every async job this worker session. Returns {count, jobs:[{job_id,
+    kind, status, elapsed_s}]} in submit order."""
+    return _call("job_list")
 
 
 def run():

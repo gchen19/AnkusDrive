@@ -62,10 +62,10 @@ flags leak into the tool surface.
 Each family lists: the agent question it answers · backend · new-dependency weight
 · proposed signatures (intent-encoded) · result schema sketch.
 
-### 1. Tolerance & GD&T  *(anchor — fully specced in Appendix A)*
+### 1. Tolerance & GD&T  *(anchor — shipped)*
 
 - **Answers:** "Will these parts fit? Tighten which dim to make the assembly fit 99.7%?"
-- **Backend:** pure-Python (numpy for Monte-Carlo, already a dep). **Weight: none.**
+- **Backend:** pure-Python (stdlib `random`/`statistics` for Monte-Carlo). **Weight: none.**
 - **Signatures:**
   ```
   tolerance_stackup(chain=[{name,nominal,plus,minus}, ...],
@@ -77,7 +77,13 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Result:** `{nominal, worstcase:{min,max}, rss:{sigma,min_3s,max_3s},
   montecarlo:{mean,std,cpk,pct_in_spec}}`; `fit_check` →
   `{fit_class, min_clearance, max_clearance, prob_interference}`.
-- The largest agent unlock for the smallest build. **Ships first.**
+- **Status: shipped (P0)** in `driftpin/analysis/tolerance.py` —
+  `tolerance_stackup`, `fit_check`, `fit_class`, `gdt_check`, with 13 two-sided
+  toys in `tests/test_tolerance.py`. Signed-deviation convention
+  (`plus`=upper, `minus`=lower, half-band = 3σ); stack links carry an optional
+  `direction` (±1) for gap/subtractive chains. `fit_class` v1 covers hole-basis H
+  with clearance shaft letters (h, g, f, e); interference letters extend the same
+  table next.
 
 ### 2. Materials & selection  *(foundational — many families cite it)*
 
@@ -125,6 +131,12 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - **Result:** `{safety_factor, life_cycles, pass, governing_mode}` etc.
 - Turns a one-shot FEM stress number into a *durability* answer.
+- **Status: shipped (P0)** in `driftpin/analysis/durability.py` —
+  `fatigue_check` (S-N Basquin + Goodman), `fracture_check` (LEFM K vs K_IC with
+  critical-crack inversion), `wear_estimate` (Archard), `creep_flag`
+  (service-temp screen), with 9 two-sided toys in `tests/test_durability.py`
+  (LEFM K=13.3, a_c=9.5 mm; Goodman SF=0.94; Archard 45 mm³). Reads σ_e / σ_uts /
+  K_IC / service temp from the Materials DB with explicit overrides.
 
 ### 4. Thermal (beyond steady-state CCX)
 
@@ -139,6 +151,11 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - CCX already covers steady-state conduction via `fem_thermal_results`; this fills
   the *time* and *radiation* gaps. Lumped version ships in the pure-Python wave.
+- **Status: lumped shipped (P0)** in `driftpin/analysis/thermal.py` —
+  `thermal_lumped` (first-order RC: ΔT_ss, τ, T(t), plus an h_rad-vs-h_conv
+  radiation screen), 5 two-sided toys in `tests/test_thermal.py` (τ=450 s,
+  T(300 s)=55.4 °C against the exact exponential). `thermal_transient` /
+  `thermal_radiation` (Elmer/CFD-backed) stay P2.
 
 ### 5. Structural extensions
 
@@ -232,6 +249,16 @@ process. Several reuse existing DriftPin tools directly.
   cost_estimate(model, process, material, quantity)
     -> {material_cost, process_cost, unit_cost, breakdown}
   ```
+- **Status: shipped (P0, v1 explicit-input)** — `dfm_check` (draft/undercut/min-wall
+  from explicit face descriptors), `dfa_check` (Boothroyd-lite), `pack_check`
+  (carton fit + dimensional weight) in `driftpin/analysis/dfx.py`; `cost_estimate`
+  (exact `material_cost = volume·density·price` + a per-process machine-time model)
+  in `cost.py`; `slice_estimate` (first-order FDM estimate; a PrusaSlicer/OrcaSlicer
+  CLI on STL is the P1 upgrade) in `slicing.py`. 21 two-sided toys across
+  `tests/test_dfx.py` / `test_cost.py` / `test_slicing.py`. v1 takes **explicit**
+  geometry summaries (face draft angles, bbox, volume) like `tolerance.py` takes an
+  explicit chain; reading those off a `Shape` (via `draft`/`thickness`/`query_faces`/
+  `mass_properties`) is the v2 wiring.
 
 ### 10. Machine-element rating  *(highest leverage on existing tools)*
 
@@ -301,9 +328,13 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
   FEM material convention (`"210000 MPa"`). Tolerances carry their unit; no bare floats.
 - **Caching.** Expensive solves are keyed on a geometry content-hash (the same
   hashing the multi-agent lockfile already uses) so an unchanged part isn't re-solved.
-- **Async / long solves.** Already a known ROADMAP open issue (worker pool or async
-  `fem_run`). CFD, transient thermal, and MBD make it *blocking* — these P2 families
-  cannot ship until a long solve can run without holding the MCP channel.
+- **Async / long solves. Shipped** in `driftpin/jobs.py` — a FreeCAD-free job
+  registry + background-thread runner + content-hash cache, with a shared
+  `job_status`/`job_result`/`job_list` poll surface (and `async_demo_submit` as the
+  reference). Any `*_submit` tool runs its work off the MCP channel; the submitted
+  callable must not touch FreeCAD (pure-Python compute, or polling an external
+  solver subprocess), so CFD/transient-thermal/MBD background only their solver
+  the way `render_photoreal_submit` does. This is the unblock for the P2 families.
 - **Merge gates** ([`MULTI_AGENT.md`](MULTI_AGENT.md)). Sim results become hard
   oracles: a partitioned design can gate merge on "every part passes `dfm_check` and
   its interfaces fit within the `tolerance_stackup` budget" — deterministic,
@@ -331,14 +362,14 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
 
 **P0 — pure-Python, zero new deps, ship first.** Days each, no installs,
 immediately useful:
-1. **Tolerance / GD&T** (Appendix A) — validates the new `analysis/` extension point. *(scaffolded)*
+1. **Tolerance / GD&T** (Appendix A) — validates the new `analysis/` extension point. *(shipped)*
 2. **Materials DB** — foundational; unblocks fatigue, fracture, cost. *(shipped)*
-3. **Wear / fatigue / fracture** — turns FEM stress into durability.
-4. **DfM / DfA heuristics** + lumped thermal — grade against process, reuse existing tools.
+3. **Wear / fatigue / fracture** — turns FEM stress into durability. *(shipped)*
+4. **DfM / DfA heuristics** + lumped thermal — grade against process, reuse existing tools. *(shipped: dfm/dfa/pack/cost + thermal_lumped)*
 5. **Machine-element rating** — closed-form life/SF on the existing `add_*` component tools. *(shipped: bolt, bearing, spring, gear, belt, press-fit, seal)*
 
 **P1 — external CLI, self-contained.** One new tool dependency each, bounded runtime:
-5. **Slicer estimate** (PrusaSlicer/OrcaSlicer CLI on STL).
+5. **Slicer estimate** (PrusaSlicer/OrcaSlicer CLI on STL). *(first-order analytic `slice_estimate` shipped; CLI upgrade pending)*
 6. **Optics** (wrap `~/diffuser`).
 7. **Cost** rollup (depends on Materials DB + a process-time model).
 
