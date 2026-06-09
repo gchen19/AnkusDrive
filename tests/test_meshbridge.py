@@ -79,6 +79,18 @@ def test_parse_minmax_scalars_reads_last_row():
         assert mb.parse_minmax_scalars(d, "missing.dat") is None
 
 
+def test_mesh_boundary_count_guards_zero():
+    with tempfile.TemporaryDirectory() as d:
+        mdir = os.path.join(d, "case")
+        os.makedirs(mdir)
+        # mesh.header line 1 = "n_nodes n_bulk n_boundary"
+        open(os.path.join(mdir, "mesh.header"), "w").write("729 384 104\n3\n")
+        assert mb.mesh_boundary_count(d, "case") == 104        # healthy mesh
+        open(os.path.join(mdir, "mesh.header"), "w").write("729 384 0\n3\n")
+        assert mb.mesh_boundary_count(d, "case") == 0          # the silent-zero failure
+        assert mb.mesh_boundary_count(d, "absent") == 0        # missing header -> 0
+
+
 def test_sif_validation():
     ok = dict(k=1, rho=1, cp=1, h_conv=1, t_initial_c=1, t_ambient_c=0,
               dt=0.1, n_steps=2, convection_tags=[1])

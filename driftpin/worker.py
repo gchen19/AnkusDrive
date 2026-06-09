@@ -7250,6 +7250,17 @@ def _thermal_body_submit(p, info):
             return {"ok": False, "returncode": grid.returncode, "solver": "elmergrid",
                     "mode": "body", "case_dir": case_dir,
                     "stdout_tail": ((grid.stdout or "") + (grid.stderr or ""))[-2000:]}
+        # ElmerGrid can succeed (rc=0) yet drop the boundary groups during UNV import
+        # (the silent-zero-boundary failure the .grd path hit). Then the convective BC
+        # binds to nothing, the body stays adiabatic, and the solve returns ok:true
+        # with physically wrong temperatures. Fail loudly instead.
+        if not _mb.mesh_boundary_count(case_dir, built["mesh_name"]):
+            return {"ok": False, "returncode": grid.returncode, "solver": "elmergrid",
+                    "mode": "body", "case_dir": case_dir,
+                    "reason": "ElmerGrid produced 0 boundary elements — the convective "
+                              "faces would bind to nothing (adiabatic). The mesh's face "
+                              "groups did not survive UNV import; check the solid/mesh.",
+                    "stdout_tail": ((grid.stdout or "") + (grid.stderr or ""))[-2000:]}
         proc = subprocess.run([elmer_bin, built["sif"]], cwd=case_dir,
                               capture_output=True, text=True)
         out = {

@@ -193,6 +193,23 @@ def write_body_transient_case(
     }
 
 
+def mesh_boundary_count(case_dir: str, mesh_name: str) -> int:
+    """Number of boundary elements in the ElmerGrid-written mesh DB — the third field
+    of ``<case_dir>/<mesh_name>/mesh.header`` line 1 (``n_nodes n_bulk n_boundary``).
+
+    Used to catch the silent failure where ElmerGrid succeeds (rc=0) but the UNV face
+    groups don't survive the conversion, leaving 0 boundary elements: the convective
+    BC would then bind to nothing and the body stays adiabatic — physically wrong but
+    rc=0. Returns 0 when the header is absent or unparseable (treated as a failure)."""
+    path = os.path.join(case_dir, mesh_name, "mesh.header")
+    try:
+        with open(path) as f:
+            fields = f.readline().split()
+        return int(fields[2]) if len(fields) >= 3 else 0
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
 def parse_minmax_scalars(case_dir: str, scalars: str = "scalars.dat") -> dict | None:
     """Read the SaveScalars history of a bridged solve: last-row max/min Temperature.
 
