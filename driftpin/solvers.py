@@ -246,6 +246,43 @@ def require_solver(name: str) -> dict:
     }
 
 
+def openfoam_bashrc() -> str | None:
+    """Locate the OpenFOAM environment file to ``source`` before running its apps.
+
+    OpenFOAM binaries need WM_PROJECT_DIR / FOAM_ETC exported or they abort with
+    "Could not find mandatory etc entry 'controlDict'" — so a bare ``subprocess.run``
+    of blockMesh/simpleFoam fails. Resolution order, side-effect-free:
+    ``DRIFTPIN_OPENFOAM_BASHRC`` env -> ``$WM_PROJECT_DIR/etc/bashrc`` -> the source-
+    build layout next to the resolved binary (``<foamdir>/platforms/.../bin`` ->
+    ``<foamdir>/etc/bashrc``) -> common install dirs (incl. the apt
+    ``/usr/share/openfoam`` layout). Returns the path, or None when none resolves."""
+    env = os.environ.get("DRIFTPIN_OPENFOAM_BASHRC")
+    if env and os.path.isfile(env):
+        return env
+    wm = os.environ.get("WM_PROJECT_DIR")
+    if wm:
+        cand = os.path.join(wm, "etc", "bashrc")
+        if os.path.isfile(cand):
+            return cand
+    binpath = find_solver("openfoam").get("path")
+    if binpath:
+        # source builds: <foamdir>/platforms/<arch>/bin/<app> -> <foamdir>/etc/bashrc
+        marker = os.sep + "platforms" + os.sep
+        real = os.path.realpath(binpath)
+        if marker in real:
+            cand = os.path.join(real.split(marker)[0], "etc", "bashrc")
+            if os.path.isfile(cand):
+                return cand
+    import glob as _glob
+    for pat in ("/usr/share/openfoam/etc/bashrc",
+                "/usr/lib/openfoam/openfoam*/etc/bashrc",
+                "/opt/openfoam*/etc/bashrc", "/opt/OpenFOAM*/etc/bashrc"):
+        hits = sorted(_glob.glob(pat))
+        if hits:
+            return hits[-1]
+    return None
+
+
 def capabilities() -> dict:
     """Report which P2 solvers (and which families) are usable *right now* —
     the ``solve_capabilities`` tool's payload, the solver twin of
