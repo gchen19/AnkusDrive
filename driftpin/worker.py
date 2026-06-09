@@ -6486,6 +6486,51 @@ def _h_slice_estimate(p):
     return slicing.slice_estimate(**p)
 
 
+# --- generic async jobs (driftpin.jobs) ---------------------------------------
+# A reusable submit/poll facility for long solves that must not block the MCP
+# channel. async_demo_submit is the reference implementation; job_status /
+# job_result / job_list are the shared poll surface every future *_submit reuses.
+# The submitted callable runs on a background thread, so it must not touch FreeCAD
+# (see driftpin/jobs.py) — for an FEM/CFD solve, background only the solver
+# subprocess the way render_photoreal_submit does, then read results on the main
+# thread once the job is done.
+
+@handler("async_demo_submit")
+def _h_async_demo_submit(p):
+    """Reference long-solve: a FreeCAD-free background job that 'computes' for
+    duration_s then returns a deterministic result. Returns {job_id, status,
+    cache_hit}; identical (duration_s, value) is a content-hash cache hit."""
+    import time as _time
+    from driftpin import jobs
+    duration = float(p.get("duration_s", 0.5))
+    value = float(p.get("value", 1.0))
+    key = jobs.content_key("async_demo", {"duration_s": duration, "value": value})
+
+    def _work():
+        _time.sleep(duration)
+        return {"value": value, "squared": value * value, "duration_s": duration}
+
+    return jobs.submit("async_demo", _work, key=key, meta={"duration_s": duration})
+
+
+@handler("job_status")
+def _h_job_status(p):
+    from driftpin import jobs
+    return jobs.status(p["job_id"])
+
+
+@handler("job_result")
+def _h_job_result(p):
+    from driftpin import jobs
+    return jobs.result(p["job_id"], discard=bool(p.get("discard", False)))
+
+
+@handler("job_list")
+def _h_job_list(p):
+    from driftpin import jobs
+    return jobs.list_jobs()
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:

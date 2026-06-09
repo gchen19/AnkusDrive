@@ -328,9 +328,13 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
   FEM material convention (`"210000 MPa"`). Tolerances carry their unit; no bare floats.
 - **Caching.** Expensive solves are keyed on a geometry content-hash (the same
   hashing the multi-agent lockfile already uses) so an unchanged part isn't re-solved.
-- **Async / long solves.** Already a known ROADMAP open issue (worker pool or async
-  `fem_run`). CFD, transient thermal, and MBD make it *blocking* — these P2 families
-  cannot ship until a long solve can run without holding the MCP channel.
+- **Async / long solves. Shipped** in `driftpin/jobs.py` — a FreeCAD-free job
+  registry + background-thread runner + content-hash cache, with a shared
+  `job_status`/`job_result`/`job_list` poll surface (and `async_demo_submit` as the
+  reference). Any `*_submit` tool runs its work off the MCP channel; the submitted
+  callable must not touch FreeCAD (pure-Python compute, or polling an external
+  solver subprocess), so CFD/transient-thermal/MBD background only their solver
+  the way `render_photoreal_submit` does. This is the unblock for the P2 families.
 - **Merge gates** ([`MULTI_AGENT.md`](MULTI_AGENT.md)). Sim results become hard
   oracles: a partitioned design can gate merge on "every part passes `dfm_check` and
   its interfaces fit within the `tolerance_stackup` budget" — deterministic,

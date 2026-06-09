@@ -27,7 +27,8 @@ negative is caught.
 | 4 · Thermal (lumped) | ✅ **shipped** — `thermal_lumped` (RC transient + radiation screen), 5 hand-verified toys (Sprint 3) |
 | 9 · Design for X | ✅ **shipped (v1 explicit-input)** — `dfm_check` / `dfa_check` / `pack_check` / `cost_estimate` / `slice_estimate`, 21 hand-verified toys (Sprints 3–4) |
 | 7 · Optics | 📋 specced; optical **corpus already shipped** with family 2 |
-| 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | 📋 specced — gated on async-solve infra |
+| 6 · Async / long-solve infra | ✅ **shipped** — `driftpin/jobs.py` (submit/poll/cache) + `job_status`/`job_result`/`job_list`, 7 toys (Sprint 6); unblocks all P2 |
+| 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | 📋 specced — async infra now in place; need external solvers |
 
 Pure-Python `analysis/` is FreeCAD-free and standalone-testable; that extension
 point is proven by families 1, 2, 3, 4-lumped, 9 and 10 — **82 two-sided toys**
@@ -147,20 +148,25 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
 
 ## Cross-cutting enabler (critical path for all of P2)
 
-### Sprint 6 — Async / long-solve infrastructure
+### Sprint 6 — Async / long-solve infrastructure ✅ shipped
 - **Goal:** run a multi-minute solve without holding the MCP channel; cache by
-  geometry content-hash so an unchanged part isn't re-solved.
-- **Scope:** worker pool / async `fem_run`; `submit → job-id → poll` tool pair;
-  content-hash cache keyed like the multi-agent lockfile.
-- **Key reuse — do not reinvent:** the **render pipeline already ships this exact
-  pattern** (`render_photoreal_submit` + `render_job` poll, with bounded async-job
-  memory). Lift that submit/poll/cache template; it is the lowest-risk path to the
-  async primitive every P2 family blocks on.
-- **Acceptance:** a long solve returns a job id immediately, the channel stays
-  responsive, polling yields the result, and a re-submit of an unchanged part is a
-  cache hit (no re-solve).
-- **Depends on:** nothing — but **everything in P2 depends on it.** Sequence it
-  before any P2 sprint.
+  content-hash so unchanged work isn't re-solved.
+- **Status: shipped** as a **FreeCAD-free `driftpin/jobs.py`** facility — a job
+  registry + background-thread runner + content-hash cache + bounded eviction,
+  generalizing the render-job pattern (`render_photoreal_submit` + `render_job`)
+  into one shared poll surface. MCP surface: `async_demo_submit` (the reference
+  long-solve) + generic `job_status` / `job_result` / `job_list` that **every**
+  future `*_submit` reuses. 7 two-sided toys in `tests/test_jobs.py` (deterministic
+  via a `threading.Event`, no sleeps) + an end-to-end worker check: submit returns
+  in ~0.01 s, `ping` answers in ~0 s **while a 1.5 s job runs**, the result arrives,
+  and an identical resubmit is a cache hit.
+- **Threading contract (documented in `jobs.py`):** the submitted callable runs on
+  a background thread, so it must NOT touch FreeCAD. Two safe shapes — pure-Python
+  compute, or *polling an external subprocess* (ccx/OpenFOAM/slicer) whose
+  FreeCAD-side setup ran on the calling thread first, exactly how the renderer
+  executor backgrounds only its subprocess. That is the wiring path for the P2
+  solves below.
+- **Depends on:** nothing — but **everything in P2 depends on it** (now unblocked).
 
 ---
 

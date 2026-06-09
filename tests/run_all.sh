@@ -51,6 +51,10 @@ echo "== FDM slice-estimate toys (pure-Python; no FreeCAD) =="
 python3 tests/test_slicing.py
 
 echo
+echo "== Async job-registry toys (pure-Python; no FreeCAD) =="
+python3 tests/test_jobs.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

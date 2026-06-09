@@ -2843,6 +2843,40 @@ def slice_estimate(
                  print_speed_mm_s=print_speed_mm_s, nozzle_mm=nozzle_mm)
 
 
+@mcp.tool()
+def async_demo_submit(duration_s: float = 0.5, value: float = 1.0) -> dict:
+    """Reference async long-solve: launch a job that runs OFF the MCP channel and
+    return immediately, so a multi-minute solve never blocks the worker. (This demo
+    just computes for duration_s then returns a deterministic result; a real
+    FEM/CFD solve plugs into the same facility — see driftpin/jobs.py.) Returns
+    {job_id, status, cache_hit}; poll with job_status / job_result. A re-submit with
+    identical (duration_s, value) is a content-hash cache hit (no recompute)."""
+    return _call("async_demo_submit", duration_s=duration_s, value=value)
+
+
+@mcp.tool()
+def job_status(job_id: str) -> dict:
+    """Lightweight poll of any async job (from an *_submit tool). Returns {job_id,
+    kind, status: 'running'|'done'|'failed', elapsed_s, meta} (+ error when failed)
+    WITHOUT the result payload — cheap to call in a loop."""
+    return _call("job_status", job_id=job_id)
+
+
+@mcp.tool()
+def job_result(job_id: str, discard: bool = False) -> dict:
+    """Fetch an async job's outcome. Returns {job_id, kind, status, elapsed_s,
+    result (when done) | error (when failed)}; while running neither is set.
+    discard=True frees a terminal job (and its cache entry) once you have it."""
+    return _call("job_result", job_id=job_id, discard=discard)
+
+
+@mcp.tool()
+def job_list() -> dict:
+    """List every async job this worker session. Returns {count, jobs:[{job_id,
+    kind, status, elapsed_s}]} in submit order."""
+    return _call("job_list")
+
+
 def run():
     mcp.run()
 
