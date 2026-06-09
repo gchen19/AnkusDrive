@@ -2821,23 +2821,40 @@ def thermal_transient_1d(
 def thermal_transient_submit(
     case_dir: str | None = None,
     sif: str = "case.sif",
-    analysis: str | None = None,
+    half_thickness_mm: float | None = None,
+    h_conv: float | None = None,
     duration_s: float | None = None,
-    dt_s: float | None = None,
+    k: float | None = None,
+    rho: float | None = None,
+    cp: float | None = None,
+    material: str | None = None,
+    t_initial_c: float = 100.0,
+    t_ambient_c: float = 25.0,
+    n_elements: int = 40,
+    n_steps: int = 120,
 ) -> dict:
-    """Transient / radiation thermal FEM via Elmer, asynchronous (heavy solve runs on
-    the provisioned runner). Requires ElmerSolver (apt `elmerfem-csc` / conda); when
-    it's absent this returns {ok:false, reason, install} rather than raising. Provide a
-    prepared Elmer `case_dir` (with its `.sif`); it runs ElmerSolver there in the
-    background and parses the SaveScalars history. (The analytic transient with no
-    solver is thermal_transient_1d; building the case from a FreeCAD `analysis` is a
-    follow-on.)
+    """Transient thermal FEM via Elmer, asynchronous. Requires ElmerSolver (apt
+    `elmerfem-csc` / conda); when absent this returns {ok:false, reason, install}
+    rather than raising. Two modes:
+
+    - **Build the analytic-slab case** (no solver case prep needed): pass the
+      plane-wall transient — `half_thickness_mm`, `h_conv` (W/m²K), `duration_s`, and
+      either `k`+`rho`+`cp` (SI) or a `material` name, with optional `t_initial_c` /
+      `t_ambient_c` and mesh/step counts `n_elements` / `n_steps`. The handler writes
+      the 1-D conduction case (symmetry at the centre, convection at the surface), runs
+      ElmerSolver, and returns the centre/surface temperatures — the same plane-wall
+      BVP `thermal_transient_1d` solves analytically, so the two are directly
+      comparable (the kickoff's relative gate).
+    - **Run a prepared `case_dir`** containing its own `.sif` + mesh.
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
-    {ok, returncode, solver, case_dir, scalars_final, stdout_tail}."""
-    params = {"sif": sif}
-    for key, v in (("case_dir", case_dir), ("analysis", analysis),
-                   ("duration_s", duration_s), ("dt_s", dt_s)):
+    {ok, returncode, solver, case_dir, stdout_tail} plus, for the slab case,
+    {t_center_c, t_surface_c, n_steps_written} (or {scalars_final} for a prepared case)."""
+    params = {"sif": sif, "t_initial_c": t_initial_c, "t_ambient_c": t_ambient_c,
+              "n_elements": n_elements, "n_steps": n_steps}
+    for key, v in (("case_dir", case_dir), ("half_thickness_mm", half_thickness_mm),
+                   ("h_conv", h_conv), ("duration_s", duration_s),
+                   ("k", k), ("rho", rho), ("cp", cp), ("material", material)):
         if v is not None:
             params[key] = v
     return _call("thermal_transient_submit", **params)
@@ -2874,20 +2891,40 @@ def cfd_pipe_flow(
 def cfd_internal_flow_submit(
     case_dir: str | None = None,
     application: str | None = None,
-    model: str | None = None,
+    diameter_mm: float | None = None,
+    length_mm: float | None = None,
+    velocity_m_s: float | None = None,
+    flow_rate_lpm: float | None = None,
+    fluid: str = "water-20c",
+    mu_pa_s: float | None = None,
+    rho_kg_m3: float | None = None,
+    n_axial: int = 120,
+    n_radial: int = 15,
+    end_time: int = 4000,
 ) -> dict:
-    """Internal-flow CFD (pressure drop / recirculation) via OpenFOAM or SU2,
-    asynchronous (heavy solve runs on the provisioned runner). Requires an OpenFOAM
-    (apt/conda) or SU2 binary; when none resolves this returns {ok:false, reason,
-    install} rather than raising. Provide a prepared OpenFOAM `case_dir` (optionally an
-    `application` to run, e.g. 'simpleFoam'/'foamRun'); it runs the solver there in the
-    background. (The exact analytic screen with no solver is cfd_pipe_flow; building the
-    case from a FreeCAD `model` is a follow-on.)
+    """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, asynchronous. Requires an
+    OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
+    reason, install} rather than raising. Two modes:
 
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
-    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
-    params = {}
-    for k, v in (("case_dir", case_dir), ("application", application), ("model", model)):
+    - **Build the straight-pipe validation case** (no case prep): pass `diameter_mm`,
+      `length_mm`, and `velocity_m_s` (or `flow_rate_lpm`), with a `fluid` name or
+      explicit `mu_pa_s`+`rho_kg_m3` (mesh density via `n_axial`/`n_radial`, iterations
+      via `end_time`). The handler builds the axisymmetric laminar pipe, runs
+      blockMesh+simpleFoam, and returns the solved Δp next to the Hagen–Poiseuille
+      analytic reference (`cfd_pipe_flow`) — the kickoff's exact CFD gate, `hp_ratio`≈1.
+    - **Run a prepared OpenFOAM `case_dir`** (optionally an `application`, e.g.
+      'simpleFoam'/'foamRun'); the OpenFOAM environment is sourced before the run.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Pipe
+    case: {ok, returncode, reynolds, regime, pressure_drop_pa (developed),
+    pressure_drop_inlet_pa, hagen_poiseuille_pa, hp_ratio, n_cells, case_dir}. Prepared
+    case: {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    params = {"fluid": fluid, "n_axial": n_axial, "n_radial": n_radial,
+              "end_time": end_time}
+    for k, v in (("case_dir", case_dir), ("application", application),
+                 ("diameter_mm", diameter_mm), ("length_mm", length_mm),
+                 ("velocity_m_s", velocity_m_s), ("flow_rate_lpm", flow_rate_lpm),
+                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3)):
         if v is not None:
             params[k] = v
     return _call("cfd_internal_flow_submit", **params)

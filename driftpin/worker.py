@@ -6895,107 +6895,277 @@ def _parse_elmer_scalars(case_dir):
         return None
 
 
+def _resolve_thermal_props(p):
+    """Resolve (k, rho, cp) in SI from explicit p['k'/'rho'/'cp'] or a p['material']
+    card — the same resolution thermal_transient_1d uses, so the Elmer slab solve and
+    its analytic oracle read identical properties. Raises ValueError if incomplete."""
+    from driftpin.analysis import materials as _materials
+    from driftpin.analysis import thermal as _thermal
+    card = _materials.get(p["material"]) if p.get("material") else {}
+    k = _thermal._thermal_property(p.get("k"), card, "thermal_conductivity")
+    rho = _thermal._thermal_property(p.get("rho"), card, "Density", "density")
+    cp = _thermal._thermal_property(p.get("cp"), card, "specific_heat",
+                                    "specific_heat_j_kgk")
+    if not (k and rho and cp):
+        raise ValueError(
+            "provide k+rho+cp, or a material with thermal_conductivity/Density/"
+            "specific_heat, to build the Elmer slab case")
+    return k, rho, cp
+
+
 @handler("thermal_transient_submit")
 def _h_thermal_transient_submit(p):
-    """Transient / radiation thermal FEM via Elmer, OFF the MCP channel. Degrades to
-    {ok:false, reason, install} when ElmerSolver is absent — the locally-verified gate;
-    the heavy solve runs only on the provisioned runner. When present, runs ElmerSolver
-    on a prepared case directory (`case_dir` containing its `.sif`) in a background
-    subprocess and parses the SaveScalars time history. (Writing the Elmer case from a
-    live FreeCAD analysis is a documented follow-on; the analytic oracle is
-    thermal_transient_1d.)
+    """Transient thermal FEM via Elmer, OFF the MCP channel. Degrades to
+    {ok:false, reason, install} when ElmerSolver is absent (never raises on a miss).
 
+    Two ways to drive it:
+      * **Build the analytic-slab case** — pass the plane-wall transient params
+        (`half_thickness_mm`, `h_conv`, `duration_s`, `t_initial_c`, `t_ambient_c`,
+        and `k`+`rho`+`cp` or a `material`). The handler writes the 1-D conduction
+        case (native Elmer mesh + .sif, symmetry at the centre, convection at the
+        surface) and SaveScalars-extracts the centre/surface temperatures — directly
+        gateable against thermal_transient_1d (the Heisler oracle).
+      * **Run a prepared `case_dir`** — pass a directory containing its `.sif` and
+        mesh; the handler just runs ElmerSolver there and parses the scalar history.
+
+    The background job runs ONLY the ElmerSolver subprocess (it never touches FreeCAD).
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
-    {ok, returncode, solver, case_dir, scalars_final, stdout_tail}."""
+    {ok, returncode, solver, case_dir, stdout_tail} plus, for the slab case,
+    {t_center_c, t_surface_c, n_steps_written}, or for a prepared case {scalars_final}."""
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
     from driftpin import jobs
-    case_dir = p.get("case_dir")
-    if not case_dir or not os.path.isdir(case_dir):
-        raise ValueError(
-            "thermal_transient_submit needs a prepared Elmer `case_dir` (with its "
-            ".sif). Building the case from a FreeCAD analysis is a follow-on; the "
-            "analytic transient is thermal_transient_1d.")
-    sif = p.get("sif", "case.sif")
     elmer_bin = info["path"]
-    key = jobs.content_key("thermal_transient",
-                           {"case_dir": os.path.abspath(case_dir), "sif": sif})
+    case_dir = p.get("case_dir")
+
+    if case_dir:                                     # --- prepared case directory ---
+        if not os.path.isdir(case_dir):
+            raise ValueError(f"case_dir {case_dir!r} is not a directory")
+        sif = p.get("sif", "case.sif")
+        key = jobs.content_key("thermal_transient",
+                               {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+        def _work():
+            import subprocess
+            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                                  capture_output=True, text=True)
+            return {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "case_dir": case_dir,
+                "scalars_final": _parse_elmer_scalars(case_dir),
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+
+        return jobs.submit("thermal_transient", _work, key=key,
+                           meta={"case_dir": case_dir, "duration_s": p.get("duration_s")})
+
+    if p.get("half_thickness_mm") is None:
+        raise ValueError(
+            "provide a prepared `case_dir`, or the slab params "
+            "(half_thickness_mm, h_conv, duration_s, and k+rho+cp or material) to "
+            "build the analytic-slab case gated against thermal_transient_1d")
+
+    # --- build the 1-D plane-wall transient case from physical params ------------
+    k, rho, cp = _resolve_thermal_props(p)
+    half_thickness_m = float(p["half_thickness_mm"]) / 1000.0
+    slab = {
+        "half_thickness_m": half_thickness_m,
+        "k": k, "rho": rho, "cp": cp,
+        "h_conv": float(p["h_conv"]),
+        "t_initial_c": float(p.get("t_initial_c", 100.0)),
+        "t_ambient_c": float(p.get("t_ambient_c", 25.0)),
+        "duration_s": float(p["duration_s"]),
+        "n_elements": int(p.get("n_elements", 40)),
+        "n_steps": int(p.get("n_steps", 120)),
+    }
+    key = jobs.content_key("thermal_transient", {"slab": slab})
 
     def _work():
         import subprocess
-        proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+        import tempfile
+        from driftpin.analysis import elmer as _elmer
+        cdir = tempfile.mkdtemp(prefix="elmer_slab_")
+        built = _elmer.write_slab_transient_case(cdir, **slab)
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
-        return {
+        out = {
             "ok": proc.returncode == 0,
             "returncode": proc.returncode,
             "solver": "elmer",
-            "case_dir": case_dir,
-            "scalars_final": _parse_elmer_scalars(case_dir),
+            "case_dir": cdir,
+            "n_steps": built["n_steps"],
+            "dt": built["dt"],
             "stdout_tail": (proc.stdout or "")[-2000:],
         }
+        parsed = _elmer.parse_slab_scalars(cdir, built["scalars"])
+        if parsed:
+            out.update(parsed)                       # t_center_c, t_surface_c, ...
+        return out
 
     return jobs.submit("thermal_transient", _work, key=key,
-                       meta={"case_dir": case_dir, "duration_s": p.get("duration_s")})
+                       meta={"mode": "slab", "duration_s": slab["duration_s"],
+                             "half_thickness_mm": p["half_thickness_mm"]})
 
 
 # --- CFD (family 6 P2; OpenFOAM/SU2-backed) -----------------------------------
 
+def _run_foam(case_dir, argv_list, env_bashrc):
+    """Run a sequence of OpenFOAM apps (each an argv list) in ``case_dir``, sourcing
+    ``env_bashrc`` first so WM_PROJECT_DIR/FOAM_ETC are exported — without that the
+    foam apps abort with "Could not find mandatory etc entry 'controlDict'". Apps run
+    left-to-right, stopping at the first failure. Returns (returncode, combined_tail)."""
+    import subprocess
+    chain = " && ".join(" ".join(a) for a in argv_list)
+    script = (f"source '{env_bashrc}' >/dev/null 2>&1\n" if env_bashrc else "") + chain
+    proc = subprocess.run(["bash", "-c", script], cwd=case_dir,
+                          capture_output=True, text=True)
+    return proc.returncode, ((proc.stdout or "") + (proc.stderr or ""))[-2000:]
+
+
 def _openfoam_submit(p, kind):
-    """Shared OpenFOAM/SU2 runner for the cfd_*_flow_submit handlers. Degrades to the
-    structured dict when no CFD solver resolves; otherwise runs the solver app in a
-    prepared OpenFOAM `case_dir` as a background subprocess. ``kind`` ('internal' |
-    'external') only labels the job/meta — the parse is the same run summary, since
-    pressure-drop vs force extraction lives in the case's functionObjects."""
+    """Shared OpenFOAM/SU2 runner for the prepared-`case_dir` path of the
+    cfd_*_flow_submit handlers. Degrades to the structured dict when no CFD solver
+    resolves; otherwise runs the solver app in the prepared case (with the OpenFOAM
+    environment sourced) as a background subprocess. ``kind`` ('internal' | 'external')
+    labels the job/meta; force/pressure extraction lives in the case's setup."""
     info = _require_solver("openfoam")
+    is_openfoam = info["ok"]
     if not info["ok"]:
         info_su2 = _require_solver("su2")             # SU2 is the documented alternative
         if not info_su2["ok"]:
             return info                               # report the primary solver's hint
         info = info_su2
     import shutil
-    from driftpin import jobs
+
+    from driftpin import jobs, solvers
     case_dir = p.get("case_dir")
     if not case_dir or not os.path.isdir(case_dir):
         raise ValueError(
-            f"cfd_{kind}_flow_submit needs a prepared CFD `case_dir`. Building the "
-            "case from a FreeCAD model is a follow-on; the analytic internal-flow "
-            "screen with no solver is cfd_pipe_flow.")
-    # which application to run: explicit override, else the resolved binary
+            f"cfd_{kind}_flow_submit needs a prepared CFD `case_dir` (or, for internal "
+            "flow, pipe params to build the straight-pipe validation case).")
     app = p.get("application") or os.path.basename(info["path"])
     solver_bin = info["path"] if not p.get("application") else (shutil.which(app) or app)
+    env_bashrc = solvers.openfoam_bashrc() if is_openfoam else None
     key = jobs.content_key(f"cfd_{kind}_flow",
                            {"case_dir": os.path.abspath(case_dir), "app": app})
 
     def _work():
-        import subprocess
-        proc = subprocess.run([solver_bin], cwd=case_dir, capture_output=True, text=True)
+        rc, tail = _run_foam(case_dir, [[solver_bin]], env_bashrc)
         return {
-            "ok": proc.returncode == 0,
-            "returncode": proc.returncode,
+            "ok": rc == 0,
+            "returncode": rc,
             "solver": info["name"],
             "application": app,
             "case_dir": case_dir,
             "kind": kind,
-            "stdout_tail": (proc.stdout or "")[-2000:],
+            "stdout_tail": tail,
         }
 
     return jobs.submit(f"cfd_{kind}_flow", _work, key=key,
                        meta={"case_dir": case_dir, "kind": kind, "application": app})
 
 
+def _cfd_pipe_submit(p):
+    """Build the axisymmetric straight-pipe case, run blockMesh+simpleFoam (laminar)
+    and parse the pressure drop — the kickoff's Hagen–Poiseuille gate, now that
+    OpenFOAM is provisioned. Degrades cleanly when OpenFOAM is absent. Returns the
+    solved Δp next to the analytic `cfd_pipe_flow` reference so the two are directly
+    comparable; the solve runs OFF the MCP channel and never touches FreeCAD."""
+    import math
+
+    info = _require_solver("openfoam")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    from driftpin import jobs, solvers
+    from driftpin.analysis import cfd as _cfd
+
+    diameter_mm = float(p["diameter_mm"])
+    length_mm = float(p["length_mm"])
+    D = diameter_mm / 1000.0
+    L = length_mm / 1000.0
+    mu, rho = _cfd._fluid_props(p.get("fluid", "water-20c"),
+                                p.get("mu_pa_s"), p.get("rho_kg_m3"))
+    nu = mu / rho
+    area = math.pi * D * D / 4.0
+    velocity = p.get("velocity_m_s")
+    if velocity is None:
+        if p.get("flow_rate_lpm") is None:
+            raise ValueError("provide velocity_m_s or flow_rate_lpm")
+        velocity = (float(p["flow_rate_lpm"]) / 1000.0 / 60.0) / area
+    velocity = float(velocity)
+    n_axial = int(p.get("n_axial", 120))
+    n_radial = int(p.get("n_radial", 15))
+    end_time = int(p.get("end_time", 4000))
+
+    hp = _cfd.pipe_pressure_drop(diameter_mm=diameter_mm, length_mm=length_mm,
+                                 velocity_m_s=velocity, mu_pa_s=mu, rho_kg_m3=rho)
+    env_bashrc = solvers.openfoam_bashrc()
+    key = jobs.content_key("cfd_internal_flow", {"pipe": {
+        "D": D, "L": L, "U": velocity, "nu": nu, "rho": rho,
+        "na": n_axial, "nr": n_radial, "et": end_time}})
+
+    def _work():
+        import tempfile
+        from driftpin.analysis import openfoam as _of
+        cdir = tempfile.mkdtemp(prefix="foam_pipe_")
+        built = _of.write_pipe_case(
+            cdir, diameter_m=D, length_m=L, velocity_m_s=velocity, nu_m2_s=nu,
+            n_axial=n_axial, n_radial=n_radial, end_time=end_time)
+        rc, tail = _run_foam(cdir, [["blockMesh"], ["simpleFoam"]], env_bashrc)
+        out = {
+            "ok": rc == 0,
+            "returncode": rc,
+            "solver": "openfoam",
+            "kind": "internal",
+            "case_dir": cdir,
+            "reynolds": round(built["reynolds"], 3),
+            "regime": hp["regime"],
+            "hagen_poiseuille_pa": hp["hagen_poiseuille_pa"],
+            "stdout_tail": tail,
+        }
+        parsed = _of.parse_pressure_drop(cdir, rho_kg_m3=rho)
+        if parsed:
+            out["pressure_drop_pa"] = round(parsed["dp_developed_pa"], 6)
+            out["pressure_drop_inlet_pa"] = round(parsed["dp_inlet_pa"], 6)
+            out["n_cells"] = parsed["n_cells"]
+            if hp["hagen_poiseuille_pa"] > 0:
+                out["hp_ratio"] = round(parsed["dp_developed_pa"]
+                                        / hp["hagen_poiseuille_pa"], 4)
+        return out
+
+    return jobs.submit("cfd_internal_flow", _work, key=key,
+                       meta={"mode": "pipe", "diameter_mm": diameter_mm,
+                             "length_mm": length_mm})
+
+
 @handler("cfd_internal_flow_submit")
 def _h_cfd_internal_flow_submit(p):
-    """Internal-flow CFD (pressure drop / recirculation) via OpenFOAM or SU2, OFF the
-    MCP channel. Degrades to {ok:false, reason, install} when no CFD solver resolves —
-    the locally-verified gate; the heavy solve runs only on the provisioned runner.
-    When present, runs the solver app in a prepared OpenFOAM `case_dir` in a background
-    subprocess. (The exact laminar oracle with no solver is cfd_pipe_flow;
-    FreeCAD-model→case meshing is a follow-on.)
+    """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, OFF the MCP channel.
+    Degrades to {ok:false, reason, install} when no CFD solver resolves (never raises).
 
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
-    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
-    return _openfoam_submit(p, "internal")
+    Two ways to drive it:
+      * **Build the straight-pipe validation case** — pass `diameter_mm`, `length_mm`,
+        and `velocity_m_s` (or `flow_rate_lpm`), plus a `fluid` name or `mu_pa_s`+
+        `rho_kg_m3`. The handler builds the axisymmetric laminar pipe, runs
+        blockMesh+simpleFoam, and returns the solved pressure drop next to the
+        Hagen–Poiseuille reference — the kickoff's exact CFD gate (`hp_ratio` ~ 1).
+      * **Run a prepared OpenFOAM `case_dir`** containing its own mesh + dictionaries.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. For
+    the pipe case: {ok, returncode, reynolds, regime, pressure_drop_pa (developed),
+    pressure_drop_inlet_pa, hagen_poiseuille_pa, hp_ratio, n_cells, case_dir}. For a
+    prepared case: {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    if p.get("case_dir"):
+        return _openfoam_submit(p, "internal")
+    if p.get("diameter_mm") is not None:
+        return _cfd_pipe_submit(p)
+    raise ValueError(
+        "provide a prepared `case_dir`, or the straight-pipe params (diameter_mm, "
+        "length_mm, velocity_m_s or flow_rate_lpm) to build the Hagen–Poiseuille "
+        "validation case")
 
 
 @handler("cfd_external_flow_submit")

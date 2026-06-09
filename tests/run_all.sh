@@ -87,6 +87,14 @@ echo "== Internal-flow / Hagen-Poiseuille toys (pure-Python; no FreeCAD) =="
 python3 tests/test_cfd.py
 
 echo
+echo "== Elmer transient-thermal (case gen always; ElmerSolver gate when present) =="
+python3 tests/test_elmer.py
+
+echo
+echo "== OpenFOAM pipe CFD (case gen always; blockMesh+simpleFoam gate when present) =="
+python3 tests/test_openfoam.py
+
+echo
 echo "== MBD dynamics (PyBullet; skip if the mbd extra is absent) =="
 $VENV_PY tests/test_mbd.py
 

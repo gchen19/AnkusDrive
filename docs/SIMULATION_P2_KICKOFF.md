@@ -159,7 +159,9 @@ M2  MBD                ✅ mechanism_simulate_submit (PyBullet) + mechanism_kine
 M3  Topology           ✅ topology_optimize_submit (in-house SIMP) — returns geometry
                           ✅ topology_to_solid — density field → fused FreeCAD solid
 M4  Transient thermal  ✅ thermal_transient_1d (analytic) + thermal_transient_submit (Elmer)
+                          ✅ slab case builder — real ElmerSolver gated vs the Heisler oracle
 M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,external}_flow_submit
+                          ✅ axisymmetric pipe builder — real blockMesh+simpleFoam gated vs Hagen–Poiseuille
 ```
 
 > **Status (branch `feat/sim-p2-provisioning`):** M0 landed —
@@ -216,6 +218,30 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 > run's density reconstructs to a valid solid whose thresholded mass fraction is
 > ≤ `keep_fraction` (the SIMULATION_EXAMPLES §5 geometric gate). **Only the
 > heavy-solver case-from-FreeCAD export (Elmer/OpenFOAM/SU2) now remains as a P2 follow-on.**
+>
+> **Status (branch `feat/sim-p2-solver-cases`, stacked on the above):** the
+> heavy-solver case-build follow-on landed — with ElmerSolver/ElmerGrid (v26.2) and
+> OpenFOAM (1912) **provisioned on the runner**, both families now build their case
+> from physical parameters, run the real solver, and gate against the analytic oracle.
+> - **M4 Elmer** — [`driftpin/analysis/elmer.py`](../driftpin/analysis/elmer.py)
+>   generates the 1-D plane-wall transient case (native Elmer mesh + `.sif`, symmetry
+>   at the centre, convection at the surface, SaveScalars max/min → centre/surface
+>   temps). `thermal_transient_submit` now takes the slab params (or still a prepared
+>   `case_dir`), runs ElmerSolver via `jobs.py`, and returns the temperatures —
+>   matching `thermal_transient_1d` (Heisler) to **< 0.1 %** and the lumped limit at
+>   small Biot. Toys: [`test_elmer.py`](../tests/test_elmer.py) (structure always;
+>   solver gate when ElmerSolver resolves).
+> - **M5 CFD** — [`driftpin/analysis/openfoam.py`](../driftpin/analysis/openfoam.py)
+>   generates the **axisymmetric wedge pipe** (collapsed-axis blockMesh + simpleFoam,
+>   laminar); Δp is read straight from the converged `p` field (the `surfaceFieldValue`
+>   function object is broken in this build). `cfd_internal_flow_submit` now takes the
+>   pipe params (or a prepared `case_dir`), runs blockMesh+simpleFoam via `jobs.py`, and
+>   returns the solved Δp next to the Hagen–Poiseuille reference — **`hp_ratio` ≈ 1.00**
+>   (within ~1 %), and the **D⁴ scaling law** holds (halving the bore → ~16× Δp). Toys:
+>   [`test_openfoam.py`](../tests/test_openfoam.py). The OpenFOAM env-sourcing bug
+>   (`solvers.openfoam_bashrc()`, sourced in `_run_foam`) is fixed — foam apps need
+>   `WM_PROJECT_DIR` exported. **All P2 milestones (M0–M5) and both named follow-ons
+>   are now complete and oracle-gated end-to-end on the provisioned runner.**
 
 Each Mn is a vertical slice in the established pattern: a module/handler/tool, the
 `*_submit` wired through `jobs.py`, a graceful-degradation path, and the two-sided
