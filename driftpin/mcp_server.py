@@ -2822,6 +2822,9 @@ def thermal_transient_submit(
     case_dir: str | None = None,
     sif: str = "case.sif",
     half_thickness_mm: float | None = None,
+    body: str | None = None,
+    convection_faces: list | None = None,
+    char_length_mm: float | None = None,
     h_conv: float | None = None,
     duration_s: float | None = None,
     k: float | None = None,
@@ -2835,7 +2838,7 @@ def thermal_transient_submit(
 ) -> dict:
     """Transient thermal FEM via Elmer, asynchronous. Requires ElmerSolver (apt
     `elmerfem-csc` / conda); when absent this returns {ok:false, reason, install}
-    rather than raising. Two modes:
+    rather than raising. Three modes:
 
     - **Build the analytic-slab case** (no solver case prep needed): pass the
       plane-wall transient — `half_thickness_mm`, `h_conv` (W/m²K), `duration_s`, and
@@ -2845,14 +2848,25 @@ def thermal_transient_submit(
       ElmerSolver, and returns the centre/surface temperatures — the same plane-wall
       BVP `thermal_transient_1d` solves analytically, so the two are directly
       comparable (the kickoff's relative gate).
+    - **Solve a real FreeCAD solid — the geometry bridge**: pass a `body` handle plus
+      `convection_faces` (1-based indices into the solid's faces; those faces get the
+      `h_conv`/`t_ambient_c` convective BC, every other face is adiabatic), the
+      physics (`h_conv`, `duration_s`, `k`+`rho`+`cp` or `material`), and an optional
+      `char_length_mm` Gmsh element size. The solid is Gmsh-meshed and solved as a
+      true 3-D body (ElmerGrid + ElmerSolver); the result's {t_max_c, t_min_c} are
+      the interior/convective-surface temperatures (for a slab-like body, directly
+      gateable against thermal_transient_1d).
     - **Run a prepared `case_dir`** containing its own `.sif` + mesh.
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
     {ok, returncode, solver, case_dir, stdout_tail} plus, for the slab case,
-    {t_center_c, t_surface_c, n_steps_written} (or {scalars_final} for a prepared case)."""
+    {t_center_c, t_surface_c, n_steps_written}, for a body {t_max_c, t_min_c, nodes,
+    tets} (or {scalars_final} for a prepared case)."""
     params = {"sif": sif, "t_initial_c": t_initial_c, "t_ambient_c": t_ambient_c,
               "n_elements": n_elements, "n_steps": n_steps}
     for key, v in (("case_dir", case_dir), ("half_thickness_mm", half_thickness_mm),
+                   ("body", body), ("convection_faces", convection_faces),
+                   ("char_length_mm", char_length_mm),
                    ("h_conv", h_conv), ("duration_s", duration_s),
                    ("k", k), ("rho", rho), ("cp", cp), ("material", material)):
         if v is not None:
@@ -2935,6 +2949,9 @@ def cfd_internal_flow_submit(
     application: str | None = None,
     diameter_mm: float | None = None,
     length_mm: float | None = None,
+    body: str | None = None,
+    inlet_face: int | None = None,
+    outlet_face: int | None = None,
     velocity_m_s: float | None = None,
     flow_rate_lpm: float | None = None,
     fluid: str = "water-20c",
@@ -2942,11 +2959,14 @@ def cfd_internal_flow_submit(
     rho_kg_m3: float | None = None,
     n_axial: int = 120,
     n_radial: int = 15,
+    base_cell_mm: float | None = None,
+    location_in_mesh_mm: list | None = None,
+    stl_tolerance_mm: float = 0.2,
     end_time: int = 4000,
 ) -> dict:
     """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, asynchronous. Requires an
     OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
-    reason, install} rather than raising. Two modes:
+    reason, install} rather than raising. Three modes:
 
     - **Build the straight-pipe validation case** (no case prep): pass `diameter_mm`,
       `length_mm`, and `velocity_m_s` (or `flow_rate_lpm`), with a `fluid` name or
@@ -2954,17 +2974,29 @@ def cfd_internal_flow_submit(
       via `end_time`). The handler builds the axisymmetric laminar pipe, runs
       blockMesh+simpleFoam, and returns the solved Δp next to the Hagen–Poiseuille
       analytic reference (`cfd_pipe_flow`) — the kickoff's exact CFD gate, `hp_ratio`≈1.
+    - **Solve a real FreeCAD solid — the geometry bridge**: pass a `body` handle plus
+      `inlet_face`/`outlet_face` (1-based indices into the solid's faces; every other
+      face becomes a no-slip wall) and `velocity_m_s` (applied along the inlet face's
+      inward normal). The solid tessellates into a multi-region STL and meshes with
+      blockMesh + snappyHexMesh; `base_cell_mm` sets the background cell size,
+      `location_in_mesh_mm` the kept-region seed point (default: bbox centre — set it
+      for non-convex solids), `stl_tolerance_mm` the tessellation sag. Use the
+      developed-profile `pressure_drop_pa`; also pass `diameter_mm`+`length_mm` to get
+      an `hp_ratio` reference for pipe-like bodies.
     - **Run a prepared OpenFOAM `case_dir`** (optionally an `application`, e.g.
       'simpleFoam'/'foamRun'); the OpenFOAM environment is sourced before the run.
 
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Pipe
-    case: {ok, returncode, reynolds, regime, pressure_drop_pa (developed),
-    pressure_drop_inlet_pa, hagen_poiseuille_pa, hp_ratio, n_cells, case_dir}. Prepared
-    case: {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result.
+    Pipe/body cases: {ok, returncode, pressure_drop_pa (developed),
+    pressure_drop_inlet_pa, hagen_poiseuille_pa?, hp_ratio?, n_cells, case_dir}.
+    Prepared case: {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
     params = {"fluid": fluid, "n_axial": n_axial, "n_radial": n_radial,
-              "end_time": end_time}
+              "stl_tolerance_mm": stl_tolerance_mm, "end_time": end_time}
     for k, v in (("case_dir", case_dir), ("application", application),
                  ("diameter_mm", diameter_mm), ("length_mm", length_mm),
+                 ("body", body), ("inlet_face", inlet_face),
+                 ("outlet_face", outlet_face), ("base_cell_mm", base_cell_mm),
+                 ("location_in_mesh_mm", location_in_mesh_mm),
                  ("velocity_m_s", velocity_m_s), ("flow_rate_lpm", flow_rate_lpm),
                  ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3)):
         if v is not None:
