@@ -3929,9 +3929,13 @@ def test_geometry_bridge_box_end_to_end_matches_heisler():
         box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
         # box faces 1 and 2 are x=0 / x=20 (verified mapping): a plane wall of
         # half-thickness 10 mm cooled on both faces, lateral faces adiabatic
+        # Pin the mesh size: Gmsh's default element size varies across versions/hosts,
+        # and a too-coarse box under-resolves this Bi=0.5 transient (CI saw a 13% error
+        # on the default mesh). char_length_mm=2.0 (~10 elements through the wall) lands
+        # the excursion within ~0.3% of Heisler, reproducibly.
         sub = w.call("thermal_transient_submit", body=box["handle"],
                      convection_faces=[1, 2], h_conv=10000.0, duration_s=0.6,
-                     k=200.0, rho=2700.0, cp=900.0,
+                     k=200.0, rho=2700.0, cp=900.0, char_length_mm=2.0,
                      t_initial_c=100.0, t_ambient_c=25.0)
         assert sub.get("job_id"), sub
         deadline = time.monotonic() + 120
