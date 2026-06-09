@@ -6091,6 +6091,61 @@ def _h_random_vibration(p):
     )
 
 
+@handler("contact_setup")
+def _h_contact_setup(p):
+    """Set up surface-to-surface contact between face pairs for a CalculiX solve and
+    flip the solver to nonlinear — promoting the CCX contact/nonlinear flags the FEM
+    path already exposes (no new solver). Each entry of `face_pairs` is
+    {a:{handle, tag|face}, b:{handle, tag|face}} (master, slave). `friction` is the
+    Coulomb coefficient (0 = frictionless); `slope` optionally sets the penalty
+    contact stiffness. The two faces become one FemConstraintContact each.
+
+    Returns {contacts:[handles], n_pairs, friction, nonlinear (whether the solver's
+    GeometricalNonlinearity was set)}. Run fem_run + fem_results after; gate the
+    result RELATIVE to a bonded reference under the same mesh (a bonded model is
+    stiffer — less peak displacement — than the same parts in frictional contact)."""
+    doc = _active_doc()
+    analysis = _resolve_analysis(p["analysis"])
+    pairs = p.get("face_pairs") or []
+    if not pairs:
+        raise ValueError("face_pairs must be a non-empty list of {a, b} face refs")
+    friction = float(p.get("friction", 0.0))
+    handles = []
+    for i, pair in enumerate(pairs):
+        if "a" not in pair or "b" not in pair:
+            raise ValueError(f"face_pair {i} needs both 'a' and 'b' face refs: {pair!r}")
+        refs = _build_references([pair["a"]]) + _build_references([pair["b"]])
+        c = ObjectsFem.makeConstraintContact(doc, p.get("name", "Contact") + f"_{i + 1}")
+        c.References = refs
+        # FreeCAD versions differ: newer ones have Friction (bool toggle) +
+        # FrictionCoefficient (float); older ones make Friction the float coefficient.
+        if "Friction" in c.PropertiesList:
+            if c.getTypeIdOfProperty("Friction") == "App::PropertyBool":
+                c.Friction = friction > 0.0
+                if "FrictionCoefficient" in c.PropertiesList:
+                    c.FrictionCoefficient = friction
+            else:
+                c.Friction = friction
+        if p.get("slope") is not None and "Slope" in c.PropertiesList:
+            c.Slope = p["slope"]
+        analysis.addObject(c)
+        handles.append(_register("contact", c))
+
+    # Contact is a nonlinear analysis in CCX — flip the solver flag unless told not to.
+    nonlinear = False
+    if p.get("nonlinear", True):
+        try:
+            solver = _solver_of(analysis)
+            if "GeometricalNonlinearity" in solver.PropertiesList:
+                solver.GeometricalNonlinearity = "nonlinear"
+                nonlinear = True
+        except RuntimeError:
+            pass                                     # no solver yet; set one with fem_set_solver
+    doc.recompute()
+    return {"contacts": handles, "n_pairs": len(pairs), "friction": friction,
+            "nonlinear": nonlinear}
+
+
 @handler("fem_buckling")
 def _h_fem_buckling(p):
     """Configure the analysis for linear buckling. Sets AnalysisType='buckling'

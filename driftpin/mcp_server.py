@@ -2274,6 +2274,33 @@ def fem_modal_results(analysis: str) -> dict:
 
 
 @mcp.tool()
+def contact_setup(
+    analysis: str,
+    face_pairs: list,
+    friction: float = 0.0,
+    slope: str | float | None = None,
+    nonlinear: bool = True,
+    name: str = "Contact",
+) -> dict:
+    """Set up surface-to-surface contact between face pairs for a CalculiX solve and
+    flip the solver to nonlinear — no new solver (promotes the CCX contact/nonlinear
+    flags the FEM path already exposes). `face_pairs` is a list of
+    {a:{handle, tag|face}, b:{handle, tag|face}} (master, slave) pairs; `friction` is
+    the Coulomb coefficient (0 = frictionless); `slope` optionally sets the penalty
+    contact stiffness; `nonlinear` (default True) sets the solver's
+    GeometricalNonlinearity.
+
+    Run fem_run + fem_results after. Gate RELATIVE to a bonded reference on the same
+    mesh: a bonded model is stiffer (less peak displacement) than frictional contact.
+    Returns {contacts:[handles], n_pairs, friction, nonlinear}."""
+    params = {"analysis": analysis, "face_pairs": face_pairs, "friction": friction,
+              "nonlinear": nonlinear, "name": name}
+    if slope is not None:
+        params["slope"] = slope
+    return _call("contact_setup", **params)
+
+
+@mcp.tool()
 def fem_buckling(analysis: str, n_factors: int = 1) -> dict:
     """Configure analysis for linear buckling. Apply a unit-magnitude force
     constraint at the load location; the result factors are the multipliers
