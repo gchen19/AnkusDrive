@@ -7038,13 +7038,28 @@ def _h_topology_optimize_submit(p):
     Pure-Python background body (no FreeCAD)."""
     from driftpin import jobs
     from driftpin.analysis import topology as topo
-    nelx = int(p.get("nelx", 60))
-    nely = int(p.get("nely", 20))
     nelz = int(p.get("nelz") or 0)
+    # 3-D DOFs grow as the product of three dims, so a 3-D run must NOT inherit the
+    # 2-D grid defaults (nelx=60,nely=20 → ~40k DOFs in 3-D, a multi-minute solve).
+    # Use the small 3-D defaults the optimizer itself ships with, unless overridden.
+    if nelz >= 1:
+        nelx = int(p.get("nelx", 16))
+        nely = int(p.get("nely", 8))
+        max_iter = int(p.get("max_iter", 40))
+    else:
+        nelx = int(p.get("nelx", 60))
+        nely = int(p.get("nely", 20))
+        max_iter = int(p.get("max_iter", 60))
+    # Guard against a runaway grid (accidental or otherwise): cap total DOFs.
+    ndof_est = (3 * (nelx + 1) * (nely + 1) * (nelz + 1) if nelz >= 1
+                else 2 * (nelx + 1) * (nely + 1))
+    if ndof_est > 250000:
+        raise ValueError(
+            f"requested grid is ~{ndof_est} DOFs (cap 250000) — reduce nelx/nely"
+            + ("/nelz" if nelz >= 1 else "") + " to avoid a runaway solve")
     keep_fraction = float(p.get("keep_fraction", 0.4))
     penal = float(p.get("penal", 3.0))
     rmin = float(p.get("rmin", 1.5))
-    max_iter = int(p.get("max_iter", 60))
     tol = float(p.get("tol", 0.01))
     load = p.get("load")
     fixed_dofs = p.get("fixed_dofs")

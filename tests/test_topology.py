@@ -162,6 +162,30 @@ def test_3d_keep_out_stays_void_and_keep_in_stays_solid():
         raise AssertionError("expected ValueError for infeasible keep_in")
 
 
+def test_3d_infeasible_keep_out_and_overlap_rejected():
+    # keep_out that voids more than (1-keep_fraction)·N can't meet the volume target
+    # — reject it (don't silently report converged below keep_fraction).
+    try:
+        topo.simp_topology_3d(nelx=10, nely=10, nelz=2, keep_fraction=0.6,
+                              max_iter=2, keep_out=[[0, 7, 0, 10, 0, 2]])  # voids 70%
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for infeasible keep_out")
+    # keep_out and keep_in cannot claim the same cell (forced void vs forced solid)
+    try:
+        topo.simp_topology_3d(nelx=10, nely=10, nelz=2, keep_fraction=0.5, max_iter=2,
+                              keep_out=[[0, 3, 0, 3, 0, 2]], keep_in=[[0, 3, 0, 3, 0, 2]])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for keep_out/keep_in overlap")
+    # a feasible keep_out still hits the volume target
+    r = topo.simp_topology_3d(nelx=10, nely=10, nelz=2, keep_fraction=0.4, max_iter=5,
+                              keep_out=[[0, 2, 0, 2, 0, 1]])
+    assert abs(r["mass_fraction"] - 0.4) < 0.02, r["mass_fraction"]
+
+
 def test_3d_uniform_cantilever_matches_beam_theory():
     # The relative physics gate: a (near-)uniform-density cantilever's FE
     # compliance vs Euler-Bernoulli + Timoshenko shear, F·δ = F²L³/3EI + κF²L/GA.

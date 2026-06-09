@@ -485,6 +485,18 @@ def simp_topology_3d(
         raise ValueError(
             f"keep_in covers {len(active)} cells > keep_fraction·N = "
             f"{keep_fraction * n:.1f}; raise keep_fraction or shrink keep_in")
+    # Mirror check: if keep_out voids so many cells that the remaining (free + forced-
+    # solid) cells can't reach the volume target, the OC update saturates and would
+    # silently return converged at a mass_fraction below keep_fraction (breaking the
+    # mass_fraction == keep_fraction contract). Reject it like an over-budget keep_in.
+    if passive is not None and len(passive) > (1.0 - keep_fraction) * n + 1e-9:
+        raise ValueError(
+            f"keep_out voids {len(passive)} cells > (1−keep_fraction)·N = "
+            f"{(1.0 - keep_fraction) * n:.1f}; the volume target can't be met — "
+            "lower keep_fraction or shrink keep_out")
+    if passive is not None and active is not None and np.intersect1d(passive, active).size:
+        raise ValueError(
+            "keep_out and keep_in overlap — a cell cannot be both forced void and solid")
 
     def clamp_passive(arr):
         if passive is not None:
