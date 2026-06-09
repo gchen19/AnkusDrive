@@ -3156,6 +3156,40 @@ def topology_optimize_submit(
 
 
 @mcp.tool()
+def topology_to_solid(
+    density: list,
+    threshold: float = 0.5,
+    cell_mm: float = 1.0,
+    thickness_mm: float | None = None,
+    name: str | None = None,
+    placement: list | None = None,
+) -> dict:
+    """Reconstruct a FreeCAD solid from a topology-optimization density field — the
+    modeller-side close of the loop opened by `topology_optimize_submit`, whose
+    `density` grid this consumes. Thresholds the nely×nelx grid (a cell is solid when
+    density ≥ `threshold`), run-length-merges each row into solid spans, tiles each
+    span as a `cell_mm` box extruded `thickness_mm` in Z, and fuses them into one
+    static Part::Feature. `cell_mm` is a scalar (square cells) or [cx, cy] mm;
+    `thickness_mm` defaults to the smaller cell edge; `placement` is an optional
+    [x, y, z] mm origin offset; `name` names the object. Runs synchronously (it builds
+    geometry — no jobs.py poll).
+
+    Returns {handle, name, volume (mm³), solid_cells, total_cells, mass_fraction
+    (== solid_cells/total_cells — must be ≤ keep_fraction within one cell), n_solids
+    (disjoint bodies; >1 means a split load path), threshold, nelx, nely, bbox_mm}.
+    Gate it with mass_properties (mass ≤ keep_fraction·original) and interference_check
+    against keep-out regions, per SIMULATION_EXAMPLES §5."""
+    params = {"density": density, "threshold": threshold, "cell_mm": cell_mm}
+    if thickness_mm is not None:
+        params["thickness_mm"] = thickness_mm
+    if name is not None:
+        params["name"] = name
+    if placement is not None:
+        params["placement"] = placement
+    return _call("topology_to_solid", **params)
+
+
+@mcp.tool()
 def async_demo_submit(duration_s: float = 0.5, value: float = 1.0) -> dict:
     """Reference async long-solve: launch a job that runs OFF the MCP channel and
     return immediately, so a multi-minute solve never blocks the worker. (This demo

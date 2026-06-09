@@ -3825,6 +3825,56 @@ def test_declare_intent_validation():
         assert w.call("ping") == "pong"
 
 
+def test_topology_to_solid_reconstructs_density_field():
+    """topology_to_solid bakes a real solid from a topology density grid (the
+    modeller-side follow-on to topology_optimize_submit). A full grid is exactly
+    cell-tiled; a holed grid drops the void cell; mass_fraction tracks the kept
+    cells — the geometric gate from SIMULATION_EXAMPLES §5."""
+    with Worker() as w:
+        w.call("new_document", name="topo")
+        # full 2x3 grid (nely=2, nelx=3), 10mm square cells, 5mm thick:
+        # volume == 30 x 20 x 5 == 3000 mm^3, one fused solid.
+        full = w.call("topology_to_solid",
+                      density=[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+                      cell_mm=10.0, thickness_mm=5.0)
+        assert abs(full["volume"] - 3000.0) < 1e-6, full["volume"]
+        assert full["mass_fraction"] == 1.0, full
+        assert full["solid_cells"] == 6 and full["total_cells"] == 6, full
+        assert full["n_solids"] == 1, full
+        assert full["bbox_mm"] == [30.0, 20.0, 5.0], full["bbox_mm"]
+        assert full["handle"].startswith("toposolid_"), full["handle"]
+
+        # 3x3 frame (center void): 8 of 9 cells, still one connected solid.
+        frame = w.call("topology_to_solid",
+                       density=[[1, 1, 1], [1, 0, 1], [1, 1, 1]],
+                       cell_mm=10.0, thickness_mm=10.0)
+        assert abs(frame["volume"] - 8000.0) < 1e-6, frame["volume"]   # 8 cells x 1000
+        assert frame["solid_cells"] == 8 and frame["total_cells"] == 9, frame
+        assert frame["mass_fraction"] == round(8 / 9, 6), frame["mass_fraction"]
+        assert frame["n_solids"] == 1, frame
+
+        # a split load path → two disjoint solids in one feature.
+        split = w.call("topology_to_solid", density=[[1, 0, 1]],
+                       cell_mm=10.0, thickness_mm=10.0)
+        assert split["n_solids"] == 2, split
+        assert abs(split["volume"] - 2000.0) < 1e-6, split["volume"]
+
+
+def test_topology_to_solid_empty_threshold_is_a_clean_error():
+    """A threshold above every cell yields no geometry: a structured error, not a
+    crash — and the worker survives it."""
+    with Worker() as w:
+        w.call("new_document", name="topo_empty")
+        try:
+            w.call("topology_to_solid", density=[[0.4, 0.3], [0.2, 0.49]],
+                   threshold=0.5)
+        except WorkerError as e:
+            assert "threshold" in e.remote_message.lower(), e.remote_message
+        else:
+            raise AssertionError("expected WorkerError for an all-void threshold")
+        assert w.call("ping") == "pong", "worker poisoned by the error path"
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

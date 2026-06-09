@@ -6802,6 +6802,80 @@ def _h_topology_optimize_submit(p):
                        meta={"nelx": nelx, "nely": nely, "keep_fraction": keep_fraction})
 
 
+@handler("topology_to_solid")
+def _h_topology_to_solid(p):
+    """Reconstruct a FreeCAD solid from a topology-optimization density field — the
+    modeller-side follow-on that closes the loop opened by topology_optimize_submit
+    (whose `density` grid this consumes). Thresholds the nely×nelx grid (a cell is
+    solid when density >= `threshold`, default 0.5), run-length-merges each row into
+    solid spans, tiles each span as a `cell_mm` box extruded `thickness_mm` in Z,
+    fuses them into one shape and bakes a static Part::Feature. `cell_mm` is a scalar
+    (square cells) or [cx, cy] mm; `thickness_mm` defaults to the smaller cell edge;
+    `placement` is an optional [x, y, z] mm origin offset. Grid row 0 sits at the top
+    (+Y), matching the density grid's reading order. This runs synchronously on the
+    main thread (it builds geometry — unlike the *_submit solves it does NOT use
+    jobs.py). Returns {handle, name, volume (mm^3), solid_cells, total_cells,
+    mass_fraction (==solid_cells/total_cells), n_solids (>1 = a split load path),
+    threshold, nelx, nely, bbox_mm}."""
+    doc = _active_doc()
+    from driftpin.analysis import topology as topo
+    density = p.get("density")
+    if not density:
+        raise ValueError("density (nely×nelx grid 0..1) is required")
+    threshold = float(p.get("threshold", 0.5))
+    cell = p.get("cell_mm", 1.0)
+    if isinstance(cell, (list, tuple)):
+        if len(cell) != 2:
+            raise ValueError("cell_mm must be a number or [cx, cy] in mm")
+        cx, cy = float(cell[0]), float(cell[1])
+    else:
+        cx = cy = float(cell)
+    thickness = float(p.get("thickness_mm", p.get("thickness", min(cx, cy))))
+    if cx <= 0 or cy <= 0 or thickness <= 0:
+        raise ValueError("cell_mm and thickness_mm must be > 0")
+
+    dec = topo.density_to_rects(density, threshold)
+    rects = dec["rects"]
+    if not rects:
+        raise ValueError(
+            f"no cells at or above threshold {threshold}; lower `threshold` or "
+            f"check the density field (max cell < {threshold})")
+    nelx, nely = dec["nelx"], dec["nely"]
+
+    boxes = [
+        Part.makeBox(w * cx, cy, thickness,
+                     App.Vector(i0 * cx, (nely - 1 - j) * cy, 0.0))
+        for (i0, j, w) in rects
+    ]
+    solid = boxes[0] if len(boxes) == 1 else boxes[0].multiFuse(boxes[1:])
+    # adjacent boxes leave coplanar seams; collapse them into single faces.
+    solid = solid.removeSplitter()
+
+    out = doc.addObject("Part::Feature", p.get("name", "TopologySolid"))
+    out.Shape = solid
+    placement = p.get("placement")
+    if placement is not None:
+        if len(placement) != 3:
+            raise ValueError("placement must be [x, y, z] in mm")
+        out.Placement.Base = App.Vector(*(float(c) for c in placement))
+    doc.recompute()
+    h = _register("toposolid", out)
+    bb = solid.BoundBox
+    total = nelx * nely
+    return {
+        "handle": h,
+        "name": out.Name,
+        "volume": solid.Volume,
+        "solid_cells": dec["solid_cells"],
+        "total_cells": total,
+        "mass_fraction": round(dec["solid_cells"] / total, 6),
+        "n_solids": len(solid.Solids),
+        "threshold": threshold,
+        "nelx": nelx, "nely": nely,
+        "bbox_mm": [round(bb.XLength, 4), round(bb.YLength, 4), round(bb.ZLength, 4)],
+    }
+
+
 # --- transient/radiation thermal (family 4 P2; Elmer-backed) ------------------
 
 def _parse_elmer_scalars(case_dir):

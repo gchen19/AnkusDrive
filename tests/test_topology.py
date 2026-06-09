@@ -60,6 +60,50 @@ def test_input_validation():
             raise AssertionError("expected ValueError")
 
 
+# --- density -> solid reconstruction (the modeller-side follow-on) ------------
+
+def test_density_to_rects_run_length_merges_rows():
+    grid = [
+        [0.9, 0.9, 0.1, 0.8],   # cols 0-1 solid (run w2), col 2 void, col 3 solid (w1)
+        [0.2, 0.6, 0.6, 0.6],   # col 0 void, cols 1-3 solid (run w3)
+    ]
+    dec = topo.density_to_rects(grid, threshold=0.5)
+    assert dec["nelx"] == 4 and dec["nely"] == 2, dec
+    # rects emitted row-major, left-to-right; gaps split runs
+    assert dec["rects"] == [(0, 0, 2), (3, 0, 1), (1, 1, 3)], dec["rects"]
+    # solid_cells counts thresholded cells == realized mass fraction numerator
+    assert dec["solid_cells"] == 6, dec["solid_cells"]
+
+
+def test_density_to_rects_full_grid_is_one_run_per_row():
+    grid = [[1.0, 1.0, 1.0]] * 4          # 4 rows x 3 cols, all solid
+    dec = topo.density_to_rects(grid, threshold=0.5)
+    assert dec["rects"] == [(0, j, 3) for j in range(4)], dec["rects"]
+    assert dec["solid_cells"] == 12, dec["solid_cells"]
+
+
+def test_density_to_rects_threshold_excludes_gray():
+    grid = [[0.49, 0.5, 0.51]]            # >= threshold is solid (cols 1,2)
+    dec = topo.density_to_rects(grid, threshold=0.5)
+    assert dec["rects"] == [(1, 0, 2)], dec["rects"]
+    # a higher threshold drops the 0.5 cell, leaving only col 2
+    assert topo.density_to_rects(grid, threshold=0.51)["rects"] == [(2, 0, 1)]
+
+
+def test_density_to_rects_validation():
+    for bad in (
+        lambda: topo.density_to_rects([], threshold=0.5),
+        lambda: topo.density_to_rects([[]], threshold=0.5),
+        lambda: topo.density_to_rects([[1.0, 1.0], [1.0]], threshold=0.5),  # ragged
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

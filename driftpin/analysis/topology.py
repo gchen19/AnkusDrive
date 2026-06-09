@@ -184,3 +184,46 @@ def simp_topology_2d(
         "gray_fraction": round(gray, 4),
         "density": [[round(v, 4) for v in row] for row in grid.tolist()],
     }
+
+
+def density_to_rects(density, threshold: float = 0.5) -> dict:
+    """Decompose a thresholded density field into axis-aligned solid rectangles.
+
+    The modeller-side half of the topology follow-on: ``simp_topology_2d`` returns a
+    ``density`` grid (geometry, not a solid); to hand it to the FreeCAD kernel as a
+    real body each above-threshold cell must become a box. Tiling one box *per cell*
+    would fuse thousands of coincident faces; instead this run-length-merges each row
+    into maximal horizontal spans of solid cells, so the worker fuses O(runs) boxes
+    rather than O(cells). Vertically-stacked runs still share faces, which a single
+    ``removeSplitter`` cleans up after the fuse.
+
+    ``density`` is the nely×nelx row-major grid from ``simp_topology_2d`` (values
+    0..1, ``density[j][i]`` = column i of row j). A cell is solid when its value is
+    ``>= threshold``. Returns ``{nelx, nely, threshold, solid_cells, rects}`` where
+    each rect is ``(col0, row, width)`` — row ``row`` is solid across columns
+    ``col0 .. col0+width-1``. ``solid_cells`` (= Σ width) over ``nelx*nely`` is the
+    realized mass fraction at this threshold. Raises ValueError on an empty or ragged
+    grid."""
+    if not density or not density[0]:
+        raise ValueError("density must be a non-empty 2-D grid")
+    nely = len(density)
+    nelx = len(density[0])
+    rects = []
+    for j, row in enumerate(density):
+        if len(row) != nelx:
+            raise ValueError(
+                f"density rows must all be length {nelx}; row {j} has {len(row)}")
+        i = 0
+        while i < nelx:
+            if row[i] >= threshold:
+                i0 = i
+                while i < nelx and row[i] >= threshold:
+                    i += 1
+                rects.append((i0, j, i - i0))
+            else:
+                i += 1
+    return {
+        "nelx": nelx, "nely": nely, "threshold": threshold,
+        "solid_cells": sum(w for _, _, w in rects),
+        "rects": rects,
+    }
