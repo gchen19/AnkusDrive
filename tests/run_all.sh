@@ -67,8 +67,16 @@ echo "== Planar-kinematics toys (Grashof / stroke / DOF; pure-Python; no FreeCAD
 python3 tests/test_kinematics.py
 
 echo
+echo "== Internal-flow / Hagen-Poiseuille toys (pure-Python; no FreeCAD) =="
+python3 tests/test_cfd.py
+
+echo
 echo "== MBD dynamics (PyBullet; skip if the mbd extra is absent) =="
 $VENV_PY tests/test_mbd.py
+
+echo
+echo "== Topology-optimization toys (SIMP; needs numpy) =="
+$VENV_PY tests/test_topology.py
 
 echo
 echo "== Worker / FreeCAD-side tests =="

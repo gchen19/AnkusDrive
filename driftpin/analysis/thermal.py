@@ -95,3 +95,105 @@ def thermal_lumped(
         "h_rad_w_m2k": round(h_rad, 3),
         "radiation_significant": h_rad > h_conv,
     }
+
+
+def _thermal_property(explicit, card, *keys):
+    """Resolve a thermal property (SI) from an explicit value/quantity-string, else
+    the named Materials-DB card keys. Returns the number or None."""
+    if explicit is not None:
+        return materials.parse_quantity(explicit)[0]
+    for key in keys:
+        if key in card:
+            return materials.parse_quantity(card[key])[0]
+    return None
+
+
+def _first_eigenvalue(bi: float) -> float:
+    """First root ζ₁ of the plane-wall transcendental ζ·tan(ζ) = Bi on (0, π/2).
+    f(ζ)=ζ·tanζ−Bi rises monotonically from −Bi to +∞ there, so bisection is exact."""
+    lo, hi = 1e-9, math.pi / 2.0 - 1e-9
+    for _ in range(100):
+        mid = 0.5 * (lo + hi)
+        if mid * math.tan(mid) - bi > 0:
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+def thermal_transient_1d(
+    half_thickness_mm: float,
+    h_conv: float,
+    duration_s: float,
+    k=None,
+    rho=None,
+    cp=None,
+    alpha_m2_s=None,
+    material: str | None = None,
+    t_initial_c: float = 100.0,
+    t_ambient_c: float = 25.0,
+) -> dict:
+    """1-D transient conduction in a plane wall of half-thickness L, cooling (or
+    heating) toward ambient through surface convection — the one-term series
+    (Heisler) solution, the analytic oracle the Elmer ``thermal_transient`` solve is
+    gated against (and the *distributed* answer the lumped model only screens).
+
+    θ*(x,t) = C₁·exp(−ζ₁²·Fo)·cos(ζ₁·x/L), with Bi = h·L/k, Fo = α·t/L², ζ₁ the first
+    root of ζ·tanζ = Bi, C₁ = 4·sinζ₁/(2ζ₁+sin2ζ₁); the center is x=0, the surface
+    x=L. Diffusivity α = k/(ρ·cₚ) from explicit values/quantity-strings or `material`
+    (Materials DB), or pass `alpha_m2_s` directly. The one-term form is accurate for
+    Fo ≳ 0.2 (``one_term_valid``).
+
+    As Bi→0 the body is isothermal and this collapses to the lumped exponential
+    exp(−Bi·Fo)=exp(−t/τ); ``t_center_lumped_c`` and ``lumped_agrees`` expose that
+    cross-check. Returns {biot, fourier, eigenvalue_1, c1, t_center_c, t_surface_c,
+    t_center_lumped_c, time_constant_s, one_term_valid, lumped_agrees}. Raises
+    ValueError if the properties can't be resolved or inputs are non-positive."""
+    card = materials.get(material) if material else {}
+    L = half_thickness_mm / 1000.0
+    if L <= 0 or h_conv <= 0 or duration_s <= 0:
+        raise ValueError("half_thickness_mm, h_conv, duration_s must be > 0")
+
+    if alpha_m2_s is not None:
+        alpha = float(alpha_m2_s)
+        kk = _thermal_property(k, card, "thermal_conductivity")
+    else:
+        kk = _thermal_property(k, card, "thermal_conductivity")
+        rr = _thermal_property(rho, card, "Density", "density")
+        cc = _thermal_property(cp, card, "specific_heat", "specific_heat_j_kgk")
+        if not (kk and rr and cc):
+            raise ValueError(
+                "provide alpha_m2_s, or k+rho+cp, or a material with "
+                "thermal_conductivity/Density/specific_heat")
+        alpha = kk / (rr * cc)
+    if not kk:
+        raise ValueError("thermal conductivity k is required (explicit or material)")
+
+    bi = h_conv * L / kk
+    fo = alpha * duration_s / (L * L)
+    zeta1 = _first_eigenvalue(bi)
+    c1 = 4.0 * math.sin(zeta1) / (2.0 * zeta1 + math.sin(2.0 * zeta1))
+
+    theta_center = c1 * math.exp(-zeta1 * zeta1 * fo)         # x=0
+    theta_surface = theta_center * math.cos(zeta1)            # x=L
+    dT = t_initial_c - t_ambient_c
+    t_center = t_ambient_c + theta_center * dT
+    t_surface = t_ambient_c + theta_surface * dT
+
+    # lumped limit: τ = ρ·cₚ·Lc/h with Lc = L (slab cooled both faces); θ = exp(−Bi·Fo)
+    theta_lumped = math.exp(-bi * fo)
+    t_center_lumped = t_ambient_c + theta_lumped * dT
+    tau = (bi * fo / duration_s) ** -1 if (bi * fo) > 0 else float("inf")  # = ρcpL/h
+
+    return {
+        "biot": round(bi, 5),
+        "fourier": round(fo, 5),
+        "eigenvalue_1": round(zeta1, 5),
+        "c1": round(c1, 5),
+        "t_center_c": round(t_center, 3),
+        "t_surface_c": round(t_surface, 3),
+        "t_center_lumped_c": round(t_center_lumped, 3),
+        "time_constant_s": round(tau, 3),
+        "one_term_valid": fo >= 0.2,
+        "lumped_agrees": abs(theta_center - theta_lumped) < 0.05,
+    }

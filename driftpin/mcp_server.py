@@ -2274,6 +2274,33 @@ def fem_modal_results(analysis: str) -> dict:
 
 
 @mcp.tool()
+def contact_setup(
+    analysis: str,
+    face_pairs: list,
+    friction: float = 0.0,
+    slope: str | float | None = None,
+    nonlinear: bool = True,
+    name: str = "Contact",
+) -> dict:
+    """Set up surface-to-surface contact between face pairs for a CalculiX solve and
+    flip the solver to nonlinear — no new solver (promotes the CCX contact/nonlinear
+    flags the FEM path already exposes). `face_pairs` is a list of
+    {a:{handle, tag|face}, b:{handle, tag|face}} (master, slave) pairs; `friction` is
+    the Coulomb coefficient (0 = frictionless); `slope` optionally sets the penalty
+    contact stiffness; `nonlinear` (default True) sets the solver's
+    GeometricalNonlinearity.
+
+    Run fem_run + fem_results after. Gate RELATIVE to a bonded reference on the same
+    mesh: a bonded model is stiffer (less peak displacement) than frictional contact.
+    Returns {contacts:[handles], n_pairs, friction, nonlinear}."""
+    params = {"analysis": analysis, "face_pairs": face_pairs, "friction": friction,
+              "nonlinear": nonlinear, "name": name}
+    if slope is not None:
+        params["slope"] = slope
+    return _call("contact_setup", **params)
+
+
+@mcp.tool()
 def fem_buckling(analysis: str, n_factors: int = 1) -> dict:
     """Configure analysis for linear buckling. Apply a unit-magnitude force
     constraint at the load location; the result factors are the multipliers
@@ -2757,6 +2784,136 @@ def thermal_lumped(
 
 
 @mcp.tool()
+def thermal_transient_1d(
+    half_thickness_mm: float,
+    h_conv: float,
+    duration_s: float,
+    k: str | float | None = None,
+    rho: str | float | None = None,
+    cp: str | float | None = None,
+    alpha_m2_s: float | None = None,
+    material: str | None = None,
+    t_initial_c: float = 100.0,
+    t_ambient_c: float = 25.0,
+) -> dict:
+    """Analytic 1-D plane-wall transient conduction (one-term Heisler series), valid
+    for Fourier ≳ 0.2 — the closed-form transient the Elmer thermal_transient solve is
+    gated against, and the *distributed* (spatial-gradient) answer the lumped screen
+    only approximates. A wall of half-thickness L cools/heats toward ambient by surface
+    convection: Bi = h·L/k, Fo = α·t/L², α = k/(ρ·cₚ). Pass `alpha_m2_s`, or k+rho+cp,
+    or a `material` (Materials DB: thermal_conductivity/Density/specific_heat).
+
+    As Bi→0 the body is isothermal and this collapses to the lumped exponential
+    exp(−t/τ) (cross-checked via t_center_lumped_c / lumped_agrees). Returns {biot,
+    fourier, eigenvalue_1, c1, t_center_c, t_surface_c, t_center_lumped_c,
+    time_constant_s, one_term_valid, lumped_agrees}."""
+    params = {"half_thickness_mm": half_thickness_mm, "h_conv": h_conv,
+              "duration_s": duration_s, "t_initial_c": t_initial_c,
+              "t_ambient_c": t_ambient_c}
+    for key, v in (("k", k), ("rho", rho), ("cp", cp), ("alpha_m2_s", alpha_m2_s),
+                   ("material", material)):
+        if v is not None:
+            params[key] = v
+    return _call("thermal_transient_1d", **params)
+
+
+@mcp.tool()
+def thermal_transient_submit(
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+    analysis: str | None = None,
+    duration_s: float | None = None,
+    dt_s: float | None = None,
+) -> dict:
+    """Transient / radiation thermal FEM via Elmer, asynchronous (heavy solve runs on
+    the provisioned runner). Requires ElmerSolver (apt `elmerfem-csc` / conda); when
+    it's absent this returns {ok:false, reason, install} rather than raising. Provide a
+    prepared Elmer `case_dir` (with its `.sif`); it runs ElmerSolver there in the
+    background and parses the SaveScalars history. (The analytic transient with no
+    solver is thermal_transient_1d; building the case from a FreeCAD `analysis` is a
+    follow-on.)
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, case_dir, scalars_final, stdout_tail}."""
+    params = {"sif": sif}
+    for key, v in (("case_dir", case_dir), ("analysis", analysis),
+                   ("duration_s", duration_s), ("dt_s", dt_s)):
+        if v is not None:
+            params[key] = v
+    return _call("thermal_transient_submit", **params)
+
+
+@mcp.tool()
+def cfd_pipe_flow(
+    diameter_mm: float,
+    length_mm: float,
+    flow_rate_lpm: float | None = None,
+    velocity_m_s: float | None = None,
+    fluid: str = "water-20c",
+    mu_pa_s: float | None = None,
+    rho_kg_m3: float | None = None,
+) -> dict:
+    """Analytic straight-pipe pressure drop (NO solver) — the fast internal-flow screen
+    and the exact gate the OpenFOAM cfd_internal_flow solve is checked against. Laminar
+    (Re<2300) is Hagen–Poiseuille Δp = 128·μ·L·Q/(π·D⁴) with its D⁴ scaling; turbulent
+    uses smooth-pipe Blasius. Give flow as `flow_rate_lpm` or `velocity_m_s`; fluid μ,ρ
+    from a name ('water-20c','air-20c','oil-sae30-20c','glycerin-20c') or explicit
+    `mu_pa_s`+`rho_kg_m3`.
+
+    Returns {reynolds, regime, velocity_m_s, flow_rate_m3_s, friction_factor,
+    pressure_drop_pa, wall_shear_pa, hagen_poiseuille_pa, laminar}."""
+    params = {"diameter_mm": diameter_mm, "length_mm": length_mm, "fluid": fluid}
+    for k, v in (("flow_rate_lpm", flow_rate_lpm), ("velocity_m_s", velocity_m_s),
+                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3)):
+        if v is not None:
+            params[k] = v
+    return _call("cfd_pipe_flow", **params)
+
+
+@mcp.tool()
+def cfd_internal_flow_submit(
+    case_dir: str | None = None,
+    application: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """Internal-flow CFD (pressure drop / recirculation) via OpenFOAM or SU2,
+    asynchronous (heavy solve runs on the provisioned runner). Requires an OpenFOAM
+    (apt/conda) or SU2 binary; when none resolves this returns {ok:false, reason,
+    install} rather than raising. Provide a prepared OpenFOAM `case_dir` (optionally an
+    `application` to run, e.g. 'simpleFoam'/'foamRun'); it runs the solver there in the
+    background. (The exact analytic screen with no solver is cfd_pipe_flow; building the
+    case from a FreeCAD `model` is a follow-on.)
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    params = {}
+    for k, v in (("case_dir", case_dir), ("application", application), ("model", model)):
+        if v is not None:
+            params[k] = v
+    return _call("cfd_internal_flow_submit", **params)
+
+
+@mcp.tool()
+def cfd_external_flow_submit(
+    case_dir: str | None = None,
+    application: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """External-flow CFD (drag / lift) via OpenFOAM or SU2, asynchronous. Same contract
+    as cfd_internal_flow_submit: degrades to {ok:false, reason, install} when no CFD
+    solver resolves, else runs the solver app in a prepared `case_dir` in the background
+    (forces vs pressure-drop extraction lives in the case's functionObjects).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    params = {}
+    for k, v in (("case_dir", case_dir), ("application", application), ("model", model)):
+        if v is not None:
+            params[k] = v
+    return _call("cfd_external_flow_submit", **params)
+
+
+@mcp.tool()
 def random_vibration(
     psd_profile: list,
     analysis: str | None = None,
@@ -2963,6 +3120,39 @@ def mechanism_simulate_submit(
         if v is not None:
             params[k] = v
     return _call("mechanism_simulate_submit", **params)
+
+
+@mcp.tool()
+def topology_optimize_submit(
+    nelx: int = 60,
+    nely: int = 20,
+    keep_fraction: float = 0.4,
+    penal: float = 3.0,
+    rmin: float = 1.5,
+    max_iter: int = 60,
+    tol: float = 0.01,
+    load: list | None = None,
+    fixed_dofs: list | None = None,
+) -> dict:
+    """Minimum-compliance topology optimization (in-house SIMP; NO external solver),
+    asynchronous because each iteration solves an FE system. Optimizes a 2-D
+    rectangular design domain (`nelx`×`nely` unit cells) to the stiffest layout that
+    holds Σdensity = `keep_fraction` (the Optimality-Criteria update holds it exactly);
+    `penal` is the SIMP penalty (≈3), `rmin` the cone filter radius. Default BCs: left
+    edge clamped + unit downward load at the right-edge mid-height (override
+    `fixed_dofs` / `load`=[dof_index, value]).
+
+    Returns immediately {job_id, status, cache_hit}; poll job_result for {density
+    (nely×nelx grid 0..1 — this IS geometry), mass_fraction (==keep_fraction),
+    compliance, compliance_initial, iterations, converged, gray_fraction}. Threshold
+    + voxel→solid back in the modeller, then gate with mass_properties (mass ≤
+    keep_fraction·original) and interference_check vs keep-outs."""
+    params = {"nelx": nelx, "nely": nely, "keep_fraction": keep_fraction,
+              "penal": penal, "rmin": rmin, "max_iter": max_iter, "tol": tol}
+    for k, v in (("load", load), ("fixed_dofs", fixed_dofs)):
+        if v is not None:
+            params[k] = v
+    return _call("topology_optimize_submit", **params)
 
 
 @mcp.tool()

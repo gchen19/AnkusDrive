@@ -6091,6 +6091,61 @@ def _h_random_vibration(p):
     )
 
 
+@handler("contact_setup")
+def _h_contact_setup(p):
+    """Set up surface-to-surface contact between face pairs for a CalculiX solve and
+    flip the solver to nonlinear — promoting the CCX contact/nonlinear flags the FEM
+    path already exposes (no new solver). Each entry of `face_pairs` is
+    {a:{handle, tag|face}, b:{handle, tag|face}} (master, slave). `friction` is the
+    Coulomb coefficient (0 = frictionless); `slope` optionally sets the penalty
+    contact stiffness. The two faces become one FemConstraintContact each.
+
+    Returns {contacts:[handles], n_pairs, friction, nonlinear (whether the solver's
+    GeometricalNonlinearity was set)}. Run fem_run + fem_results after; gate the
+    result RELATIVE to a bonded reference under the same mesh (a bonded model is
+    stiffer — less peak displacement — than the same parts in frictional contact)."""
+    doc = _active_doc()
+    analysis = _resolve_analysis(p["analysis"])
+    pairs = p.get("face_pairs") or []
+    if not pairs:
+        raise ValueError("face_pairs must be a non-empty list of {a, b} face refs")
+    friction = float(p.get("friction", 0.0))
+    handles = []
+    for i, pair in enumerate(pairs):
+        if "a" not in pair or "b" not in pair:
+            raise ValueError(f"face_pair {i} needs both 'a' and 'b' face refs: {pair!r}")
+        refs = _build_references([pair["a"]]) + _build_references([pair["b"]])
+        c = ObjectsFem.makeConstraintContact(doc, p.get("name", "Contact") + f"_{i + 1}")
+        c.References = refs
+        # FreeCAD versions differ: newer ones have Friction (bool toggle) +
+        # FrictionCoefficient (float); older ones make Friction the float coefficient.
+        if "Friction" in c.PropertiesList:
+            if c.getTypeIdOfProperty("Friction") == "App::PropertyBool":
+                c.Friction = friction > 0.0
+                if "FrictionCoefficient" in c.PropertiesList:
+                    c.FrictionCoefficient = friction
+            else:
+                c.Friction = friction
+        if p.get("slope") is not None and "Slope" in c.PropertiesList:
+            c.Slope = p["slope"]
+        analysis.addObject(c)
+        handles.append(_register("contact", c))
+
+    # Contact is a nonlinear analysis in CCX — flip the solver flag unless told not to.
+    nonlinear = False
+    if p.get("nonlinear", True):
+        try:
+            solver = _solver_of(analysis)
+            if "GeometricalNonlinearity" in solver.PropertiesList:
+                solver.GeometricalNonlinearity = "nonlinear"
+                nonlinear = True
+        except RuntimeError:
+            pass                                     # no solver yet; set one with fem_set_solver
+    doc.recompute()
+    return {"contacts": handles, "n_pairs": len(pairs), "friction": friction,
+            "nonlinear": nonlinear}
+
+
 @handler("fem_buckling")
 def _h_fem_buckling(p):
     """Configure the analysis for linear buckling. Sets AnalysisType='buckling'
@@ -6520,6 +6575,29 @@ def _h_thermal_lumped(p):
     return thermal.thermal_lumped(**p)
 
 
+@handler("thermal_transient_1d")
+def _h_thermal_transient_1d(p):
+    """Analytic 1-D plane-wall transient (one-term Heisler series) — the closed-form
+    oracle the Elmer thermal_transient solve is gated against, and the distributed
+    answer the lumped screen only approximates. See driftpin.analysis.thermal. Returns
+    {biot, fourier, eigenvalue_1, c1, t_center_c, t_surface_c, t_center_lumped_c,
+    time_constant_s, one_term_valid, lumped_agrees}."""
+    from driftpin.analysis import thermal
+    return thermal.thermal_transient_1d(**p)
+
+
+@handler("cfd_pipe_flow")
+def _h_cfd_pipe_flow(p):
+    """Analytic straight-pipe pressure drop (no solver) — Hagen–Poiseuille in the
+    laminar regime (the exact CFD gate) and Blasius for smooth turbulent. The fast
+    internal-flow screen and the oracle the OpenFOAM cfd_internal_flow solve is gated
+    against. See driftpin.analysis.cfd. Returns {reynolds, regime, velocity_m_s,
+    flow_rate_m3_s, friction_factor, pressure_drop_pa, wall_shear_pa,
+    hagen_poiseuille_pa, laminar}."""
+    from driftpin.analysis import cfd
+    return cfd.pipe_pressure_drop(**p)
+
+
 @handler("dfm_check")
 def _h_dfm_check(p):
     from driftpin.analysis import dfx
@@ -6683,6 +6761,177 @@ def _h_mechanism_simulate_submit(p):
                       meta={"n_links": n_links, "duration_s": duration_s})
     res["mobility_dof"] = mobility
     return res
+
+
+# --- topology optimization (family 5; in-house SIMP, no external solver) ------
+
+@handler("topology_optimize_submit")
+def _h_topology_optimize_submit(p):
+    """Minimum-compliance topology optimization (in-house NumPy SIMP — no external
+    solver), run OFF the MCP channel because each iteration solves an FE system.
+    Optimizes a 2-D rectangular design domain (nelx×nely unit cells) to the stiffest
+    layout subject to Σdensity = keep_fraction (held exactly by the OC update).
+    Default BCs: left edge clamped + unit downward load at the right-edge mid-height
+    (override `fixed_dofs` / `load`=[dof_index, value]).
+
+    Returns {job_id, status, cache_hit}; poll job_result for {density (nely×nelx grid
+    0..1 — this is geometry), mass_fraction, compliance, compliance_initial,
+    iterations, converged, gray_fraction}. Pure-Python background body (no FreeCAD)."""
+    from driftpin import jobs
+    from driftpin.analysis import topology as topo
+    nelx = int(p.get("nelx", 60))
+    nely = int(p.get("nely", 20))
+    keep_fraction = float(p.get("keep_fraction", 0.4))
+    penal = float(p.get("penal", 3.0))
+    rmin = float(p.get("rmin", 1.5))
+    max_iter = int(p.get("max_iter", 60))
+    tol = float(p.get("tol", 0.01))
+    load = p.get("load")
+    fixed_dofs = p.get("fixed_dofs")
+    key = jobs.content_key("topology_optimize", {
+        "nelx": nelx, "nely": nely, "keep_fraction": keep_fraction, "penal": penal,
+        "rmin": rmin, "max_iter": max_iter, "tol": tol, "load": load,
+        "fixed_dofs": fixed_dofs})
+
+    def _work():
+        return topo.simp_topology_2d(
+            nelx=nelx, nely=nely, keep_fraction=keep_fraction, penal=penal,
+            rmin=rmin, max_iter=max_iter, tol=tol, load=load, fixed_dofs=fixed_dofs)
+
+    return jobs.submit("topology_optimize", _work, key=key,
+                       meta={"nelx": nelx, "nely": nely, "keep_fraction": keep_fraction})
+
+
+# --- transient/radiation thermal (family 4 P2; Elmer-backed) ------------------
+
+def _parse_elmer_scalars(case_dir):
+    """Best-effort parse of an Elmer SaveScalars .dat (whitespace columns; the last
+    row is the final timestep). Returns that row as floats, or None when absent."""
+    import glob
+    dats = sorted(glob.glob(os.path.join(case_dir, "*.dat")))
+    if not dats:
+        return None
+    with open(dats[-1]) as f:
+        rows = [r for r in f.read().splitlines() if r.strip()]
+    if not rows:
+        return None
+    try:
+        return [float(x) for x in rows[-1].split()]
+    except ValueError:
+        return None
+
+
+@handler("thermal_transient_submit")
+def _h_thermal_transient_submit(p):
+    """Transient / radiation thermal FEM via Elmer, OFF the MCP channel. Degrades to
+    {ok:false, reason, install} when ElmerSolver is absent — the locally-verified gate;
+    the heavy solve runs only on the provisioned runner. When present, runs ElmerSolver
+    on a prepared case directory (`case_dir` containing its `.sif`) in a background
+    subprocess and parses the SaveScalars time history. (Writing the Elmer case from a
+    live FreeCAD analysis is a documented follow-on; the analytic oracle is
+    thermal_transient_1d.)
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, case_dir, scalars_final, stdout_tail}."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    from driftpin import jobs
+    case_dir = p.get("case_dir")
+    if not case_dir or not os.path.isdir(case_dir):
+        raise ValueError(
+            "thermal_transient_submit needs a prepared Elmer `case_dir` (with its "
+            ".sif). Building the case from a FreeCAD analysis is a follow-on; the "
+            "analytic transient is thermal_transient_1d.")
+    sif = p.get("sif", "case.sif")
+    elmer_bin = info["path"]
+    key = jobs.content_key("thermal_transient",
+                           {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+    def _work():
+        import subprocess
+        proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                              capture_output=True, text=True)
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "case_dir": case_dir,
+            "scalars_final": _parse_elmer_scalars(case_dir),
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+
+    return jobs.submit("thermal_transient", _work, key=key,
+                       meta={"case_dir": case_dir, "duration_s": p.get("duration_s")})
+
+
+# --- CFD (family 6 P2; OpenFOAM/SU2-backed) -----------------------------------
+
+def _openfoam_submit(p, kind):
+    """Shared OpenFOAM/SU2 runner for the cfd_*_flow_submit handlers. Degrades to the
+    structured dict when no CFD solver resolves; otherwise runs the solver app in a
+    prepared OpenFOAM `case_dir` as a background subprocess. ``kind`` ('internal' |
+    'external') only labels the job/meta — the parse is the same run summary, since
+    pressure-drop vs force extraction lives in the case's functionObjects."""
+    info = _require_solver("openfoam")
+    if not info["ok"]:
+        info_su2 = _require_solver("su2")             # SU2 is the documented alternative
+        if not info_su2["ok"]:
+            return info                               # report the primary solver's hint
+        info = info_su2
+    import shutil
+    from driftpin import jobs
+    case_dir = p.get("case_dir")
+    if not case_dir or not os.path.isdir(case_dir):
+        raise ValueError(
+            f"cfd_{kind}_flow_submit needs a prepared CFD `case_dir`. Building the "
+            "case from a FreeCAD model is a follow-on; the analytic internal-flow "
+            "screen with no solver is cfd_pipe_flow.")
+    # which application to run: explicit override, else the resolved binary
+    app = p.get("application") or os.path.basename(info["path"])
+    solver_bin = info["path"] if not p.get("application") else (shutil.which(app) or app)
+    key = jobs.content_key(f"cfd_{kind}_flow",
+                           {"case_dir": os.path.abspath(case_dir), "app": app})
+
+    def _work():
+        import subprocess
+        proc = subprocess.run([solver_bin], cwd=case_dir, capture_output=True, text=True)
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": info["name"],
+            "application": app,
+            "case_dir": case_dir,
+            "kind": kind,
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+
+    return jobs.submit(f"cfd_{kind}_flow", _work, key=key,
+                       meta={"case_dir": case_dir, "kind": kind, "application": app})
+
+
+@handler("cfd_internal_flow_submit")
+def _h_cfd_internal_flow_submit(p):
+    """Internal-flow CFD (pressure drop / recirculation) via OpenFOAM or SU2, OFF the
+    MCP channel. Degrades to {ok:false, reason, install} when no CFD solver resolves —
+    the locally-verified gate; the heavy solve runs only on the provisioned runner.
+    When present, runs the solver app in a prepared OpenFOAM `case_dir` in a background
+    subprocess. (The exact laminar oracle with no solver is cfd_pipe_flow;
+    FreeCAD-model→case meshing is a follow-on.)
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    return _openfoam_submit(p, "internal")
+
+
+@handler("cfd_external_flow_submit")
+def _h_cfd_external_flow_submit(p):
+    """External-flow CFD (drag / lift) via OpenFOAM or SU2, OFF the MCP channel. Same
+    degradation + prepared-`case_dir` execution contract as cfd_internal_flow_submit
+    (the forces vs pressure-drop distinction lives in the case's functionObjects).
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    return _openfoam_submit(p, "external")
 
 
 # --- generic async jobs (driftpin.jobs) ---------------------------------------
