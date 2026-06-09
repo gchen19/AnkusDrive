@@ -6426,6 +6426,30 @@ def _h_gdt_check(p):
     return tolerance.gdt_check(**p)
 
 
+@handler("fatigue_check")
+def _h_fatigue_check(p):
+    from driftpin.analysis import durability
+    return durability.fatigue_check(**p)
+
+
+@handler("fracture_check")
+def _h_fracture_check(p):
+    from driftpin.analysis import durability
+    return durability.fracture_check(**p)
+
+
+@handler("wear_estimate")
+def _h_wear_estimate(p):
+    from driftpin.analysis import durability
+    return durability.wear_estimate(**p)
+
+
+@handler("creep_flag")
+def _h_creep_flag(p):
+    from driftpin.analysis import durability
+    return durability.creep_flag(**p)
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:

@@ -31,6 +31,10 @@ echo "== Tolerance & GD&T toys (pure-Python; no FreeCAD) =="
 python3 tests/test_tolerance.py
 
 echo
+echo "== Wear / fatigue / fracture toys (pure-Python; no FreeCAD) =="
+python3 tests/test_durability.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

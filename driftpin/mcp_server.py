@@ -2617,6 +2617,96 @@ def gdt_check(
     return _call("gdt_check", **params)
 
 
+@mcp.tool()
+def fatigue_check(
+    stress_range_mpa: float,
+    mean_stress_mpa: float = 0.0,
+    cycles: float = 1_000_000.0,
+    material: str = "Steel-1045",
+    endurance_mpa: float | None = None,
+    uts_mpa: float | None = None,
+) -> dict:
+    """Rate fatigue life (S-N Basquin + Goodman mean-stress correction). σ_a =
+    stress_range/2; infinite-life SF = 1/(σ_a/σ_e + σ_m/σ_uts); finite life from
+    an equivalent fully-reversed amplitude on a log-log S-N line. σ_e/σ_uts come
+    from the material (or overrides). pass = survives `cycles` (σ_ar ≤ σ_e ⇒
+    infinite life); a tensile mean ≥ σ_uts fails outright. Returns
+    {stress_amplitude_mpa, mean_stress_mpa, endurance_mpa, uts_mpa,
+    equiv_reversed_mpa, safety_factor, life_cycles, required_cycles, pass,
+    governing_mode, endurance_basis}."""
+    params = {"stress_range_mpa": stress_range_mpa, "mean_stress_mpa": mean_stress_mpa,
+              "cycles": cycles, "material": material}
+    if endurance_mpa is not None:
+        params["endurance_mpa"] = endurance_mpa
+    if uts_mpa is not None:
+        params["uts_mpa"] = uts_mpa
+    return _call("fatigue_check", **params)
+
+
+@mcp.tool()
+def fracture_check(
+    stress_mpa: float,
+    crack_len_mm: float,
+    material: str = "Steel-1045",
+    geometry_factor: float = 1.12,
+    fracture_toughness_mpa_sqrt_m: float | None = None,
+) -> dict:
+    """Rate brittle fracture (LEFM): K = Y·σ·√(π·a) vs K_IC. a is crack length in
+    mm; Y (geometry_factor) defaults 1.12 (edge crack), 1.0 for a centre crack.
+    K_IC from the material (or override). Critical crack a_c = (K_IC/(Y·σ))²/π.
+    Returns {k_applied_mpa_sqrt_m, k_ic_mpa_sqrt_m, geometry_factor, safety_factor,
+    margin, critical_crack_mm, pass}; a crack past a_c gives SF<1 and margin<0."""
+    params = {"stress_mpa": stress_mpa, "crack_len_mm": crack_len_mm,
+              "material": material, "geometry_factor": geometry_factor}
+    if fracture_toughness_mpa_sqrt_m is not None:
+        params["fracture_toughness_mpa_sqrt_m"] = fracture_toughness_mpa_sqrt_m
+    return _call("fracture_check", **params)
+
+
+@mcp.tool()
+def wear_estimate(
+    load_n: float,
+    sliding_dist_m: float,
+    material_pair: list | None = None,
+    wear_coef: float | None = None,
+    hardness_mpa: float | None = None,
+    apparent_area_mm2: float | None = None,
+    max_depth_mm: float | None = None,
+) -> dict:
+    """Estimate sliding wear (Archard): V = k·F·s/H. k (wear_coef) is empirical —
+    pass it, or it's looked up by the material_pair's category pair (order-of-
+    magnitude). H (hardness_mpa) defaults to Tabor 3·σ_y of the softer member.
+    With apparent_area_mm2 a mean depth is reported and gated by max_depth_mm.
+    Returns {wear_coef, hardness_mpa, volume_loss_mm3, depth_loss_mm, coef_basis,
+    hardness_basis, pass}."""
+    params = {"load_n": load_n, "sliding_dist_m": sliding_dist_m}
+    for k, v in (("material_pair", material_pair), ("wear_coef", wear_coef),
+                 ("hardness_mpa", hardness_mpa),
+                 ("apparent_area_mm2", apparent_area_mm2),
+                 ("max_depth_mm", max_depth_mm)):
+        if v is not None:
+            params[k] = v
+    return _call("wear_estimate", **params)
+
+
+@mcp.tool()
+def creep_flag(
+    stress_mpa: float,
+    temp_c: float,
+    material: str = "Steel-1045",
+    max_service_temp_c: float | None = None,
+) -> dict:
+    """Screen for creep risk: compare operating temperature to the material's max
+    service temperature (Materials DB, or an override). A screen, not a
+    Larson-Miller life model. pass = below the service limit. Returns
+    {operating_temp_c, service_temp_c, margin_c, stress_mpa, creep_risk, pass,
+    reason}."""
+    params = {"stress_mpa": stress_mpa, "temp_c": temp_c, "material": material}
+    if max_service_temp_c is not None:
+        params["max_service_temp_c"] = max_service_temp_c
+    return _call("creep_flag", **params)
+
+
 def run():
     mcp.run()
 

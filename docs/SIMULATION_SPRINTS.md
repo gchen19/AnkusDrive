@@ -23,15 +23,15 @@ negative is caught.
 | 2 · Materials & selection | ✅ **shipped** — `material_get` / `material_select` / `material_list`, seed corpus + CC0 optical layer (Sellmeier `refractive_index_at`) |
 | 10 · Machine-element rating | ✅ **shipped** — bolt / bearing / spring / gear / belt / press-fit / seal, 12 hand-verified toys |
 | 1 · Tolerance & GD&T | ✅ **shipped** — `tolerance_stackup` / `fit_check` / `fit_class` / `gdt_check`, 13 hand-verified toys (Sprint 1) |
-| 3 · Wear / fatigue / fracture | 📋 specced + toys — not built |
+| 3 · Wear / fatigue / fracture | ✅ **shipped** — `fatigue_check` / `fracture_check` / `wear_estimate` / `creep_flag`, 9 hand-verified toys (Sprint 2) |
 | 4 · Thermal (lumped) | 📋 specced + toys — not built |
 | 9 · Design for X | 📋 specced + toys — not built |
 | 7 · Optics | 📋 specced; optical **corpus already shipped** with family 2 |
 | 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | 📋 specced — gated on async-solve infra |
 
 Pure-Python `analysis/` is FreeCAD-free and standalone-testable; that extension
-point is proven by families 1, 2 and 10. The remaining P0 families slot into the
-same shape with zero new dependencies.
+point is proven by families 1, 2, 3 and 10. The remaining P0 families slot into
+the same shape with zero new dependencies.
 
 ---
 
@@ -72,7 +72,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   covers hole-basis H + clearance shaft letters (h, g, f, e); interference letters
   (p, s, …) are the documented next extension.
 
-### Sprint 2 — Wear / Fatigue / Fracture
+### Sprint 2 — Wear / Fatigue / Fracture ✅ shipped
 - **Goal:** turn a one-shot FEM stress into a durability verdict.
 - **Tools:** `fatigue_check` (S-N + Goodman) · `fracture_check` (LEFM K vs K_IC) ·
   `wear_estimate` (Archard) · `creep_flag` (service-temp screen).
@@ -83,7 +83,11 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   AL6061 K_IC≈29 → SF≈2.2; invert to a_c≈9.5 mm at K=K_IC. Goodman σ_a=90/σ_m=40 on
   6061 → SF≈0.94 `pass:false`. **Negatives:** tensile mean > UTS forces `pass:false`
   regardless of cycles; crack > a_c reports negative margin, never a positive SF.
-- **Depends on:** Materials DB (done). Optionally Sprint 1's `analysis/` precedent.
+- **Depends on:** Materials DB (done). **Shipped** — `driftpin/analysis/durability.py`
+  + worker/MCP wiring + `tests/test_durability.py` (9 toys: LEFM K=13.3 / a_c=9.5 mm,
+  Goodman SF=0.94 with the pass/fail crossing, Archard 45 mm³, two-sided negatives
+  for static overload, past-critical-crack, and missing material data). Strengths,
+  endurance, toughness and service temp read from the Materials DB with overrides.
 
 ### Sprint 3 — Lumped thermal + Design-for-X heuristics
 - **Goal:** "How hot after 5 min? Grade this part for its process and cost."

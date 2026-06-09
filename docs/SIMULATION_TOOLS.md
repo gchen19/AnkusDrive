@@ -131,6 +131,12 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - **Result:** `{safety_factor, life_cycles, pass, governing_mode}` etc.
 - Turns a one-shot FEM stress number into a *durability* answer.
+- **Status: shipped (P0)** in `driftpin/analysis/durability.py` —
+  `fatigue_check` (S-N Basquin + Goodman), `fracture_check` (LEFM K vs K_IC with
+  critical-crack inversion), `wear_estimate` (Archard), `creep_flag`
+  (service-temp screen), with 9 two-sided toys in `tests/test_durability.py`
+  (LEFM K=13.3, a_c=9.5 mm; Goodman SF=0.94; Archard 45 mm³). Reads σ_e / σ_uts /
+  K_IC / service temp from the Materials DB with explicit overrides.
 
 ### 4. Thermal (beyond steady-state CCX)
 
@@ -339,7 +345,7 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
 immediately useful:
 1. **Tolerance / GD&T** (Appendix A) — validates the new `analysis/` extension point. *(shipped)*
 2. **Materials DB** — foundational; unblocks fatigue, fracture, cost. *(shipped)*
-3. **Wear / fatigue / fracture** — turns FEM stress into durability.
+3. **Wear / fatigue / fracture** — turns FEM stress into durability. *(shipped)*
 4. **DfM / DfA heuristics** + lumped thermal — grade against process, reuse existing tools.
 5. **Machine-element rating** — closed-form life/SF on the existing `add_*` component tools. *(shipped: bolt, bearing, spring, gear, belt, press-fit, seal)*
 
