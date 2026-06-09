@@ -63,6 +63,14 @@ echo "== P2 solver degradation contract (pure-Python; no FreeCAD) =="
 python3 tests/test_solve_degradation.py
 
 echo
+echo "== Planar-kinematics toys (Grashof / stroke / DOF; pure-Python; no FreeCAD) =="
+python3 tests/test_kinematics.py
+
+echo
+echo "== MBD dynamics (PyBullet; skip if the mbd extra is absent) =="
+$VENV_PY tests/test_mbd.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 
