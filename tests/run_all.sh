@@ -15,6 +15,22 @@ cd "$(dirname "$0")/.."
 
 VENV_PY=".venv/bin/python3"
 
+# Lint first — mirrors the CI "Fast checks" workflow (.github/workflows/fast-checks.yml)
+# so a ruff E9/pyflakes error (unused name, bad import, syntax) is caught locally
+# before it reaches CI. Same command + pyproject.toml config CI uses. Resolve ruff
+# from the venv, else PATH; if it isn't installed, warn loudly and continue (so the
+# suite still runs) rather than silently passing the lint gate.
+echo "== Lint (ruff E9,F — mirrors CI fast-checks; config in pyproject.toml) =="
+if [ -x ".venv/bin/ruff" ]; then RUFF=".venv/bin/ruff"
+elif command -v ruff >/dev/null 2>&1; then RUFF="ruff"
+else RUFF=""; fi
+if [ -n "$RUFF" ]; then
+    "$RUFF" check driftpin tests
+else
+    echo "  WARNING: ruff not found — 'pip install ruff==0.15.15' to lint locally as CI does (skipping)"
+fi
+
+echo
 echo "== Static contracts (registry parity + docstrings; no FreeCAD) =="
 python3 tests/test_contracts.py
 
