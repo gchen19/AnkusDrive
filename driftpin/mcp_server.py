@@ -3266,6 +3266,7 @@ def mechanism_simulate_submit(
 def topology_optimize_submit(
     nelx: int = 60,
     nely: int = 20,
+    nelz: int | None = None,
     keep_fraction: float = 0.4,
     penal: float = 3.0,
     rmin: float = 1.5,
@@ -3273,23 +3274,36 @@ def topology_optimize_submit(
     tol: float = 0.01,
     load: list | None = None,
     fixed_dofs: list | None = None,
+    loads: list | None = None,
+    fixed_nodes: list | None = None,
+    keep_out: list | None = None,
+    keep_in: list | None = None,
 ) -> dict:
     """Minimum-compliance topology optimization (in-house SIMP; NO external solver),
     asynchronous because each iteration solves an FE system. Optimizes a 2-D
-    rectangular design domain (`nelx`×`nely` unit cells) to the stiffest layout that
+    rectangular design domain (`nelx`×`nely` unit cells) — or, when `nelz` is set, a
+    3-D `nelx`×`nely`×`nelz` grid of trilinear hexahedra — to the stiffest layout that
     holds Σdensity = `keep_fraction` (the Optimality-Criteria update holds it exactly);
-    `penal` is the SIMP penalty (≈3), `rmin` the cone filter radius. Default BCs: left
-    edge clamped + unit downward load at the right-edge mid-height (override
-    `fixed_dofs` / `load`=[dof_index, value]).
+    `penal` is the SIMP penalty (≈3), `rmin` the cone filter radius. Default BCs
+    (both): the whole left face clamped + a unit downward load at the right-face
+    centre. 2-D overrides: `fixed_dofs` / `load`=[dof_index, value]. 3-D overrides:
+    `loads`=[[i,j,k,axis,value],...] point loads at node grid coords (axis 'x'|'y'|'z'),
+    `fixed_nodes`=[[i,j,k],...] clamped nodes, and `keep_out`/`keep_in` lists of
+    half-open element-index boxes [i0,i1,j0,j1,k0,k1] forced void / forced solid
+    (keep-out regions and must-keep pads).
 
     Returns immediately {job_id, status, cache_hit}; poll job_result for {density
-    (nely×nelx grid 0..1 — this IS geometry), mass_fraction (==keep_fraction),
-    compliance, compliance_initial, iterations, converged, gray_fraction}. Threshold
-    + voxel→solid back in the modeller, then gate with mass_properties (mass ≤
+    (2-D: nely×nelx grid; 3-D: nelz×nely×nelx voxel field, density[k][j][i] with j=0
+    at the bottom — this IS geometry), mass_fraction (==keep_fraction), compliance,
+    compliance_initial, iterations, converged, gray_fraction, solver (3-D: which
+    linear-solve backend ran)}. Threshold + voxel→solid back in the modeller with
+    `topology_to_solid`, then gate with mass_properties (mass ≤
     keep_fraction·original) and interference_check vs keep-outs."""
     params = {"nelx": nelx, "nely": nely, "keep_fraction": keep_fraction,
               "penal": penal, "rmin": rmin, "max_iter": max_iter, "tol": tol}
-    for k, v in (("load", load), ("fixed_dofs", fixed_dofs)):
+    for k, v in (("nelz", nelz), ("load", load), ("fixed_dofs", fixed_dofs),
+                 ("loads", loads), ("fixed_nodes", fixed_nodes),
+                 ("keep_out", keep_out), ("keep_in", keep_in)):
         if v is not None:
             params[k] = v
     return _call("topology_optimize_submit", **params)
@@ -3306,19 +3320,21 @@ def topology_to_solid(
 ) -> dict:
     """Reconstruct a FreeCAD solid from a topology-optimization density field — the
     modeller-side close of the loop opened by `topology_optimize_submit`, whose
-    `density` grid this consumes. Thresholds the nely×nelx grid (a cell is solid when
+    `density` this consumes. 2-D (nely×nelx grid): thresholds (a cell is solid when
     density ≥ `threshold`), run-length-merges each row into solid spans, tiles each
-    span as a `cell_mm` box extruded `thickness_mm` in Z, and fuses them into one
-    static Part::Feature. `cell_mm` is a scalar (square cells) or [cx, cy] mm;
+    span as a `cell_mm` box extruded `thickness_mm` in Z (row 0 at the top). 3-D (a
+    nelz×nely×nelx voxel field from the `nelz` mode): greedy-merges solid voxels into
+    maximal boxes at (i·cx, j·cy, k·cz) — j=0 at the bottom, `thickness_mm` ignored.
+    Fuses into one static Part::Feature. `cell_mm` is a scalar or [cx, cy(, cz)] mm;
     `thickness_mm` defaults to the smaller cell edge; `placement` is an optional
     [x, y, z] mm origin offset; `name` names the object. Runs synchronously (it builds
     geometry — no jobs.py poll).
 
     Returns {handle, name, volume (mm³), solid_cells, total_cells, mass_fraction
     (== solid_cells/total_cells — must be ≤ keep_fraction within one cell), n_solids
-    (disjoint bodies; >1 means a split load path), threshold, nelx, nely, bbox_mm}.
-    Gate it with mass_properties (mass ≤ keep_fraction·original) and interference_check
-    against keep-out regions, per SIMULATION_EXAMPLES §5."""
+    (disjoint bodies; >1 means a split load path), threshold, nelx, nely, nelz (None
+    for 2-D), bbox_mm}. Gate it with mass_properties (mass ≤ keep_fraction·original)
+    and interference_check against keep-out regions, per SIMULATION_EXAMPLES §5."""
     params = {"density": density, "threshold": threshold, "cell_mm": cell_mm}
     if thickness_mm is not None:
         params["thickness_mm"] = thickness_mm

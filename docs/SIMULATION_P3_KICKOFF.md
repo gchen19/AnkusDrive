@@ -170,7 +170,13 @@ M2  Radiation thermal  ✅ thermal_radiation_submit (Elmer diffuse-gray enclosur
 M3  CFD external   ⏳ cfd_external_flow_submit builder + Stokes/Blasius drag oracle
 M4  Geometry bridge ⏳ FreeCAD solid → Gmsh/ElmerGrid (Elmer) · STL/snappyHexMesh
                        (OpenFOAM); relative gate: meshed-from-FreeCAD == parametric
-M5  3-D topology   ⏳ 3-D SIMP + real load cases/keep-outs → topology_to_solid (3-D)
+M5  3-D topology   ✅ simp_topology_3d (trilinear hexes; scipy/dense/PCG backends) +
+                       point loads / fixed_nodes / keep_out / keep_in element boxes →
+                       topology_optimize_submit(nelz=…) → topology_to_solid consumes
+                       the voxel field (density_to_boxes greedy merge). Gated: volume
+                       exact, z-symmetry, keep-outs void, uniform cantilever within
+                       the Euler-Bernoulli+Timoshenko band. (FreeCAD-extracted load
+                       cases ride on the M4 bridge.)
 M6  Frontier       ⏳ (optional) modal/harmonic · conjugate heat transfer · EM
 ```
 

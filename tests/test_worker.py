@@ -3860,6 +3860,30 @@ def test_topology_to_solid_reconstructs_density_field():
         assert abs(split["volume"] - 2000.0) < 1e-6, split["volume"]
 
 
+def test_topology_to_solid_3d_voxel_field():
+    """The 3-D path (P3 M5): a nelz×nely×nelx voxel field from simp_topology_3d
+    bakes as merged boxes — a full field is one exact cuboid; an L across layers
+    keeps the voxel volume; mass_fraction tracks kept voxels."""
+    with Worker() as w:
+        w.call("new_document", name="topo3d")
+        # full 2x2x3 field (nelz=2, nely=2, nelx=3), [10, 5, 4] mm cells:
+        # one merged box 30 x 10 x 8 mm == 2400 mm^3.
+        full = w.call("topology_to_solid",
+                      density=[[[1.0] * 3] * 2] * 2, cell_mm=[10.0, 5.0, 4.0])
+        assert abs(full["volume"] - 2400.0) < 1e-6, full["volume"]
+        assert full["mass_fraction"] == 1.0 and full["n_solids"] == 1, full
+        assert full["nelz"] == 2 and full["total_cells"] == 12, full
+        assert full["bbox_mm"] == [30.0, 10.0, 8.0], full["bbox_mm"]
+
+        # L-shape across layers: 9 of 12 voxels, unit cells -> 9 mm^3, connected.
+        ell = w.call("topology_to_solid",
+                     density=[[[1, 1, 0], [1, 1, 0]],
+                              [[1, 1, 0], [1, 1, 1]]], cell_mm=1.0)
+        assert abs(ell["volume"] - 9.0) < 1e-9, ell["volume"]
+        assert ell["solid_cells"] == 9 and ell["total_cells"] == 12, ell
+        assert ell["n_solids"] == 1, ell
+
+
 def test_topology_to_solid_empty_threshold_is_a_clean_error():
     """A threshold above every cell yields no geometry: a structured error, not a
     crash — and the worker survives it."""

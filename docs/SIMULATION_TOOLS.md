@@ -181,6 +181,16 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - `topology_optimize` *returns geometry*, not just numbers — the one family here
   that closes the loop back into the modeller.
+- **3-D mode shipped (P3 M5):** `topology_optimize_submit(nelz=…)` runs the
+  in-house SIMP on trilinear hexahedra (`analysis/topology.simp_topology_3d` —
+  scipy.sparse / dense / matrix-free-PCG backends, all agreeing to 1e-4) with
+  point `loads`=[[i,j,k,axis,value]], clamped `fixed_nodes`, and `keep_out` /
+  `keep_in` element boxes (forced void / forced solid). Returns a
+  nelz×nely×nelx voxel `density` field; `topology_to_solid` consumes it
+  directly (greedy voxel→box merge, `density_to_boxes`). Gates in
+  `tests/test_topology.py`: volume held exactly, z-mirror symmetry of a
+  mid-plane-loaded design, keep-out/keep-in respected, and the uniform-density
+  cantilever within the Euler-Bernoulli+Timoshenko band.
 
 ### 6. Fluids / CFD
 
