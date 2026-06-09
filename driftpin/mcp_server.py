@@ -3004,6 +3004,67 @@ def dfm_check(
 
 
 @mcp.tool()
+def optics_raytrace(
+    n_refractive: float = 1.49062,
+    source_config: dict | None = None,
+    n_rays: int = 64,
+    model: dict | None = None,
+) -> dict:
+    """Ray-trace a bundle through a dielectric optical model with rayoptics
+    (asynchronous-free; needs no FreeCAD geometry). Requires the rayoptics wheel
+    (the `optics` extra); when it does not resolve this returns {ok:false, reason,
+    install} rather than raising. The geometric refraction comes from rayoptics;
+    the Fresnel/TIR energy split + the exit histogram come from the exact
+    analysis/optics core, so the trace is gated against that oracle
+    (`oracle_max_dev_deg` = max rayoptics−Snell exit-angle deviation, ~0).
+
+    `n_refractive` is the medium index n2 (default PMMA 1.49062). `source_config`
+    is {kind:'collimated'(angle_deg)|'cone'(half_angle_deg)|'lambertian'
+    (max_angle_deg)} (default collimated at normal incidence). `model` may carry
+    {n1 (incident index, default air 1.0), absorption (0..1 bulk loss),
+    target_half_angle_deg (the acceptance cone counted as efficiency)}.
+
+    Returns the degradation dict, or {ok, backend:'rayoptics', rayoptics_version,
+    n_rays, n1, n2, critical_angle_deg, efficiency, leakage_fraction,
+    absorbed_fraction, tir_fraction, energy_balance, oracle_max_dev_deg,
+    exit_distribution:[{angle_deg,intensity}], hotspot_locations}."""
+    params = {"n_refractive": n_refractive, "n_rays": n_rays}
+    for k, v in (("source_config", source_config), ("model", model)):
+        if v is not None:
+            params[k] = v
+    return _call("optics_raytrace", **params)
+
+
+@mcp.tool()
+def optics_moldability_check(
+    model: str,
+    pull_axis: str = "+z",
+    process: str = "injection",
+    min_draft_deg: float = 1.0,
+    min_wall_mm: float | None = None,
+) -> dict:
+    """Moldability screen for a part against a single pull axis — geometric, no
+    solver. Resolves the `model` handle's solid, then per face computes the draft
+    relative to `pull_axis` from the outward normal (draft_deg = 90 − angle(normal,
+    pull); 0 = a wall parallel to the pull that needs draft) and ray-casts the face
+    centroid along ±pull: a face the straight pull frees in neither direction is a
+    re-entrant UNDERCUT (reported with negative draft). Inward chords give a wall-
+    thickness distribution. Scored through the same DfM machinery as dfm_check.
+
+    `pull_axis`: '+z'/'-x'/… or an [x,y,z] vector. `process` ('injection'|'cnc'|
+    'sheet'|'fdm') sets the default min wall; override with `min_wall_mm`.
+
+    Returns {process, pull_axis, n_faces, undercut_faces, draft_violations,
+    min_wall_violations, wall_thickness_stats:{min_mm,mean_mm,max_mm,n}, score,
+    pass}."""
+    params = {"model": model, "pull_axis": pull_axis, "process": process,
+              "min_draft_deg": min_draft_deg}
+    if min_wall_mm is not None:
+        params["min_wall_mm"] = min_wall_mm
+    return _call("optics_moldability_check", **params)
+
+
+@mcp.tool()
 def dfa_check(
     part_count: int,
     fastener_count: int = 0,

@@ -185,23 +185,44 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - Gated on the async/long-solve work (below) — a CFD run can't block the MCP channel.
 
-### 7. Optics
+### 7. Optics  ✅ shipped (P3 M1)
 
-- **Answers:** "Where does the light land? Is this lens moldable? Optimize the BSpline."
-- **Backend:** wrap the existing in-house `~/diffuser` pipeline (already imports
-  FreeCAD, already runs under the worker); `rayoptics` / `optiland` for general lenses.
-  **Weight: light** (in-house code exists).
-- **Signatures:**
+- **Answers:** "Where does the light land? Is this lens moldable?"
+- **Backend:** the exact closed-form core (Snell / Fresnel / TIR + an
+  energy-conserving ray-bundle trace) is pure-Python in
+  [`analysis/optics.py`](../driftpin/analysis/optics.py) (stdlib `math`, no NumPy,
+  fast-lane). The full lens/diffuser trace rides on the **`rayoptics`** wheel (the
+  `optics` extra) behind `_require_solver('rayoptics')`, degrading cleanly when
+  absent. (`~/diffuser` is not present on the runner; `rayoptics` is the portable
+  backend. Optical n vs wavelength comes from
+  [`materials/optical.json`](../driftpin/analysis/materials/optical.json).)
+- **Exact anchors (the gate):** 30° air→PMMA (n=1.49062) → **19.60°**;
+  normal-incidence Fresnel reflectance **3.88%**; PMMA→air critical angle
+  **42.13°** (zero transmission above it); the bundle trace conserves energy
+  (`leakage + efficiency + absorbed == 1` to floating point). rayoptics reproduces
+  Snell to **< 1e-6°** (`oracle_max_dev_deg`).
+- **Signatures (implemented):**
   ```
-  optics_raytrace(model, source_config, n_refractive, n_rays)
-    -> {exit_distribution, leakage_fraction, hotspot_locations}
-  optics_moldability_check(model, pull_axis)
-    -> {undercut_faces, draft_violations, wall_thickness_stats}
-  optics_optimize(baseline, target_metrics, parameter_space)
-    -> {best_candidate_path, score_breakdown}
+  optics_raytrace(n_refractive=1.49062, source_config=None, n_rays=64, model=None)
+    -> {ok:false, reason, install}                  # when rayoptics is absent
+     | {ok, backend:'rayoptics', rayoptics_version, n_rays, n1, n2,
+        critical_angle_deg, efficiency, leakage_fraction, absorbed_fraction,
+        tir_fraction, energy_balance, oracle_max_dev_deg,
+        exit_distribution:[{angle_deg, intensity}], hotspot_locations}
+  optics_moldability_check(model, pull_axis='+z', process='injection',
+                           min_draft_deg=1.0, min_wall_mm=None)
+    -> {process, pull_axis, n_faces, undercut_faces, draft_violations,
+        min_wall_violations, wall_thickness_stats:{min_mm,mean_mm,max_mm,n},
+        score, pass}
   ```
-- ROADMAP's original first pick; sequenced after tolerance here because it depends
-  on an external (if in-house) pipeline rather than being self-contained math.
+  `optics_moldability_check` is purely geometric: per-face draft vs the pull axis
+  (draft_deg = 90 − angle(normal, pull)) plus a ray-cast occlusion test on the live
+  FreeCAD solid — a face the straight pull frees in neither direction is a
+  re-entrant **undercut** — scored through `analysis/dfx.dfm_check`.
+- Acceptance evidence: **Example D** in
+  [`run_simulation_examples.py`](../examples/run_simulation_examples.py) (+ the
+  `optics.png` figure); fast-lane gates in
+  [`tests/test_optics.py`](../tests/test_optics.py).
 
 ### 8. Multibody dynamics / kinematics
 

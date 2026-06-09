@@ -6628,6 +6628,260 @@ def _h_slice_estimate(p):
     return slicing.slice_estimate(**p)
 
 
+# --- optics (family 7) --------------------------------------------------------
+# Two surfaces, mirroring the rest of the heavy tier: the exact closed-form core
+# (Snell / Fresnel / TIR + an energy-conserving bundle trace) lives in
+# analysis/optics.py and is fast-lane gated; optics_raytrace backs the full
+# diffuser/lens trace with the rayoptics wheel (the `optics` extra) behind
+# _require_solver, degrading cleanly when it is absent. optics_moldability_check
+# is purely geometric — per-face draft vs the pull axis + a ray-cast undercut test
+# on the live FreeCAD solid, scored through the DfM machinery (analysis/dfx.py).
+
+_PULL_AXES = {
+    "+x": (1.0, 0.0, 0.0), "-x": (-1.0, 0.0, 0.0),
+    "+y": (0.0, 1.0, 0.0), "-y": (0.0, -1.0, 0.0),
+    "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0),
+}
+
+
+def _pull_vector(pull_axis):
+    """Resolve a pull axis to a unit App.Vector. Accepts '+z'/'-x'/… or an
+    explicit [x,y,z] (normalized)."""
+    if isinstance(pull_axis, str):
+        key = pull_axis.lower().strip()
+        if key not in _PULL_AXES:
+            raise ValueError(
+                f"pull_axis must be one of {sorted(_PULL_AXES)} or [x,y,z]; got {pull_axis!r}")
+        return App.Vector(*_PULL_AXES[key])
+    v = App.Vector(*[float(c) for c in pull_axis])
+    if v.Length == 0:
+        raise ValueError("pull_axis vector must be non-zero")
+    v.normalize()
+    return v
+
+
+def _ray_hits_solid(shape, start, direction, reach):
+    """True if the segment from `start` along unit `direction` for `reach` mm
+    passes through the solid's interior — the occlusion test behind the undercut
+    check. Uses a boolean common of the solid with the probe edge; any surviving
+    edge length above a small tolerance means the ray re-enters material."""
+    import Part
+    end = start + direction.multiply(reach)
+    try:
+        seg = Part.makeLine(start, end)
+        common = shape.common(seg)
+    except Exception:
+        return False
+    return common.Length > 1e-6
+
+
+@handler("optics_moldability_check")
+def _h_optics_moldability_check(p):
+    """Moldability screen for an optical (or any) part against a single pull axis —
+    geometric, no solver. Resolves the `model` handle to its solid, then for every
+    face computes the draft relative to `pull_axis` from the outward normal
+    (draft_deg = 90 − angle(normal, pull); 0 is a wall parallel to the pull that
+    needs draft) and ray-casts the face centroid along ±pull to decide releasability
+    — a face the straight pull cannot free in either direction is a re-entrant
+    UNDERCUT (its draft_deg is reported negative so it falls out as an undercut).
+    Inward chords give a wall-thickness distribution. The per-face descriptors are
+    scored through analysis/dfx.dfm_check.
+
+    Args: model (handle), pull_axis ('+z'/'-x'/… or [x,y,z]), process
+    ('injection'|'cnc'|'sheet'|'fdm', default injection), min_draft_deg (default 1.0),
+    min_wall_mm (optional, else the process default). Returns {process, pull_axis,
+    n_faces, undercut_faces, draft_violations, min_wall_violations,
+    wall_thickness_stats:{min_mm,mean_mm,max_mm,n}, score, pass}."""
+    from driftpin.analysis import dfx
+    handle = p.get("model") or p.get("handle")
+    if not handle:
+        raise ValueError("optics_moldability_check needs a `model` handle")
+    _, shape = _shape_of(handle)
+    pull = _pull_vector(p.get("pull_axis", "+z"))
+    min_draft = float(p.get("min_draft_deg", 1.0))
+
+    bbox = shape.BoundBox
+    reach = bbox.DiagonalLength * 2.0 + 1.0          # comfortably exits the solid
+    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)      # step just off the surface
+
+    faces = []
+    walls = []
+    import math as _math
+    for i, face in enumerate(shape.Faces):
+        idx = f"Face{i + 1}"
+        n = _outward_normal(face)
+        if n.Length == 0:
+            continue
+        n = App.Vector(n).normalize()
+        cos = max(-1.0, min(1.0, n.dot(pull)))
+        phi = _math.degrees(_math.acos(cos))         # angle of normal from +pull
+        draft = 90.0 - phi                           # >0 toward pull, <0 against
+
+        c = face.CenterOfMass
+        out_pt = c + App.Vector(n).multiply(eps)
+        releasable_plus = not _ray_hits_solid(shape, out_pt, App.Vector(pull), reach)
+        releasable_minus = not _ray_hits_solid(
+            shape, out_pt, App.Vector(pull).multiply(-1.0), reach)
+        undercut = not (releasable_plus or releasable_minus)
+        # An undercut face is reported with a negative draft so dfx.dfm_check
+        # classifies it as re-entrant; otherwise carry the geometric draft (its
+        # sign already encodes which mold half releases it).
+        draft_deg = -abs(draft) if undercut else abs(draft)
+
+        # inward chord ~ local wall thickness (face inward to the next boundary)
+        in_pt = c - App.Vector(n).multiply(eps)
+        wall_mm = None
+        try:
+            import Part
+            chord = shape.common(Part.makeLine(in_pt, in_pt - App.Vector(n).multiply(reach)))
+            if chord.Length > 1e-6:
+                wall_mm = round(chord.Length, 4)
+                walls.append(chord.Length)
+        except Exception:
+            pass
+
+        fdesc = {"name": idx, "draft_deg": round(draft_deg, 4)}
+        if wall_mm is not None:
+            fdesc["wall_mm"] = wall_mm
+        faces.append(fdesc)
+
+    res = dfx.dfm_check(
+        faces=faces, pull_axis=str(p.get("pull_axis", "+z")),
+        process=p.get("process", "injection"),
+        min_wall_mm=p.get("min_wall_mm"), min_draft_deg=min_draft)
+    if walls:
+        res["wall_thickness_stats"] = {
+            "min_mm": round(min(walls), 4), "mean_mm": round(sum(walls) / len(walls), 4),
+            "max_mm": round(max(walls), 4), "n": len(walls)}
+    else:
+        res["wall_thickness_stats"] = {"min_mm": None, "mean_mm": None, "max_mm": None, "n": 0}
+    res["n_faces"] = len(shape.Faces)
+    return res
+
+
+def _rayoptics_flat_trace(n1, n2, angles_deg):
+    """Trace each incidence angle (deg) through a single flat n1→n2 interface with
+    rayoptics, returning the list of refraction angles (deg). n1 is air-side (the
+    object space); rayoptics owns the geometry so this validates Snell against the
+    analytic oracle. Imported lazily — only after _require_solver('rayoptics')."""
+    import math as _math
+
+    import numpy as np
+    from rayoptics.environment import OpticalModel
+    from rayoptics.raytr import raytrace
+    from rayoptics.raytr.opticalspec import FieldSpec, PupilSpec, WvlSpec
+
+    opm = OpticalModel(radius_mode=True)
+    sm, osp = opm["seq_model"], opm["optical_spec"]
+    osp["pupil"] = PupilSpec(osp, key=["object", "epd"], value=2.0)
+    osp["fov"] = FieldSpec(osp, key=["object", "angle"], value=[0.0], is_relative=False)
+    osp["wvls"] = WvlSpec([("d", 1.0)], ref_wl=0)
+    sm.gaps[0].thi = 100.0
+    sm.add_surface([1e10, 10.0, n2 / n1, 57.4])      # flat interface, relative index
+    sm.add_surface([1e10, 0.0])
+    sm.gaps[-1].thi = 10.0
+    sm.set_stop()
+    opm.update_model()
+    wvl = sm.central_wavelength()
+    path = list(sm.path(wl=wvl))
+
+    out = []
+    for th in angles_deg:
+        t = _math.radians(th)
+        dir0 = np.array([0.0, _math.sin(t), _math.cos(t)])
+        pt0 = np.array([0.0, 0.0, 0.0])
+        ray, _opd, _w = raytrace.trace_raw(iter(path), pt0, dir0, wvl)
+        after = ray[1][1]
+        nrm = float(np.linalg.norm(after))
+        out.append(_math.degrees(_math.acos(min(1.0, abs(after[2] / nrm)))))
+    return out
+
+
+@handler("optics_raytrace")
+def _h_optics_raytrace(p):
+    """Ray-trace a bundle through an optical model with rayoptics, OFF no FreeCAD
+    geometry — degrades to {ok:false, reason, install} when the rayoptics wheel
+    (the `optics` extra) is absent, never raising. The geometric refraction comes
+    from rayoptics; the Fresnel/TIR energy split and the histogram come from the
+    exact analysis/optics core, so the result is gated against that oracle
+    (`oracle_max_dev_deg` is the max rayoptics−Snell exit-angle deviation).
+
+    Args: source_config ({kind:'collimated'|'cone'|'lambertian', …}, see
+    analysis.optics.sample_source), n_refractive (the medium index, n2), n_rays
+    (default 64), model (optional {n1, n_refractive/n2, absorption,
+    target_half_angle_deg}). The incident medium n1 defaults to air (1.0).
+
+    Returns the degradation dict, or {ok, backend:'rayoptics', rayoptics_version,
+    n_rays, n1, n2, critical_angle_deg, efficiency, leakage_fraction,
+    absorbed_fraction, tir_fraction, energy_balance, oracle_max_dev_deg,
+    exit_distribution:[{angle_deg,intensity}], hotspot_locations:[…]}."""
+    info = _require_solver("rayoptics")
+    if not info["ok"]:
+        return info
+    from driftpin.analysis import optics
+
+    model = p.get("model") or {}
+    n2 = float(p.get("n_refractive", model.get("n_refractive", model.get("n2", 1.49062))))
+    n1 = float(model.get("n1", 1.0))
+    n_rays = int(p.get("n_rays", 64))
+    absorption = float(model.get("absorption", p.get("absorption", 0.0)))
+    target = model.get("target_half_angle_deg", p.get("target_half_angle_deg"))
+    source = p.get("source_config") or {"kind": "collimated", "angle_deg": 0.0}
+
+    angles, weights = optics.sample_source(source, n_rays)
+    if n1 != 1.0:
+        raise ValueError(
+            "optics_raytrace's rayoptics flat-interface trace expects an air-incident "
+            "model (n1=1.0); set model.n1=1.0 (use the analytic core for n1>1 TIR cases)")
+    ro_exit = _rayoptics_flat_trace(n1, n2, angles)
+
+    # Energy partition from the exact Fresnel/TIR core; geometry from rayoptics.
+    efficiency = leakage = absorbed = tir = 0.0
+    exit_samples = []
+    max_dev = 0.0
+    for theta_i, w, theta_ro in zip(angles, weights, ro_exit):
+        absorbed += w * absorption
+        remaining = w * (1.0 - absorption)
+        fr = optics.fresnel_reflectance(theta_i, n1, n2)
+        snell = optics.refract_angle(theta_i, n1, n2)
+        if snell is not None:
+            max_dev = max(max_dev, abs(theta_ro - snell))
+        if fr["tir"]:
+            leakage += remaining
+            tir += remaining
+            continue
+        transmitted = remaining * fr["transmittance"]
+        leakage += remaining * fr["reflectance"]
+        exit_samples.append((theta_ro, transmitted))
+        if target is None or theta_ro <= float(target):
+            efficiency += transmitted
+        else:
+            leakage += transmitted
+
+    dist = optics._histogram(exit_samples, 18)
+    hot = sorted((b for b in dist if b["intensity"] > 0),
+                 key=lambda b: b["intensity"], reverse=True)[:3]
+    theta_c = optics.critical_angle(n1, n2)
+    import rayoptics as _ro
+    return {
+        "ok": True,
+        "backend": "rayoptics",
+        "rayoptics_version": getattr(_ro, "__version__", "unknown"),
+        "n_rays": n_rays,
+        "n1": n1,
+        "n2": n2,
+        "critical_angle_deg": (round(theta_c, 4) if theta_c is not None else None),
+        "efficiency": round(efficiency, 6),
+        "leakage_fraction": round(leakage, 6),
+        "absorbed_fraction": round(absorbed, 6),
+        "tir_fraction": round(tir, 6),
+        "energy_balance": round(efficiency + leakage + absorbed, 6),
+        "oracle_max_dev_deg": round(max_dev, 6),
+        "exit_distribution": dist,
+        "hotspot_locations": hot,
+    }
+
+
 # --- multibody dynamics / kinematics (family 8) -------------------------------
 # Two surfaces: mechanism_kinematics is the closed-form, solver-free gate (Grübler
 # DOF, Grashof, slider-crank stroke = 2R, four-bar sweep) in analysis/kinematics.py;

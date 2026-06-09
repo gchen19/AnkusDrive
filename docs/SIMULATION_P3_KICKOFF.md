@@ -158,8 +158,11 @@ solvers). Each would follow the same oracle-gated pattern; scope as a later tier
 M0  Provisioning   ⏳ mostly reused — solve_capabilities · the optics extra · the
                        degradation contract already exist. New: verify the rayoptics
                        wheel resolves; add the radiation + external-flow + Stokes oracles.
-M1  Optics         ⏳ analysis/optics.py (Snell/Fresnel/TIR oracle) + optics_raytrace
-                       (rayoptics, degrades) + optics_moldability_check (geometric)
+M1  Optics         ✅ analysis/optics.py (Snell/Fresnel/TIR oracle + energy-closing
+                       trace) + optics_raytrace (rayoptics, degrades) +
+                       optics_moldability_check (geometric: draft + ray-cast undercut).
+                       Gated: Snell 19.60°, Fresnel 3.88%, TIR θc 42.13°, energy Σ=1;
+                       rayoptics matches Snell to <1e-6°. Example D + optics.png.
 M2  Radiation thermal  ⏳ thermal_radiation (Elmer enclosure) vs 2-plate σ-exchange
 M3  CFD external   ⏳ cfd_external_flow_submit builder + Stokes/Blasius drag oracle
 M4  Geometry bridge ⏳ FreeCAD solid → Gmsh/ElmerGrid (Elmer) · STL/snappyHexMesh

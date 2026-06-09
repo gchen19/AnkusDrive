@@ -7,7 +7,7 @@ runs the actual solver via ``jobs.py``, polls the shared ``job_result`` surface,
 compares the solved numbers to the closed-form answer from
 ``docs/SIMULATION_EXAMPLES.md``.
 
-Three examples, each a kickoff gate:
+Four examples, each a kickoff gate:
   * **A — topology** (§5): ``topology_optimize_submit`` → ``topology_to_solid`` →
     ``mass_properties``; the reconstructed solid must hold mass_fraction ≤ keep_fraction
     and be a valid (watertight) body. Needs NumPy in the worker; no external solver.
@@ -17,6 +17,13 @@ Three examples, each a kickoff gate:
   * **C — CFD** (§6): ``cfd_internal_flow_submit`` builds the axisymmetric pipe and runs
     **blockMesh + simpleFoam**; the pressure drop must land within 10% of
     Hagen–Poiseuille, and the D⁴ scaling law must hold (halving the bore → ~16× Δp).
+  * **D — optics** (§7): the exact Snell / Fresnel / TIR oracle (``analysis/optics.py``)
+    — 30° into PMMA → 19.60°, normal-incidence reflectance 3.9%, the PMMA→air critical
+    angle 42.16° with zero transmission above it, and a ray-bundle trace whose energy
+    closes (leakage+efficiency+absorbed ≈ 1). The full **rayoptics** trace
+    (``optics_raytrace``) is gated against Snell when the ``optics`` wheel resolves in
+    the worker, else reported as degraded — the oracle gate still runs (it needs no
+    solver), so D is the one example that never SKIPs.
 
 Each example **degrades gracefully**: a missing solver (ElmerSolver / OpenFOAM) or a
 worker that lacks NumPy is reported as SKIP, not a failure, so the script is safe to
@@ -37,7 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin import Worker
-from driftpin.analysis import thermal
+from driftpin.analysis import optics, thermal
 
 
 def _poll(w, job_id, timeout_s=360):
@@ -142,6 +149,49 @@ def example_cfd(w, log):
         f"Δp(5mm)={sml['pressure_drop_pa']:.4f} → ratio {ratio:.2f} (expect ~16)")
     log(f"  GATE hp_ratio within 10% and D⁴ ratio ~16: {'PASS' if hp_ok and d4_ok else 'FAIL'}")
     return hp_ok and d4_ok
+
+
+def example_optics(w, log):
+    """§7 — the exact Snell/Fresnel/TIR oracle (always) + the rayoptics trace gate."""
+    log("### Example D — optics oracle (Snell/Fresnel/TIR) + optics_raytrace  (§7)")
+    PMMA = 1.49062
+    # Exact closed-form gates — pure-Python, no solver, run everywhere.
+    snell = optics.refract_angle(30.0, 1.0, PMMA)
+    r0 = optics.fresnel_reflectance(0.0, 1.0, PMMA)["reflectance"]
+    tc = optics.critical_angle(PMMA, 1.0)
+    above = optics.fresnel_reflectance(tc + 3.0, PMMA, 1.0)
+    tb = optics.trace_bundle(1.0, PMMA, {"kind": "cone", "half_angle_deg": 60},
+                             n_rays=64, absorption=0.05, target_half_angle_deg=25.0)
+    log(f"- Snell: 30° air→PMMA(n={PMMA}) → {snell:.4f}° (exact 19.60°)")
+    log(f"- Fresnel: normal-incidence reflectance {r0 * 100:.3f}% (exact 3.9%)")
+    log(f"- TIR: PMMA→air critical angle {tc:.4f}° (exact 42.16°); "
+        f"transmission at {tc + 3:.1f}° = {above['transmittance']:.3f}")
+    log(f"- trace_bundle(cone 60°, 5% absorbed, 25° target): efficiency {tb['efficiency']}, "
+        f"leakage {tb['leakage_fraction']}, absorbed {tb['absorbed_fraction']} "
+        f"→ energy_balance {tb['energy_balance']}")
+    snell_ok = abs(snell - 19.6) < 0.1
+    fresnel_ok = abs(r0 * 100 - 3.9) < 0.2
+    tir_ok = abs(tc - 42.16) < 0.1 and above["transmittance"] == 0.0
+    energy_ok = abs(tb["energy_balance"] - 1.0) < 0.01
+    oracle_ok = snell_ok and fresnel_ok and tir_ok and energy_ok
+
+    # The rayoptics-backed trace: gated against Snell when the wheel resolves in the
+    # worker, else degraded (the oracle gate above still carries the example).
+    rt = w.call("optics_raytrace", n_refractive=PMMA,
+                source_config={"kind": "cone", "half_angle_deg": 40}, n_rays=32)
+    if rt.get("ok"):
+        dev = rt["oracle_max_dev_deg"]
+        log(f"- optics_raytrace (rayoptics {rt['rayoptics_version']}): "
+            f"efficiency {rt['efficiency']}, energy_balance {rt['energy_balance']}, "
+            f"max Snell deviation {dev:.2e}°")
+        ray_ok = dev < 1e-2 and abs(rt["energy_balance"] - 1.0) < 0.01
+        log(f"  GATE oracle exact AND rayoptics matches Snell (<1e-2°): "
+            f"{'PASS' if oracle_ok and ray_ok else 'FAIL'}")
+        return oracle_ok and ray_ok
+    log(f"- optics_raytrace degraded in the worker ({rt.get('install', 'rayoptics absent')}); "
+        "oracle gate still runs")
+    log(f"  GATE Snell/Fresnel/TIR/energy oracle exact: {'PASS' if oracle_ok else 'FAIL'}")
+    return oracle_ok
 
 
 # --- figures (--plots) --------------------------------------------------------
@@ -266,8 +316,124 @@ def _plot_cfd(outdir):
     return True
 
 
+def _rayoptics_flat_trace(n2, angles_deg):
+    """Refraction angles (deg) for a flat air→n2 interface traced through rayoptics —
+    the solver overlay for the Snell panel. Returns None when the wheel is absent."""
+    try:
+        import math as _m
+
+        import numpy as np
+        from rayoptics.environment import OpticalModel
+        from rayoptics.raytr import raytrace
+        from rayoptics.raytr.opticalspec import FieldSpec, PupilSpec, WvlSpec
+    except ImportError:
+        return None
+    opm = OpticalModel(radius_mode=True)
+    sm, osp = opm["seq_model"], opm["optical_spec"]
+    osp["pupil"] = PupilSpec(osp, key=["object", "epd"], value=2.0)
+    osp["fov"] = FieldSpec(osp, key=["object", "angle"], value=[0.0], is_relative=False)
+    osp["wvls"] = WvlSpec([("d", 1.0)], ref_wl=0)
+    sm.gaps[0].thi = 100.0
+    sm.add_surface([1e10, 10.0, n2, 57.4])
+    sm.add_surface([1e10, 0.0])
+    sm.gaps[-1].thi = 10.0
+    sm.set_stop()
+    opm.update_model()
+    wvl = sm.central_wavelength()
+    path = list(sm.path(wl=wvl))
+    out = []
+    for th in angles_deg:
+        t = _m.radians(th)
+        ray, _o, _w = raytrace.trace_raw(
+            iter(path), np.array([0.0, 0.0, 0.0]),
+            np.array([0.0, _m.sin(t), _m.cos(t)]), wvl)
+        after = ray[1][1]
+        out.append(_m.degrees(_m.acos(min(1.0, abs(after[2] / float(np.linalg.norm(after)))))))
+    return out
+
+
+def _plot_optics(outdir):
+    """Panel D: the exact Snell / Fresnel / TIR oracle, with rayoptics points on the
+    Snell curve (overlaid when the wheel resolves) and the bundle energy split. Built
+    straight from analysis/optics.py, so the oracle always draws (no solver needed)."""
+    import matplotlib.pyplot as plt
+    PMMA = 1.49062
+    fig, axes = plt.subplots(2, 2, figsize=(9.2, 6.4))
+
+    # (0,0) Snell — refraction vs incidence, air→PMMA, with rayoptics overlay.
+    inc = [i for i in range(0, 90, 2)]
+    refr = [optics.refract_angle(i, 1.0, PMMA) for i in inc]
+    ax = axes[0][0]
+    ax.plot(inc, refr, "-", color="C0", lw=2, label="Snell oracle")
+    ro = _rayoptics_flat_trace(PMMA, list(range(5, 86, 10)))
+    if ro is not None:
+        ax.plot(list(range(5, 86, 10)), ro, "o", color="C3", ms=6, mfc="white",
+                label="rayoptics trace")
+    ax.plot([30], [optics.refract_angle(30, 1.0, PMMA)], "s", color="k", ms=7)
+    ax.annotate("30° → 19.60°", (30, optics.refract_angle(30, 1.0, PMMA)),
+                textcoords="offset points", xytext=(8, -14), fontsize=8)
+    ax.set_xlabel("incidence (°)"); ax.set_ylabel("refraction (°)")
+    ax.set_title(f"Snell: air → PMMA (n={PMMA})", fontsize=9, weight="bold")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(True, ls=":", alpha=0.4)
+
+    # (0,1) Fresnel — s/p/unpolarized power reflectance vs incidence, air→PMMA.
+    ax = axes[0][1]
+    rs = [optics.fresnel_reflectance(i, 1.0, PMMA)["r_s"] * 100 for i in inc]
+    rp = [optics.fresnel_reflectance(i, 1.0, PMMA)["r_p"] * 100 for i in inc]
+    ru = [optics.fresnel_reflectance(i, 1.0, PMMA)["reflectance"] * 100 for i in inc]
+    ax.plot(inc, rs, "-", color="C0", lw=2, label="s-pol")
+    ax.plot(inc, rp, "-", color="C2", lw=2, label="p-pol")
+    ax.plot(inc, ru, "--", color="C3", lw=1.6, label="unpolarized")
+    r0 = optics.fresnel_reflectance(0.0, 1.0, PMMA)["reflectance"] * 100
+    ax.plot([0], [r0], "ko", ms=6)
+    ax.annotate(f"R₀ = {r0:.2f}%", (0, r0), textcoords="offset points",
+                xytext=(8, 6), fontsize=8)
+    theta_b = math.degrees(math.atan(PMMA))
+    ax.axvline(theta_b, ls=":", color="gray")
+    ax.text(theta_b - 1, 55, f"Brewster {theta_b:.1f}°", rotation=90, fontsize=7,
+            color="gray", va="center", ha="right")
+    ax.set_xlabel("incidence (°)"); ax.set_ylabel("reflectance (%)")
+    ax.set_title("Fresnel reflectance: air → PMMA", fontsize=9, weight="bold")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(True, ls=":", alpha=0.4)
+
+    # (1,0) TIR — transmittance vs incidence, PMMA→air, dropping to 0 at θc.
+    ax = axes[1][0]
+    tc = optics.critical_angle(PMMA, 1.0)
+    inc2 = [i * 0.5 for i in range(0, 180)]
+    trans = [optics.fresnel_reflectance(i, PMMA, 1.0)["transmittance"] for i in inc2]
+    ax.plot(inc2, trans, "-", color="C4", lw=2)
+    ax.axvline(tc, ls="--", color="C3")
+    ax.text(tc + 1, 0.5, f"θc = {tc:.2f}°\n(TIR: T=0 above)", fontsize=8, color="C3")
+    ax.set_xlabel("internal incidence (°)"); ax.set_ylabel("transmittance")
+    ax.set_title("Total internal reflection: PMMA → air", fontsize=9, weight="bold")
+    ax.grid(True, ls=":", alpha=0.4)
+
+    # (1,1) energy-conserving bundle: exit distribution + the closed energy split.
+    ax = axes[1][1]
+    tb = optics.trace_bundle(1.0, PMMA, {"kind": "lambertian", "max_angle_deg": 85},
+                             n_rays=400, absorption=0.06)
+    xs = [b["angle_deg"] for b in tb["exit_distribution"]]
+    ys = [b["intensity"] for b in tb["exit_distribution"]]
+    ax.bar(xs, ys, width=4.2, color="#1f4e79", alpha=0.85)
+    ax.set_xlabel("exit angle (°)"); ax.set_ylabel("transmitted intensity")
+    ax.set_title("Bundle trace (Lambertian, 6% absorbed)", fontsize=9, weight="bold")
+    ax.text(0.97, 0.95,
+            f"efficiency {tb['efficiency']:.3f}\nleakage {tb['leakage_fraction']:.3f}\n"
+            f"absorbed {tb['absorbed_fraction']:.3f}\nΣ = {tb['energy_balance']:.3f}",
+            transform=ax.transAxes, fontsize=8, va="top", ha="right",
+            bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.9))
+    ax.grid(True, ls=":", alpha=0.4)
+
+    fig.suptitle("Example D — optics: exact Snell / Fresnel / TIR oracle + rayoptics  (§7)",
+                 fontsize=11, weight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.savefig(f"{outdir}/optics.png", dpi=130)
+    plt.close(fig)
+    return ro is not None
+
+
 def make_plots(outdir):
-    """Generate the three result figures into ``outdir``; skip a panel when its solver
+    """Generate the four result figures into ``outdir``; skip a panel when its solver
     is absent. matplotlib is imported lazily so the gated run needs no plotting deps."""
     import os
     try:
@@ -282,6 +448,8 @@ def make_plots(outdir):
     print("  topology.png ✓")
     print("  elmer.png " + ("✓" if _plot_thermal(outdir) else "SKIP (ElmerSolver absent)"))
     print("  openfoam.png " + ("✓" if _plot_cfd(outdir) else "SKIP (OpenFOAM absent)"))
+    print("  optics.png " + ("✓ (with rayoptics overlay)" if _plot_optics(outdir)
+                             else "✓ (oracle only — rayoptics absent)"))
 
 
 def main():
@@ -303,7 +471,8 @@ def main():
         log(f"FreeCAD {'.'.join(w.freecad_version[:3])}\n")
         for name, fn in (("topology", example_topology),
                          ("thermal", example_thermal),
-                         ("cfd", example_cfd)):
+                         ("cfd", example_cfd),
+                         ("optics", example_optics)):
             try:
                 results[name] = fn(w, log)
             except Exception as e:  # one example failing must not abort the rest
