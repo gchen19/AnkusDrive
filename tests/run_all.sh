@@ -55,6 +55,14 @@ echo "== Async job-registry toys (pure-Python; no FreeCAD) =="
 python3 tests/test_jobs.py
 
 echo
+echo "== Random-vibration toys (Miles; pure-Python; no FreeCAD) =="
+python3 tests/test_vibration.py
+
+echo
+echo "== P2 solver degradation contract (pure-Python; no FreeCAD) =="
+python3 tests/test_solve_degradation.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

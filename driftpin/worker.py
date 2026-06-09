@@ -5632,6 +5632,41 @@ def _h_render_capabilities(p):
     return out
 
 
+# --- external-solver provisioning (driftpin.solvers) --------------------------
+# The P2 twin of the renderer provisioning glue: discover the heavy external
+# solvers the P2 families ride on (CFD/MBD/topology/transient-thermal/optics) and
+# degrade to a clean structured dict when one is absent. The registry + resolution
+# live in driftpin/solvers.py (pure-Python, FreeCAD-free — so the degradation
+# contract is testable on the no-FreeCAD CI lane). A family's *_submit calls
+# _require_solver(name) first and returns its dict verbatim on a miss, the way the
+# render path uses _require_render — so a missing solver is a clean result, never
+# an import crash.
+
+def _require_solver(name):
+    """Resolve an external P2 solver, or return the structured-degradation dict —
+    the graceful-degradation twin of _require_render. {ok:True, ...} when the
+    solver resolves; {ok:False, solver, reason:'solver not installed', install}
+    when it does not. See driftpin/solvers.py."""
+    from driftpin import solvers
+    return solvers.require_solver(name)
+
+
+@handler("solve_capabilities")
+def _h_solve_capabilities(p):
+    """Report which P2 external solvers — and which families — are usable right
+    now, so a caller can pick a working solver instead of probing a *_submit by
+    trial and error. The solver twin of render_capabilities: it resolves each
+    solver side-effect-free (DRIFTPIN_<SOLVER>_PATH env -> PATH -> per-OS install
+    dirs for binaries; importability for pip-wheel solvers) and executes nothing.
+
+    Returns {platform, available (sorted ready solver names), solvers: {name:
+    {available, kind, family, extra, and either path/module or install_hint}},
+    families: {family: {solvers, available, any_available}}, extras: {extra:
+    [solver names]}} (see driftpin/solvers.capabilities)."""
+    from driftpin import solvers
+    return solvers.capabilities()
+
+
 # --- FEM (decomposed) ---------------------------------------------------------
 
 def _resolve_analysis(handle):
@@ -6025,6 +6060,35 @@ def _h_fem_modal_results(p):
         "frequencies_hz": [m["frequency_hz"] for m in modes],
         "modes": modes,
     }
+
+
+@handler("random_vibration")
+def _h_random_vibration(p):
+    """Random-vibration response from a modal run + a base-acceleration PSD
+    (Miles' equation; pure-Python, no external solver — modal already ran). Reads
+    the natural frequencies from the analysis's completed modal results (same
+    extraction as fem_modal_results) when given an `analysis` handle, or uses an
+    explicit `frequencies_hz` list, then computes the SRSS GRMS response off the
+    PSD. See driftpin.analysis.vibration. Returns {rms_g, first_mode_hz,
+    dominant_mode_hz, q, psd_band_hz, miles_grms_g, modes, rms_stress_mpa,
+    three_sigma_stress_mpa, pass}."""
+    from driftpin.analysis import vibration
+    freqs = p.get("frequencies_hz")
+    if not freqs:
+        if "analysis" not in p:
+            raise ValueError("provide an `analysis` handle or `frequencies_hz`")
+        freqs = _h_fem_modal_results({"analysis": p["analysis"]})["frequencies_hz"]
+        if not freqs:
+            raise RuntimeError(
+                "no modal frequencies on the analysis — run fem_modal + fem_run first"
+            )
+    return vibration.random_vibration(
+        frequencies_hz=freqs,
+        psd_profile=p["psd_profile"],
+        q=float(p.get("q", 10.0)),
+        modal_stress_mpa_per_g=p.get("modal_stress_mpa_per_g"),
+        allowable_stress_mpa=p.get("allowable_stress_mpa"),
+    )
 
 
 @handler("fem_buckling")
