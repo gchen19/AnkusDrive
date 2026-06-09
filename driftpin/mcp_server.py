@@ -2108,6 +2108,25 @@ def render_capabilities() -> dict:
 
 
 @mcp.tool()
+def solve_capabilities() -> dict:
+    """Report which P2 external solvers (CFD/MBD/topology/transient-thermal/optics)
+    are usable right now — so you can pick a working solver for a *_submit family
+    instead of discovering availability by trial and error. The solver twin of
+    render_capabilities.
+
+    Takes no arguments. Resolves each solver side-effect-free: a binary by
+    DRIFTPIN_<SOLVER>_PATH env -> PATH -> per-OS install dirs; a pip-wheel solver by
+    importability. It executes nothing and installs nothing.
+
+    Returns {platform, available (sorted ready solver names), solvers: {name:
+    {available, kind ('binary'|'wheel'), family, extra, and either path/module (when
+    available) or install_hint}}, families: {family: {solvers, available,
+    any_available}}, extras: {extra: [solver names]} for `pip install
+    driftpin[<extra>]`}."""
+    return _call("solve_capabilities")
+
+
+@mcp.tool()
 def fem_new_analysis(name: str = "Analysis") -> dict:
     """Create a Fem::FemAnalysis container. Returns {handle, name}."""
     return _call("fem_new_analysis", name=name)
@@ -2735,6 +2754,37 @@ def thermal_lumped(
         if v is not None:
             params[k] = v
     return _call("thermal_lumped", **params)
+
+
+@mcp.tool()
+def random_vibration(
+    psd_profile: list,
+    analysis: str | None = None,
+    frequencies_hz: list | None = None,
+    q: float = 10.0,
+    modal_stress_mpa_per_g: float | None = None,
+    allowable_stress_mpa: float | None = None,
+) -> dict:
+    """Random-vibration response off a modal run (Miles' equation; closed-form, no
+    external solver). Provide either `analysis` (a handle whose fem_modal + fem_run
+    already produced natural frequencies) or an explicit `frequencies_hz` list, plus
+    a base-acceleration PSD `psd_profile` ([{"hz":20,"g2_hz":0.01}, ...]; log-log
+    interpolated, and zero outside its band so a mode stiffened above the band
+    escapes drive). Each mode is an SDOF resonator with amplification `q` (default
+    10; rule of thumb Q≈√f_n), combined by SRSS: rms_g = sqrt(Σ (π/2)·f·W(f)·Q).
+    With `modal_stress_mpa_per_g` the g response converts to RMS / 3-σ stress; add
+    `allowable_stress_mpa` for a pass/fail.
+
+    Returns {rms_g, first_mode_hz, dominant_mode_hz, q, psd_band_hz, miles_grms_g,
+    modes: [{mode, frequency_hz, psd_g2_hz, contribution_g, in_band}], rms_stress_mpa,
+    three_sigma_stress_mpa, pass}."""
+    params = {"psd_profile": psd_profile, "q": q}
+    for k, v in (("analysis", analysis), ("frequencies_hz", frequencies_hz),
+                 ("modal_stress_mpa_per_g", modal_stress_mpa_per_g),
+                 ("allowable_stress_mpa", allowable_stress_mpa)):
+        if v is not None:
+            params[k] = v
+    return _call("random_vibration", **params)
 
 
 @mcp.tool()
