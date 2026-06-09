@@ -19,6 +19,14 @@ echo "== Static contracts (registry parity + docstrings; no FreeCAD) =="
 python3 tests/test_contracts.py
 
 echo
+echo "== Materials DB toys (pure-Python; no FreeCAD) =="
+python3 tests/test_materials.py
+
+echo
+echo "== Machine-element rating toys (pure-Python; no FreeCAD) =="
+python3 tests/test_machine_elements.py
+
+echo
 echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 

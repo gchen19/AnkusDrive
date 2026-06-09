@@ -19,6 +19,11 @@ import os
 import sys
 import traceback
 
+# This file is launched as a bare script (`freecadcmd worker.py`), so the repo
+# root isn't on sys.path. Add it so pure-Python `driftpin.analysis.*` modules
+# (materials, tolerance, ...) are importable from handlers below.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 _RESPONSE_FD = os.dup(1)
 os.dup2(2, 1)
@@ -6331,6 +6336,70 @@ def _h_fem_cantilever(p):
         "max_vonmises_mpa": max(stress),
         "workdir": workdir,
     }
+
+
+@handler("material_get")
+def _h_material_get(p):
+    from driftpin.analysis import materials
+    try:
+        return materials.get(p["name"])
+    except materials.MaterialNotFound as e:
+        return {"ok": False, "reason": str(e)}
+
+
+@handler("material_select")
+def _h_material_select(p):
+    from driftpin.analysis import materials
+    return materials.select(p.get("criteria") or {},
+                            p.get("rank_by", "specific_strength"))
+
+
+@handler("material_list")
+def _h_material_list(p):
+    from driftpin.analysis import materials
+    return materials.list_materials(p.get("category"))
+
+
+@handler("bolted_joint_check")
+def _h_bolted_joint_check(p):
+    from driftpin.analysis import machine_elements as me
+    return me.bolted_joint_check(**p)
+
+
+@handler("bearing_life")
+def _h_bearing_life(p):
+    from driftpin.analysis import machine_elements as me
+    return me.bearing_life(**p)
+
+
+@handler("spring_check")
+def _h_spring_check(p):
+    from driftpin.analysis import machine_elements as me
+    return me.spring_check(**p)
+
+
+@handler("gear_rating")
+def _h_gear_rating(p):
+    from driftpin.analysis import machine_elements as me
+    return me.gear_rating(**p)
+
+
+@handler("belt_drive")
+def _h_belt_drive(p):
+    from driftpin.analysis import machine_elements as me
+    return me.belt_drive(**p)
+
+
+@handler("press_fit_stress")
+def _h_press_fit_stress(p):
+    from driftpin.analysis import machine_elements as me
+    return me.press_fit_stress(**p)
+
+
+@handler("seal_check")
+def _h_seal_check(p):
+    from driftpin.analysis import machine_elements as me
+    return me.seal_check(**p)
 
 
 def _main():

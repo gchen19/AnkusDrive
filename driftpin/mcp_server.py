@@ -2358,6 +2358,197 @@ def fem_cantilever_demo(
     )
 
 
+@mcp.tool()
+def material_get(name: str) -> dict:
+    """Look up a material by name (e.g. 'AL6061-T6'). Returns the full property
+    card as SI quantity strings (YoungsModulus, PoissonRatio, Density,
+    yield_strength, fracture_toughness, thermal_conductivity, cte, rough_cost,
+    refractive_index where applicable, source, basis). The structural keys are
+    FEM-card-compatible, so the result feeds fem_set_material directly. On a miss
+    returns {ok:false, reason} with a did_you_mean suggestion."""
+    return _call("material_get", name=name)
+
+
+@mcp.tool()
+def material_select(
+    criteria: dict | None = None,
+    rank_by: str = "specific_strength",
+) -> dict:
+    """Ashby-style selection: filter the corpus, then rank survivors.
+
+    criteria keys are min_<accessor>/max_<accessor> (e.g. min_yield_mpa,
+    max_density_g_cc, min_service_temp_c). rank_by: specific_strength |
+    specific_stiffness | strength | stiffness | cost | density. Returns
+    {rank_by, count, criteria, candidates:[{name, score, yield_mpa, density_g_cc,
+    youngs_gpa, cost_usd_kg}, ...]} best-first; an empty filter returns no
+    candidates rather than the closest miss."""
+    return _call("material_select", criteria=criteria or {}, rank_by=rank_by)
+
+
+@mcp.tool()
+def material_list(category: str | None = None) -> dict:
+    """List available materials, optionally filtered to one category
+    ('aluminum' | 'steel' | 'titanium' | 'magnesium' | 'polymer' | 'glass').
+    Returns {count, category, materials:[{name, category}, ...]} sorted by name."""
+    return _call("material_list", category=category)
+
+
+@mcp.tool()
+def bolted_joint_check(
+    bolt_dia_mm: float,
+    pitch_mm: float | None = None,
+    torque_nm: float | None = None,
+    preload_n: float | None = None,
+    k_factor: float = 0.2,
+    external_load_n: float = 0.0,
+    joint_stiffness_ratio: float = 0.3,
+    material: str = "Steel-4140-QT",
+    proof_strength_mpa: float | None = None,
+) -> dict:
+    """Rate a bolted joint (VDI 2230-lite). Preload from torque via T=K*F*d (pass
+    torque_nm OR preload_n). Returns {preload_n, tensile_stress_area_mm2,
+    bolt_stress_mpa, preload_pct_proof, bolt_stress_with_load_mpa,
+    separation_load_n, separation_margin, pass, governing}."""
+    params = {"bolt_dia_mm": bolt_dia_mm, "k_factor": k_factor,
+              "external_load_n": external_load_n,
+              "joint_stiffness_ratio": joint_stiffness_ratio, "material": material}
+    for k, v in (("pitch_mm", pitch_mm), ("torque_nm", torque_nm),
+                 ("preload_n", preload_n), ("proof_strength_mpa", proof_strength_mpa)):
+        if v is not None:
+            params[k] = v
+    return _call("bolted_joint_check", **params)
+
+
+@mcp.tool()
+def bearing_life(
+    dynamic_load_c_n: float,
+    equivalent_load_p_n: float,
+    speed_rpm: float,
+    kind: str = "ball",
+    target_hours: float | None = None,
+) -> dict:
+    """Basic rating life L10 (ISO 281): L10=(C/P)^p rev (p=3 ball, 10/3 roller),
+    L10h=L10*1e6/(60n). Returns {l10_million_rev, l10_hours, load_ratio, exponent,
+    pass} (pass vs target_hours when given)."""
+    params = {"dynamic_load_c_n": dynamic_load_c_n,
+              "equivalent_load_p_n": equivalent_load_p_n,
+              "speed_rpm": speed_rpm, "kind": kind}
+    if target_hours is not None:
+        params["target_hours"] = target_hours
+    return _call("bearing_life", **params)
+
+
+@mcp.tool()
+def spring_check(
+    wire_dia_mm: float,
+    coil_mean_dia_mm: float,
+    active_coils: float,
+    force_n: float | None = None,
+    deflection_mm: float | None = None,
+    material: str = "Steel-1045",
+    free_length_mm: float | None = None,
+) -> dict:
+    """Rate a helical compression spring (Wahl). rate k=G d^4/(8 D^3 Na); corrected
+    shear tau=Kw 8FD/(pi d^3). Pass force_n OR deflection_mm. Returns
+    {spring_index, wahl_factor, rate_n_mm, force_n, deflection_mm, shear_stress_mpa,
+    slenderness, buckling_flag, shear_sf, pass}."""
+    params = {"wire_dia_mm": wire_dia_mm, "coil_mean_dia_mm": coil_mean_dia_mm,
+              "active_coils": active_coils, "material": material}
+    for k, v in (("force_n", force_n), ("deflection_mm", deflection_mm),
+                 ("free_length_mm", free_length_mm)):
+        if v is not None:
+            params[k] = v
+    return _call("spring_check", **params)
+
+
+@mcp.tool()
+def gear_rating(
+    module_mm: float,
+    teeth: int,
+    face_width_mm: float,
+    tangential_force_n: float | None = None,
+    power_w: float | None = None,
+    pinion_speed_rpm: float | None = None,
+    material: str = "Steel-4140-QT",
+    lewis_form_factor: float | None = None,
+) -> dict:
+    """Rate spur-gear tooth bending (Lewis): sigma=Ft/(b*m*Y). Pass
+    tangential_force_n, or power_w + pinion_speed_rpm. Returns {tangential_force_n,
+    pitch_dia_mm, pitch_line_velocity_m_s, lewis_form_factor, bending_stress_mpa,
+    allowable_bending_mpa, bending_sf, pass}. First-order screen, not full AGMA."""
+    params = {"module_mm": module_mm, "teeth": teeth,
+              "face_width_mm": face_width_mm, "material": material}
+    for k, v in (("tangential_force_n", tangential_force_n), ("power_w", power_w),
+                 ("pinion_speed_rpm", pinion_speed_rpm),
+                 ("lewis_form_factor", lewis_form_factor)):
+        if v is not None:
+            params[k] = v
+    return _call("gear_rating", **params)
+
+
+@mcp.tool()
+def belt_drive(
+    power_w: float,
+    small_pulley_dia_mm: float,
+    large_pulley_dia_mm: float,
+    center_distance_mm: float,
+    small_pulley_rpm: float,
+    friction_coef: float = 0.3,
+    vbelt_groove_deg: float | None = None,
+    tight_side_limit_n: float | None = None,
+) -> dict:
+    """Rate a belt drive (Eytelwein/capstan). Wrap theta=pi-2asin((D-d)/2C),
+    Fe=P/V, T1/T2=e^(mu*theta) (V-belt divides mu by sin(beta/2)). Returns
+    {wrap_angle_deg, belt_speed_m_s, effective_force_n, tension_ratio, tight_side_n,
+    slack_side_n, transmissible_power_w, pass}."""
+    params = {"power_w": power_w, "small_pulley_dia_mm": small_pulley_dia_mm,
+              "large_pulley_dia_mm": large_pulley_dia_mm,
+              "center_distance_mm": center_distance_mm,
+              "small_pulley_rpm": small_pulley_rpm, "friction_coef": friction_coef}
+    for k, v in (("vbelt_groove_deg", vbelt_groove_deg),
+                 ("tight_side_limit_n", tight_side_limit_n)):
+        if v is not None:
+            params[k] = v
+    return _call("belt_drive", **params)
+
+
+@mcp.tool()
+def press_fit_stress(
+    shaft_dia_mm: float,
+    hub_outer_dia_mm: float,
+    interference_mm: float,
+    engagement_length_mm: float,
+    material: str = "Steel-A36",
+    friction_coef: float = 0.15,
+) -> dict:
+    """Rate an interference (press/shrink) fit via Lamé. p=delta_r E (ro^2-rc^2)/
+    (2 rc ro^2); hub bore hoop=p(ro^2+rc^2)/(ro^2-rc^2); torque=2pi mu p rc^2 L.
+    interference_mm is diametral. Returns {contact_pressure_mpa, hub_hoop_stress_mpa,
+    torque_capacity_nm, axial_force_n, hub_yield_sf, pass}."""
+    return _call("press_fit_stress", shaft_dia_mm=shaft_dia_mm,
+                 hub_outer_dia_mm=hub_outer_dia_mm, interference_mm=interference_mm,
+                 engagement_length_mm=engagement_length_mm, material=material,
+                 friction_coef=friction_coef)
+
+
+@mcp.tool()
+def seal_check(
+    cross_section_dia_mm: float,
+    groove_depth_mm: float,
+    groove_width_mm: float,
+    application: str = "static_radial",
+    max_gland_fill_pct: float = 90.0,
+) -> dict:
+    """Rate an O-ring gland (pairs with oring_groove): squeeze=W-depth, fill=
+    (pi/4 W^2)/(width*depth). Squeeze must sit in the application band (static
+    15-30%, dynamic 10-20%), fill below max_gland_fill_pct. Returns {squeeze_mm,
+    squeeze_pct, gland_fill_pct, squeeze_range_pct, within_squeeze, within_fill,
+    pass}."""
+    return _call("seal_check", cross_section_dia_mm=cross_section_dia_mm,
+                 groove_depth_mm=groove_depth_mm, groove_width_mm=groove_width_mm,
+                 application=application, max_gland_fill_pct=max_gland_fill_pct)
+
+
 def run():
     mcp.run()
 

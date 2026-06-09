@@ -5,3 +5,7 @@ phase0_assembly.FCStd
 phase0_clash.FCStd
 phase0_*.FCBak
 phase0_*_iso.png
+
+*.FCStd
+*.stl
+*.png

@@ -96,6 +96,20 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Integration:** lets `fem_set_material(..., material='Steel-A36')` take a *name*
   instead of a hand-typed property dict — and is the lookup table fatigue, fracture,
   and cost all read from.
+- **Status: shipped.** Lives in `driftpin/analysis/materials/` (`material_get` /
+  `material_select` / `material_list` tools). Mechanical/thermal cards are
+  hand-seeded in `seed.json` and enriched at runtime from FreeCAD's installed
+  `.FCMat` cards (`fcmat.py`).
+- **Optical corpus (submodule + extract).** Optical members (n_d, Abbe, Sellmeier
+  dispersion) come from the CC0 [refractiveindex.info-database](https://github.com/polyanskiy/refractiveindex.info-database),
+  vendored as a git submodule at `vendor/refractiveindex.info-database` pinned to
+  tag **`v2026-05-24`**. `tools/extract_optical_corpus.py` (dev-only, PyYAML)
+  extracts a curated set into the committed `optical.json`, which the loader merges
+  *field-wise* onto the seed cards — so the worker needs no YAML or submodule at
+  runtime, only to regenerate. `materials.refractive_index_at(card, nm)` evaluates
+  the Sellmeier formula for the optics family's `n_refractive`. Full sourcing
+  rationale + per-source reliability/license notes:
+  [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) (materials-corpus section).
 
 ### 3. Wear, fatigue & fracture
 
@@ -219,7 +233,54 @@ process. Several reuse existing DriftPin tools directly.
     -> {material_cost, process_cost, unit_cost, breakdown}
   ```
 
-### 10. Horizon (table-only)
+### 10. Machine-element rating  *(highest leverage on existing tools)*
+
+Closed-form ratings that pair **1:1 with DriftPin's existing component
+generators** — `add_fastener`/`add_thread`, `add_bearing`, `add_spring`,
+`add_gear`, `add_pulley`/`add_sprocket`, `oring_groove`. The generator already
+encodes the geometry; the rating tool consumes it (by handle or explicit dims) and
+returns life / safety-factor, turning "I drew a gear" into "this gear survives."
+
+- **Answers:** "Will this bolt hold preload without yielding? How many hours does
+  this bearing last? Does this spring buckle or fatigue?"
+- **Backend:** pure-Python textbook closed-form (VDI 2230, ISO 281, Wahl, AGMA/
+  Lewis, Lamé), reading strengths/moduli from the **Materials DB**. **Weight: none.**
+- **Signatures (intent-encoded):**
+  ```
+  bolted_joint_check(bolt_dia_mm, pitch_mm, torque_nm|preload_n, k_factor,
+                     external_load_n, joint_stiffness_ratio, material)   # VDI 2230-lite
+    -> {preload_n, bolt_stress_mpa, preload_pct_proof, separation_margin, pass}
+  bearing_life(dynamic_load_c_n, equivalent_load_p_n, speed_rpm, kind)   # ISO 281 L10
+    -> {l10_million_rev, l10_hours, load_ratio, pass}
+  spring_check(wire_dia_mm, coil_mean_dia_mm, active_coils, force_n, material)  # Wahl
+    -> {rate_n_mm, shear_stress_mpa, wahl_factor, deflection_mm, buckling_flag}
+  gear_rating(module_mm, teeth, face_width_mm, tangential_force_n|power_w,
+              pinion_speed_rpm, material)                                # Lewis bending
+    -> {bending_stress_mpa, bending_sf, pitch_line_velocity_m_s, pass}
+  belt_drive(power_w, small_pulley_dia_mm, large_pulley_dia_mm,
+             center_distance_mm, small_pulley_rpm, friction_coef,
+             vbelt_groove_deg)                                           # Eytelwein
+    -> {wrap_angle_deg, belt_speed_m_s, tension_ratio, tight_side_n, slack_side_n}
+  press_fit_stress(shaft_dia_mm, hub_outer_dia_mm, interference_mm,
+                   engagement_length_mm, material, friction_coef)        # Lamé
+    -> {contact_pressure_mpa, hub_hoop_stress_mpa, torque_capacity_nm, hub_yield_sf}
+  seal_check(cross_section_dia_mm, groove_depth_mm, groove_width_mm,
+             application)                                                # O-ring gland
+    -> {squeeze_pct, gland_fill_pct, within_squeeze, within_fill, pass}
+  ```
+- **Result:** every tool returns a safety-factor / life number and a `pass` bool,
+  so it drops straight into a **merge gate** (every rated element passes).
+- **Integration:** the natural durability counterpart to the component-generator
+  tools, exactly as Wear/Fatigue/Fracture (family 3) is to FEM stress.
+  `belt_drive`↔`add_pulley`, `press_fit_stress`↔press-fit geometry,
+  `seal_check`↔`oring_groove`.
+- **Status: shipped (P0)** in `driftpin/analysis/machine_elements.py` —
+  `bolted_joint_check`, `bearing_life`, `spring_check`, `gear_rating`,
+  `belt_drive`, `press_fit_stress`, `seal_check`, all with hand-verified toys in
+  `tests/test_machine_elements.py`. Chain/sprocket and weld-group ratings extend
+  the same module next.
+
+### 11. Horizon (table-only)
 
 | Domain | Tooling | Priority |
 |---|---|---|
@@ -258,6 +319,9 @@ process. Several reuse existing DriftPin tools directly.
    FEM stress results ─────────┘
    (existing fem_results)
 
+   Materials DB ──────────────────► Machine-element rating
+   add_* component generators ─────┘ (bolt/bearing/spring/gear/…)
+
    Geometry export (STEP/STL/mesh) ──┬──► CFD
                                      ├──► Optics
                                      └──► Slicer estimate
@@ -267,10 +331,11 @@ process. Several reuse existing DriftPin tools directly.
 
 **P0 — pure-Python, zero new deps, ship first.** Days each, no installs,
 immediately useful:
-1. **Tolerance / GD&T** (Appendix A) — validates the new `analysis/` extension point.
-2. **Materials DB** — foundational; unblocks fatigue, fracture, cost.
+1. **Tolerance / GD&T** (Appendix A) — validates the new `analysis/` extension point. *(scaffolded)*
+2. **Materials DB** — foundational; unblocks fatigue, fracture, cost. *(shipped)*
 3. **Wear / fatigue / fracture** — turns FEM stress into durability.
 4. **DfM / DfA heuristics** + lumped thermal — grade against process, reuse existing tools.
+5. **Machine-element rating** — closed-form life/SF on the existing `add_*` component tools. *(shipped: bolt, bearing, spring, gear, belt, press-fit, seal)*
 
 **P1 — external CLI, self-contained.** One new tool dependency each, bounded runtime:
 5. **Slicer estimate** (PrusaSlicer/OrcaSlicer CLI on STL).
