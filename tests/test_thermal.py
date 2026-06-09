@@ -84,6 +84,44 @@ def test_specific_heat_from_material_and_errors():
         raise AssertionError("expected ValueError for zero area")
 
 
+def test_transient_1d_matches_heisler_one_term():
+    # Bi=1, Fo=1 (L=0.1 m, k=10, h=100, alpha=1e-4, t=100 s): center 65.0 C
+    r = th.thermal_transient_1d(half_thickness_mm=100, h_conv=100, duration_s=100,
+                                k=10, alpha_m2_s=1e-4, t_initial_c=100, t_ambient_c=25)
+    assert abs(r["biot"] - 1.0) < 1e-6 and abs(r["fourier"] - 1.0) < 1e-6, r
+    assert abs(r["eigenvalue_1"] - 0.8603) < 1e-3, r["eigenvalue_1"]
+    assert abs(r["t_center_c"] - 65.0) < 0.2, r["t_center_c"]
+    assert r["t_surface_c"] < r["t_center_c"], r       # surface leads the center
+    assert r["one_term_valid"] is True, r
+
+
+def test_transient_1d_agrees_with_lumped_at_small_biot():
+    # thin, high-conductivity slab -> isothermal -> the lumped exponential
+    s = th.thermal_transient_1d(half_thickness_mm=5, h_conv=20, duration_s=200,
+                                material="AL6061-T6", t_initial_c=100, t_ambient_c=25)
+    assert s["biot"] < 0.01, s["biot"]
+    assert abs(s["t_center_c"] - s["t_center_lumped_c"]) < 0.5, s
+    assert s["lumped_agrees"] is True, s
+
+
+def test_transient_1d_errors():
+    # no properties resolvable
+    try:
+        th.thermal_transient_1d(half_thickness_mm=10, h_conv=10, duration_s=10)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError without k/rho/cp or alpha")
+    # non-positive geometry
+    try:
+        th.thermal_transient_1d(half_thickness_mm=0, h_conv=10, duration_s=10,
+                                k=10, alpha_m2_s=1e-4)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for zero thickness")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

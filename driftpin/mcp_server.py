@@ -2784,6 +2784,66 @@ def thermal_lumped(
 
 
 @mcp.tool()
+def thermal_transient_1d(
+    half_thickness_mm: float,
+    h_conv: float,
+    duration_s: float,
+    k: str | float | None = None,
+    rho: str | float | None = None,
+    cp: str | float | None = None,
+    alpha_m2_s: float | None = None,
+    material: str | None = None,
+    t_initial_c: float = 100.0,
+    t_ambient_c: float = 25.0,
+) -> dict:
+    """Analytic 1-D plane-wall transient conduction (one-term Heisler series), valid
+    for Fourier ≳ 0.2 — the closed-form transient the Elmer thermal_transient solve is
+    gated against, and the *distributed* (spatial-gradient) answer the lumped screen
+    only approximates. A wall of half-thickness L cools/heats toward ambient by surface
+    convection: Bi = h·L/k, Fo = α·t/L², α = k/(ρ·cₚ). Pass `alpha_m2_s`, or k+rho+cp,
+    or a `material` (Materials DB: thermal_conductivity/Density/specific_heat).
+
+    As Bi→0 the body is isothermal and this collapses to the lumped exponential
+    exp(−t/τ) (cross-checked via t_center_lumped_c / lumped_agrees). Returns {biot,
+    fourier, eigenvalue_1, c1, t_center_c, t_surface_c, t_center_lumped_c,
+    time_constant_s, one_term_valid, lumped_agrees}."""
+    params = {"half_thickness_mm": half_thickness_mm, "h_conv": h_conv,
+              "duration_s": duration_s, "t_initial_c": t_initial_c,
+              "t_ambient_c": t_ambient_c}
+    for key, v in (("k", k), ("rho", rho), ("cp", cp), ("alpha_m2_s", alpha_m2_s),
+                   ("material", material)):
+        if v is not None:
+            params[key] = v
+    return _call("thermal_transient_1d", **params)
+
+
+@mcp.tool()
+def thermal_transient_submit(
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+    analysis: str | None = None,
+    duration_s: float | None = None,
+    dt_s: float | None = None,
+) -> dict:
+    """Transient / radiation thermal FEM via Elmer, asynchronous (heavy solve runs on
+    the provisioned runner). Requires ElmerSolver (apt `elmerfem-csc` / conda); when
+    it's absent this returns {ok:false, reason, install} rather than raising. Provide a
+    prepared Elmer `case_dir` (with its `.sif`); it runs ElmerSolver there in the
+    background and parses the SaveScalars history. (The analytic transient with no
+    solver is thermal_transient_1d; building the case from a FreeCAD `analysis` is a
+    follow-on.)
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, case_dir, scalars_final, stdout_tail}."""
+    params = {"sif": sif}
+    for key, v in (("case_dir", case_dir), ("analysis", analysis),
+                   ("duration_s", duration_s), ("dt_s", dt_s)):
+        if v is not None:
+            params[key] = v
+    return _call("thermal_transient_submit", **params)
+
+
+@mcp.tool()
 def random_vibration(
     psd_profile: list,
     analysis: str | None = None,

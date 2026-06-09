@@ -6575,6 +6575,17 @@ def _h_thermal_lumped(p):
     return thermal.thermal_lumped(**p)
 
 
+@handler("thermal_transient_1d")
+def _h_thermal_transient_1d(p):
+    """Analytic 1-D plane-wall transient (one-term Heisler series) — the closed-form
+    oracle the Elmer thermal_transient solve is gated against, and the distributed
+    answer the lumped screen only approximates. See driftpin.analysis.thermal. Returns
+    {biot, fourier, eigenvalue_1, c1, t_center_c, t_surface_c, t_center_lumped_c,
+    time_constant_s, one_term_valid, lumped_agrees}."""
+    from driftpin.analysis import thermal
+    return thermal.thermal_transient_1d(**p)
+
+
 @handler("dfm_check")
 def _h_dfm_check(p):
     from driftpin.analysis import dfx
@@ -6777,6 +6788,69 @@ def _h_topology_optimize_submit(p):
 
     return jobs.submit("topology_optimize", _work, key=key,
                        meta={"nelx": nelx, "nely": nely, "keep_fraction": keep_fraction})
+
+
+# --- transient/radiation thermal (family 4 P2; Elmer-backed) ------------------
+
+def _parse_elmer_scalars(case_dir):
+    """Best-effort parse of an Elmer SaveScalars .dat (whitespace columns; the last
+    row is the final timestep). Returns that row as floats, or None when absent."""
+    import glob
+    dats = sorted(glob.glob(os.path.join(case_dir, "*.dat")))
+    if not dats:
+        return None
+    with open(dats[-1]) as f:
+        rows = [r for r in f.read().splitlines() if r.strip()]
+    if not rows:
+        return None
+    try:
+        return [float(x) for x in rows[-1].split()]
+    except ValueError:
+        return None
+
+
+@handler("thermal_transient_submit")
+def _h_thermal_transient_submit(p):
+    """Transient / radiation thermal FEM via Elmer, OFF the MCP channel. Degrades to
+    {ok:false, reason, install} when ElmerSolver is absent — the locally-verified gate;
+    the heavy solve runs only on the provisioned runner. When present, runs ElmerSolver
+    on a prepared case directory (`case_dir` containing its `.sif`) in a background
+    subprocess and parses the SaveScalars time history. (Writing the Elmer case from a
+    live FreeCAD analysis is a documented follow-on; the analytic oracle is
+    thermal_transient_1d.)
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, case_dir, scalars_final, stdout_tail}."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    from driftpin import jobs
+    case_dir = p.get("case_dir")
+    if not case_dir or not os.path.isdir(case_dir):
+        raise ValueError(
+            "thermal_transient_submit needs a prepared Elmer `case_dir` (with its "
+            ".sif). Building the case from a FreeCAD analysis is a follow-on; the "
+            "analytic transient is thermal_transient_1d.")
+    sif = p.get("sif", "case.sif")
+    elmer_bin = info["path"]
+    key = jobs.content_key("thermal_transient",
+                           {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+    def _work():
+        import subprocess
+        proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                              capture_output=True, text=True)
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "case_dir": case_dir,
+            "scalars_final": _parse_elmer_scalars(case_dir),
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+
+    return jobs.submit("thermal_transient", _work, key=key,
+                       meta={"case_dir": case_dir, "duration_s": p.get("duration_s")})
 
 
 # --- generic async jobs (driftpin.jobs) ---------------------------------------
