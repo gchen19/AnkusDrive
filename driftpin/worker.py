@@ -7879,6 +7879,89 @@ def _h_cht_channel_submit(p):
                              "flux_w_m2": params.get("flux_w_m2", 10000.0)})
 
 
+@handler("cht_graetz_submit")
+def _h_cht_graetz_submit(p):
+    """Flow-coupled Graetz channel via Elmer (SIMULATION_NEXT B4), OFF the MCP
+    channel — FlowSolve computes the real laminar profile and HeatSolver rides on
+    it (Convection = Computed) between isothermal walls; the developed mixing-cup
+    decay yields a TRUE Nusselt number gated against the Graetz eigenvalue
+    Nu_T = 7.5407 (parallel plates; a slug profile would give pi^2 = 9.87 — the
+    discriminator). Second gate: the solved parabola's u_max/u_mean = 3/2 exactly.
+    Degrades to {ok:false, reason, install} when ElmerSolver is absent. Also
+    accepts a prepared case_dir. Returns the degradation dict or {job_id, status,
+    cache_hit}; poll job_result."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import subprocess
+    import tempfile
+
+    from driftpin import jobs
+    from driftpin.analysis import cht as _cht
+    elmer_bin = info["path"]
+
+    case_dir = p.get("case_dir")
+    if case_dir:                                     # --- prepared case directory ---
+        if not os.path.isdir(case_dir):
+            raise ValueError(f"case_dir {case_dir!r} is not a directory")
+        sif = p.get("sif", "case.sif")
+        key = jobs.content_key("cht_graetz",
+                               {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+        def _work_prepared():
+            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                                  capture_output=True, text=True)
+            return {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "case_dir": case_dir,
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+
+        return jobs.submit("cht_graetz", _work_prepared, key=key,
+                           meta={"case_dir": case_dir})
+
+    params = {k: float(p[k]) for k in (
+        "velocity_m_s", "gap_m", "length_m", "rho_fluid", "mu_fluid",
+        "k_fluid", "cp_fluid", "t_in_c", "t_wall_c") if p.get(k) is not None}
+    for k in ("nx", "ny", "max_iterations"):
+        if p.get(k) is not None:
+            params[k] = int(p[k])
+    key = jobs.content_key("cht_graetz", {"channel": params})
+
+    def _work():
+        cdir = tempfile.mkdtemp(prefix="elmer_graetz_")
+        built = _cht.write_graetz_channel_case(cdir, **params)
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                              capture_output=True, text=True)
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "case_dir": cdir,
+            "reynolds": round(built["reynolds"], 2),
+            "prandtl": round(built["prandtl"], 4),
+            "pe_cell": round(built["pe_cell"], 2),
+            "nu_exact": built["nu_exact"],
+            "nu_slug": built["nu_slug"],
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        parsed = _cht.parse_graetz_channel(
+            cdir, nx=built["nx"], ny=built["ny"], gap_m=built["gap_m"],
+            length_m=built["length_m"], rho_fluid=built["rho_fluid"],
+            cp_fluid=built["cp_fluid"], k_fluid=built["k_fluid"],
+            t_wall_c=built["t_wall_c"])
+        if parsed:
+            out["u_max_over_mean"] = parsed["u_max_over_mean"]
+            out["nu_fit"] = parsed["nu_fit"]
+            if parsed["nu_fit"]:
+                out["nu_ratio"] = round(parsed["nu_fit"] / built["nu_exact"], 4)
+        return out
+
+    return jobs.submit("cht_graetz", _work, key=key, meta={"mode": "graetz"})
+
+
 # --- acoustics + harmonic response (SIMULATION_NEXT B1/B2; Elmer-backed) --------
 
 @handler("acoustic_fem_submit")
@@ -8204,6 +8287,93 @@ def _h_em_conduction_submit(p):
 
     return jobs.submit("em_conduction", _work, key=key,
                        meta={"mode": "strip", "voltage_v": params.get("voltage_v", 0.001)})
+
+
+@handler("em_induction_heating_submit")
+def _h_em_induction_heating_submit(p):
+    """Coupled induction heating via Elmer (SIMULATION_NEXT B5), OFF the MCP
+    channel — completes em_induction_submit into a THERMAL answer: the harmonic
+    MagnetoDynamics solve runs once, MagnetoDynamicsCalcFields turns it into the
+    time-averaged Joule loss field, and a transient adiabatic HeatSolver
+    integrates it for heat_duration_s. Two gates: joule_power_ratio (the solved
+    eddy-current power vs the exact P'' = R_s*|H0|^2/2 = omega^2*sigma*A0^2*delta/4)
+    and energy_balance_ratio (mean dT vs P*t/(m*cp)). Degrades to {ok:false,
+    reason, install} when ElmerSolver is absent. Also accepts a prepared case_dir.
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import subprocess
+    import tempfile
+
+    from driftpin import jobs
+    from driftpin.analysis import em as _em
+    elmer_bin = info["path"]
+
+    case_dir = p.get("case_dir")
+    if case_dir:                                     # --- prepared case directory ---
+        if not os.path.isdir(case_dir):
+            raise ValueError(f"case_dir {case_dir!r} is not a directory")
+        sif = p.get("sif", "case.sif")
+        key = jobs.content_key("em_induction_heating",
+                               {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+        def _work_prepared():
+            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                                  capture_output=True, text=True)
+            return {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "case_dir": case_dir,
+                "scalars": _em.parse_induction_scalars(case_dir),
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+
+        return jobs.submit("em_induction_heating", _work_prepared, key=key,
+                           meta={"case_dir": case_dir})
+
+    params = {k: float(p[k]) for k in (
+        "frequency_hz", "conductivity_s_m", "mu_r", "a_surface",
+        "density_kg_m3", "cp_j_kgk", "k_thermal", "heat_duration_s",
+        "depths") if p.get(k) is not None}
+    if p.get("conductor") is not None:
+        params["conductor"] = str(p["conductor"])
+    for k in ("n_steps", "nx", "ny"):
+        if p.get(k) is not None:
+            params[k] = int(p[k])
+    key = jobs.content_key("em_induction_heating", {"slab": params})
+
+    def _work():
+        cdir = tempfile.mkdtemp(prefix="elmer_indheat_")
+        built = _em.write_induction_heating_case(cdir, **params)
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                              capture_output=True, text=True)
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "case_dir": cdir,
+            "skin_depth_m": built["oracle"]["skin_depth_m"],
+            "p_total_exact_w_m": round(built["p_total_w_m"], 4),
+            "dt_mean_exact_k": round(built["dt_mean_exact_k"], 5),
+            "heat_duration_s": built["heat_duration_s"],
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        parsed = _em.parse_induction_scalars(cdir, built["scalars"])
+        if parsed:
+            out["t_mean_final_k"] = round(parsed["t_mean_final_k"], 5)
+            if parsed["eddy_power_w_m"] is not None:
+                out["eddy_power_w_m"] = round(parsed["eddy_power_w_m"], 4)
+                out["joule_power_ratio"] = round(
+                    parsed["eddy_power_w_m"] / built["p_total_w_m"], 5)
+            if built["dt_mean_exact_k"] > 0:
+                out["energy_balance_ratio"] = round(
+                    parsed["t_mean_final_k"] / built["dt_mean_exact_k"], 5)
+        return out
+
+    return jobs.submit("em_induction_heating", _work, key=key,
+                       meta={"mode": "slab"})
 
 
 @handler("em_induction_submit")

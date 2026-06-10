@@ -162,6 +162,10 @@ Each family lists: the agent question it answers · backend · new-dependency we
   cht_channel_submit(flux_w_m2, velocity_m_s, …)  # P3 M6: ONE Elmer solve over coupled
     # plug-flow fluid + solid wall regions; gated h-free (energy balance q″L=ṁ·c_p·ΔT
     # ≈0.5%, solid drop q″t/k ≈0.2%; the builder rejects cell Péclet > 25)
+  cht_graetz_submit(velocity_m_s, gap_m, …)  # B4: FlowSolve + Convection=Computed between
+    # isothermal walls — the TRUE Nusselt validation: solved parabola u_max/u_mean ≡ 3/2,
+    # developed mixing-cup decay fits Nu vs the Graetz 7.5407 (slug π² is the discriminator);
+    # closes the loop with h_estimate. tests/test_cht.py
   ```
 - CCX already covers steady-state conduction via `fem_thermal_results`; this fills
   the *time* and *radiation* gaps. Lumped version ships in the pure-Python wave.
@@ -448,6 +452,10 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
     -> resistance_ratio == 1.000000 (machine-exact vs R=L/σA, live)
   em_induction_submit(frequency_hz, conductor, mu_r, …)   # Elmer harmonic skin slab, async
     -> decay_ratio/phase_ratio ≈ 1 (|A| AND phase e-fold at exactly δ; 0.1% live)
+  em_induction_heating_submit(frequency_hz, a_surface, heat_duration_s, …)  # B5: the
+    # harmonic solve + CalcFields Joule field + transient adiabatic HeatSolver — the
+    # thermal answer: joule_power_ratio vs exact R_s|H₀|²/2 (live 1.0003) and
+    # energy_balance_ratio ΔT=P·t/(m·cₚ) (live 1.005). tests/test_em.py
   ```
 - Gates in `tests/test_em.py`; acceptance Example J + `em.png`. RF/wave EM stays
   on the horizon below.

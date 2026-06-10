@@ -192,6 +192,69 @@ def test_skin_effect_decays_at_the_exact_skin_depth():
               f"phase {fit['phase_length_m'] / delta:.4f} of exact delta")
 
 
+
+# --- B5: coupled induction heating (case gen always; Elmer gate when present) ---
+
+def test_induction_heating_power_identity():
+    # P'' = omega^2*sigma*A0^2*delta/4 must equal R_s*|H0|^2/2 with
+    # H0 = A0*sqrt(2)/(mu*delta) — two routes to the same exact dissipation
+    import math
+    f, sigma, mu_r, a0 = 1.0e4, 5.96e7, 1.0, 1.0e-3
+    p1 = em.induction_heating_power(f, sigma, mu_r, a0)
+    orc = em.skin_depth(f, conductivity_s_m=sigma, mu_r=mu_r)
+    delta = orc["skin_depth_m"]
+    mu = mu_r * 4e-7 * math.pi
+    h0 = a0 * math.sqrt(2.0) / (mu * delta)
+    rs = 1.0 / (sigma * delta)
+    p2 = rs * h0 ** 2 / 2.0
+    assert abs(p1 / p2 - 1) < 1e-9, (p1, p2)
+    # at fixed A0, H0 ~ sqrt(f) so P'' ~ f^(3/2): 4x frequency -> 8x dissipation
+    p4 = em.induction_heating_power(4 * f, sigma, mu_r, a0)
+    assert abs(p4 / p1 - 8.0) < 1e-6
+
+
+def test_induction_heating_case_structure():
+    d = tempfile.mkdtemp(prefix="indheat_gen_")
+    built = em.write_induction_heating_case(d)
+    sif = open(os.path.join(d, built["sif"])).read()
+    assert "MagnetoDynamicsCalcFields" in sif and "Joule Heat = Logical True" in sif
+    assert "Transient" in sif and "Before Simulation" in sif
+    assert built["dt_mean_exact_k"] > 0 and built["p_total_w_m"] > 0
+    for bad in (
+        lambda: em.write_induction_heating_case(tempfile.mkdtemp(), depths=2.0),
+        lambda: em.write_induction_heating_case(tempfile.mkdtemp(),
+                                                heat_duration_s=0),
+        lambda: em.write_induction_heating_case(tempfile.mkdtemp(), n_steps=1),
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+    assert em.parse_induction_scalars(tempfile.mkdtemp()) is None
+
+
+def test_induction_heating_solve_closes_energy_balance():
+    if not solvers.is_available("elmer"):
+        print("    SKIP — ElmerSolver not installed")
+        return
+    d = tempfile.mkdtemp(prefix="indheat_live_")
+    built = em.write_induction_heating_case(d)
+    binary = solvers.find_solver("elmer")["path"]
+    proc = subprocess.run([binary, built["sif"]], cwd=d,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout[-500:]
+    r = em.parse_induction_scalars(d, built["scalars"])
+    assert r is not None and r["eddy_power_w_m"] is not None, r
+    # gate 1: solved eddy-current power vs the exact R_s|H0|^2/2 (live 1.0003)
+    joule_ratio = r["eddy_power_w_m"] / built["p_total_w_m"]
+    assert abs(joule_ratio - 1) < 0.03, joule_ratio
+    # gate 2: adiabatic energy balance dT = P*t/(m*cp) (live 1.005)
+    balance = r["t_mean_final_k"] / built["dt_mean_exact_k"]
+    assert abs(balance - 1) < 0.05, balance
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

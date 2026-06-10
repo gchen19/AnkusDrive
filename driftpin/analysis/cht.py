@@ -424,3 +424,319 @@ def parse_cht_scalars(case_dir: str, scalars: str = "cht.dat") -> dict | None:
         }
     except (ValueError, IndexError):
         return None
+
+
+# --- Tier B4: flow-coupled Graetz channel (SIMULATION_NEXT) ---------------------
+#
+# The plug-flow channel above keeps its gates h-free BY CONSTRUCTION; this case
+# upgrades it to a TRUE Nusselt validation: Elmer FlowSolve computes the real
+# laminar profile (gate 1: the parabola's u_max/u_mean = 3/2 exactly) and
+# HeatSolver rides on it (Convection = Computed) between two isothermal walls.
+# In the thermally developed region the mixing-cup temperature then obeys the
+# exact decay law
+#
+#     d ln(T_wall - T_bulk)/dx = -Nu * k * P / (Dh * mdot * cp)
+#
+# whose Nu is the Graetz eigenvalue: parallel plates at constant wall
+# temperature give Nu_T = 7.5407 (a SLUG profile would give pi^2 = 9.8696 —
+# the discriminator that proves the profile coupling is real). This closes the
+# loop with h_estimate: the same number an agent gets from the correlation
+# screen is here measured from a meshed solve.
+
+GRAETZ_NU_PLATES_T = 7.5407    # parallel plates, both walls isothermal
+GRAETZ_NU_SLUG_T = 9.8696      # pi^2 — the plug-flow value the M6 model implies
+
+_GRAETZ_RE_MAX = 400.0         # keep the channel laminar with margin
+
+
+def graetz_channel_mesh_files(length_m: float, gap_m: float,
+                              nx: int, ny: int) -> dict:
+    """Native Elmer 2-D quad mesh of the open channel: tag 1 = inlet (x=0),
+    tag 2 = outlet, tag 3 = both isothermal walls."""
+    nnx, nny = nx + 1, ny + 1
+
+    def nid(i, j):
+        return j * nnx + i + 1
+
+    def parent(i, j):
+        return j * nx + i + 1
+
+    nodes = []
+    for j in range(nny):
+        for i in range(nnx):
+            nodes.append(
+                f"{nid(i, j)} -1 {i * length_m / nx:.10g} {j * gap_m / ny:.10g} 0.0\n")
+    elements = []
+    eid = 0
+    for j in range(ny):
+        for i in range(nx):
+            eid += 1
+            elements.append(
+                f"{eid} 1 404 {nid(i, j)} {nid(i + 1, j)} "
+                f"{nid(i + 1, j + 1)} {nid(i, j + 1)}\n")
+    boundary, bid = [], 0
+    for j in range(ny):
+        bid += 1
+        boundary.append(f"{bid} 1 {parent(0, j)} 0 202 {nid(0, j)} {nid(0, j + 1)}\n")
+        bid += 1
+        boundary.append(f"{bid} 2 {parent(nx - 1, j)} 0 202 {nid(nx, j)} {nid(nx, j + 1)}\n")
+    for i in range(nx):
+        bid += 1
+        boundary.append(f"{bid} 3 {parent(i, 0)} 0 202 {nid(i, 0)} {nid(i + 1, 0)}\n")
+        bid += 1
+        boundary.append(f"{bid} 3 {parent(i, ny - 1)} 0 202 {nid(i, ny)} {nid(i + 1, ny)}\n")
+    header = f"{nnx * nny} {nx * ny} {bid}\n2\n202 {bid}\n404 {nx * ny}\n"
+    return {"mesh.header": header, "mesh.nodes": "".join(nodes),
+            "mesh.elements": "".join(elements), "mesh.boundary": "".join(boundary)}
+
+
+def write_graetz_channel_case(
+    case_dir: str,
+    *,
+    velocity_m_s: float = 0.025,
+    gap_m: float = 0.01,
+    length_m: float = 0.12,
+    rho_fluid: float = 1000.0,
+    mu_fluid: float = 0.02,
+    k_fluid: float = 80.0,
+    cp_fluid: float = 4000.0,
+    t_in_c: float = 20.0,
+    t_wall_c: float = 80.0,
+    nx: int = 120,
+    ny: int = 20,
+    max_iterations: int = 30,
+    mesh_name: str = "chan",
+    output: str = "graetz",
+) -> dict:
+    """Write the flow-coupled Graetz channel: FlowSolve (Navier-Stokes) +
+    HeatSolver with Convection = Computed, uniform inlet, no-slip isothermal
+    walls. The writer polices the physics the fit depends on: Re < 400
+    (laminar), both development lengths (0.05*Re*Dh and 0.05*Re*Pr*Dh) inside
+    the first 45 % of the channel so the second-half fit window is developed,
+    and cell Peclet U*dx/alpha <= 25 (the stabilized-advection envelope the M6
+    case established). Returns {case_dir, sif, mesh_db, output, reynolds,
+    prandtl, pe_cell, nu_exact, nu_slug, nx, ny, gap_m, length_m}."""
+    if min(velocity_m_s, gap_m, length_m, rho_fluid, mu_fluid, k_fluid,
+           cp_fluid) <= 0:
+        raise ValueError("flow, geometry and material properties must be > 0")
+    if t_wall_c == t_in_c:
+        raise ValueError("t_wall_c must differ from t_in_c (no decay to fit)")
+    if nx < 40 or ny < 10:
+        raise ValueError("need nx >= 40 and ny >= 10 to resolve the profile")
+    dh = 2.0 * gap_m
+    re = rho_fluid * velocity_m_s * dh / mu_fluid
+    if not 4.0 <= re <= _GRAETZ_RE_MAX:
+        raise ValueError(f"Re = {re:.0f} outside the laminar channel envelope "
+                         f"[4, {_GRAETZ_RE_MAX:.0f}]")
+    alpha = k_fluid / (rho_fluid * cp_fluid)
+    pr = mu_fluid * cp_fluid / k_fluid
+    dev = 0.05 * re * dh * max(1.0, pr)
+    if dev > 0.45 * length_m:
+        raise ValueError(
+            f"development length {dev:.3g} m exceeds 45% of the channel — "
+            "lengthen it or drop Re/Pr so the fit window is developed")
+    pe_cell = velocity_m_s * (length_m / nx) / alpha
+    if pe_cell > 25.0:
+        raise ValueError(f"cell Peclet {pe_cell:.1f} > 25 — refine nx or slow "
+                         "the flow (stabilized advection leaks beyond it)")
+    mesh_dir = os.path.join(case_dir, mesh_name)
+    os.makedirs(mesh_dir, exist_ok=True)
+    for name, content in graetz_channel_mesh_files(length_m, gap_m, nx, ny).items():
+        with open(os.path.join(mesh_dir, name), "w") as f:
+            f.write(content)
+    sif = f"""Header
+  Mesh DB "." "{mesh_name}"
+End
+Simulation
+  Coordinate System = Cartesian 2D
+  Simulation Type = Steady State
+  Steady State Max Iterations = {max_iterations}
+  Output Intervals = 0
+End
+Body 1
+  Equation = 1
+  Material = 1
+End
+Material 1
+  Density = {rho_fluid:.10g}
+  Viscosity = {mu_fluid:.10g}
+  Heat Conductivity = {k_fluid:.10g}
+  Heat Capacity = {cp_fluid:.10g}
+End
+Equation 1
+  Active Solvers(2) = 1 2
+  Convection = Computed
+  NS Convect = True
+End
+Solver 1
+  Equation = Navier-Stokes
+  Procedure = "FlowSolve" "FlowSolver"
+  Variable = Flow Solution[Velocity:2 Pressure:1]
+  Stabilize = True
+  Nonlinear System Max Iterations = 30
+  Nonlinear System Convergence Tolerance = 1.0e-7
+  Linear System Solver = Direct
+  Linear System Direct Method = UMFPACK
+  Steady State Convergence Tolerance = 1.0e-6
+End
+Solver 2
+  Equation = Heat Equation
+  Procedure = "HeatSolve" "HeatSolver"
+  Variable = Temperature
+  Stabilize = True
+  Nonlinear System Max Iterations = 1
+  Linear System Solver = Direct
+  Linear System Direct Method = UMFPACK
+  Steady State Convergence Tolerance = 1.0e-6
+End
+Solver 3
+  Equation = ResultOutput
+  Procedure = "ResultOutputSolve" "ResultOutputSolver"
+  Output File Name = "{output}"
+  Vtu Format = True
+  Ascii Output = True
+  Exec Solver = After Simulation
+End
+Boundary Condition 1
+  Target Boundaries(1) = 1
+  Velocity 1 = {velocity_m_s:.10g}
+  Velocity 2 = 0.0
+  Temperature = {t_in_c:.10g}
+End
+Boundary Condition 2
+  Target Boundaries(1) = 2
+  Velocity 2 = 0.0
+End
+Boundary Condition 3
+  Target Boundaries(1) = 3
+  Velocity 1 = 0.0
+  Velocity 2 = 0.0
+  Temperature = {t_wall_c:.10g}
+End
+"""
+    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+        f.write(sif)
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+        f.write("case.sif\n")
+    return {
+        "case_dir": case_dir,
+        "sif": "case.sif",
+        "mesh_db": mesh_name,
+        "output": output,
+        "reynolds": re,
+        "prandtl": pr,
+        "pe_cell": pe_cell,
+        "nu_exact": GRAETZ_NU_PLATES_T,
+        "nu_slug": GRAETZ_NU_SLUG_T,
+        "nx": nx,
+        "ny": ny,
+        "gap_m": gap_m,
+        "length_m": length_m,
+        "velocity_m_s": velocity_m_s,
+        "rho_fluid": rho_fluid,
+        "k_fluid": k_fluid,
+        "cp_fluid": cp_fluid,
+        "t_wall_c": t_wall_c,
+    }
+
+
+def fit_nusselt(xs, theta, *, dh: float, mdot_cp: float, k_fluid: float,
+                perimeter: float) -> float | None:
+    """Nu from the developed decay law: a linear fit of ln(theta) vs x (theta =
+    T_wall - T_bulk > 0) has slope -Nu*k*P/(Dh*mdot*cp). Exact for a
+    synthetic exponential — the standalone-testable core of the Graetz gate.
+    Returns None when fewer than 4 usable points."""
+    import math
+    pts = [(x, math.log(t)) for x, t in zip(xs, theta) if t > 0]
+    if len(pts) < 4:
+        return None
+    n = len(pts)
+    sx = sum(x for x, _ in pts)
+    sy = sum(y for _, y in pts)
+    sxx = sum(x * x for x, _ in pts)
+    sxy = sum(x * y for x, y in pts)
+    slope = (n * sxy - sx * sy) / (n * sxx - sx * sx)
+    return -slope * dh * mdot_cp / (k_fluid * perimeter)
+
+
+def parse_graetz_channel(
+    case_dir: str,
+    *,
+    nx: int,
+    ny: int,
+    gap_m: float,
+    length_m: float,
+    rho_fluid: float,
+    cp_fluid: float,
+    k_fluid: float,
+    t_wall_c: float,
+    mesh_name: str = "chan",
+    output: str = "graetz",
+) -> dict | None:
+    """Read the solved T and U fields (ASCII vtu) and extract the two gates:
+    the mid-length velocity-profile ratio u_max/u_mean (parabola: 3/2 exactly)
+    and the fitted developed Nusselt number, using the SOLVED mass flux in the
+    decay law (physically consistent with the field the heat rode on). The fit
+    window is the second half of the channel. Returns {u_max_over_mean,
+    u_mean_solved, nu_fit, n_fit_points} or None."""
+    import re as _re
+    path = os.path.join(case_dir, mesh_name, f"{output}_t0001.vtu")
+    if not os.path.exists(path):
+        return None
+    txt = open(path).read()
+
+    def field(name, ncomp):
+        m = _re.search(rf'Name="{name}"[^>]*format="ascii"[^>]*>(.*?)</DataArray>',
+                       txt, _re.S)
+        if not m:
+            return None
+        vals = [float(v) for v in m.group(1).split()]
+        if ncomp == 1:
+            return vals
+        return [tuple(vals[i:i + ncomp]) for i in range(0, len(vals), ncomp)]
+
+    temp = field("temperature", 1)
+    vel = field("velocity", 3)
+    nnx, nny = nx + 1, ny + 1
+    if not temp or not vel or len(temp) != nnx * nny:
+        return None
+
+    def u_x(i, j):
+        return vel[j * nnx + i][0]
+
+    # mid-length profile: parabola check + solved mean velocity (trapezoid)
+    i_mid = nx // 2
+    prof = [u_x(i_mid, j) for j in range(nny)]
+    u_mean = sum((prof[j] + prof[j + 1]) / 2.0 for j in range(nny - 1)) / (nny - 1)
+    if u_mean <= 0:
+        return None
+    ratio = max(prof) / u_mean
+
+    def bulk(i):
+        num = den = 0.0
+        for j in range(nny - 1):
+            u1, u2 = u_x(i, j), u_x(i, j + 1)
+            t1, t2 = temp[j * nnx + i], temp[(j + 1) * nnx + i]
+            num += (u1 * t1 + u2 * t2) / 2.0
+            den += (u1 + u2) / 2.0
+        return num / den if den > 0 else None
+
+    xs, theta = [], []
+    for i in range(nnx):
+        x = i * length_m / nx
+        if x < length_m / 2.0:
+            continue
+        tb = bulk(i)
+        if tb is None:
+            continue
+        xs.append(x)
+        theta.append(t_wall_c - tb)
+    mdot_cp = rho_fluid * u_mean * gap_m * cp_fluid    # solved flux, per depth
+    nu = fit_nusselt(xs, theta, dh=2.0 * gap_m, mdot_cp=mdot_cp,
+                     k_fluid=k_fluid, perimeter=2.0)
+    return {
+        "u_max_over_mean": round(ratio, 5),
+        "u_mean_solved": u_mean,
+        "nu_fit": (round(nu, 4) if nu is not None else None),
+        "n_fit_points": len(xs),
+    }
