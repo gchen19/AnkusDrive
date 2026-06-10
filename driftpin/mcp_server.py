@@ -2829,7 +2829,8 @@ def acoustic_screen(
     20·log₁₀(f·m″)−47 dB — ±3 dB) | 'duct_cutoff' (duct_width_mm or
     duct_diameter_mm -> first cross-mode; plane waves only below — exact). Sound
     speed from air at t_ambient_c unless c_m_s given. Fidelity is labeled per kind;
-    no higher-order acoustic solve is shipped yet (escalate_to=None until Tier B1).
+    escalate to the Elmer `acoustic_fem_submit` solve (Tier B1) when the margin is
+    within ~2× the band.
 
     Returns {kind, c_m_s, fidelity, band_pct, band_db, valid_range_ok, warnings,
     escalate_to} plus per kind: {modes:[{f_hz,n}], f_fundamental_hz} |
@@ -3223,6 +3224,131 @@ def cht_channel_submit(
     if case_dir is not None:
         params["case_dir"] = case_dir
     return _call("cht_channel_submit", **params)
+
+
+@mcp.tool()
+def acoustic_fem_submit(
+    kind: str = "duct",
+    length_m: float = 1.0,
+    kl: float = 2.0,
+    n_elements: int = 200,
+    lx_m: float = 0.5,
+    ly_m: float = 0.4,
+    nx: int = 50,
+    ny: int = 40,
+    mode_nx: int = 1,
+    mode_ny: int = 0,
+    span_pct: float = 8.0,
+    n_steps: int = 13,
+    c_m_s: float = 343.0,
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+) -> dict:
+    """Acoustic FEM via Elmer HelmholtzSolve (SIMULATION_NEXT Tier B1),
+    asynchronous — the higher-order twin of `acoustic_screen`, gated against its
+    exact closed forms. Requires ElmerSolver; when absent this returns {ok:false,
+    reason, install} rather than raising.
+
+    kind='duct': a closed duct driven p=1 at x=0, rigid at x=L, at f = kL·c/(2πL)
+    (keep `kl` off the quarter-wave resonances) — the rigid-end pressure has the
+    exact oracle 1/cos(kL), so `p_end_ratio` ≈ 1 machine-tight. kind='cavity': a
+    rigid lx_m × ly_m cavity excited by a corner Wave Flux source, swept ±span_pct%
+    around the exact (mode_nx, mode_ny) eigenfrequency in n_steps Scanning steps;
+    the in-phase corner-probe response flips sign through resonance, and the 1/A
+    zero-crossing gives `f_solved_hz` with `mode_ratio` ≈ 1 (<0.1%). Also accepts
+    a prepared `case_dir`.
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for duct {ok, p_end_re, p_end_exact, p_end_ratio (≈1), p_mean_ratio,
+    frequency_hz, case_dir} | cavity {ok, f_solved_hz, f_exact_hz, mode_ratio
+    (≈1), mode, case_dir}."""
+    params = {"kind": kind, "c_m_s": c_m_s}
+    if case_dir is not None:
+        params.update({"case_dir": case_dir, "sif": sif})
+    elif kind == "duct":
+        params.update({"length_m": length_m, "kl": kl, "n_elements": n_elements})
+    else:
+        params.update({"lx_m": lx_m, "ly_m": ly_m, "nx": nx, "ny": ny,
+                       "mode_nx": mode_nx, "mode_ny": mode_ny,
+                       "span_pct": span_pct, "n_steps": n_steps})
+    return _call("acoustic_fem_submit", **params)
+
+
+@mcp.tool()
+def harmonic_response(
+    natural_frequency_hz: float,
+    damping_ratio: float,
+    frequency_hz: float | None = None,
+    static_deflection_mm: float | None = None,
+) -> dict:
+    """Exact SDOF harmonic frequency response (NO solver) — the FRF screen and the
+    oracle the Elmer `harmonic_response_submit` sweep is gated against. Bridges
+    `beam_modal` (f_n) and `random_vibration` (Q = 1/(2ζ)): with r = f/f_n,
+    |H| = 1/√((1−r²)²+(2ζr)²), phase = atan2(2ζr, 1−r²), peak amplification
+    Q = 1/(2ζ√(1−ζ²)) at f_peak = f_n·√(1−2ζ²), half-power bandwidth ≈ 2ζ·f_n.
+    With `frequency_hz` the response at that drive is returned;
+    `static_deflection_mm` scales it to an absolute amplitude_mm. fidelity='exact';
+    ζ ≥ 1/√2 has no peak (flagged). Escalate to `harmonic_response_submit` for a
+    real meshed FRF (multi-mode, geometry-true).
+
+    Returns {natural_frequency_hz, damping_ratio, q_factor, f_peak_hz,
+    half_power_bandwidth_hz, frequency_ratio, amplification, phase_deg,
+    amplitude_mm, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"natural_frequency_hz": natural_frequency_hz,
+              "damping_ratio": damping_ratio}
+    for k, v in (("frequency_hz", frequency_hz),
+                 ("static_deflection_mm", static_deflection_mm)):
+        if v is not None:
+            params[k] = v
+    return _call("harmonic_response", **params)
+
+
+@mcp.tool()
+def harmonic_response_submit(
+    length_m: float = 0.2,
+    height_m: float = 0.01,
+    nx: int = 80,
+    ny: int = 4,
+    youngs_pa: float = 200e9,
+    density_kg_m3: float = 7850.0,
+    poisson: float = 0.3,
+    damping_ratio: float = 0.02,
+    traction_pa: float = 1000.0,
+    span_pct: float = 10.0,
+    n_sweep: int = 21,
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+) -> dict:
+    """Harmonic forced response (FRF) via Elmer StressSolve Harmonic Analysis
+    (SIMULATION_NEXT Tier B2), asynchronous — a plane-stress cantilever driven by
+    a harmonic tip traction, swept one quasi-static point + n_sweep points across
+    ±span_pct% of its first resonance, with Rayleigh β tuned to `damping_ratio`
+    at f₁. Requires ElmerSolver; when absent this returns {ok:false, reason,
+    install} rather than raising.
+
+    Three gates from the in-phase (real) response: `f1_ratio` — Re(H) = 0 exactly
+    AT resonance, so the swept tip response's sign-flip locates f₁ vs the
+    Euler-Bernoulli `beam_modal` closed form (within ~2%, plane-stress vs beam
+    theory); `static_ratio` — the quasi-static point vs the exact tip compliance
+    F·L³/(3EI) (within ~5%); `q_ratio` — max|Re|/static vs Q/2 = 1/(4ζ), the
+    exact SDOF light-damping identity (within ~15%, sweep-sampled). Cross-links
+    `harmonic_response` (the SDOF oracle) and `random_vibration` (same Q). Also
+    accepts a prepared `case_dir`.
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, f1_solved_hz, f1_eb_hz, f1_ratio, static_solved_m, static_exact_m,
+    static_ratio, peak_over_static, q_factor, q_ratio, frf:[[f_hz, tip_re_m]],
+    case_dir}."""
+    params = {}
+    if case_dir is not None:
+        params.update({"case_dir": case_dir, "sif": sif})
+    else:
+        params.update({"length_m": length_m, "height_m": height_m, "nx": nx,
+                       "ny": ny, "youngs_pa": youngs_pa,
+                       "density_kg_m3": density_kg_m3, "poisson": poisson,
+                       "damping_ratio": damping_ratio, "traction_pa": traction_pa,
+                       "span_pct": span_pct, "n_sweep": n_sweep})
+    return _call("harmonic_response_submit", **params)
 
 
 @mcp.tool()

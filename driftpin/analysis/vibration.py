@@ -29,6 +29,8 @@ GRMS = 7.0 g).
 from __future__ import annotations
 
 import math
+import os
+import re
 
 _HALF_PI = math.pi / 2.0
 
@@ -253,3 +255,289 @@ def random_vibration(
             out["pass"] = bool(three_sigma <= float(allowable_stress_mpa))
 
     return out
+
+
+# --- Tier B2: harmonic forced response (SIMULATION_NEXT) ----------------------
+#
+# The SDOF frequency-response oracle (exact closed forms) plus the Elmer
+# StressSolve harmonic-sweep case it gates: a plane-stress cantilever driven by
+# a harmonic tip traction, swept through its first resonance. Three gates, all
+# from the real (in-phase) response the solver writes:
+#   - Re(H) = 0 exactly AT f_n (any damping) -> the swept tip response flips
+#     sign through resonance; interpolating the zero against f**2 localizes f_1
+#     to compare with the Euler-Bernoulli beam_modal closed form.
+#   - the low-frequency point is the static tip compliance F*L**3/(3*E*I).
+#   - max|Re(H)| = Q/2 times static (light damping) — the damping/Q gate.
+# Case generation is pure-Python; the solve runs through harmonic_response_submit.
+
+def harmonic_response(
+    natural_frequency_hz: float,
+    damping_ratio: float,
+    frequency_hz: float | None = None,
+    static_deflection_mm: float | None = None,
+) -> dict:
+    """Exact SDOF harmonic frequency response (no solver) — the FRF oracle the
+    Elmer ``harmonic_response_submit`` sweep is gated against, and the bridge
+    between ``beam_modal`` (which gives f_n) and ``random_vibration`` (whose Q
+    is 1/(2ζ)). With r = f/f_n:
+
+        |H| = 1/sqrt((1-r²)² + (2ζr)²),  phase = atan2(2ζr, 1-r²)
+        Q (peak amplification) = 1/(2ζ·sqrt(1-ζ²)),  f_peak = f_n·sqrt(1-2ζ²)
+        half-power bandwidth Δf ≈ 2ζ·f_n (= f_n/Q, light damping)
+
+    With ``frequency_hz`` the response at that drive is returned;
+    ``static_deflection_mm`` scales |H| into an absolute ``amplitude_mm``. For
+    ζ ≥ 1/√2 there is no resonant peak (f_peak/q_factor are None, flagged).
+
+    Returns {natural_frequency_hz, damping_ratio, q_factor, f_peak_hz,
+    half_power_bandwidth_hz, frequency_ratio, amplification, phase_deg,
+    amplitude_mm, fidelity, band_pct, valid_range_ok, warnings, escalate_to}.
+    Raises ValueError on non-positive f_n / drive or ζ outside (0, 1)."""
+    if natural_frequency_hz <= 0:
+        raise ValueError("natural_frequency_hz must be > 0")
+    if not 0.0 < damping_ratio < 1.0:
+        raise ValueError("damping_ratio must be in (0, 1)")
+    fn, z = natural_frequency_hz, damping_ratio
+    warnings: list[str] = []
+    if z < 1.0 / math.sqrt(2.0):
+        q = 1.0 / (2.0 * z * math.sqrt(1.0 - z * z))
+        f_peak = fn * math.sqrt(1.0 - 2.0 * z * z)
+    else:
+        q = f_peak = None
+        warnings.append("ζ ≥ 1/√2 — overdamped response, no resonant peak")
+    out = {
+        "natural_frequency_hz": round(fn, 4),
+        "damping_ratio": z,
+        "q_factor": (round(q, 4) if q is not None else None),
+        "f_peak_hz": (round(f_peak, 4) if f_peak is not None else None),
+        "half_power_bandwidth_hz": round(2.0 * z * fn, 4),
+        "frequency_ratio": None,
+        "amplification": None,
+        "phase_deg": None,
+        "amplitude_mm": None,
+        "fidelity": "exact",
+        "band_pct": None,
+        "escalate_to": "harmonic_response_submit",
+    }
+    if frequency_hz is not None:
+        if frequency_hz <= 0:
+            raise ValueError("frequency_hz must be > 0")
+        r = frequency_hz / fn
+        amp = 1.0 / math.sqrt((1.0 - r * r) ** 2 + (2.0 * z * r) ** 2)
+        out["frequency_ratio"] = round(r, 6)
+        out["amplification"] = round(amp, 6)
+        out["phase_deg"] = round(math.degrees(math.atan2(2.0 * z * r, 1.0 - r * r)), 4)
+        if static_deflection_mm is not None:
+            out["amplitude_mm"] = round(static_deflection_mm * amp, 6)
+    out["warnings"] = warnings
+    out["valid_range_ok"] = not warnings
+    return out
+
+
+def harmonic_beam_mesh_files(length_m: float, height_m: float, nx: int, ny: int) -> dict:
+    """Native Elmer 2-D quad mesh of the cantilever strip: boundary tag 1 is the
+    clamped root (x=0), tag 2 the driven tip edge (x=L)."""
+    nnx, nny = nx + 1, ny + 1
+
+    def nid(i, j):
+        return j * nnx + i + 1
+
+    def parent(i, j):
+        return j * nx + i + 1
+
+    nodes = []
+    for j in range(nny):
+        for i in range(nnx):
+            nodes.append(
+                f"{nid(i, j)} -1 {i * length_m / nx:.10g} {j * height_m / ny:.10g} 0.0\n")
+    elements = []
+    eid = 0
+    for j in range(ny):
+        for i in range(nx):
+            eid += 1
+            elements.append(
+                f"{eid} 1 404 {nid(i, j)} {nid(i + 1, j)} "
+                f"{nid(i + 1, j + 1)} {nid(i, j + 1)}\n")
+    boundary, bid = [], 0
+    for j in range(ny):
+        bid += 1
+        boundary.append(f"{bid} 1 {parent(0, j)} 0 202 {nid(0, j)} {nid(0, j + 1)}\n")
+        bid += 1
+        boundary.append(f"{bid} 2 {parent(nx - 1, j)} 0 202 {nid(nx, j)} {nid(nx, j + 1)}\n")
+    header = f"{nnx * nny} {nx * ny} {bid}\n2\n202 {bid}\n404 {nx * ny}\n"
+    return {"mesh.header": header, "mesh.nodes": "".join(nodes),
+            "mesh.elements": "".join(elements), "mesh.boundary": "".join(boundary)}
+
+
+def write_harmonic_beam_case(
+    case_dir: str,
+    *,
+    length_m: float = 0.2,
+    height_m: float = 0.01,
+    nx: int = 80,
+    ny: int = 4,
+    youngs_pa: float = 200e9,
+    density_kg_m3: float = 7850.0,
+    poisson: float = 0.3,
+    damping_ratio: float = 0.02,
+    traction_pa: float = 1000.0,
+    span_pct: float = 10.0,
+    n_sweep: int = 21,
+    mesh_name: str = "beam",
+    output: str = "frf",
+) -> dict:
+    """Write the harmonic-swept plane-stress cantilever case: clamped at x=0,
+    harmonic tip traction (y) at x=L, Rayleigh β = 2ζ/ω₁ tuned to give
+    ``damping_ratio`` at the first mode. The Scanning sweep runs one
+    quasi-static point (f₁/40) followed by ``n_sweep`` points spanning
+    ±span_pct% of the Euler-Bernoulli f₁. ResultOutput writes one ASCII .vtu
+    per step into the mesh directory. Returns {case_dir, sif, mesh_db, output,
+    freqs, f1_eb_hz, static_exact_m, q_factor, damping_ratio, tip_node,
+    n_steps}."""
+    if min(length_m, height_m) <= 0 or nx < 16 or ny < 2:
+        raise ValueError("need positive dimensions and nx >= 16, ny >= 2")
+    if not 0.0 < damping_ratio < 0.2:
+        raise ValueError("damping_ratio must be in (0, 0.2) for a meaningful peak")
+    if n_sweep < 9:
+        raise ValueError("n_sweep must be >= 9 to resolve the peak")
+    i_area = height_m ** 3 / 12.0           # per unit depth
+    area = height_m
+    f1 = (1.8751041 ** 2 / (2.0 * math.pi)) * math.sqrt(
+        youngs_pa * i_area / (density_kg_m3 * area * length_m ** 4))
+    beta = 2.0 * damping_ratio / (2.0 * math.pi * f1)
+    span = span_pct / 100.0
+    freqs = [f1 / 40.0] + [
+        f1 * (1.0 - span + 2.0 * span * i / (n_sweep - 1)) for i in range(n_sweep)]
+    force_n = traction_pa * height_m        # per unit depth
+    static_exact = force_n * length_m ** 3 / (3.0 * youngs_pa * i_area)
+    mesh_dir = os.path.join(case_dir, mesh_name)
+    os.makedirs(mesh_dir, exist_ok=True)
+    for name, content in harmonic_beam_mesh_files(length_m, height_m, nx, ny).items():
+        with open(os.path.join(mesh_dir, name), "w") as f:
+            f.write(content)
+    freq_rows = "".join(f"      {i + 1}.0 {f:.10g}\n" for i, f in enumerate(freqs))
+    sif = f"""Header
+  Mesh DB "." "{mesh_name}"
+End
+
+Simulation
+  Coordinate System = Cartesian 2D
+  Simulation Type = Scanning
+  Timestep Intervals = {len(freqs)}
+  Output Intervals = 0
+  Frequency = Variable time
+    Real
+{freq_rows}    End
+End
+
+Body 1
+  Equation = 1
+  Material = 1
+End
+
+Equation 1
+  Active Solvers(1) = 1
+  Plane Stress = True
+End
+
+Material 1
+  Density = {density_kg_m3:.10g}
+  Youngs Modulus = {youngs_pa:.10g}
+  Poisson Ratio = {poisson:.10g}
+  Rayleigh Damping Alpha = 0.0
+  Rayleigh Damping Beta = {beta:.10g}
+End
+
+Solver 1
+  Equation = Linear Elasticity
+  Procedure = "StressSolve" "StressSolver"
+  Variable = Displacement
+  Variable Dofs = 2
+  Harmonic Analysis = True
+  Linear System Solver = Direct
+  Linear System Direct Method = UMFPACK
+End
+
+Solver 2
+  Equation = ResultOutput
+  Procedure = "ResultOutputSolve" "ResultOutputSolver"
+  Output File Name = "{output}"
+  Vtu Format = True
+  Ascii Output = True
+End
+
+Boundary Condition 1
+  Target Boundaries(1) = 1
+  Displacement 1 = 0.0
+  Displacement 2 = 0.0
+End
+
+Boundary Condition 2
+  Target Boundaries(1) = 2
+  Force 2 = {traction_pa:.10g}
+End
+"""
+    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+        f.write(sif)
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+        f.write("case.sif\n")
+    tip_node = (ny // 2) * (nx + 1) + nx    # 0-based index of the mid-tip node
+    return {
+        "case_dir": case_dir,
+        "sif": "case.sif",
+        "mesh_db": mesh_name,
+        "output": output,
+        "freqs": freqs,
+        "f1_eb_hz": f1,
+        "static_exact_m": static_exact,
+        "q_factor": 1.0 / (2.0 * damping_ratio),
+        "damping_ratio": damping_ratio,
+        "tip_node": tip_node,
+        "n_steps": len(freqs),
+    }
+
+
+_VTU_ARRAY_RE = (r'Name="displacement HarmonicMode1"[^>]*format="ascii"[^>]*>'
+                 r'(.*?)</DataArray>')
+
+
+def parse_harmonic_beam(case_dir, *, mesh_name="beam", output="frf",
+                        n_steps, tip_node) -> list | None:
+    """Signed in-phase tip deflection u_y per sweep step, read from the ASCII
+    .vtu files ResultOutput wrote into the mesh directory ('displacement
+    HarmonicMode1' holds the real part, 3 components per node). Returns a list
+    of floats (one per step), or None when files are missing."""
+    out = []
+    for i in range(1, n_steps + 1):
+        path = os.path.join(case_dir, mesh_name, f"{output}_t{i:04d}.vtu")
+        if not os.path.exists(path):
+            return None
+        m = re.search(_VTU_ARRAY_RE, open(path).read(), re.S)
+        if not m:
+            return None
+        vals = m.group(1).split()
+        idx = 3 * tip_node + 1
+        if idx >= len(vals):
+            return None
+        out.append(float(vals[idx]))
+    return out
+
+
+def locate_frf_resonance(freqs, tip_re) -> float | None:
+    """f_n from the swept in-phase response: Re(H) crosses zero exactly at f_n,
+    ~linearly in f² nearby — interpolate the sign-flip pair with the largest
+    response magnitude (a sample landing exactly on zero IS the resonance).
+    Returns the f_n estimate in Hz, or None."""
+    for f, a in zip(freqs, tip_re):
+        if a == 0.0:
+            return f
+    best, best_mag = None, 0.0
+    for (f1, a1), (f2, a2) in zip(zip(freqs, tip_re), zip(freqs[1:], tip_re[1:])):
+        if (a1 > 0) == (a2 > 0):
+            continue
+        mag = min(abs(a1), abs(a2))
+        if mag > best_mag:
+            best_mag = mag
+            x1, x2 = f1 * f1, f2 * f2
+            best = math.sqrt(x1 - a1 * (x2 - x1) / (a2 - a1))
+    return best

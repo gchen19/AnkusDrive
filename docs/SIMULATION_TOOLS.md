@@ -192,6 +192,12 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
   topology_optimize_submit(body, keep_fraction, nelz?, loads?, keep_out?, keep_in?)  # SIMP, returns geometry
   random_vibration(analysis|frequencies_hz, psd_profile)   # Miles SRSS on fem_modal results
+  harmonic_response(natural_frequency_hz, damping_ratio, frequency_hz?, …)  # exact SDOF FRF:
+    # |H|, phase, Q=1/(2ζ√(1−ζ²)), f_peak, half-power bandwidth — bridges beam_modal & random_vibration
+  harmonic_response_submit(length_m, height_m, damping_ratio, span_pct, …)  # Tier B2: Elmer
+    # StressSolve Harmonic Analysis, async — tip-driven plane-stress cantilever swept through
+    # resonance; gates: f1_ratio (Re(H)=0 exactly at f_n, vs beam_modal), static_ratio
+    # (F·L³/3EI), q_ratio (max|Re|/static ≡ Q/2); tests/test_harmonic_fem.py
   beam_modal(length_mm, width_mm, height_mm, boundary, n_modes, youngs_gpa, density_kg_m3|material)
     -> {boundary, frequencies_hz, beta_l, first_mode_hz, area_mm2, I_mm4, slenderness}
   beam_buckling(length_mm, end_condition, width/height|diameter|area+I, E, sigma_y|material, load_n?)
@@ -438,7 +444,7 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
 
 | Domain | Tooling | Priority |
 |---|---|---|
-| Acoustics | Elmer, pyfar, acoular | **screening shipped** (`acoustic_screen`, Tier A: exact cavity modes / duct cutoff + Helmholtz ±10 % + mass law ±3 dB — `analysis/acoustics.py`); the Elmer `HelmholtzSolve` FEM is SIMULATION_NEXT B1, gated against the cavity modes |
+| Acoustics | Elmer, pyfar, acoular | **shipped, both tiers** — `acoustic_screen` (Tier A: exact cavity modes / duct cutoff + Helmholtz ±10 % + mass law ±3 dB) + `acoustic_fem_submit` (Tier B1: Elmer `HelmholtzSolve`, async — driven duct gated machine-tight on the exact 1/cos(kL) standing wave; flux-driven cavity sweep localizes the exact eigenfrequencies to <0.1 % via the in-phase sign flip). Both in `analysis/acoustics.py`; gates in `tests/test_acoustic_fem.py` |
 | Electromagnetics (RF/wave) | OpenEMS / FEniCSx (RF), FEMM (2D motors) | low |
 | Machining toolpaths | FreeCAD Path, pycam, kiri:moto | low |
 

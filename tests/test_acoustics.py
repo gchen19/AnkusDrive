@@ -24,6 +24,7 @@ def test_cavity_fundamental_is_half_wavelength():
     assert abs(r["f_fundamental_hz"] - r["c_m_s"] / 8.0) < 0.01, r["f_fundamental_hz"]
     assert r["modes"][0]["n"] == [1, 0, 0], r["modes"][0]
     assert r["fidelity"] == "exact" and r["band_pct"] is None, r
+    assert r["escalate_to"] == "acoustic_fem_submit", r["escalate_to"]
 
 
 def test_cavity_cube_degeneracy_and_ordering():

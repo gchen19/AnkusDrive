@@ -164,6 +164,67 @@ def test_beam_input_errors():
             raise AssertionError("expected ValueError on bad beam input")
 
 
+
+# --- harmonic forced response (SIMULATION_NEXT B2 oracle) ----------------------
+
+def test_harmonic_amplification_identities():
+    # exact identities of the SDOF FRF: |H|(r=1) = 1/(2*zeta) exactly, and the
+    # peak value (at f_peak = fn*sqrt(1-2*zeta^2)) is Q = 1/(2*zeta*sqrt(1-zeta^2))
+    z = 0.05
+    at_fn = vib.harmonic_response(100.0, z, frequency_hz=100.0)
+    assert abs(at_fn["amplification"] - 1.0 / (2 * z)) < 1e-4, at_fn
+    assert abs(at_fn["phase_deg"] - 90.0) < 1e-6, at_fn["phase_deg"]
+    r = vib.harmonic_response(100.0, z)
+    at_peak = vib.harmonic_response(100.0, z, frequency_hz=r["f_peak_hz"])
+    assert abs(at_peak["amplification"] - r["q_factor"]) < 1e-3, (at_peak, r)
+
+
+def test_harmonic_static_and_high_frequency_limits():
+    # r -> 0 gives |H| -> 1 (static); r >> 1 rolls off below 1; phase 0 -> 180
+    lo = vib.harmonic_response(100.0, 0.02, frequency_hz=1.0)
+    hi = vib.harmonic_response(100.0, 0.02, frequency_hz=1000.0)
+    assert abs(lo["amplification"] - 1.0) < 1e-3, lo
+    assert hi["amplification"] < 0.02 and hi["phase_deg"] > 175.0, hi
+    # static_deflection scales the answer linearly (1 mm static, Q at resonance)
+    amp = vib.harmonic_response(100.0, 0.02, frequency_hz=100.0,
+                                static_deflection_mm=1.0)
+    assert abs(amp["amplitude_mm"] - 25.0) < 0.01, amp["amplitude_mm"]
+
+
+def test_harmonic_half_power_bandwidth():
+    # at fn*(1 +/- zeta) the response is Q/sqrt(2) (light damping) — the
+    # bandwidth identity Delta_f = fn/Q the FRF gate leans on
+    fn, z = 200.0, 0.02
+    r = vib.harmonic_response(fn, z)
+    assert abs(r["half_power_bandwidth_hz"] - 2 * z * fn) < 1e-6
+    edge = vib.harmonic_response(fn, z, frequency_hz=fn * (1 + z))
+    assert abs(edge["amplification"] / (r["q_factor"] / math.sqrt(2)) - 1) < 0.02
+
+
+def test_harmonic_overdamped_has_no_peak():
+    r = vib.harmonic_response(100.0, 0.8)
+    assert r["q_factor"] is None and r["f_peak_hz"] is None, r
+    assert r["valid_range_ok"] is False and r["warnings"], r
+    # contract fields
+    ok = vib.harmonic_response(100.0, 0.02)
+    assert ok["fidelity"] == "exact" and ok["escalate_to"] == "harmonic_response_submit"
+
+
+def test_harmonic_input_errors():
+    for bad in (
+        lambda: vib.harmonic_response(0, 0.02),
+        lambda: vib.harmonic_response(100, 0.0),
+        lambda: vib.harmonic_response(100, 1.0),
+        lambda: vib.harmonic_response(100, 0.02, frequency_hz=0),
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
