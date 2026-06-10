@@ -3227,6 +3227,52 @@ def cht_channel_submit(
 
 
 @mcp.tool()
+def cht_graetz_submit(
+    velocity_m_s: float = 0.025,
+    gap_m: float = 0.01,
+    length_m: float = 0.12,
+    rho_fluid: float = 1000.0,
+    mu_fluid: float = 0.02,
+    k_fluid: float = 80.0,
+    cp_fluid: float = 4000.0,
+    t_in_c: float = 20.0,
+    t_wall_c: float = 80.0,
+    nx: int = 120,
+    ny: int = 20,
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+) -> dict:
+    """Flow-coupled Graetz channel via Elmer (SIMULATION_NEXT B4), asynchronous —
+    the TRUE Nusselt validation that upgrades cht_channel_submit's plug flow:
+    FlowSolve computes the real laminar profile and HeatSolver rides on it
+    (Convection = Computed) between two isothermal walls. Requires ElmerSolver;
+    when absent this returns {ok:false, reason, install} rather than raising.
+
+    Two gates: the solved parabola's u_max/u_mean ≡ 3/2 exactly, and the developed
+    mixing-cup decay d ln(T_wall−T_bulk)/dx fitted over the second half of the
+    channel yields Nu, gated against the Graetz eigenvalue Nu_T = 7.5407 (parallel
+    plates, constant wall temperature) — a slug profile would give π² = 9.87, so
+    the gate also proves the profile coupling is real. This closes the loop with
+    the `h_estimate` correlation screen. The writer polices Re < 400, development
+    lengths inside the first 45 %, and cell Péclet ≤ 25. Also accepts a prepared
+    `case_dir`.
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, u_max_over_mean (≈1.5), nu_fit, nu_exact, nu_ratio (≈1, ±10 %),
+    nu_slug, reynolds, prandtl, pe_cell, case_dir}."""
+    params = {}
+    if case_dir is not None:
+        params.update({"case_dir": case_dir, "sif": sif})
+    else:
+        params.update({"velocity_m_s": velocity_m_s, "gap_m": gap_m,
+                       "length_m": length_m, "rho_fluid": rho_fluid,
+                       "mu_fluid": mu_fluid, "k_fluid": k_fluid,
+                       "cp_fluid": cp_fluid, "t_in_c": t_in_c,
+                       "t_wall_c": t_wall_c, "nx": nx, "ny": ny})
+    return _call("cht_graetz_submit", **params)
+
+
+@mcp.tool()
 def acoustic_fem_submit(
     kind: str = "duct",
     length_m: float = 1.0,
@@ -3471,6 +3517,57 @@ def em_induction_submit(
     if conductivity_s_m is not None:
         params["conductivity_s_m"] = conductivity_s_m
     return _call("em_induction_submit", **params)
+
+
+@mcp.tool()
+def em_induction_heating_submit(
+    frequency_hz: float = 1.0e4,
+    conductivity_s_m: float | None = None,
+    conductor: str = "copper",
+    mu_r: float = 1.0,
+    a_surface: float = 1.0e-3,
+    density_kg_m3: float = 8960.0,
+    cp_j_kgk: float = 385.0,
+    k_thermal: float = 400.0,
+    heat_duration_s: float = 0.01,
+    n_steps: int = 20,
+    depths: float = 5.3,
+    nx: int = 100,
+    ny: int = 2,
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+) -> dict:
+    """Coupled induction heating via Elmer (SIMULATION_NEXT B5), asynchronous —
+    completes `em_induction_submit` into a THERMAL answer: the harmonic
+    MagnetoDynamics solve runs once, MagnetoDynamicsCalcFields turns it into the
+    time-averaged Joule loss field, and a transient adiabatic HeatSolver
+    integrates it for `heat_duration_s`. Requires ElmerSolver; when absent this
+    returns {ok:false, reason, install} rather than raising.
+
+    Two gates: joule_power_ratio — the solved eddy-current power vs the exact
+    deep-slab dissipation P″ = R_s·|H₀|²/2 = ω²σA₀²δ/4 (from the shipped
+    `em_skin_depth` chain; live 1.0003) — and energy_balance_ratio — the mean
+    temperature rise vs P·t/(m·cₚ) (live 1.005). Conductor σ from a name or
+    explicit `conductivity_s_m`; thermal ρ/cₚ/k explicit. Also accepts a prepared
+    `case_dir`.
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, eddy_power_w_m, p_total_exact_w_m, joule_power_ratio (≈1),
+    t_mean_final_k, dt_mean_exact_k, energy_balance_ratio (≈1), skin_depth_m,
+    case_dir}."""
+    params = {}
+    if case_dir is not None:
+        params.update({"case_dir": case_dir, "sif": sif})
+    else:
+        params.update({"frequency_hz": frequency_hz, "conductor": conductor,
+                       "mu_r": mu_r, "a_surface": a_surface,
+                       "density_kg_m3": density_kg_m3, "cp_j_kgk": cp_j_kgk,
+                       "k_thermal": k_thermal,
+                       "heat_duration_s": heat_duration_s, "n_steps": n_steps,
+                       "depths": depths, "nx": nx, "ny": ny})
+        if conductivity_s_m is not None:
+            params["conductivity_s_m"] = conductivity_s_m
+    return _call("em_induction_heating_submit", **params)
 
 
 @mcp.tool()

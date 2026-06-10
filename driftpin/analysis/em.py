@@ -471,3 +471,200 @@ def fit_decay_length(points, x_min: float, x_max: float) -> dict:
         raise ValueError("profile does not decay — not a skin-effect solution")
     return {"decay_length_m": -1.0 / s_mag, "phase_length_m": -1.0 / s_ph,
             "n_points": len(sel)}
+
+
+# --- Tier B5: coupled induction heating (SIMULATION_NEXT) -----------------------
+#
+# Completes the skin-effect slab into a THERMAL answer: the harmonic
+# MagnetoDynamics solve runs once (Before Simulation), MagnetoDynamicsCalcFields
+# turns it into a time-averaged Joule loss field, and a transient HeatSolver
+# integrates it with adiabatic walls. Two exact anchors:
+#
+#   P'' = omega^2*sigma*A0^2*delta/4  ( == R_s*|H0|^2/2 with H0 = A0*sqrt(2)/(mu*delta) )
+#       — the total dissipation per unit driven area of a thick slab (>= ~5 delta),
+#   dT_mean = P*t/(m*cp)              — the adiabatic energy balance.
+#
+# CalcFields also reports the integrated 'eddy current power' as a SaveScalars
+# 'res:' global — the solved P the joule gate reads (lands ~0.03 % off the
+# closed form on the default mesh).
+
+
+def induction_heating_power(frequency_hz: float, conductivity_s_m: float,
+                            mu_r: float, a_surface: float) -> float:
+    """Exact dissipation per unit driven-surface area of a deep slab,
+    P'' = omega^2*sigma*A0^2*delta/4 (identically R_s*|H0|^2/2)."""
+    omega = 2.0 * math.pi * frequency_hz
+    delta = skin_depth(frequency_hz, conductivity_s_m=conductivity_s_m,
+                       mu_r=mu_r)["skin_depth_m"]
+    return omega ** 2 * conductivity_s_m * a_surface ** 2 * delta / 4.0
+
+
+def write_induction_heating_case(
+    case_dir: str,
+    *,
+    frequency_hz: float = 1.0e4,
+    conductivity_s_m: float | None = None,
+    conductor: str | None = "copper",
+    mu_r: float = 1.0,
+    a_surface: float = 1.0e-3,
+    density_kg_m3: float = 8960.0,
+    cp_j_kgk: float = 385.0,
+    k_thermal: float = 400.0,
+    heat_duration_s: float = 0.01,
+    n_steps: int = 20,
+    depths: float = 5.3,
+    nx: int = 100,
+    ny: int = 2,
+    mesh_name: str = "skin",
+    scalars: str = "induct.dat",
+) -> dict:
+    """Write the coupled induction-heating slab: the same ``depths``-deep
+    geometry as the skin-effect case, plus MagnetoDynamicsCalcFields (Joule
+    heating) and a transient adiabatic HeatSolver driven through the Body Force
+    ``Joule Heat = True`` idiom. Returns {case_dir, sif, mesh_name, scalars,
+    length_m, width_m, oracle:{skin...}, p_area_w_m2, p_total_w_m,
+    dt_mean_exact_k, heat_duration_s}. Raises ValueError on non-positive
+    inputs or a slab too shallow for the closed form."""
+    sigma = _conductivity(conductivity_s_m, conductor)
+    if min(density_kg_m3, cp_j_kgk, k_thermal, heat_duration_s) <= 0 or n_steps < 2:
+        raise ValueError("thermal properties, duration and n_steps must be positive")
+    if depths < 4.0:
+        raise ValueError("depths < 4 — the closed-form P'' assumes a deep slab")
+    orc = skin_depth(frequency_hz, conductivity_s_m=sigma, mu_r=mu_r)
+    length_m = depths * orc["skin_depth_m"]
+    width_m = length_m / 25.0
+    p_area = induction_heating_power(frequency_hz, sigma, mu_r, a_surface)
+    p_total = p_area * width_m                       # W per unit depth (2-D)
+    mass_cp = density_kg_m3 * cp_j_kgk * length_m * width_m
+    dt_exact = p_total * heat_duration_s / mass_cp
+    mesh_dir = os.path.join(case_dir, mesh_name)
+    os.makedirs(mesh_dir, exist_ok=True)
+    for fname, text in rect_mesh_files(nx, ny, length_m, width_m).items():
+        with open(os.path.join(mesh_dir, fname), "w") as f:
+            f.write(text)
+    sif = f"""Header
+  Mesh DB "." "{mesh_name}"
+End
+Simulation
+  Coordinate System = Cartesian 2D
+  Simulation Type = Transient
+  Timestep Intervals = {n_steps}
+  Timestep Sizes = {heat_duration_s / n_steps:.10g}
+  Timestepping Method = BDF
+  BDF Order = 2
+  Output Intervals = 0
+End
+Body 1
+  Equation = 1
+  Material = 1
+  Body Force = 1
+  Initial Condition = 1
+End
+Initial Condition 1
+  Temperature = 0.0
+End
+Body Force 1
+  Joule Heat = Logical True
+End
+Material 1
+  Electric Conductivity = {sigma:.10g}
+  Relative Permeability = {mu_r:.10g}
+  Density = {density_kg_m3:.10g}
+  Heat Conductivity = {k_thermal:.10g}
+  Heat Capacity = {cp_j_kgk:.10g}
+End
+Equation 1
+  Active Solvers(4) = 1 2 3 4
+End
+Solver 1
+  Equation = MgDyn2DHarmonic
+  Procedure = "MagnetoDynamics2D" "MagnetoDynamics2DHarmonic"
+  Variable = Potential[Potential Re:1 Potential Im:1]
+  Frequency = {frequency_hz:.10g}
+  Exec Solver = Before Simulation
+  Linear System Solver = Direct
+  Linear System Direct Method = UMFPACK
+End
+Solver 2
+  Equation = CalcFields
+  Procedure = "MagnetoDynamics" "MagnetoDynamicsCalcFields"
+  Potential Variable = "Potential"
+  Calculate Joule Heating = Logical True
+  Exec Solver = Before Simulation
+  Linear System Solver = Direct
+  Linear System Direct Method = UMFPACK
+End
+Solver 3
+  Equation = Heat Equation
+  Procedure = "HeatSolve" "HeatSolver"
+  Variable = Temperature
+  Stabilize = True
+  Linear System Solver = Direct
+  Linear System Direct Method = UMFPACK
+  Nonlinear System Max Iterations = 1
+End
+Solver 4
+  Equation = SaveScalars
+  Procedure = "SaveData" "SaveScalars"
+  Filename = "{scalars}"
+  Variable 1 = Temperature
+  Operator 1 = "mean"
+End
+Boundary Condition 1
+  Target Boundaries(1) = 1
+  Potential Re = {a_surface:.10g}
+  Potential Im = 0.0
+End
+Boundary Condition 2
+  Target Boundaries(1) = 2
+  Potential Re = 0.0
+  Potential Im = 0.0
+End
+"""
+    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+        f.write(sif)
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+        f.write("case.sif\n")
+    return {
+        "case_dir": case_dir,
+        "sif": "case.sif",
+        "mesh_name": mesh_name,
+        "scalars": scalars,
+        "length_m": length_m,
+        "width_m": width_m,
+        "oracle": orc,
+        "p_area_w_m2": p_area,
+        "p_total_w_m": p_total,
+        "dt_mean_exact_k": dt_exact,
+        "heat_duration_s": heat_duration_s,
+    }
+
+
+def parse_induction_scalars(case_dir: str, scalars: str = "induct.dat") -> dict | None:
+    """Last SaveScalars row, with columns located via the ``.names`` sidecar
+    (CalcFields appends its 'res:' globals after the requested variables, so
+    positions are not fixed). Returns {t_mean_final_k, eddy_power_w_m} or None
+    when the file/columns are absent."""
+    path = os.path.join(case_dir, scalars)
+    if not os.path.exists(path):
+        return None
+    names_path = path + ".names"
+    cols = {}
+    if os.path.exists(names_path):
+        for ln in open(names_path):
+            m = ln.strip()
+            if ":" in m and m[0].isdigit():
+                idx, label = m.split(":", 1)
+                cols[label.strip().lower()] = int(idx) - 1
+    rows = [ln.split() for ln in open(path) if ln.strip()]
+    if not rows:
+        return None
+    last = [float(v) for v in rows[-1]]
+    t_idx = cols.get("mean: temperature", 0)
+    p_idx = cols.get("res: eddy current power")
+    out = {"t_mean_final_k": last[t_idx] if t_idx < len(last) else None,
+           "eddy_power_w_m": (last[p_idx] if p_idx is not None
+                              and p_idx < len(last) else None)}
+    if out["t_mean_final_k"] is None:
+        return None
+    return out

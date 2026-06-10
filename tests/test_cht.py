@@ -192,6 +192,77 @@ def test_conjugate_channel_zero_flux_negative():
             assert abs(parsed[key] - 20.0) < 0.05, (key, parsed[key])
 
 
+
+# --- B4: flow-coupled Graetz channel (case gen always; Elmer gate when present) --
+
+def test_graetz_case_structure_and_policing():
+    d = tempfile.mkdtemp(prefix="graetz_gen_")
+    built = cht.write_graetz_channel_case(d)
+    sif = open(os.path.join(d, built["sif"])).read()
+    assert "FlowSolve" in sif and "Convection = Computed" in sif, sif[:200]
+    assert "Viscosity" in sif and "ResultOutputSolve" in sif
+    assert 4 <= built["reynolds"] <= 400 and built["pe_cell"] <= 25, built
+    # the writer polices the physics the fit depends on
+    for bad in (
+        lambda: cht.write_graetz_channel_case(tempfile.mkdtemp(),
+                                              velocity_m_s=1.0),    # Re too high
+        lambda: cht.write_graetz_channel_case(tempfile.mkdtemp(),
+                                              length_m=0.02),       # undeveloped
+        lambda: cht.write_graetz_channel_case(tempfile.mkdtemp(),
+                                              t_wall_c=20.0),       # no decay
+        lambda: cht.write_graetz_channel_case(tempfile.mkdtemp(), ny=4),
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+    assert cht.parse_graetz_channel(
+        tempfile.mkdtemp(), nx=10, ny=10, gap_m=0.01, length_m=0.1,
+        rho_fluid=1000, cp_fluid=4000, k_fluid=80, t_wall_c=80) is None
+
+
+def test_fit_nusselt_recovers_synthetic_exponential():
+    # exact identity: theta = exp(-Nu*k*P/(Dh*mdot*cp)*x) must round-trip Nu
+    import math
+    nu_in, dh, mdot_cp, k, per = 7.5407, 0.02, 100.0, 80.0, 2.0
+    rate = nu_in * k * per / (dh * mdot_cp)
+    xs = [0.05 + 0.005 * i for i in range(12)]
+    theta = [math.exp(-rate * x) for x in xs]
+    nu = cht.fit_nusselt(xs, theta, dh=dh, mdot_cp=mdot_cp, k_fluid=k,
+                         perimeter=per)
+    assert abs(nu / nu_in - 1) < 1e-9, nu
+    # too few usable points -> None, never a fabricated number
+    assert cht.fit_nusselt([0.1], [0.5], dh=dh, mdot_cp=mdot_cp, k_fluid=k,
+                           perimeter=per) is None
+
+
+def test_graetz_solve_matches_eigenvalue():
+    if not solvers.is_available("elmer"):
+        print("    SKIP — ElmerSolver not installed")
+        return
+    d = tempfile.mkdtemp(prefix="graetz_live_")
+    built = cht.write_graetz_channel_case(d)
+    binary = solvers.find_solver("elmer")["path"]
+    proc = subprocess.run([binary, built["sif"]], cwd=d,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout[-500:]
+    r = cht.parse_graetz_channel(
+        d, nx=built["nx"], ny=built["ny"], gap_m=built["gap_m"],
+        length_m=built["length_m"], rho_fluid=built["rho_fluid"],
+        cp_fluid=built["cp_fluid"], k_fluid=built["k_fluid"],
+        t_wall_c=built["t_wall_c"])
+    assert r is not None and r["nu_fit"] is not None, r
+    # gate 1: FlowSolve found the exact parabola (u_max/u_mean = 3/2)
+    assert abs(r["u_max_over_mean"] - 1.5) < 0.05, r["u_max_over_mean"]
+    # gate 2: the fitted Nu is the Graetz eigenvalue (7.5407), banded ±10 % —
+    # and decisively NOT the slug-flow pi^2 the plug model would imply
+    ratio = r["nu_fit"] / built["nu_exact"]
+    assert 0.90 <= ratio <= 1.10, (r["nu_fit"], ratio)
+    assert r["nu_fit"] < 0.92 * built["nu_slug"], (r["nu_fit"], built["nu_slug"])
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

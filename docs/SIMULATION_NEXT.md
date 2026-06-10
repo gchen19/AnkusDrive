@@ -75,8 +75,8 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
 | ✅ **Acoustic FEM** (`acoustic_fem_submit`) | Elmer `HelmholtzSolve` (**installed**) | rigid rectangular cavity modes — exact eigenfrequencies; duct plane-wave standing field | M, low — the M2/M6 deck pattern verbatim |
 | ✅ **Harmonic forced response** (`harmonic_response` + `harmonic_response_submit`) | Elmer `StressSolve` Harmonic Analysis (**installed**; CCX `*STEADY STATE DYNAMICS` remains an option) | SDOF FRF: peak = Q·x_static, half-power bandwidth f_n/Q (exact); cross-links `beam_modal` + `random_vibration` | M, low |
 | ✅ **Turbulent RANS** (internal + external — `turbulence='kOmegaSST'` on the two `cfd_*_submit` tools) | OpenFOAM kOmegaSST (**installed**) | turbulent flat plate Cf=0.0592·Re^−1/5, Colebrook/Moody pipe Δp (correlations, ±10–15 % band) | M, medium — y+/wall-function discipline; gates must be banded, not exact |
-| **Flow-coupled CHT** | Elmer `FlowSolve`+Heat (**installed**) or `chtMultiRegionFoam` | Graetz–Nusselt developed Nu=3.66 / 7.54 (exact eigenvalue results) — upgrades M6's plug flow to a *true Nusselt validation*, closing the loop with `h_estimate` | M/L, medium |
-| **Coupled induction heating** | Elmer `MagnetoDynamics` + HeatSolver (**installed**) | total Joule power = R_s·|H|²/2 over the face (from the shipped `em_skin_depth`) + adiabatic ΔT energy balance | M, medium — completes `em_induction_submit` into a thermal answer |
+| ✅ **Flow-coupled CHT** (`cht_graetz_submit`) | Elmer `FlowSolve`+Heat (**installed**) | Graetz–Nusselt developed Nu=3.66 / 7.54 (exact eigenvalue results) — upgrades M6's plug flow to a *true Nusselt validation*, closing the loop with `h_estimate` | M/L, medium |
+| ✅ **Coupled induction heating** (`em_induction_heating_submit`) | Elmer `MagnetoDynamics` + HeatSolver (**installed**) | total Joule power = R_s·|H|²/2 over the face (from the shipped `em_skin_depth`) + adiabatic ΔT energy balance | M, medium — completes `em_induction_submit` into a thermal answer |
 | **Nonlinear structural** (plasticity, large deflection) | CCX 2.21 (**installed**) | plastic-hinge collapse load M_p=σ_y·Z (exact); large-deflection cantilever vs the elliptic-integral solution | M/L, medium |
 | Free-surface flow (`interFoam`), RF/wave EM (`EMWaveSolver` — waveguide cutoff f_c=c/2a is exact), explicit impact dynamics | installed / partial | exact anchors exist for the first two | L — horizon; pick up only on a concrete need |
 
@@ -99,7 +99,17 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
    (momentum-thickness Cf vs the mixed-transition 1/7-power form, banded ±15 %,
    live 1.02); `cfd_pipe_flow` gains `roughness_mm` + Colebrook + fidelity
    labels, and `flat_plate_drag_turbulent` is the new banded screen.*
-5. **B4 flow-CHT and B5 induction heating** as the coupled-physics capstones.
+5. ✅ **B4 flow-CHT and B5 induction heating** as the coupled-physics capstones.
+   *Shipped: `cht_graetz_submit` (FlowSolve+Heat — the solved parabola hits
+   u_max/u_mean = 3/2 to 0.3 %, and the developed mixing-cup decay fits
+   Nu = 7.24 vs the Graetz 7.541, decisively NOT the slug-flow π² — the true
+   Nusselt validation closing the loop with `h_estimate`) and
+   `em_induction_heating_submit` (MagnetoDynamics + CalcFields Joule + transient
+   adiabatic Heat — solved eddy power vs R_s|H₀|²/2 at ratio 1.0003, energy
+   balance ΔT = P·t/(m·cₚ) at 1.005).*
+
+**With item 5 the recommended sequence is fully executed** — both tiers of this
+assessment are shipped, every gate on the verification discipline below.
 
 The verification discipline is unchanged: exact anchors where physics is exact,
 **banded** anchors where the literature itself is a correlation (a turbulent gate
