@@ -7167,28 +7167,154 @@ def _resolve_thermal_props(p):
     return k, rho, cp
 
 
+def _thermal_body_submit(p, info):
+    """Geometry-driven transient thermal — the P3 M4 bridge. Gmsh-meshes a FreeCAD
+    solid on the MAIN thread (FemMesh + UNV export; the jobs.py contract keeps all
+    FreeCAD work out of the background fn), then ElmerGrid-converts and
+    ElmerSolver-solves in the background. FreeCAD's UNV export preserves per-face
+    groups, so `convection_faces` are the solid's 1-based face indices (boundary
+    tag i == shape.Faces[i-1], verified live); every unlisted face is adiabatic.
+    Degrades to {ok:false, reason, install} when ElmerGrid is missing."""
+    import shutil
+    import tempfile
+
+    from femmesh.gmshtools import GmshTools
+
+    from driftpin import jobs
+    from driftpin.analysis import meshbridge as _mb
+
+    elmer_bin = info["path"]
+    elmergrid = (shutil.which("ElmerGrid")
+                 or os.path.join(os.path.dirname(elmer_bin), "ElmerGrid"))
+    if not os.path.isfile(elmergrid):
+        return {"ok": False,
+                "reason": "ElmerGrid not found (converts the Gmsh UNV mesh for Elmer)",
+                "install": "ElmerGrid ships with Elmer — apt install elmerfem-csc, "
+                           "or put ElmerGrid next to ElmerSolver on PATH"}
+
+    doc = _active_doc()
+    obj = _shape_handle_to_obj(p["body"])
+    faces = obj.Shape.Faces
+    conv = p.get("convection_faces")
+    if not conv:
+        raise ValueError("convection_faces (1-based face indices of `body`) is "
+                         "required for the geometry bridge")
+    conv = sorted({int(i) for i in conv})
+    if any(i < 1 or i > len(faces) for i in conv):
+        raise ValueError(f"convection_faces out of range 1..{len(faces)}")
+    if p.get("h_conv") is None or p.get("duration_s") is None:
+        raise ValueError("h_conv and duration_s are required")
+    k, rho, cp = _resolve_thermal_props(p)
+    h_conv = float(p["h_conv"])
+    duration_s = float(p["duration_s"])
+    t_initial_c = float(p.get("t_initial_c", 100.0))
+    t_ambient_c = float(p.get("t_ambient_c", 25.0))
+    n_steps = int(p.get("n_steps", 120))
+    char_length = float(p.get("char_length_mm", 0.0))
+
+    # mesh + export on the MAIN thread; the temp FemMesh never outlives this call
+    mesh = ObjectsFem.makeMeshGmsh(doc, "BridgeMesh")
+    mesh.Shape = obj
+    if char_length > 0:
+        mesh.CharacteristicLengthMax = char_length
+    doc.recompute()
+    case_dir = tempfile.mkdtemp(prefix="elmer_body_")
+    try:
+        err = GmshTools(mesh).create_mesh()
+        nodes, tets = mesh.FemMesh.NodeCount, mesh.FemMesh.TetraCount
+        if not tets:
+            raise RuntimeError(f"Gmsh produced no volume mesh ({err or 'no detail'})")
+        mesh.FemMesh.write(os.path.join(case_dir, "body.unv"))
+    finally:
+        doc.removeObject(mesh.Name)
+        doc.recompute()
+
+    built = _mb.write_body_transient_case(
+        case_dir, k=k, rho=rho, cp=cp, h_conv=h_conv, duration_s=duration_s,
+        convection_tags=conv, t_initial_c=t_initial_c, t_ambient_c=t_ambient_c,
+        n_steps=n_steps)
+    grid_argv = [elmergrid] + built["elmergrid_argv"][1:]
+
+    bb = obj.Shape.BoundBox
+    key = jobs.content_key("thermal_transient", {"body": {
+        "volume": round(obj.Shape.Volume, 6), "area": round(obj.Shape.Area, 6),
+        "bbox": [round(v, 6) for v in (bb.XLength, bb.YLength, bb.ZLength)],
+        "n_faces": len(faces), "conv": conv, "char": char_length,
+        "k": k, "rho": rho, "cp": cp, "h": h_conv, "ti": t_initial_c,
+        "ta": t_ambient_c, "t": duration_s, "ns": n_steps}})
+
+    def _work():
+        import subprocess
+        grid = subprocess.run(grid_argv, cwd=case_dir, capture_output=True, text=True)
+        if grid.returncode != 0:
+            return {"ok": False, "returncode": grid.returncode, "solver": "elmergrid",
+                    "mode": "body", "case_dir": case_dir,
+                    "stdout_tail": ((grid.stdout or "") + (grid.stderr or ""))[-2000:]}
+        # ElmerGrid can succeed (rc=0) yet drop the boundary groups during UNV import
+        # (the silent-zero-boundary failure the .grd path hit). Then the convective BC
+        # binds to nothing, the body stays adiabatic, and the solve returns ok:true
+        # with physically wrong temperatures. Fail loudly instead.
+        if not _mb.mesh_boundary_count(case_dir, built["mesh_name"]):
+            return {"ok": False, "returncode": grid.returncode, "solver": "elmergrid",
+                    "mode": "body", "case_dir": case_dir,
+                    "reason": "ElmerGrid produced 0 boundary elements — the convective "
+                              "faces would bind to nothing (adiabatic). The mesh's face "
+                              "groups did not survive UNV import; check the solid/mesh.",
+                    "stdout_tail": ((grid.stdout or "") + (grid.stderr or ""))[-2000:]}
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=case_dir,
+                              capture_output=True, text=True)
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "mode": "body",
+            "case_dir": case_dir,
+            "nodes": nodes,
+            "tets": tets,
+            "dt": built["dt"],
+            "n_steps": built["n_steps"],
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        parsed = _mb.parse_minmax_scalars(case_dir, built["scalars"])
+        if parsed:
+            out.update(parsed)                       # t_max_c, t_min_c, ...
+        return out
+
+    return jobs.submit("thermal_transient", _work, key=key,
+                       meta={"mode": "body", "duration_s": duration_s, "tets": tets})
+
+
 @handler("thermal_transient_submit")
 def _h_thermal_transient_submit(p):
     """Transient thermal FEM via Elmer, OFF the MCP channel. Degrades to
     {ok:false, reason, install} when ElmerSolver is absent (never raises on a miss).
 
-    Two ways to drive it:
+    Three ways to drive it:
       * **Build the analytic-slab case** — pass the plane-wall transient params
         (`half_thickness_mm`, `h_conv`, `duration_s`, `t_initial_c`, `t_ambient_c`,
         and `k`+`rho`+`cp` or a `material`). The handler writes the 1-D conduction
         case (native Elmer mesh + .sif, symmetry at the centre, convection at the
         surface) and SaveScalars-extracts the centre/surface temperatures — directly
         gateable against thermal_transient_1d (the Heisler oracle).
+      * **Solve a real FreeCAD solid (the P3 M4 geometry bridge)** — pass a `body`
+        handle, `convection_faces` (1-based face indices that get the convective BC;
+        the rest are adiabatic), `h_conv`, `duration_s`, the material props, and an
+        optional `char_length_mm` mesh size. Gmsh meshes the solid on the main
+        thread; ElmerGrid + ElmerSolver run in the background. Result carries
+        {t_max_c, t_min_c} (max = interior, min = convective surface).
       * **Run a prepared `case_dir`** — pass a directory containing its `.sif` and
         mesh; the handler just runs ElmerSolver there and parses the scalar history.
 
-    The background job runs ONLY the ElmerSolver subprocess (it never touches FreeCAD).
+    The background job runs ONLY solver subprocesses (it never touches FreeCAD).
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
     {ok, returncode, solver, case_dir, stdout_tail} plus, for the slab case,
-    {t_center_c, t_surface_c, n_steps_written}, or for a prepared case {scalars_final}."""
+    {t_center_c, t_surface_c, n_steps_written}, for a body {t_max_c, t_min_c, nodes,
+    tets}, or for a prepared case {scalars_final}."""
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
+    if p.get("body"):                                # --- geometry bridge (M4) ---
+        return _thermal_body_submit(p, info)
     from driftpin import jobs
     elmer_bin = info["path"]
     case_dir = p.get("case_dir")
@@ -7517,31 +7643,157 @@ def _cfd_pipe_submit(p):
                              "length_mm": length_mm})
 
 
+def _cfd_body_submit(p):
+    """Geometry-driven internal flow — the P3 M4 bridge. Tessellates a FreeCAD
+    solid's faces into a multi-region STL on the MAIN thread (`inlet_face` /
+    `outlet_face` are 1-based face indices; every other face becomes the no-slip
+    `walls` patch), then blockMesh + snappyHexMesh + simpleFoam in the background.
+    The inlet velocity points along the inlet face's INWARD normal (probed against
+    the solid, so face orientation can't flip it). Degrades cleanly when no CFD
+    solver resolves."""
+    info = _require_solver("openfoam")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import tempfile
+
+    from driftpin import jobs, solvers
+    from driftpin.analysis import cfd as _cfd
+    from driftpin.analysis import meshbridge as _mb
+
+    obj = _shape_handle_to_obj(p["body"])
+    faces = obj.Shape.Faces
+    inlet_i = p.get("inlet_face")
+    outlet_i = p.get("outlet_face")
+    if inlet_i is None or outlet_i is None:
+        raise ValueError("inlet_face and outlet_face (1-based face indices of "
+                         "`body`) are required for the geometry bridge")
+    inlet_i, outlet_i = int(inlet_i), int(outlet_i)
+    if not (1 <= inlet_i <= len(faces) and 1 <= outlet_i <= len(faces)) \
+            or inlet_i == outlet_i:
+        raise ValueError(f"inlet/outlet must be distinct face indices in 1..{len(faces)}")
+    if p.get("velocity_m_s") is None:
+        raise ValueError("velocity_m_s is required")
+    velocity = float(p["velocity_m_s"])
+    mu, rho = _cfd._fluid_props(p.get("fluid", "water-20c"),
+                                p.get("mu_pa_s"), p.get("rho_kg_m3"))
+    nu = mu / rho
+    stl_tol = float(p.get("stl_tolerance_mm", 0.2))
+    end_time = int(p.get("end_time", 3000))
+
+    def face_tris(face):
+        pts, tris = face.tessellate(stl_tol)         # mm -> m below
+        return [tuple((pts[i].x * 1e-3, pts[i].y * 1e-3, pts[i].z * 1e-3)
+                      for i in tri) for tri in tris]
+
+    regions = {
+        "inlet": face_tris(faces[inlet_i - 1]),
+        "outlet": face_tris(faces[outlet_i - 1]),
+        "walls": [t for j, f in enumerate(faces, start=1)
+                  if j not in (inlet_i, outlet_i) for t in face_tris(f)],
+    }
+    stl_text = _mb.ascii_stl_regions(regions)
+
+    # inward inlet direction, orientation-proof: probe a point just off the face
+    # centre along the surface normal — if it lies inside the solid the normal
+    # already points inward, else flip it.
+    fin = faces[inlet_i - 1]
+    u0, u1, v0, v1 = fin.ParameterRange
+    n = fin.normalAt(0.5 * (u0 + u1), 0.5 * (v0 + v1))
+    c = fin.CenterOfMass
+    eps = max(obj.Shape.BoundBox.DiagonalLength * 1e-4, 1e-3)
+    probe = App.Vector(c.x + n.x * eps, c.y + n.y * eps, c.z + n.z * eps)
+    sgn = 1.0 if obj.Shape.isInside(probe, 1e-7, True) else -1.0
+    vel_vec = (sgn * n.x * velocity, sgn * n.y * velocity, sgn * n.z * velocity)
+
+    bb = obj.Shape.BoundBox
+    bbox_min = (bb.XMin * 1e-3, bb.YMin * 1e-3, bb.ZMin * 1e-3)
+    bbox_max = (bb.XMax * 1e-3, bb.YMax * 1e-3, bb.ZMax * 1e-3)
+    loc = p.get("location_in_mesh_mm")
+    base_cell = p.get("base_cell_mm")
+    case_dir = tempfile.mkdtemp(prefix="foam_body_")
+    _mb.write_snappy_internal_case(
+        case_dir, stl_text=stl_text, bbox_min_m=bbox_min, bbox_max_m=bbox_max,
+        inlet_velocity_m_s=vel_vec, nu_m2_s=nu,
+        location_in_mesh_m=(tuple(float(v) * 1e-3 for v in loc) if loc else None),
+        base_cell_m=(float(base_cell) * 1e-3 if base_cell else None),
+        end_time=end_time)
+    env_bashrc = solvers.openfoam_bashrc()
+
+    # optional Hagen–Poiseuille reference when the caller names the equivalent pipe
+    hp = None
+    if p.get("diameter_mm") is not None and p.get("length_mm") is not None:
+        hp = _cfd.pipe_pressure_drop(
+            diameter_mm=float(p["diameter_mm"]), length_mm=float(p["length_mm"]),
+            velocity_m_s=velocity, mu_pa_s=mu, rho_kg_m3=rho)
+
+    key = jobs.content_key("cfd_internal_flow", {"body": {
+        "volume": round(obj.Shape.Volume, 6), "area": round(obj.Shape.Area, 6),
+        "inlet": inlet_i, "outlet": outlet_i, "U": velocity, "nu": nu, "rho": rho,
+        "stl_tol": stl_tol, "cell": base_cell or 0, "loc": loc, "et": end_time}})
+
+    def _work():
+        from driftpin.analysis import openfoam as _of
+        rc, tail = _run_foam(case_dir, _mb.snappy_mesh_cmds(), env_bashrc)
+        out = {
+            "ok": rc == 0,
+            "returncode": rc,
+            "solver": "openfoam",
+            "kind": "internal",
+            "mode": "body",
+            "case_dir": case_dir,
+            "stdout_tail": tail,
+        }
+        parsed = _of.parse_pressure_drop(case_dir, rho_kg_m3=rho)
+        if parsed:
+            out["pressure_drop_pa"] = round(parsed["dp_developed_pa"], 6)
+            out["pressure_drop_inlet_pa"] = round(parsed["dp_inlet_pa"], 6)
+            out["n_cells"] = parsed["n_cells"]
+            if hp and hp["hagen_poiseuille_pa"] > 0:
+                out["hagen_poiseuille_pa"] = hp["hagen_poiseuille_pa"]
+                out["hp_ratio"] = round(
+                    parsed["dp_developed_pa"] / hp["hagen_poiseuille_pa"], 4)
+        return out
+
+    return jobs.submit("cfd_internal_flow", _work, key=key,
+                       meta={"mode": "body", "inlet_face": inlet_i,
+                             "outlet_face": outlet_i})
+
+
 @handler("cfd_internal_flow_submit")
 def _h_cfd_internal_flow_submit(p):
     """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, OFF the MCP channel.
     Degrades to {ok:false, reason, install} when no CFD solver resolves (never raises).
 
-    Two ways to drive it:
+    Three ways to drive it:
       * **Build the straight-pipe validation case** — pass `diameter_mm`, `length_mm`,
         and `velocity_m_s` (or `flow_rate_lpm`), plus a `fluid` name or `mu_pa_s`+
         `rho_kg_m3`. The handler builds the axisymmetric laminar pipe, runs
         blockMesh+simpleFoam, and returns the solved pressure drop next to the
         Hagen–Poiseuille reference — the kickoff's exact CFD gate (`hp_ratio` ~ 1).
+      * **Solve a real FreeCAD solid (the P3 M4 geometry bridge)** — pass a `body`
+        handle, `inlet_face`/`outlet_face` (1-based face indices; the rest become
+        no-slip walls), `velocity_m_s` and the fluid. The solid's faces tessellate
+        into a multi-region STL on the main thread; blockMesh + snappyHexMesh +
+        simpleFoam run in the background. Use `pressure_drop_pa` (the developed-
+        profile 2·mean(p)); pass `diameter_mm`+`length_mm` too for an `hp_ratio`
+        reference. Optional: `base_cell_mm`, `location_in_mesh_mm` (for non-convex
+        solids), `stl_tolerance_mm`.
       * **Run a prepared OpenFOAM `case_dir`** containing its own mesh + dictionaries.
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. For
-    the pipe case: {ok, returncode, reynolds, regime, pressure_drop_pa (developed),
-    pressure_drop_inlet_pa, hagen_poiseuille_pa, hp_ratio, n_cells, case_dir}. For a
+    the pipe/body cases: {ok, returncode, pressure_drop_pa (developed),
+    pressure_drop_inlet_pa, hagen_poiseuille_pa?, hp_ratio?, n_cells, case_dir}. For a
     prepared case: {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    if p.get("body"):                                # --- geometry bridge (M4) ---
+        return _cfd_body_submit(p)
     if p.get("case_dir"):
         return _openfoam_submit(p, "internal")
     if p.get("diameter_mm") is not None:
         return _cfd_pipe_submit(p)
     raise ValueError(
-        "provide a prepared `case_dir`, or the straight-pipe params (diameter_mm, "
-        "length_mm, velocity_m_s or flow_rate_lpm) to build the Hagen–Poiseuille "
-        "validation case")
+        "provide a `body` handle (geometry bridge), a prepared `case_dir`, or the "
+        "straight-pipe params (diameter_mm, length_mm, velocity_m_s or "
+        "flow_rate_lpm) to build the Hagen–Poiseuille validation case")
 
 
 def _cfd_flat_plate_submit(p):

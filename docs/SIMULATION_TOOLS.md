@@ -147,7 +147,10 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
   thermal_lumped(mass_g, c_p, power_w, h_conv, area_mm2, t_ambient_c, duration_s)
   thermal_transient_1d(half_thickness_mm, h_conv, duration_s, k, rho, cp, …)  # Heisler oracle
-  thermal_transient_submit(half_thickness_mm|case_dir, …)        # Elmer 1-D slab, async
+  thermal_transient_submit(half_thickness_mm|body+convection_faces|case_dir, …)  # Elmer, async
+    # body mode (P3 M4 bridge): Gmsh-mesh a real FreeCAD solid (UNV face groups →
+    # boundary tags, tag i == Faces[i-1]) → ElmerGrid → HeatSolver; convection_faces
+    # get h_conv/t_ambient_c, the rest are adiabatic -> {t_max_c, t_min_c, nodes, tets}
   thermal_radiation_submit(t1_c, t2_c, emissivity_1, emissivity_2, …)  # Elmer enclosure, async
     -> {ok:false, reason, install}                               # when ElmerSolver absent
      | {job_id, status, cache_hit}  # poll job_result for {ok, flux_w_m2, q_net_w,
@@ -190,8 +193,11 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Signatures (implemented):**
   ```
   cfd_pipe_flow(diameter_mm, length_mm, flow_rate_lpm|velocity_m_s, fluid)  # Hagen–Poiseuille oracle
-  cfd_internal_flow_submit(diameter_mm,length_mm,…|case_dir)  # OpenFOAM pipe, async
+  cfd_internal_flow_submit(diameter_mm,length_mm,…|body+inlet_face+outlet_face|case_dir)  # async
     -> {ok, reynolds, pressure_drop_pa, hagen_poiseuille_pa, hp_ratio (≈1), …}
+    # body mode (P3 M4 bridge): tessellate a real FreeCAD solid into per-face STL
+    # regions (inlet/outlet by 1-based face index, the rest no-slip walls) →
+    # blockMesh box → snappyHexMesh → simpleFoam; use the developed pressure_drop_pa
   cfd_external_flow_submit(velocity_m_s, plate_length_mm, fluid, …|case_dir)  # OpenFOAM flat plate, async
     -> {ok:false, reason, install}                            # when no CFD solver resolves
      | {job_id, status, cache_hit}  # poll job_result for {ok, reynolds_l, cd, cf_solved,

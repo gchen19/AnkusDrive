@@ -3875,6 +3875,89 @@ def test_topology_to_solid_empty_threshold_is_a_clean_error():
         assert w.call("ping") == "pong", "worker poisoned by the error path"
 
 
+def test_geometry_bridge_validation_errors_are_clean():
+    """The M4 bridge modes reject bad inputs as structured errors before any
+    meshing/solving happens — and the worker survives them. (Runs only when
+    ElmerSolver resolves: with the solver absent the handler's graceful-degradation
+    dict short-circuits before validation, which test_solve_degradation covers.)"""
+    import shutil as _shutil
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from driftpin import solvers
+    if not solvers.is_available("elmer") or not _shutil.which("ElmerGrid"):
+        print("    SKIP — ElmerSolver/ElmerGrid not installed")
+        return
+    with Worker() as w:
+        w.call("new_document", name="bridge_val")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        # no convection_faces
+        try:
+            w.call("thermal_transient_submit", body=box["handle"],
+                   h_conv=1000.0, duration_s=1.0, k=200.0, rho=2700.0, cp=900.0)
+        except WorkerError as e:
+            assert "convection_faces" in e.remote_message, e.remote_message
+        else:
+            raise AssertionError("expected WorkerError without convection_faces")
+        # face index out of range
+        try:
+            w.call("thermal_transient_submit", body=box["handle"],
+                   convection_faces=[1, 99], h_conv=1000.0, duration_s=1.0,
+                   k=200.0, rho=2700.0, cp=900.0)
+        except WorkerError as e:
+            assert "out of range" in e.remote_message, e.remote_message
+        else:
+            raise AssertionError("expected WorkerError for face index 99")
+        assert w.call("ping") == "pong", "worker poisoned by the error path"
+
+
+def test_geometry_bridge_box_end_to_end_matches_heisler():
+    """The full M4 Elmer path through the worker: a real FreeCAD box → GmshTools →
+    UNV (face groups intact) → ElmerGrid → ElmerSolver, polled via the shared job
+    surface — and the solved plane wall matches thermal_transient_1d (the same gate
+    test_meshbridge runs on the committed fixture, here exercising the live
+    FreeCAD-side meshing + export instead). SKIPs without ElmerSolver/ElmerGrid."""
+    import shutil as _shutil
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from driftpin import solvers
+    from driftpin.analysis import thermal as _thermal
+    if not solvers.is_available("elmer") or not _shutil.which("ElmerGrid"):
+        print("    SKIP — ElmerSolver/ElmerGrid not installed")
+        return
+    with Worker() as w:
+        w.call("new_document", name="bridge_e2e")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        # box faces 1 and 2 are x=0 / x=20 (verified mapping): a plane wall of
+        # half-thickness 10 mm cooled on both faces, lateral faces adiabatic
+        # Pin the mesh size: Gmsh's default element size varies across versions/hosts,
+        # and a too-coarse box under-resolves this Bi=0.5 transient (CI saw a 13% error
+        # on the default mesh). char_length_mm=2.0 (~10 elements through the wall) lands
+        # the excursion within ~0.3% of Heisler, reproducibly.
+        sub = w.call("thermal_transient_submit", body=box["handle"],
+                     convection_faces=[1, 2], h_conv=10000.0, duration_s=0.6,
+                     k=200.0, rho=2700.0, cp=900.0, char_length_mm=2.0,
+                     t_initial_c=100.0, t_ambient_c=25.0)
+        assert sub.get("job_id"), sub
+        deadline = time.monotonic() + 120
+        status = None
+        while time.monotonic() < deadline:
+            status = w.call("job_status", job_id=sub["job_id"])
+            if status["status"] in ("done", "failed"):
+                break
+            time.sleep(0.5)
+        assert status and status["status"] == "done", status
+        res = w.call("job_result", job_id=sub["job_id"])["result"]
+        assert res["ok"], res
+        assert res["tets"] > 0 and res["nodes"] > 0, res
+        oracle = _thermal.thermal_transient_1d(
+            half_thickness_mm=10.0, h_conv=10000.0, duration_s=0.6,
+            k=200.0, rho=2700.0, cp=900.0)
+        for solved, key in ((res["t_max_c"], "t_center_c"),
+                            (res["t_min_c"], "t_surface_c")):
+            ratio = (solved - 25.0) / (oracle[key] - 25.0)
+            assert 0.97 < ratio < 1.03, (key, solved, oracle[key], ratio)
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

@@ -171,8 +171,14 @@ M3  CFD external   ✅ cfd_external_flow_submit flat-plate builder (blockMesh+si
                        clean LE) + Stokes/Blasius drag oracle (analysis/cfd.py). Drag
                        read from the U field (force function objects abort 'sha1' here);
                        blasius_ratio ~1.09 (within 15%) + U^1.5 law. Example F + external.png.
-M4  Geometry bridge ⏳ FreeCAD solid → Gmsh/ElmerGrid (Elmer) · STL/snappyHexMesh
-                       (OpenFOAM); relative gate: meshed-from-FreeCAD == parametric
+M4  Geometry bridge ✅ analysis/meshbridge.py + body modes on thermal_transient_submit
+                       (body, convection_faces) and cfd_internal_flow_submit (body,
+                       inlet_face/outlet_face). Elmer path: FreeCAD solid → Gmsh UNV
+                       (face groups → boundary tags, tag i == Faces[i-1]) → ElmerGrid →
+                       HeatSolver; gated vs Heisler (box: 0.2–1.5%). OpenFOAM path:
+                       per-face STL regions → blockMesh box → snappyHexMesh → simpleFoam;
+                       gated vs Hagen–Poiseuille on the developed Δp (cylinder:
+                       hp_ratio 1.0006). Example G + bridge.png.
 M5  3-D topology   ⏳ 3-D SIMP + real load cases/keep-outs → topology_to_solid (3-D)
 M6  Frontier       ⏳ (optional) modal/harmonic · conjugate heat transfer · EM
 ```

@@ -33,6 +33,10 @@ Four examples, each a kickoff gate:
     the U field — OpenFOAM's force function objects abort on this build) must match the
     Blasius friction coefficient Cf=1.328/√Re_L within 15%, and the drag must follow
     the U^1.5 law.
+  * **G — geometry bridge** (§M4): real FreeCAD solids through the meshing bridge —
+    a 20 mm cube → Gmsh UNV → **ElmerGrid + ElmerSolver** as a plane wall (must match
+    the Heisler oracle within 3%), and a Ø10×100 mm cylinder → multi-region STL →
+    **snappyHexMesh + simpleFoam** (developed Δp within 10% of Hagen–Poiseuille).
 
 Each example **degrades gracefully**: a missing solver (ElmerSolver / OpenFOAM) or a
 worker that lacks NumPy is reported as SKIP, not a failure, so the script is safe to
@@ -259,6 +263,59 @@ def example_external(w, log):
     log(f"- U^1.5 law: drag(3 m/s)/drag(1.5 m/s) = {scale:.3f} (expect 2^1.5 = {2.0**1.5:.3f})")
     log(f"  GATE blasius_ratio within 15% and U^1.5 scaling: {'PASS' if bl_ok and scale_ok else 'FAIL'}")
     return bl_ok and scale_ok
+
+
+def example_bridge(w, log):
+    """§M4 — the geometry bridge: REAL FreeCAD solids through Gmsh/ElmerGrid
+    (thermal) and snappyHexMesh (internal flow), vs the same analytic oracles the
+    parametric builders gate against."""
+    log("### Example G — the geometry bridge: FreeCAD solid → mesh → solve  (§M4)")
+    w.call("new_document", name="bridge_example")
+
+    # Elmer half: a 20 mm cube as a plane wall (convection on the two x faces).
+    box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+    sub = w.call("thermal_transient_submit", body=box["handle"],
+                 convection_faces=[1, 2], h_conv=10000.0, duration_s=0.6,
+                 k=200.0, rho=2700.0, cp=900.0)
+    if not _submitted(sub):
+        log(f"  SKIP — ElmerSolver/ElmerGrid not installed ({sub.get('reason', '')})")
+        return None
+    res = _poll(w, sub["job_id"])["result"]
+    if not res.get("ok") or res.get("t_max_c") is None:
+        log(f"  FAIL — bridged thermal solve failed: {str(res)[:200]}")
+        return False
+    oracle = thermal.thermal_transient_1d(half_thickness_mm=10.0, h_conv=10000.0,
+                                          duration_s=0.6, k=200.0, rho=2700.0, cp=900.0)
+    rc = (res["t_max_c"] - 25.0) / (oracle["t_center_c"] - 25.0)
+    rs = (res["t_min_c"] - 25.0) / (oracle["t_surface_c"] - 25.0)
+    log(f"- FreeCAD 20 mm cube → Gmsh ({res['tets']} tets) → ElmerGrid → ElmerSolver "
+        f"(convection on faces 1+2: a plane wall, Bi=0.5)")
+    log(f"- centre {res['t_max_c']:.2f} °C vs Heisler {oracle['t_center_c']:.2f} °C "
+        f"(ratio {rc:.4f}); surface {res['t_min_c']:.2f} vs "
+        f"{oracle['t_surface_c']:.2f} °C (ratio {rs:.4f})")
+    th_ok = 0.97 < rc < 1.03 and 0.97 < rs < 1.03
+
+    # OpenFOAM half: a Ø10×100 mm cylinder, inlet face 3 (z=0), outlet face 2.
+    cyl = w.call("add_primitive", kind="cylinder", r=5, h=100)
+    sub = w.call("cfd_internal_flow_submit", body=cyl["handle"], inlet_face=3,
+                 outlet_face=2, velocity_m_s=0.005, fluid="water-20c",
+                 diameter_mm=10, length_mm=100)
+    if not _submitted(sub):
+        log(f"- (CFD half) SKIP — OpenFOAM not installed; thermal half "
+            f"{'PASS' if th_ok else 'FAIL'}")
+        return th_ok
+    res2 = _poll(w, sub["job_id"])["result"]
+    if not res2.get("ok") or res2.get("hp_ratio") is None:
+        log(f"  FAIL — bridged flow solve failed: {str(res2)[:200]}")
+        return False
+    log(f"- FreeCAD Ø10×100 mm cylinder → multi-region STL → snappyHexMesh "
+        f"({res2['n_cells']} cells) → simpleFoam (Re=50)")
+    log(f"- Δp(developed) {res2['pressure_drop_pa']:.4g} Pa vs Hagen–Poiseuille "
+        f"{res2['hagen_poiseuille_pa']:.4g} Pa → hp_ratio {res2['hp_ratio']}")
+    hp_ok = 0.9 < res2["hp_ratio"] < 1.1
+    log(f"  GATE bridged wall vs Heisler within 3% and bridged pipe hp_ratio "
+        f"within 10%: {'PASS' if th_ok and hp_ok else 'FAIL'}")
+    return th_ok and hp_ok
 
 
 # --- figures (--plots) --------------------------------------------------------
@@ -610,6 +667,99 @@ def _plot_external(outdir):
     return True
 
 
+def _plot_bridge(outdir):
+    """Panel G: the bridged box cooling history on the Heisler lines (left) and the
+    bridged snappy cylinder Δp on the Hagen–Poiseuille line (right). FreeCAD-free:
+    the box is the committed Gmsh UNV fixture; the cylinder is the pure-Python STL."""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    import matplotlib.pyplot as plt
+
+    from driftpin import solvers
+    from driftpin.analysis import cfd as _cfd
+    from driftpin.analysis import meshbridge as mb
+    from driftpin.analysis import openfoam as of
+    if not (solvers.is_available("elmer") and shutil.which("ElmerGrid")
+            and solvers.is_available("openfoam")):
+        return False
+    fixture = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "box20_coarse.unv"
+    k, rho, cp, h, dur = 200.0, 2700.0, 900.0, 10000.0, 0.6
+
+    with tempfile.TemporaryDirectory() as d:
+        shutil.copy(fixture, os.path.join(d, "body.unv"))
+        built = mb.write_body_transient_case(
+            d, k=k, rho=rho, cp=cp, h_conv=h, duration_s=dur, convection_tags=[1, 2])
+        subprocess.run([shutil.which("ElmerGrid")] + built["elmergrid_argv"][1:],
+                       cwd=d, capture_output=True)
+        subprocess.run([solvers.find_solver("elmer")["path"], built["sif"]],
+                       cwd=d, capture_output=True)
+        rows = [r.split() for r in open(os.path.join(d, built["scalars"])).read().splitlines()
+                if r.strip()]
+    t_solved = [(i + 1) * built["dt"] for i in range(len(rows))]
+    tmax = [float(r[0]) for r in rows]
+    tmin = [float(r[1]) for r in rows]
+    # the one-term Heisler series needs Fo >= 0.2 -> start the oracle lines there
+    t_or = [t for t in t_solved if t >= 0.2 * 0.01 * 0.01 / (k / (rho * cp))]
+    orc = [thermal.thermal_transient_1d(half_thickness_mm=10, h_conv=h, duration_s=t,
+                                        k=k, rho=rho, cp=cp) for t in t_or]
+
+    env = solvers.openfoam_bashrc()
+    D, L, nu, rho_w = 0.01, 0.1, 1e-6, 1000.0
+    vels = [0.0025, 0.005, 0.01]
+    dps = []
+    for U in vels:
+        with tempfile.TemporaryDirectory() as d:
+            mb.write_snappy_internal_case(
+                d, stl_text=mb.ascii_stl_regions(mb.cylinder_stl_regions(D, L)),
+                bbox_min_m=(-D / 2, -D / 2, 0.0), bbox_max_m=(D / 2, D / 2, L),
+                inlet_velocity_m_s=(0.0, 0.0, U), nu_m2_s=nu)
+            chain = " && ".join(" ".join(a) for a in mb.snappy_mesh_cmds())
+            script = (f"source '{env}' >/dev/null 2>&1\n" if env else "") + chain
+            subprocess.run(["bash", "-c", script], cwd=d, capture_output=True)
+            parsed = of.parse_pressure_drop(d, rho_kg_m3=rho_w)
+            dps.append(parsed["dp_developed_pa"] if parsed else float("nan"))
+    hp_line = [_cfd.pipe_pressure_drop(diameter_mm=D * 1000, length_mm=L * 1000,
+                                       velocity_m_s=U, mu_pa_s=nu * rho_w,
+                                       rho_kg_m3=rho_w)["hagen_poiseuille_pa"]
+               for U in vels]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.0))
+    ax = axes[0]
+    ax.plot(t_or, [o["t_center_c"] for o in orc], "-", color="C0",
+            label="Heisler centre (exact)")
+    ax.plot(t_or, [o["t_surface_c"] for o in orc], "-", color="C1",
+            label="Heisler surface (exact)")
+    step = max(1, len(t_solved) // 24)
+    ax.plot(t_solved[::step], tmax[::step], "o", ms=4, color="C0",
+            label="bridged box max(T)")
+    ax.plot(t_solved[::step], tmin[::step], "s", ms=4, color="C1",
+            label="bridged box min(T)")
+    ax.set_xlabel("time  [s]")
+    ax.set_ylabel("temperature  [°C]")
+    ax.set_title("FreeCAD box → Gmsh UNV → ElmerGrid → Elmer\n"
+                 "plane wall, Bi=0.5 (faces 1+2 convective)", fontsize=9)
+    ax.grid(True, ls=":", alpha=0.5)
+    ax.legend(fontsize=8)
+    ax = axes[1]
+    ax.plot(vels, hp_line, "-", color="C0", label="Hagen–Poiseuille (exact)")
+    ax.plot(vels, dps, "o", ms=8, color="C1", label="snappyHexMesh + simpleFoam\n(2·mean(p), developed)")
+    ax.set_xlabel("mean velocity  [m/s]")
+    ax.set_ylabel("pressure drop  [Pa]")
+    ax.set_title("cylinder STL → snappyHexMesh → simpleFoam\nØ10×100 mm, water",
+                 fontsize=9)
+    ax.grid(True, ls=":", alpha=0.5)
+    ax.legend(fontsize=8)
+    fig.suptitle("Example G — the geometry bridge: solid → mesh → solve  (§M4)",
+                 weight="bold", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/bridge.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
 def make_plots(outdir):
     """Generate the six result figures into ``outdir``; skip a panel when its solver
     is absent. matplotlib is imported lazily so the gated run needs no plotting deps."""
@@ -630,6 +780,8 @@ def make_plots(outdir):
                              else "✓ (oracle only — rayoptics absent)"))
     print("  radiation.png " + ("✓" if _plot_radiation(outdir) else "SKIP (ElmerSolver absent)"))
     print("  external.png " + ("✓" if _plot_external(outdir) else "SKIP (OpenFOAM absent)"))
+    print("  bridge.png " + ("✓" if _plot_bridge(outdir)
+                             else "SKIP (ElmerSolver/ElmerGrid/OpenFOAM absent)"))
 
 
 def main():
@@ -654,7 +806,8 @@ def main():
                          ("cfd", example_cfd),
                          ("optics", example_optics),
                          ("radiation", example_radiation),
-                         ("external", example_external)):
+                         ("external", example_external),
+                         ("bridge", example_bridge)):
             try:
                 results[name] = fn(w, log)
             except Exception as e:  # one example failing must not abort the rest
