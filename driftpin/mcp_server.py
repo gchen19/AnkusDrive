@@ -2762,6 +2762,48 @@ def creep_flag(
 
 
 @mcp.tool()
+def h_estimate(
+    geometry: str,
+    characteristic_mm: float,
+    t_surface_c: float,
+    t_ambient_c: float = 25.0,
+    velocity_m_s: float = 0.0,
+    emissivity: float = 0.0,
+    fluid: str = "air",
+    k_w_mk: float | None = None,
+    nu_m2_s: float | None = None,
+    pr: float | None = None,
+    beta_per_k: float | None = None,
+) -> dict:
+    """Screening convection coefficient h (NO solver) — the honest h_conv to feed
+    thermal_lumped / thermal_transient_1d / a convection BC, instead of a guess.
+    `geometry` picks the correlation: natural (velocity_m_s = 0)
+    'vertical_plate' | 'horizontal_cylinder' (Churchill–Chu); forced (velocity_m_s > 0)
+    'flat_plate' (averaged laminar/mixed Nu) | 'cylinder_crossflow' (Hilpert).
+    `characteristic_mm` is the plate height/length or cylinder diameter. Film-temp
+    air properties built in; another `fluid` needs explicit k_w_mk + nu_m2_s + pr
+    (+ beta_per_k for natural). emissivity > 0 adds the linearized radiation screen
+    into h_total_w_m2k.
+
+    This is a focusing estimate, not a gate: fidelity='correlation' with band_pct
+    the literature scatter (±15–20 %). Escalate to the conjugate solve
+    `cht_channel_submit` (or a meshed convection BC via thermal_transient_submit)
+    when the thermal margin is within ~2× band_pct. Returns {geometry, mode,
+    correlation, h_conv_w_m2k, h_rad_w_m2k, h_total_w_m2k, nusselt, reynolds,
+    rayleigh, prandtl, film_temp_c, fidelity, band_pct, valid_range_ok, warnings,
+    escalate_to}."""
+    params = {"geometry": geometry, "characteristic_mm": characteristic_mm,
+              "t_surface_c": t_surface_c, "t_ambient_c": t_ambient_c,
+              "velocity_m_s": velocity_m_s, "emissivity": emissivity,
+              "fluid": fluid}
+    for k, v in (("k_w_mk", k_w_mk), ("nu_m2_s", nu_m2_s), ("pr", pr),
+                 ("beta_per_k", beta_per_k)):
+        if v is not None:
+            params[k] = v
+    return _call("h_estimate", **params)
+
+
+@mcp.tool()
 def thermal_lumped(
     mass_g: float,
     power_w: float,
@@ -2775,7 +2817,8 @@ def thermal_lumped(
 ) -> dict:
     """Lumped first-order transient warm-up (no mesh). ΔT_ss = P/(h·A),
     τ = m·c_p/(h·A), T(t) = T_amb + ΔT_ss·(1−e^(−t/τ)). c_p is an explicit
-    value/quantity-string ('900 J/kg/K') or read from `material`. With duration_s
+    value/quantity-string ('900 J/kg/K') or read from `material`. Get h_conv from
+    the `h_estimate` correlation screen rather than guessing. With duration_s
     the temperature + fraction-of-steady reached are returned. A radiation screen
     flags when the steady-state radiative HTC exceeds h_conv. Returns
     {t_ambient_c, delta_t_steady_k, t_steady_c, time_constant_s, t_final_c,
@@ -2807,7 +2850,8 @@ def thermal_transient_1d(
     gated against, and the *distributed* (spatial-gradient) answer the lumped screen
     only approximates. A wall of half-thickness L cools/heats toward ambient by surface
     convection: Bi = h·L/k, Fo = α·t/L², α = k/(ρ·cₚ). Pass `alpha_m2_s`, or k+rho+cp,
-    or a `material` (Materials DB: thermal_conductivity/Density/specific_heat).
+    or a `material` (Materials DB: thermal_conductivity/Density/specific_heat); get
+    h_conv from the `h_estimate` correlation screen rather than guessing.
 
     As Bi→0 the body is isothermal and this collapses to the lumped exponential
     exp(−t/τ) (cross-checked via t_center_lumped_c / lumped_agrees). Returns {biot,
@@ -3405,9 +3449,11 @@ def dfa_check(
     """Grade an assembly (Boothroyd-Dewhurst-lite). assembly_efficiency =
     theoretical_min/(part_count+fastener_count) (theoretical_min = unique_part_count
     or 1); assembly_score scales that by a handling penalty from insertion_axes/
-    symmetry and decreases monotonically as part/fastener count rises. Returns
+    symmetry and decreases monotonically as part/fastener count rises. The grade is
+    an ordinal index for comparing variants (fidelity='correlation', band_pct=None)
+    — rank with it, don't gate on the absolute value. Returns
     {part_count, fastener_count, insertion_axes, handling_difficulty,
-    assembly_efficiency, assembly_score, symmetry_score}."""
+    assembly_efficiency, assembly_score, symmetry_score, fidelity, band_pct}."""
     params = {"part_count": part_count, "fastener_count": fastener_count,
               "insertion_axes": insertion_axes, "symmetric_fraction": symmetric_fraction}
     if unique_part_count is not None:
@@ -3446,9 +3492,12 @@ def cost_estimate(
     """Per-unit cost rollup (Design for Cost). material_cost = volume·density·price
     ·(1+scrap) from the Materials DB (process: cnc | fdm | casting | injection).
     process_cost = amortized setup + per-process machine time; tooling amortized
-    over quantity, so unit_cost falls as quantity rises. Returns {material_cost,
-    process_cost, tooling_amortized, unit_cost, mass_kg, breakdown}. Errors on an
-    unknown material/process or non-positive volume/quantity."""
+    over quantity, so unit_cost falls as quantity rises. The machine-time table is
+    order-of-magnitude (fidelity='correlation', band_pct=100) — trust the ratios
+    between processes/quantities, not the absolute dollars; material_cost alone is
+    exact given its inputs. Returns {material_cost, process_cost, tooling_amortized,
+    unit_cost, mass_kg, fidelity, band_pct, breakdown}. Errors on an unknown
+    material/process or non-positive volume/quantity."""
     return _call("cost_estimate", volume_mm3=volume_mm3, material=material,
                  process=process, quantity=quantity, tooling_usd=tooling_usd,
                  machine_rate_usd_hr=machine_rate_usd_hr, setup_min=setup_min,

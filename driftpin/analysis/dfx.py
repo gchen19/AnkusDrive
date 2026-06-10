@@ -140,9 +140,14 @@ def dfa_check(
     or fastener_count rises: it is the efficiency ratio scaled by a handling
     penalty, so adding any part or fastener can only lower it.
 
+    Fidelity (``SIMULATION_NEXT.md`` contract): the grade is a Boothroyd-style
+    ordinal index for *comparing variants*, not a measured quantity, so it carries
+    ``fidelity = "correlation"`` with ``band_pct = None`` (no physical scatter band
+    exists — rank with it, don't gate on the absolute value).
+
     Returns {part_count, fastener_count, insertion_axes, handling_difficulty,
-    assembly_efficiency, assembly_score, symmetry_score}. Raises ValueError on a
-    non-positive part_count or negative counts."""
+    assembly_efficiency, assembly_score, symmetry_score, fidelity, band_pct}.
+    Raises ValueError on a non-positive part_count or negative counts."""
     if part_count <= 0:
         raise ValueError("part_count must be > 0")
     if fastener_count < 0:
@@ -184,6 +189,10 @@ def dfa_check(
         "assembly_efficiency": round(assembly_efficiency, 4),
         "assembly_score": round(assembly_score, 4),
         "symmetry_score": round(sym, 4),
+        # SIMULATION_NEXT.md fidelity contract: an ordinal ranking index — no
+        # literature scatter band applies, hence band_pct None.
+        "fidelity": "correlation",
+        "band_pct": None,
     }
 
 

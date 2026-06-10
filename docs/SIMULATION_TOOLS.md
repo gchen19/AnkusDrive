@@ -145,6 +145,9 @@ Each family lists: the agent question it answers · backend · new-dependency we
   Elmer or OpenFOAM `chtMultiRegionFoam`. **Weight: none (lumped) → heavy (CFD-class).**
 - **Signatures (implemented):**
   ```
+  h_estimate(geometry, characteristic_mm, t_surface_c, …)  # screening h: Churchill–Chu /
+    # flat-plate / Hilpert correlations + the h_rad screen; fidelity='correlation',
+    # band_pct ±15–20%, escalate_to=cht_channel_submit (SIMULATION_NEXT.md Tier A)
   thermal_lumped(mass_g, c_p, power_w, h_conv, area_mm2, t_ambient_c, duration_s)
   thermal_transient_1d(half_thickness_mm, h_conv, duration_s, k, rho, cp, …)  # Heisler oracle
   thermal_transient_submit(half_thickness_mm|body+convection_faces|case_dir, …)  # Elmer, async
@@ -162,7 +165,12 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - CCX already covers steady-state conduction via `fem_thermal_results`; this fills
   the *time* and *radiation* gaps. Lumped version ships in the pure-Python wave.
-- **Status: lumped + transient + radiation shipped.** `thermal_lumped` (P0; first-order
+- **Status: lumped + transient + radiation shipped.** `h_estimate` (Tier A screening,
+  `analysis/convection.py`): handbook convection coefficients — Churchill–Chu natural
+  (vertical plate / horizontal cylinder), averaged flat-plate + Hilpert crossflow
+  forced, film-temperature air properties built in — so the h_conv every tool below
+  consumes is a labeled ±20 % correlation instead of a guess; toys in
+  `tests/test_convection.py`. `thermal_lumped` (P0; first-order
   RC: ΔT_ss, τ, T(t), plus an h_rad-vs-h_conv radiation screen). `thermal_transient_*`
   (P2 M4; Elmer 1-D plane-wall vs the one-term Heisler oracle to <0.1%). **`thermal_radiation_submit`
   (P3 M2):** Elmer **diffuse-gray** two-plate enclosure radiation (ViewFactors + HeatSolver),
