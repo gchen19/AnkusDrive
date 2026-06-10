@@ -3482,17 +3482,23 @@ def cfd_pipe_flow(
     fluid: str = "water-20c",
     mu_pa_s: float | None = None,
     rho_kg_m3: float | None = None,
+    roughness_mm: float = 0.0,
 ) -> dict:
     """Analytic straight-pipe pressure drop (NO solver) — the fast internal-flow screen
     and the exact gate the OpenFOAM cfd_internal_flow solve is checked against. Laminar
-    (Re<2300) is Hagen–Poiseuille Δp = 128·μ·L·Q/(π·D⁴) with its D⁴ scaling; turbulent
-    uses smooth-pipe Blasius. Give flow as `flow_rate_lpm` or `velocity_m_s`; fluid μ,ρ
-    from a name ('water-20c','air-20c','oil-sae30-20c','glycerin-20c') or explicit
-    `mu_pa_s`+`rho_kg_m3`.
+    (Re<2300) is Hagen–Poiseuille Δp = 128·μ·L·Q/(π·D⁴) with its D⁴ scaling — exact;
+    turbulent uses smooth-pipe Blasius, or Colebrook–White when `roughness_mm` is given
+    (the Colebrook value is always reported for turbulent flow) — a ±10 % Moody-band
+    correlation (fidelity labeled). Give flow as `flow_rate_lpm` or `velocity_m_s`;
+    fluid μ,ρ from a name ('water-20c','air-20c','oil-sae30-20c','glycerin-20c') or
+    explicit `mu_pa_s`+`rho_kg_m3`. Escalate turbulent cases to
+    cfd_internal_flow_submit(turbulence='kOmegaSST').
 
     Returns {reynolds, regime, velocity_m_s, flow_rate_m3_s, friction_factor,
-    pressure_drop_pa, wall_shear_pa, hagen_poiseuille_pa, laminar}."""
-    params = {"diameter_mm": diameter_mm, "length_mm": length_mm, "fluid": fluid}
+    colebrook_friction_factor, relative_roughness, pressure_drop_pa, wall_shear_pa,
+    hagen_poiseuille_pa, laminar, fidelity, band_pct, escalate_to}."""
+    params = {"diameter_mm": diameter_mm, "length_mm": length_mm, "fluid": fluid,
+              "roughness_mm": roughness_mm}
     for k, v in (("flow_rate_lpm", flow_rate_lpm), ("velocity_m_s", velocity_m_s),
                  ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3)):
         if v is not None:
@@ -3514,16 +3520,21 @@ def cfd_internal_flow_submit(
     fluid: str = "water-20c",
     mu_pa_s: float | None = None,
     rho_kg_m3: float | None = None,
-    n_axial: int = 120,
-    n_radial: int = 15,
+    n_axial: int | None = None,
+    n_radial: int | None = None,
     base_cell_mm: float | None = None,
     location_in_mesh_mm: list | None = None,
     stl_tolerance_mm: float = 0.2,
-    end_time: int = 4000,
+    end_time: int | None = None,
+    turbulence: str = "laminar",
 ) -> dict:
     """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, asynchronous. Requires an
     OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
-    reason, install} rather than raising. Three modes:
+    reason, install} rather than raising. `turbulence='kOmegaSST'` upgrades the pipe
+    validation case to RANS (SIMULATION_NEXT B3): wall-function k/ω/ν_t with first-cell
+    y+ targeted at ~30–100, developed dp/dx fitted over the second half of a ≥40·D pipe,
+    gated BANDED against Colebrook (`colebrook_ratio` ≈ 1 ± 10 % — the Moody correlation
+    is itself a band, never an exact gate). Three modes:
 
     - **Build the straight-pipe validation case** (no case prep): pass `diameter_mm`,
       `length_mm`, and `velocity_m_s` (or `flow_rate_lpm`), with a `fluid` name or
@@ -3545,17 +3556,21 @@ def cfd_internal_flow_submit(
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result.
     Pipe/body cases: {ok, returncode, pressure_drop_pa (developed),
-    pressure_drop_inlet_pa, hagen_poiseuille_pa?, hp_ratio?, n_cells, case_dir}.
-    Prepared case: {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
-    params = {"fluid": fluid, "n_axial": n_axial, "n_radial": n_radial,
-              "stl_tolerance_mm": stl_tolerance_mm, "end_time": end_time}
+    pressure_drop_inlet_pa, hagen_poiseuille_pa?, hp_ratio?, n_cells, case_dir};
+    RANS pipe adds {dpdx_pa_m, dpdx_colebrook_pa_m, colebrook_ratio, y_plus_estimate,
+    band_pct}. Prepared case: {ok, returncode, solver, application, case_dir, kind,
+    stdout_tail}."""
+    params = {"fluid": fluid, "stl_tolerance_mm": stl_tolerance_mm,
+              "turbulence": turbulence}
     for k, v in (("case_dir", case_dir), ("application", application),
                  ("diameter_mm", diameter_mm), ("length_mm", length_mm),
                  ("body", body), ("inlet_face", inlet_face),
                  ("outlet_face", outlet_face), ("base_cell_mm", base_cell_mm),
                  ("location_in_mesh_mm", location_in_mesh_mm),
                  ("velocity_m_s", velocity_m_s), ("flow_rate_lpm", flow_rate_lpm),
-                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3)):
+                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3),
+                 ("n_axial", n_axial), ("n_radial", n_radial),
+                 ("end_time", end_time)):
         if v is not None:
             params[k] = v
     return _call("cfd_internal_flow_submit", **params)
@@ -3571,13 +3586,19 @@ def cfd_external_flow_submit(
     case_dir: str | None = None,
     application: str | None = None,
     model: str | None = None,
-    nx_plate: int = 160,
-    n_y: int = 140,
-    end_time: int = 3000,
+    nx_plate: int | None = None,
+    n_y: int | None = None,
+    end_time: int | None = None,
+    turbulence: str = "laminar",
 ) -> dict:
     """External-flow CFD (drag) via OpenFOAM or SU2, asynchronous. Requires an OpenFOAM
     (apt/conda) or SU2 binary; when none resolves this returns {ok:false, reason,
-    install} rather than raising. Two modes:
+    install} rather than raising. `turbulence='kOmegaSST'` upgrades the plate to RANS
+    (SIMULATION_NEXT B3, default plate_length 1000 mm so Re_L > transition): the
+    headline drag is the trailing-edge momentum-thickness integral, gated BANDED
+    against the mixed-transition Cf = 0.074·Re^(−1/5) − A/Re (`cf_mixed_ratio` ≈ 1
+    ± 15 % — the 1/7-power family is itself a band); the (ν+ν_t)-corrected wall-shear
+    sum is the cross-check. Two modes:
 
     - **Build the flat-plate validation case** (no case prep): pass `velocity_m_s`, with
       optional `plate_length_mm` (default 100), a `fluid` name ('air-20c','water-20c',…)
@@ -3591,12 +3612,15 @@ def cfd_external_flow_submit(
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Flat
     plate: {ok, returncode, reynolds_l, cd, cf_solved, cf_blasius, blasius_ratio,
-    drag_force_n, drag_momentum_n, drag_blasius_n, n_cells, case_dir}. Prepared case:
+    drag_force_n, drag_momentum_n, drag_blasius_n, n_cells, case_dir}; RANS plate
+    swaps the gate fields for {cf_solved (momentum), cf_mixed_ref, cf_mixed_ratio,
+    cf_turbulent_ref, cf_wall_corrected, y_plus_estimate, band_pct}. Prepared case:
     {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
-    params = {"fluid": fluid, "nx_plate": nx_plate, "n_y": n_y, "end_time": end_time}
+    params = {"fluid": fluid, "turbulence": turbulence}
     for k, v in (("velocity_m_s", velocity_m_s), ("plate_length_mm", plate_length_mm),
                  ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3), ("case_dir", case_dir),
-                 ("application", application), ("model", model)):
+                 ("application", application), ("model", model),
+                 ("nx_plate", nx_plate), ("n_y", n_y), ("end_time", end_time)):
         if v is not None:
             params[k] = v
     return _call("cfd_external_flow_submit", **params)

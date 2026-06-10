@@ -8330,14 +8330,100 @@ def _openfoam_submit(p, kind):
                        meta={"case_dir": case_dir, "kind": kind, "application": app})
 
 
+def _is_rans(p) -> bool:
+    return str(p.get("turbulence", "laminar")).lower() in (
+        "komegasst", "k-omega-sst", "rans", "turbulent")
+
+
+def _cfd_pipe_rans_submit(p):
+    """kOmegaSST upgrade of the pipe validation case (SIMULATION_NEXT B3): same
+    wedge, wall-function k/omega/nut, developed dp/dx fitted over the second half
+    of the pipe and gated BANDED against Colebrook (the Moody correlation is itself
+    ±10%). Wall-function discipline: the mesh targets first-cell y+ ~ 30-100
+    (reported as y_plus_estimate)."""
+    import math
+
+    info = _require_solver("openfoam")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    from driftpin import jobs, solvers
+    from driftpin.analysis import cfd as _cfd
+
+    diameter_mm = float(p.get("diameter_mm", 50.0))
+    D = diameter_mm / 1000.0
+    length_mm = float(p.get("length_mm", 48 * diameter_mm))
+    L = length_mm / 1000.0
+    mu, rho = _cfd._fluid_props(p.get("fluid", "water-20c"),
+                                p.get("mu_pa_s"), p.get("rho_kg_m3"))
+    nu = mu / rho
+    area = math.pi * D * D / 4.0
+    velocity = p.get("velocity_m_s")
+    if velocity is None:
+        if p.get("flow_rate_lpm") is None:
+            raise ValueError("provide velocity_m_s or flow_rate_lpm")
+        velocity = (float(p["flow_rate_lpm"]) / 1000.0 / 60.0) / area
+    velocity = float(velocity)
+    n_axial = int(p.get("n_axial", 100))
+    n_radial = int(p.get("n_radial", 24))
+    end_time = int(p.get("end_time", 2000))
+
+    oracle = _cfd.pipe_pressure_drop(
+        diameter_mm=diameter_mm, length_mm=length_mm, velocity_m_s=velocity,
+        mu_pa_s=mu, rho_kg_m3=rho)
+    env_bashrc = solvers.openfoam_bashrc()
+    key = jobs.content_key("cfd_internal_flow", {"pipe_rans": {
+        "D": D, "L": L, "U": velocity, "nu": nu, "rho": rho,
+        "na": n_axial, "nr": n_radial, "et": end_time}})
+
+    def _work():
+        import tempfile
+        from driftpin.analysis import openfoam as _of
+        cdir = tempfile.mkdtemp(prefix="foam_pipe_rans_")
+        built = _of.write_pipe_rans_case(
+            cdir, diameter_m=D, length_m=L, velocity_m_s=velocity, nu_m2_s=nu,
+            n_axial=n_axial, n_radial=n_radial, end_time=end_time)
+        rc, tail = _run_foam(cdir, [["blockMesh"], ["simpleFoam"]], env_bashrc)
+        dpdx_cole = built["friction_factor_colebrook"] / D * 0.5 * rho * velocity ** 2
+        out = {
+            "ok": rc == 0,
+            "returncode": rc,
+            "solver": "openfoam",
+            "kind": "internal",
+            "turbulence": "kOmegaSST",
+            "case_dir": cdir,
+            "reynolds": round(built["reynolds"], 3),
+            "regime": oracle["regime"],
+            "y_plus_estimate": built["y_plus_estimate"],
+            "dpdx_colebrook_pa_m": round(dpdx_cole, 4),
+            "band_pct": 10.0,
+            "stdout_tail": tail,
+        }
+        parsed = _of.parse_pipe_rans_dpdx(
+            cdir, n_axial=n_axial, n_radial=n_radial, length_m=L, rho_kg_m3=rho)
+        if parsed:
+            out["dpdx_pa_m"] = round(parsed["dpdx_pa_m"], 4)
+            out["pressure_drop_pa"] = round(parsed["dpdx_pa_m"] * L, 4)
+            out["n_cells"] = parsed["n_cells"]
+            out["colebrook_ratio"] = round(parsed["dpdx_pa_m"] / dpdx_cole, 4)
+        return out
+
+    return jobs.submit("cfd_internal_flow", _work, key=key,
+                       meta={"mode": "pipe_rans", "diameter_mm": diameter_mm,
+                             "length_mm": length_mm})
+
+
 def _cfd_pipe_submit(p):
     """Build the axisymmetric straight-pipe case, run blockMesh+simpleFoam (laminar)
     and parse the pressure drop — the kickoff's Hagen–Poiseuille gate, now that
-    OpenFOAM is provisioned. Degrades cleanly when OpenFOAM is absent. Returns the
-    solved Δp next to the analytic `cfd_pipe_flow` reference so the two are directly
-    comparable; the solve runs OFF the MCP channel and never touches FreeCAD."""
+    OpenFOAM is provisioned. Degrades cleanly when OpenFOAM is absent. With
+    turbulence='kOmegaSST' the RANS variant runs instead (banded Colebrook gate —
+    SIMULATION_NEXT B3). Returns the solved Δp next to the analytic `cfd_pipe_flow`
+    reference so the two are directly comparable; the solve runs OFF the MCP
+    channel and never touches FreeCAD."""
     import math
 
+    if _is_rans(p):
+        return _cfd_pipe_rans_submit(p)
     info = _require_solver("openfoam")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
@@ -8556,13 +8642,101 @@ def _h_cfd_internal_flow_submit(p):
         "flow_rate_lpm) to build the Hagen–Poiseuille validation case")
 
 
+def _cfd_flat_plate_rans_submit(p):
+    """kOmegaSST upgrade of the flat-plate validation case (SIMULATION_NEXT B3):
+    same 3-block mesh with wall-function grading, gated BANDED against the
+    mixed-transition Cf = 0.074·Re^(-1/5) − A/Re (the 1/7-power family is itself
+    ±10-15%). The headline drag is the trailing-edge momentum-thickness integral
+    (valid for any turbulence treatment); the (nu+nut)-corrected wall-shear sum is
+    the cross-check."""
+    info = _require_solver("openfoam")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    from driftpin import jobs, solvers
+    from driftpin.analysis import cfd as _cfd
+
+    velocity = p.get("velocity_m_s")
+    if velocity is None:
+        raise ValueError("provide velocity_m_s to build the flat-plate RANS case")
+    velocity = float(velocity)
+    plate_length_mm = float(p.get("plate_length_mm", 1000.0))
+    L = plate_length_mm / 1000.0
+    mu, rho = _cfd._fluid_props(p.get("fluid", "air-20c"),
+                                p.get("mu_pa_s"), p.get("rho_kg_m3"))
+    nu = mu / rho
+    thickness_m = 0.002
+    nx_plate = int(p.get("nx_plate", 120))
+    n_y = int(p.get("n_y", 50))
+    grading_y = float(p.get("grading_y", 25.0))
+    height_m = float(p.get("height_m", 0.5))
+    end_time = int(p.get("end_time", 2000))
+
+    oracle = _cfd.flat_plate_drag_turbulent(
+        length_mm=plate_length_mm, velocity_m_s=velocity,
+        width_mm=thickness_m * 1000.0, mu_pa_s=mu, rho_kg_m3=rho)
+    env_bashrc = solvers.openfoam_bashrc()
+    key = jobs.content_key("cfd_external_flow", {"plate_rans": {
+        "L": L, "U": velocity, "nu": nu, "rho": rho, "nxp": nx_plate, "ny": n_y,
+        "gy": grading_y, "H": height_m, "et": end_time}})
+
+    def _work():
+        import tempfile
+        from driftpin.analysis import openfoam as _of
+        cdir = tempfile.mkdtemp(prefix="foam_plate_rans_")
+        built = _of.write_flat_plate_rans_case(
+            cdir, velocity_m_s=velocity, nu_m2_s=nu, plate_length_m=L,
+            thickness_m=thickness_m, nx_plate=nx_plate, n_y=n_y,
+            grading_y=grading_y, height_m=height_m, end_time=end_time)
+        rc, tail = _run_foam(cdir, [["blockMesh"], ["simpleFoam"]], env_bashrc)
+        out = {
+            "ok": rc == 0,
+            "returncode": rc,
+            "solver": "openfoam",
+            "kind": "external",
+            "body": "flat_plate",
+            "turbulence": "kOmegaSST",
+            "case_dir": cdir,
+            "reynolds_l": round(built["reynolds_l"], 3),
+            "y_plus_estimate": built["y_plus_estimate"],
+            "cf_mixed_ref": oracle["cf_mixed"],
+            "cf_turbulent_ref": oracle["cf_turbulent"],
+            "cf_laminar_blasius": oracle["cf_laminar_blasius"],
+            "band_pct": 15.0,
+            "stdout_tail": tail,
+        }
+        parsed = _of.parse_flat_plate_rans_drag(
+            cdir, rho_kg_m3=rho, nu_m2_s=nu, velocity_m_s=velocity,
+            plate_length_m=L, thickness_m=thickness_m, nx_plate=nx_plate,
+            nx_upstream=built["nx_upstream"], n_y=n_y, grading_y=grading_y,
+            height_m=height_m)
+        if parsed:
+            out["drag_momentum_n"] = parsed["drag_momentum_n"]
+            out["cf_solved"] = round(parsed["cf_momentum"], 6)
+            out["cf_wall_corrected"] = (round(parsed["cf_wall_corrected"], 6)
+                                        if parsed["cf_wall_corrected"] else None)
+            out["n_cells"] = parsed["n_cells"]
+            if oracle["cf_mixed"] > 0:
+                out["cf_mixed_ratio"] = round(
+                    parsed["cf_momentum"] / oracle["cf_mixed"], 4)
+        return out
+
+    return jobs.submit("cfd_external_flow", _work, key=key,
+                       meta={"mode": "flat_plate_rans",
+                             "plate_length_mm": plate_length_mm,
+                             "velocity_m_s": velocity})
+
+
 def _cfd_flat_plate_submit(p):
     """Build the 2-D laminar flat-plate case, run blockMesh+simpleFoam and integrate
     the wall-shear drag — the kickoff's external-flow Blasius gate. Degrades cleanly
-    when OpenFOAM is absent. Returns the solved drag/Cd next to the analytic
-    `flat_plate_drag` (Blasius Cf=1.328/√Re_L) reference; the solve runs OFF the MCP
-    channel and never touches FreeCAD. Drag is read straight from the converged U field
-    (OpenFOAM force function objects abort with a 'sha1' IOstream error in this build)."""
+    when OpenFOAM is absent. With turbulence='kOmegaSST' the RANS variant runs
+    instead (banded mixed-transition Cf gate — SIMULATION_NEXT B3). Returns the
+    solved drag/Cd next to the analytic `flat_plate_drag` (Blasius Cf=1.328/√Re_L)
+    reference; the solve runs OFF the MCP channel and never touches FreeCAD. Drag is
+    read straight from the converged U field (OpenFOAM force function objects abort
+    with a 'sha1' IOstream error in this build)."""
+    if _is_rans(p):
+        return _cfd_flat_plate_rans_submit(p)
     info = _require_solver("openfoam")
     if not info["ok"]:                               # graceful degradation (verified)
         return info

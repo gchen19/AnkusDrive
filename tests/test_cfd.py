@@ -117,6 +117,66 @@ def test_external_input_validation():
             raise AssertionError("expected ValueError")
 
 
+
+# --- B3 turbulent oracles (Colebrook + 1/7-power plate) -------------------------
+
+def test_colebrook_tracks_blasius_when_smooth():
+    # smooth pipe: Colebrook and Blasius agree within ~2 % below Re ~ 1e5
+    import math
+    for re_d in (5e3, 2e4, 1e5):
+        cole = cfd.colebrook_friction_factor(re_d)
+        blas = 0.316 * re_d ** -0.25
+        assert abs(cole / blas - 1) < 0.03, (re_d, cole, blas)
+    # fully-rough limit: f -> von Karman (2*log10(3.7/(eps/D)))^-2, Re-independent
+    vk = (2 * math.log10(3.7 / 0.002)) ** -2
+    assert abs(cfd.colebrook_friction_factor(1e9, 0.002) / vk - 1) < 1e-3
+    hi = cfd.colebrook_friction_factor(1e8, 0.002)
+    lo = cfd.colebrook_friction_factor(1e9, 0.002)
+    assert abs(hi / lo - 1) < 0.01      # Re no longer matters when fully rough
+    # laminar Re refused (it is a turbulent correlation)
+    try:
+        cfd.colebrook_friction_factor(1000)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError below Re=4000")
+
+
+def test_roughness_raises_pressure_drop_monotonically():
+    smooth = cfd.pipe_pressure_drop(50, 1000, velocity_m_s=2.0)
+    rough = cfd.pipe_pressure_drop(50, 1000, velocity_m_s=2.0, roughness_mm=0.1)
+    rougher = cfd.pipe_pressure_drop(50, 1000, velocity_m_s=2.0, roughness_mm=0.5)
+    assert smooth["friction_factor"] < rough["friction_factor"] < rougher["friction_factor"]
+    # smooth default keeps the historical Blasius factor; Colebrook rides along
+    assert abs(smooth["friction_factor"] - 0.316 * smooth["reynolds"] ** -0.25) < 1e-5
+    assert smooth["colebrook_friction_factor"] is not None
+    # fidelity contract: laminar exact, turbulent banded correlation
+    lam = cfd.pipe_pressure_drop(50, 1000, velocity_m_s=0.01)
+    assert lam["fidelity"] == "exact" and lam["band_pct"] is None, lam
+    assert smooth["fidelity"] == "correlation" and smooth["band_pct"] == 10.0
+    assert smooth["escalate_to"] == "cfd_internal_flow_submit"
+
+
+def test_turbulent_plate_correlations():
+    import math
+    # air, 30 m/s over 1 m: Re_L = 2e6 — turbulent regime
+    t = cfd.flat_plate_drag_turbulent(1000, 30, fluid="air-20c")
+    assert t["valid_range_ok"] is True, t["warnings"]
+    # exact identity of the form: cf_turbulent * Re^(1/5) == 0.074
+    assert abs(t["cf_turbulent"] * t["reynolds_l"] ** 0.2 - 0.074) < 1e-6
+    # the mixed (laminar leading-run) form is below fully-turbulent, above laminar
+    assert t["cf_laminar_blasius"] < t["cf_mixed"] < t["cf_turbulent"], t
+    # mixed -> fully-turbulent as Re grows (the laminar run stops mattering)
+    big = cfd.flat_plate_drag_turbulent(10000, 150, fluid="air-20c")  # Re = 1e8
+    assert big["cf_mixed"] / big["cf_turbulent"] > 0.97
+    assert big["valid_range_ok"] is False        # above the 1e7 envelope — flagged
+    # below transition the tool says so rather than answering quietly
+    lam = cfd.flat_plate_drag_turbulent(100, 1, fluid="air-20c")
+    assert lam["valid_range_ok"] is False and lam["warnings"], lam
+    assert t["fidelity"] == "correlation" and t["band_pct"] == 15.0
+    assert t["escalate_to"] == "cfd_external_flow_submit"
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

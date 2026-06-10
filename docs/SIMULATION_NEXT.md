@@ -74,7 +74,7 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
 |---|---|---|---|
 | ✅ **Acoustic FEM** (`acoustic_fem_submit`) | Elmer `HelmholtzSolve` (**installed**) | rigid rectangular cavity modes — exact eigenfrequencies; duct plane-wave standing field | M, low — the M2/M6 deck pattern verbatim |
 | ✅ **Harmonic forced response** (`harmonic_response` + `harmonic_response_submit`) | Elmer `StressSolve` Harmonic Analysis (**installed**; CCX `*STEADY STATE DYNAMICS` remains an option) | SDOF FRF: peak = Q·x_static, half-power bandwidth f_n/Q (exact); cross-links `beam_modal` + `random_vibration` | M, low |
-| **Turbulent RANS** (internal + external) | OpenFOAM kOmegaSST (**installed**) | turbulent flat plate Cf=0.0592·Re^−1/5, Colebrook/Moody pipe Δp (correlations, ±10–15 % band) | M, medium — y+/wall-function discipline; gates must be banded, not exact |
+| ✅ **Turbulent RANS** (internal + external — `turbulence='kOmegaSST'` on the two `cfd_*_submit` tools) | OpenFOAM kOmegaSST (**installed**) | turbulent flat plate Cf=0.0592·Re^−1/5, Colebrook/Moody pipe Δp (correlations, ±10–15 % band) | M, medium — y+/wall-function discipline; gates must be banded, not exact |
 | **Flow-coupled CHT** | Elmer `FlowSolve`+Heat (**installed**) or `chtMultiRegionFoam` | Graetz–Nusselt developed Nu=3.66 / 7.54 (exact eigenvalue results) — upgrades M6's plug flow to a *true Nusselt validation*, closing the loop with `h_estimate` | M/L, medium |
 | **Coupled induction heating** | Elmer `MagnetoDynamics` + HeatSolver (**installed**) | total Joule power = R_s·|H|²/2 over the face (from the shipped `em_skin_depth`) + adiabatic ΔT energy balance | M, medium — completes `em_induction_submit` into a thermal answer |
 | **Nonlinear structural** (plasticity, large deflection) | CCX 2.21 (**installed**) | plastic-hinge collapse load M_p=σ_y·Z (exact); large-deflection cantilever vs the elliptic-integral solution | M/L, medium |
@@ -92,8 +92,13 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
    cavity-mode sweep localized <0.1 % via the in-phase sign flip) +
    `harmonic_response` / `harmonic_response_submit` (SDOF FRF oracle; StressSolve
    harmonic cantilever gated on f₁ / static compliance / Q-over-2).*
-4. **B3 RANS** (extends the CFD validity envelope past Re≈2300 — the most common
-   real-world escape from the current laminar gates).
+4. ✅ **B3 RANS** (extends the CFD validity envelope past Re≈2300 — the most common
+   real-world escape from the current laminar gates). *Shipped:
+   `turbulence='kOmegaSST'` on `cfd_internal_flow_submit` (developed dp/dx vs
+   Colebrook, banded ±10 %, live 0.93) and `cfd_external_flow_submit`
+   (momentum-thickness Cf vs the mixed-transition 1/7-power form, banded ±15 %,
+   live 1.02); `cfd_pipe_flow` gains `roughness_mm` + Colebrook + fidelity
+   labels, and `flat_plate_drag_turbulent` is the new banded screen.*
 5. **B4 flow-CHT and B5 induction heating** as the coupled-physics capstones.
 
 The verification discipline is unchanged: exact anchors where physics is exact,
