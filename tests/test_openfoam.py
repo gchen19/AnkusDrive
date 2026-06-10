@@ -237,6 +237,125 @@ def test_flat_plate_blasius_u_scaling():
     assert abs(ratio - 2.0 ** 1.5) / (2.0 ** 1.5) < 0.1, f"U^1.5 scaling: got {ratio:.3f}"
 
 
+
+# --- B3: kOmegaSST RANS (case gen always; live banded gates when present) -------
+
+def test_rans_pipe_case_files_carry_turbulence_model():
+    files = openfoam.pipe_rans_case_files(
+        diameter_m=0.05, length_m=2.4, velocity_m_s=2.0, nu_m2_s=1e-6)
+    tp = files["constant/turbulenceProperties"]
+    assert "RAS" in tp and "kOmegaSST" in tp, tp
+    for f in ("0/k", "0/omega", "0/nut"):
+        assert f in files, sorted(files)
+    assert "kqRWallFunction" in files["0/k"]
+    assert "omegaWallFunction" in files["0/omega"]
+    assert "nutkWallFunction" in files["0/nut"]
+    assert "wallDist" in files["system/fvSchemes"]
+    assert "div(phi,k)" in files["system/fvSchemes"]
+    assert "omega { solver" in files["system/fvSolution"]
+
+
+def test_rans_pipe_writer_polices_regime_and_length():
+    # laminar Re refused; short pipe (no developed region to fit) refused
+    for bad in (
+        lambda: openfoam.write_pipe_rans_case(
+            tempfile.mkdtemp(), diameter_m=0.05, length_m=2.4,
+            velocity_m_s=0.01, nu_m2_s=1e-6),
+        lambda: openfoam.write_pipe_rans_case(
+            tempfile.mkdtemp(), diameter_m=0.05, length_m=0.5,
+            velocity_m_s=2.0, nu_m2_s=1e-6),
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+    d = tempfile.mkdtemp(prefix="ranspipe_gen_")
+    built = openfoam.write_pipe_rans_case(
+        d, diameter_m=0.05, length_m=2.4, velocity_m_s=2.0, nu_m2_s=1e-6)
+    # wall-function discipline: first-cell y+ estimate inside the 30-300 window
+    assert 20 < built["y_plus_estimate"] < 300, built["y_plus_estimate"]
+    assert (Path(d) / "0" / "nut").exists()
+
+
+def test_rans_plate_case_files_and_writer():
+    files = openfoam.flat_plate_rans_case_files(velocity_m_s=30, nu_m2_s=1.5e-5)
+    assert "kOmegaSST" in files["constant/turbulenceProperties"]
+    assert "symmetryPlane" in files["0/k"]          # slip/top carried through
+    d = tempfile.mkdtemp(prefix="ransplate_gen_")
+    built = openfoam.write_flat_plate_rans_case(d, velocity_m_s=30, nu_m2_s=1.5e-5)
+    assert built["reynolds_l"] == 2e6, built
+    assert 20 < built["y_plus_estimate"] < 300, built["y_plus_estimate"]
+    # sub-transition plate refused (that is the laminar case's job)
+    try:
+        openfoam.write_flat_plate_rans_case(
+            tempfile.mkdtemp(), velocity_m_s=1.0, nu_m2_s=1.5e-5)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError below transition")
+    # parsers are None-safe on an unsolved case
+    assert openfoam.parse_pipe_rans_dpdx(
+        d, n_axial=10, n_radial=10, length_m=1.0, rho_kg_m3=1000) is None
+
+
+def test_rans_pipe_matches_colebrook_banded():
+    if not solvers.is_available("openfoam"):
+        print("    SKIP — OpenFOAM not installed")
+        return
+    D, L, U, nu, rho = 0.05, 2.4, 2.0, 1e-6, 998.0
+    d = tempfile.mkdtemp(prefix="ranspipe_live_")
+    built = openfoam.write_pipe_rans_case(
+        d, diameter_m=D, length_m=L, velocity_m_s=U, nu_m2_s=nu)
+    rc = _run_case(d)
+    assert rc == 0, "simpleFoam failed"
+    parsed = openfoam.parse_pipe_rans_dpdx(
+        d, n_axial=built["n_axial"], n_radial=built["n_radial"],
+        length_m=L, rho_kg_m3=rho)
+    assert parsed is not None, "no converged p field"
+    ref = built["friction_factor_colebrook"] / D * 0.5 * rho * U * U
+    ratio = parsed["dpdx_pa_m"] / ref
+    # BANDED gate: the Moody chart itself is ±10 %; wall-function kOmegaSST
+    # lands ~5-8 % low on a smooth pipe (observed 0.93 on this mesh)
+    assert 0.85 <= ratio <= 1.15, (parsed["dpdx_pa_m"], ref, ratio)
+
+
+def test_rans_plate_matches_mixed_cf_banded():
+    if not solvers.is_available("openfoam"):
+        print("    SKIP — OpenFOAM not installed")
+        return
+    U, nu, rho = 30.0, 1.5e-5, 1.205
+    d = tempfile.mkdtemp(prefix="ransplate_live_")
+    built = openfoam.write_flat_plate_rans_case(d, velocity_m_s=U, nu_m2_s=nu)
+    rc = _run_case(d)
+    assert rc == 0, "simpleFoam failed"
+    parsed = openfoam.parse_flat_plate_rans_drag(
+        d, rho_kg_m3=rho, nu_m2_s=nu, velocity_m_s=U,
+        plate_length_m=built["plate_length_m"], thickness_m=built["thickness_m"],
+        nx_plate=built["nx_plate"], nx_upstream=built["nx_upstream"],
+        n_y=built["n_y"], grading_y=built["grading_y"], height_m=built["height_m"])
+    assert parsed is not None, "no converged U field"
+    orc = cfd.flat_plate_drag_turbulent(
+        1000 * built["plate_length_m"], U, mu_pa_s=nu * rho, rho_kg_m3=rho)
+    ratio = parsed["cf_momentum"] / orc["cf_mixed"]
+    # BANDED gate vs the mixed-transition 1/7-power Cf (observed 1.02 here);
+    # the answer must also be unmistakably turbulent, not a laminar relapse
+    assert 0.85 <= ratio <= 1.15, (parsed["cf_momentum"], orc["cf_mixed"], ratio)
+    assert parsed["cf_momentum"] > 2.5 * orc["cf_laminar_blasius"], parsed
+    # the wall-function-corrected shear agrees with the momentum integral
+    if parsed["cf_wall_corrected"]:
+        assert 0.7 <= parsed["cf_wall_corrected"] / parsed["cf_momentum"] <= 1.4
+
+
+def _run_case(case_dir):
+    bashrc = solvers.openfoam_bashrc()
+    return subprocess.run(
+        ["bash", "-c",
+         f"source '{bashrc}' >/dev/null 2>&1; cd '{case_dir}' && blockMesh && simpleFoam"],
+        capture_output=True, text=True).returncode
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

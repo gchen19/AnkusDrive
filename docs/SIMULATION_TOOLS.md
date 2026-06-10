@@ -229,14 +229,16 @@ Each family lists: the agent question it answers · backend · new-dependency we
   oracle gates in `tests/test_vibration.py`, the CalculiX gate in `tests/test_worker.py`
   (`test_fem_modal_cantilever`).
 
-### 6. Fluids / CFD  ✅ shipped (P2 M5 internal; P3 M3 external)
+### 6. Fluids / CFD  ✅ shipped (P2 M5 internal; P3 M3 external; B3 kOmegaSST RANS)
 
 - **Answers:** "What's the pressure drop through this manifold? Drag on this housing?"
 - **Backend:** OpenFOAM (`blockMesh`+`simpleFoam`, laminar) / SU2; the exact analytic
   oracles are pure-Python in [`analysis/cfd.py`](../driftpin/analysis/cfd.py).
 - **Signatures (implemented):**
   ```
-  cfd_pipe_flow(diameter_mm, length_mm, flow_rate_lpm|velocity_m_s, fluid)  # Hagen–Poiseuille oracle
+  cfd_pipe_flow(diameter_mm, length_mm, flow_rate_lpm|velocity_m_s, fluid, roughness_mm)
+    # Hagen–Poiseuille oracle (exact laminar) + Blasius/Colebrook turbulent screen
+    # (fidelity='correlation', band_pct=10); flat_plate_drag_turbulent is the external twin
   cfd_internal_flow_submit(diameter_mm,length_mm,…|body+inlet_face+outlet_face|case_dir)  # async
     -> {ok, reynolds, pressure_drop_pa, hagen_poiseuille_pa, hp_ratio (≈1), …}
     # body mode (P3 M4 bridge): tessellate a real FreeCAD solid into per-face STL
@@ -258,6 +260,16 @@ Each family lists: the agent question it answers · backend · new-dependency we
   converges with Re). Acceptance: **Example F** + `external.png`; oracle gates in
   `tests/test_cfd.py`, the simpleFoam gate (Blasius + U^1.5 law) in
   `tests/test_openfoam.py`.
+- **B3 turbulent RANS (SIMULATION_NEXT):** `turbulence='kOmegaSST'` on both submit
+  tools upgrades the validation cases past Re≈2300 — wall-function k/ω/ν_t (first-cell
+  y+ targeted ~30–100, reported), upwind convection, and **banded** gates only: the
+  pipe fits the developed dp/dx over its second half against Colebrook
+  (`colebrook_ratio`, ±10 % — live 0.93 at Re=10⁵), the plate gates the
+  trailing-edge momentum-thickness Cf against the mixed-transition 1/7-power form
+  (`cf_mixed_ratio`, ±15 % — live 1.02 at Re_L=2·10⁶, with the (ν+ν_t)-corrected
+  wall shear as cross-check). Builders/parsers in `analysis/openfoam.py`
+  (`*_rans_*`), oracles in `analysis/cfd.py` (`colebrook_friction_factor`,
+  `flat_plate_drag_turbulent`), gates in `tests/test_openfoam.py`.
 - Long solves run async via [`jobs.py`](../driftpin/jobs.py) so a CFD run never blocks
   the MCP channel.
 

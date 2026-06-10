@@ -551,3 +551,356 @@ def parse_flat_plate_drag(
         "n_cells": len(vecs),
         "time": time,
     }
+
+
+# --- Tier B3: kOmegaSST RANS variants (SIMULATION_NEXT) -------------------------
+#
+# Turbulent upgrades of the two validation cases above, extending the CFD
+# validity envelope past Re~2300. Wall-function discipline: meshes target a
+# first-cell y+ of ~30-100 (reported as y_plus_estimate), k/omega/nut carry the
+# standard wall functions, and the GATES ARE BANDED, never exact — the
+# references themselves (Colebrook, the 1/7-power Cf family) are +-10-15 %
+# correlations. Inlet turbulence: k = 1.5*(I*U)^2, omega = k^0.5/(Cmu^0.25*l).
+
+_CMU = 0.09
+
+
+def _rans_scalar_field(obj: str, dims: str, internal: float, bcs: dict) -> str:
+    s = (f"FoamFile {{ version 2.0; format ascii; class volScalarField; "
+         f"object {obj}; }}\n"
+         f"dimensions {dims};\ninternalField uniform {internal:.10g};\n"
+         "boundaryField\n{\n")
+    for patch, body in bcs.items():
+        s += f"    {patch} {{ {body} }}\n"
+    return s + "}\n"
+
+
+def _rans_turbulence_properties() -> str:
+    return ("FoamFile { version 2.0; format ascii; class dictionary; "
+            "location \"constant\"; object turbulenceProperties; }\n"
+            "simulationType  RAS;\n"
+            "RAS\n{\n    RASModel        kOmegaSST;\n"
+            "    turbulence      on;\n    printCoeffs     off;\n}\n")
+
+
+def _rans_inlet_k_omega(velocity_m_s: float, length_scale_m: float,
+                        intensity: float) -> tuple:
+    k = 1.5 * (intensity * velocity_m_s) ** 2
+    omega = math.sqrt(k) / (_CMU ** 0.25 * length_scale_m)
+    return k, omega
+
+
+def _rans_overlay(files: dict, *, k_in: float, omega_in: float,
+                  k_bcs: dict, omega_bcs: dict, nut_bcs: dict) -> dict:
+    """Turn a laminar simpleFoam case-file dict into the kOmegaSST one: RAS
+    turbulence properties, 0/k + 0/omega + 0/nut, upwind k/omega divergence +
+    wallDist in fvSchemes, k/omega solvers + 0.7 relaxation in fvSolution."""
+    files = dict(files)
+    files["constant/turbulenceProperties"] = _rans_turbulence_properties()
+    files["0/k"] = _rans_scalar_field("k", "[0 2 -2 0 0 0 0]", k_in, k_bcs)
+    files["0/omega"] = _rans_scalar_field("omega", "[0 0 -1 0 0 0 0]",
+                                          omega_in, omega_bcs)
+    files["0/nut"] = _rans_scalar_field("nut", "[0 2 -1 0 0 0 0]", 0.0, nut_bcs)
+    s = files["system/fvSchemes"]
+    s = s.replace("divSchemes\n{",
+                  "divSchemes\n{\n"
+                  "    div(phi,k)      bounded Gauss upwind;\n"
+                  "    div(phi,omega)  bounded Gauss upwind;")
+    files["system/fvSchemes"] = s + "\nwallDist { method meshWave; }\n"
+    s = files["system/fvSolution"]
+    s = s.replace(
+        "U { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }",
+        "U { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }\n"
+        "    k { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }\n"
+        "    omega { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }")
+    s = re.sub(r"residualControl \{[^}]*\}",
+               "residualControl { p 1e-6; U 1e-6; k 1e-6; omega 1e-6; }", s)
+    s = re.sub(r"relaxationFactors.*",
+               "relaxationFactors { equations { U 0.7; k 0.7; omega 0.7; } "
+               "fields { p 0.7; } }", s, flags=re.S)
+    files["system/fvSolution"] = s
+    return files
+
+
+def pipe_rans_case_files(
+    *,
+    diameter_m: float,
+    length_m: float,
+    velocity_m_s: float,
+    nu_m2_s: float,
+    intensity: float = 0.05,
+    half_angle_deg: float = 2.5,
+    n_axial: int = 100,
+    n_radial: int = 24,
+    end_time: int = 2000,
+) -> dict:
+    """kOmegaSST axisymmetric pipe (the turbulent upgrade of pipe_case_files):
+    same wedge mesh, RAS model + wall-function k/omega/nut, upwind convection.
+    Keep the pipe long (>= 40 D) so the developed-gradient fit has room."""
+    files = pipe_case_files(
+        diameter_m=diameter_m, length_m=length_m, velocity_m_s=velocity_m_s,
+        nu_m2_s=nu_m2_s, half_angle_deg=half_angle_deg, n_axial=n_axial,
+        n_radial=n_radial, end_time=end_time)
+    # sharper convection for the mean flow than the laminar central default
+    files["system/fvSchemes"] = files["system/fvSchemes"].replace(
+        "div(phi,U) bounded Gauss linear;",
+        "div(phi,U) bounded Gauss linearUpwind grad(U);")
+    k_in, omega_in = _rans_inlet_k_omega(velocity_m_s, 0.07 * diameter_m, intensity)
+    wedges = {"wedge1": "type wedge;", "wedge2": "type wedge;"}
+    return _rans_overlay(
+        files, k_in=k_in, omega_in=omega_in,
+        k_bcs={"inlet": f"type fixedValue; value uniform {k_in:.10g};",
+               "outlet": "type zeroGradient;",
+               "wall": f"type kqRWallFunction; value uniform {k_in:.10g};",
+               **wedges},
+        omega_bcs={"inlet": f"type fixedValue; value uniform {omega_in:.10g};",
+                   "outlet": "type zeroGradient;",
+                   "wall": f"type omegaWallFunction; value uniform {omega_in:.10g};",
+                   **wedges},
+        nut_bcs={"inlet": "type calculated; value uniform 0;",
+                 "outlet": "type calculated; value uniform 0;",
+                 "wall": "type nutkWallFunction; value uniform 0;",
+                 **wedges})
+
+
+def write_pipe_rans_case(
+    case_dir: str,
+    *,
+    diameter_m: float,
+    length_m: float,
+    velocity_m_s: float,
+    nu_m2_s: float,
+    intensity: float = 0.05,
+    n_axial: int = 100,
+    n_radial: int = 24,
+    end_time: int = 2000,
+) -> dict:
+    """Write the runnable kOmegaSST pipe case. Returns {case_dir, reynolds,
+    n_axial, n_radial, end_time, y_plus_estimate, colebrook_dpdx_pa_m,
+    blasius_dpdx_pa_m} — the references use water-like rho via the caller; the
+    dp/dx fields here are per unit rho (kinematic·rho applied by the caller)."""
+    re_d = velocity_m_s * diameter_m / nu_m2_s
+    if re_d < 4000:
+        raise ValueError(
+            f"Re = {re_d:.0f} is not turbulent — use the laminar pipe case "
+            "(or raise the velocity)")
+    if length_m < 40 * diameter_m:
+        raise ValueError("keep length_m >= 40*diameter_m so the second-half "
+                         "gradient fit sits in developed flow")
+    files = pipe_rans_case_files(
+        diameter_m=diameter_m, length_m=length_m, velocity_m_s=velocity_m_s,
+        nu_m2_s=nu_m2_s, intensity=intensity, n_axial=n_axial,
+        n_radial=n_radial, end_time=end_time)
+    for rel, content in files.items():
+        path = os.path.join(case_dir, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+    # first-cell y+ from the Blasius shear estimate: tau = f/8 * rho U^2
+    from . import cfd as _cfd
+    f_est = _cfd.colebrook_friction_factor(re_d)
+    u_star = velocity_m_s * math.sqrt(f_est / 8.0)
+    y1 = (diameter_m / 2.0) / n_radial / 2.0
+    return {
+        "case_dir": case_dir,
+        "reynolds": re_d,
+        "n_axial": n_axial,
+        "n_radial": n_radial,
+        "end_time": end_time,
+        "y_plus_estimate": round(y1 * u_star / nu_m2_s, 1),
+        "friction_factor_colebrook": f_est,
+    }
+
+
+def parse_pipe_rans_dpdx(
+    case_dir: str,
+    *,
+    n_axial: int,
+    n_radial: int,
+    length_m: float,
+    rho_kg_m3: float,
+    time_dir: str | None = None,
+) -> dict | None:
+    """Developed pressure gradient from the converged p field: column-mean p per
+    axial station (cells are x-fastest in the single-block wedge), linear fit
+    over the SECOND HALF of the pipe (past the turbulent entrance length).
+    Returns {dpdx_pa_m, n_fit_points, n_cells, time} or None."""
+    td = time_dir or _latest_time_dir(case_dir)
+    if td is None or td == "0":
+        return None
+    vals = _read_internal_scalar_field(os.path.join(case_dir, td, "p"))
+    if not vals or len(vals) != n_axial * n_radial:
+        return None
+    col = [sum(vals[i + j * n_axial] for j in range(n_radial)) / n_radial
+           for i in range(n_axial)]
+    dx = length_m / n_axial
+    pts = [((i + 0.5) * dx, p) for i, p in enumerate(col)
+           if (i + 0.5) * dx >= length_m / 2.0]
+    n = len(pts)
+    sx = sum(x for x, _ in pts)
+    sy = sum(p for _, p in pts)
+    sxx = sum(x * x for x, _ in pts)
+    sxy = sum(x * p for x, p in pts)
+    slope = (n * sxy - sx * sy) / (n * sxx - sx * sx)
+    return {
+        "dpdx_pa_m": -slope * rho_kg_m3,   # OpenFOAM p is kinematic (m^2/s^2)
+        "n_fit_points": n,
+        "n_cells": len(vals),
+        "time": td,
+    }
+
+
+def flat_plate_rans_case_files(
+    *,
+    velocity_m_s: float,
+    nu_m2_s: float,
+    plate_length_m: float = 1.0,
+    upstream_m: float = 0.15,
+    wake_m: float = 0.3,
+    height_m: float = 0.5,
+    thickness_m: float = 0.002,
+    nx_plate: int = 120,
+    nx_upstream: int = 20,
+    nx_wake: int = 30,
+    n_y: int = 50,
+    grading_y: float = 25.0,
+    end_time: int = 2000,
+    intensity: float = 0.05,
+) -> dict:
+    """kOmegaSST flat plate (the turbulent upgrade of flat_plate_case_files):
+    same 3-block mesh with a mild wall grading sized for wall-function y+."""
+    files = flat_plate_case_files(
+        velocity_m_s=velocity_m_s, nu_m2_s=nu_m2_s,
+        plate_length_m=plate_length_m, upstream_m=upstream_m, wake_m=wake_m,
+        height_m=height_m, thickness_m=thickness_m, nx_plate=nx_plate,
+        nx_upstream=nx_upstream, nx_wake=nx_wake, n_y=n_y,
+        grading_y=grading_y, end_time=end_time)
+    k_in, omega_in = _rans_inlet_k_omega(velocity_m_s, 0.01, intensity)
+    sym = "type symmetryPlane;"
+    empty = "type empty;"
+    return _rans_overlay(
+        files, k_in=k_in, omega_in=omega_in,
+        k_bcs={"inlet": f"type fixedValue; value uniform {k_in:.10g};",
+               "outlet": "type zeroGradient;",
+               "plate": f"type kqRWallFunction; value uniform {k_in:.10g};",
+               "slip": sym, "top": sym, "frontAndBack": empty},
+        omega_bcs={"inlet": f"type fixedValue; value uniform {omega_in:.10g};",
+                   "outlet": "type zeroGradient;",
+                   "plate": f"type omegaWallFunction; value uniform {omega_in:.10g};",
+                   "slip": sym, "top": sym, "frontAndBack": empty},
+        nut_bcs={"inlet": "type calculated; value uniform 0;",
+                 "outlet": "type calculated; value uniform 0;",
+                 "plate": "type nutkWallFunction; value uniform 0;",
+                 "slip": sym, "top": sym, "frontAndBack": empty})
+
+
+def write_flat_plate_rans_case(case_dir: str, **kwargs) -> dict:
+    """Write the runnable kOmegaSST flat-plate case. Same knobs as
+    flat_plate_rans_case_files. Returns {case_dir, reynolds_l, ...mesh knobs...,
+    y_plus_estimate}."""
+    velocity_m_s = kwargs["velocity_m_s"]
+    nu_m2_s = kwargs["nu_m2_s"]
+    plate_length_m = kwargs.get("plate_length_m", 1.0)
+    n_y = kwargs.get("n_y", 50)
+    grading_y = kwargs.get("grading_y", 25.0)
+    height_m = kwargs.get("height_m", 0.5)
+    re_l = velocity_m_s * plate_length_m / nu_m2_s
+    if re_l < 5e5:
+        raise ValueError(
+            f"Re_L = {re_l:.3g} is below transition — use the laminar "
+            "flat-plate case")
+    files = flat_plate_rans_case_files(**kwargs)
+    for rel, content in files.items():
+        path = os.path.join(case_dir, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+    # first cell height from the geometric grading; y+ from mid-plate local Cf
+    k = grading_y ** (1.0 / (n_y - 1))
+    h1 = height_m * (k - 1.0) / (k ** n_y - 1.0)
+    cf_mid = 0.0592 * (re_l / 2.0) ** -0.2
+    u_star = velocity_m_s * math.sqrt(cf_mid / 2.0)
+    return {
+        "case_dir": case_dir,
+        "reynolds_l": re_l,
+        "velocity_m_s": velocity_m_s,
+        "nu_m2_s": nu_m2_s,
+        "plate_length_m": plate_length_m,
+        "thickness_m": kwargs.get("thickness_m", 0.002),
+        "nx_plate": kwargs.get("nx_plate", 120),
+        "nx_upstream": kwargs.get("nx_upstream", 20),
+        "n_y": n_y,
+        "grading_y": grading_y,
+        "height_m": height_m,
+        "end_time": kwargs.get("end_time", 2000),
+        "y_plus_estimate": round((h1 / 2.0) * u_star / nu_m2_s, 1),
+    }
+
+
+def parse_flat_plate_rans_drag(
+    case_dir: str,
+    *,
+    rho_kg_m3: float,
+    nu_m2_s: float,
+    velocity_m_s: float,
+    plate_length_m: float,
+    thickness_m: float,
+    nx_plate: int,
+    nx_upstream: int,
+    n_y: int,
+    grading_y: float,
+    height_m: float,
+    time_dir: str | None = None,
+) -> dict | None:
+    """Turbulent plate drag. The HEADLINE number is the trailing-edge
+    momentum-thickness drag (pure momentum conservation — valid for any
+    turbulence treatment); the laminar-style mu*u1/y1 wall sum is corrected with
+    the wall-function eddy viscosity, tau_w = rho*(nu + nut_wall)*u1/y1, and
+    reported as a cross-check. Returns {drag_momentum_n, cf_momentum,
+    drag_wall_corrected_n, cf_wall_corrected, reynolds_l, n_cells, time} or
+    None."""
+    base = parse_flat_plate_drag(
+        case_dir, rho_kg_m3=rho_kg_m3, nu_m2_s=nu_m2_s,
+        velocity_m_s=velocity_m_s, plate_length_m=plate_length_m,
+        thickness_m=thickness_m, nx_plate=nx_plate, nx_upstream=nx_upstream,
+        n_y=n_y, grading_y=grading_y, height_m=height_m, time_dir=time_dir)
+    if base is None:
+        return None
+    td = time_dir or _latest_time_dir(case_dir)
+    q = 0.5 * rho_kg_m3 * velocity_m_s ** 2
+    area = plate_length_m * thickness_m
+    out = {
+        "drag_momentum_n": base["drag_momentum_n"],
+        "cf_momentum": base["drag_momentum_n"] / (q * area),
+        "reynolds_l": base["reynolds_l"],
+        "n_cells": base["n_cells"],
+        "time": base["time"],
+        "drag_wall_corrected_n": None,
+        "cf_wall_corrected": None,
+    }
+    # wall-function correction: nut on the plate patch scales each station's
+    # mu*u1/y1 contribution by (nu + nut_i)/nu
+    try:
+        txt = open(os.path.join(case_dir, td, "nut")).read()
+        m = re.search(r"plate\s*\{(.*?)\n\s*\}", txt, re.S)
+        lst = re.search(r"List<scalar>\s*\n?\s*\d+\s*\(([^)]*)\)", m.group(1), re.S)
+        nut_wall = [float(v) for v in lst.group(1).split()]
+    except (OSError, AttributeError, ValueError):
+        return out
+    if len(nut_wall) != nx_plate:
+        return out
+    uvals = _read_internal_vector_field(os.path.join(case_dir, td, "U"))
+    if not uvals:
+        return out
+    k = grading_y ** (1.0 / (n_y - 1))
+    h1 = height_m * (k - 1.0) / (k ** n_y - 1.0)
+    y1 = h1 / 2.0
+    dx = plate_length_m / nx_plate
+    n0 = nx_upstream * n_y
+    drag = 0.0
+    for i in range(nx_plate):
+        u1 = uvals[n0 + i][0]
+        drag += rho_kg_m3 * (nu_m2_s + nut_wall[i]) * (u1 / y1) * dx * thickness_m
+    out["drag_wall_corrected_n"] = drag
+    out["cf_wall_corrected"] = drag / (q * area)
+    return out
