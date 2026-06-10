@@ -35,9 +35,9 @@ It must NOT merely restate a happy-path anchor already pinned in the basic test.
 | cost | unit cost monotone↓ → floor, amortization 1/qty, scrap linear, process-ratio invariant | ✅ shipped |
 | slicing | mass≡ρV, infill linear, layer≡ceil, time∝deposited/flow | ✅ shipped |
 | kinematics | stroke independent of L, Grashof change-point, Grübler n−3 sequence | ✅ shipped |
-| topology (more) | SIMP E(x) penalty, compliance monotone↓ in keep_fraction | ☐ Batch 5 |
-| optics (more) | energy balance to 1e-12, TIR sharp edge | ☐ Batch 5 |
-| thermal (more) | Heisler→lumped (Bi→0), lumped t=τ → 63.2% | ☐ Batch 5 |
+| topology (more) | SIMP penalty exponent wired into c₀, compliance monotone↓ in keep_fraction, OC volume exact | ✅ shipped |
+| optics (more) | energy balance to 1e-12, TIR sharp edge at θc | ✅ shipped |
+| thermal (more) | Heisler→lumped (Bi→0), lumped t=τ → 63.2% | ✅ shipped |
 
 ## Batches (each ≈ one PR appended to `tests/test_toys_advanced.py`)
 
@@ -53,7 +53,15 @@ NumPy on the fast lane (already wired into `tests/run_all.sh` under the venv).
   identities while the code is fresh.
 - **Batch 4 — design-for-X & throughput (dfx · cost · slicing · kinematics).** ✅
   shipped — monotonicity / limit envelopes.
-- **Batch 5 (optional round-out)** — deepen the four already-covered families.
+- **Batch 5 (optional round-out)** — ✅ shipped — deepen the already-covered families
+  (topology · optics · thermal conduction).
+
+## Status — all batches landed
+
+All 18 families now carry an advanced tier: **64 toys** in `tests/test_toys_advanced.py`,
+on the fast lane in `tests/run_all.sh`. Run `.venv/bin/python tests/test_toys_advanced.py`.
+The advanced toys are the standard second tier per family — see
+[`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md).
 
 Excluded as duplicative of the basic tests: CFD D⁴ scaling, Miles 7.0 g, slider
 stroke = 2R, beam mode ratios — their *sharper* siblings (invariants/independence)
