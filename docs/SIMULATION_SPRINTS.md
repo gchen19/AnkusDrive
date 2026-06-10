@@ -34,9 +34,9 @@ negative is caught.
 Pure-Python `analysis/` is FreeCAD-free and standalone-testable; that extension
 point is proven across every family above. The P3 M6 frontier (modal, conjugate
 heat transfer, low-frequency EM) shipped with
-[`SIMULATION_P3_KICKOFF.md`](SIMULATION_P3_KICKOFF.md); the only item still open
-from this plan is the Sprint 4 **slicer external-CLI upgrade** (PrusaSlicer/Orca
-behind an extra).
+[`SIMULATION_P3_KICKOFF.md`](SIMULATION_P3_KICKOFF.md), and the Sprint 4 slicer
+external-CLI upgrade shipped as `slice_gcode_submit` (PrusaSlicer, graceful
+degradation) — **every item in this plan is now built.**
 
 ---
 
@@ -121,19 +121,24 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
 
 ## P1 — one external CLI each, bounded runtime
 
-### Sprint 4 — Slicer estimate 🟡 first-order shipped
+### Sprint 4 — Slicer estimate ✅ shipped (analytic + external CLI)
 - **Tools:** `slice_estimate(volume_mm3, bbox_mm, material, infill_fraction,
-  layer_height_mm, …)` → mass, filament, deposited volume, layer count, print time.
-- **Status:** the **analytic first-order estimator** shipped in
-  `analysis/slicing.py` (6 toys, `tests/test_slicing.py`) — `filament_g == mass_g`
-  at 100% infill, `layer_count = ceil(height/layer_height)`, print time from nozzle
-  volumetric flow. The **external-CLI upgrade** (PrusaSlicer/OrcaSlicer on an
-  exported STL, behind an optional extra with graceful degradation — adding real
-  supports, travel/accel, per-feature speeds) is still pending.
+  layer_height_mm, …)` → mass, filament, deposited volume, layer count, print time;
+  `slice_gcode_submit(body|stl_path, layer_height_mm, infill_fraction, supports,
+  material)` → the real **PrusaSlicer CLI** on an exported STL, async via `jobs.py`.
+- **Status:** the analytic first-order estimator shipped in `analysis/slicing.py`;
+  the **external-CLI upgrade shipped** as the `prusaslicer` solver registration +
+  `slicer_cmd`/`parse_gcode_stats` (headless argv builder + G-code footer/layer
+  parser, pure-Python testable) and the `slice_gcode_submit` worker/MCP tool —
+  real perimeters, infill patterns, supports, travel/accel and the slicer's own
+  print-time model. CLI quirk handled: PrusaSlicer's default fill pattern refuses
+  100% density → full infill auto-switches to rectilinear.
 - **Acceptance (met):** `filament_g == mass_g` for a solid 100%-infill print;
   strictly less filament at 20% infill; finer layer height → more layers + longer
-  print. **CLI-upgrade negative (pending):** missing CLI returns
-  `{ok:false, reason:"slicer not installed"}`, not a stack trace.
+  print. **CLI gates (met, live):** a 20 mm cube at 100% slices to 8.06 cm³ vs the
+  exact 8.00 cm³ (ratio 1.008 — the skirt); 20% deposits < 70% of that; the layer
+  count matches the first-layer + layer-height arithmetic; and a missing CLI
+  returns `{ok:false, reason:"solver not installed", install}` — not a stack trace.
 
 ### Sprint 5 — Optics ✅ shipped (P3 M1)
 - **Tools:** `optics_raytrace(model, source_config, n_refractive, n_rays)` ·

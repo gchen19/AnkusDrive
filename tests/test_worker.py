@@ -3944,6 +3944,45 @@ def test_geometry_bridge_validation_errors_are_clean():
         assert w.call("ping") == "pong", "worker poisoned by the error path"
 
 
+def test_slice_gcode_cube_end_to_end_matches_analytic():
+    """The Sprint-4 CLI upgrade through the worker: a real FreeCAD cube -> STL
+    export (main thread) -> PrusaSlicer in the background -> parsed G-code next to
+    the analytic slice_estimate. At 100% infill the deposited_ratio must be ~1
+    (measured 1.008 — the skirt). SKIPs without a slicer."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from driftpin import solvers
+    if not solvers.is_available("prusaslicer"):
+        print("    SKIP — PrusaSlicer not installed")
+        return
+    with Worker() as w:
+        w.call("new_document", name="slice_e2e")
+        box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+        sub = w.call("slice_gcode_submit", body=box["handle"],
+                     layer_height_mm=0.2, infill_fraction=1.0, material="PLA")
+        assert sub.get("job_id"), sub
+        deadline = time.monotonic() + 120
+        status = None
+        while time.monotonic() < deadline:
+            status = w.call("job_status", job_id=sub["job_id"])
+            if status["status"] in ("done", "failed"):
+                break
+            time.sleep(0.5)
+        assert status and status["status"] == "done", status
+        res = w.call("job_result", job_id=sub["job_id"])["result"]
+        assert res["ok"], res
+        assert res["layer_count"] > 90, res["layer_count"]
+        assert res["print_time_s"] and res["filament_g"] > 0, res
+        # sliced volume vs the analytic estimate for the same body
+        assert 0.95 < res["deposited_ratio"] < 1.10, res["deposited_ratio"]
+        # validation: no body and no stl_path is a clean error
+        try:
+            w.call("slice_gcode_submit", infill_fraction=0.5)
+        except WorkerError as e:
+            assert "body" in e.remote_message, e.remote_message
+        else:
+            raise AssertionError("expected WorkerError without body/stl_path")
+
+
 def test_geometry_bridge_box_end_to_end_matches_heisler():
     """The full M4 Elmer path through the worker: a real FreeCAD box → GmshTools →
     UNV (face groups intact) → ElmerGrid → ElmerSolver, polled via the shared job

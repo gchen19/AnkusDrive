@@ -3466,16 +3466,55 @@ def slice_estimate(
     print_speed_mm_s: float = 50.0,
     nozzle_mm: float = 0.4,
 ) -> dict:
-    """First-order FDM slice estimate (analytic; a real PrusaSlicer/OrcaSlicer CLI
-    is the P1 upgrade). mass_g = volume·density (Materials DB); deposited =
-    volume·(wall_fraction + infill·(1−wall_fraction)) so at 100% infill filament_g
-    == mass_g; layer_count = ceil(bbox height/layer_height); print_time from nozzle
-    volumetric flow. Returns {mass_g, filament_g, deposited_volume_mm3, layer_count,
-    print_time_min, infill_fraction}."""
+    """First-order FDM slice estimate (analytic, NO slicer needed; see
+    slice_gcode_submit for the real PrusaSlicer CLI). mass_g = volume·density
+    (Materials DB); deposited = volume·(wall_fraction + infill·(1−wall_fraction))
+    so at 100% infill filament_g == mass_g; layer_count = ceil(bbox
+    height/layer_height); print_time from nozzle volumetric flow. Returns {mass_g,
+    filament_g, deposited_volume_mm3, layer_count, print_time_min,
+    infill_fraction}."""
     return _call("slice_estimate", volume_mm3=volume_mm3, bbox_mm=bbox_mm,
                  material=material, infill_fraction=infill_fraction,
                  layer_height_mm=layer_height_mm, wall_fraction=wall_fraction,
                  print_speed_mm_s=print_speed_mm_s, nozzle_mm=nozzle_mm)
+
+
+@mcp.tool()
+def slice_gcode_submit(
+    body: str | None = None,
+    stl_path: str | None = None,
+    layer_height_mm: float = 0.2,
+    infill_fraction: float = 0.2,
+    supports: bool = False,
+    material: str = "PLA",
+    density_g_cc: float | None = None,
+    extra_args: list | None = None,
+) -> dict:
+    """Slice a real part with the PrusaSlicer CLI, asynchronous — the external-CLI
+    upgrade of the analytic slice_estimate: real perimeters, infill patterns,
+    `supports`, travel/acceleration, and the slicer's own print-time model.
+    Requires a PrusaSlicer install ('apt install prusa-slicer' / the AppImage);
+    when absent this returns {ok:false, reason, install} rather than raising.
+
+    Pass a `body` handle (exported to STL in the modeller) or a prepared
+    `stl_path`. `infill_fraction` is 0..1 (full infill auto-switches the fill
+    pattern — PrusaSlicer's default refuses 100%); `material`/`density_g_cc` set
+    the filament density used to turn the sliced volume into grams. With a `body`
+    the result also carries the analytic estimate and the `deposited_ratio`
+    between them (a 20 mm cube at 100% lands ~1.008 — the skirt).
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, gcode_path, filament_mm, filament_cm3, filament_g, print_time_s,
+    print_time_text, layer_count, config (the slicer's echoed settings),
+    analytic?, deposited_ratio?}."""
+    params = {"layer_height_mm": layer_height_mm,
+              "infill_fraction": infill_fraction, "supports": supports,
+              "material": material}
+    for k, v in (("body", body), ("stl_path", stl_path),
+                 ("density_g_cc", density_g_cc), ("extra_args", extra_args)):
+        if v is not None:
+            params[k] = v
+    return _call("slice_gcode_submit", **params)
 
 
 @mcp.tool()

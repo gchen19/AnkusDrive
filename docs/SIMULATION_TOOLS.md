@@ -330,8 +330,11 @@ process. Several reuse existing DriftPin tools directly.
   from explicit face descriptors), `dfa_check` (Boothroyd-lite), `pack_check`
   (carton fit + dimensional weight) in `driftpin/analysis/dfx.py`; `cost_estimate`
   (exact `material_cost = volume·density·price` + a per-process machine-time model)
-  in `cost.py`; `slice_estimate` (first-order FDM estimate; a PrusaSlicer/OrcaSlicer
-  CLI on STL is the P1 upgrade) in `slicing.py`. 21 two-sided toys across
+  in `cost.py`; `slice_estimate` (first-order FDM estimate) +
+  `slice_gcode_submit` (the **shipped CLI upgrade**: the `prusaslicer` solver +
+  headless argv builder + G-code footer/layer parser in `slicing.py` — a real
+  PrusaSlicer slice of an exported body, async, degrading cleanly; live gate: a
+  20 mm cube at 100% infill slices to within 1% of its exact volume). 21 two-sided toys across
   `tests/test_dfx.py` / `test_cost.py` / `test_slicing.py`. v1 takes **explicit**
   geometry summaries (face draft angles, bbox, volume) like `tolerance.py` takes an
   explicit chain; reading those off a `Shape` (via `draft`/`thickness`/`query_faces`/
@@ -467,7 +470,7 @@ immediately useful:
 5. **Machine-element rating** — closed-form life/SF on the existing `add_*` component tools. *(shipped: bolt, bearing, spring, gear, belt, press-fit, seal)*
 
 **P1 — external CLI, self-contained.** One new tool dependency each, bounded runtime:
-5. **Slicer estimate** (PrusaSlicer/OrcaSlicer CLI on STL). *(first-order analytic `slice_estimate` shipped; CLI upgrade pending)*
+5. **Slicer estimate** (PrusaSlicer CLI on STL). *(shipped: analytic `slice_estimate` + the `slice_gcode_submit` CLI upgrade)*
 6. **Optics** (wrap `~/diffuser`).
 7. **Cost** rollup (depends on Materials DB + a process-time model).
 

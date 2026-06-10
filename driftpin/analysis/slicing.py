@@ -6,10 +6,20 @@ print. Feed it an explicit volume + bounding box (from ``mass_properties`` or a
 hand number) plus a filament material and it returns deposited mass, filament
 weight, layer count and a print-time estimate that drops into a DfM/cost gate.
 
-This is the closed-form first-order estimate; shelling out to a PrusaSlicer /
-OrcaSlicer / CuraEngine CLI on an exported STL — which adds supports, real
-travel/acceleration and per-feature speeds — is the P1 upgrade. This module is
-the FreeCAD-free standalone that needs no slicer installed.
+Two tiers live here:
+
+* the closed-form first-order estimate (:func:`slice_estimate`) — the FreeCAD-free
+  standalone that needs no slicer installed; and
+* the **external-CLI upgrade** (the Sprint 4 follow-on): :func:`slicer_cmd` builds
+  a headless PrusaSlicer invocation on an exported STL — real perimeters, infill
+  patterns, supports, travel/acceleration — and :func:`parse_gcode_stats` reads the
+  sliced G-code's footer (filament used, estimated print time, the echoed config)
+  plus the layer-change markers. The CLI runs behind the ``prusaslicer`` solver
+  registration with the standard graceful degradation; the parser is pure-Python
+  and testable on synthetic G-code text. CLI quirk handled here: PrusaSlicer's
+  default fill pattern REJECTS 100 % density ("not supposed to work at 100%"), so
+  full infill switches to ``rectilinear``. Validated live: a 20 mm cube at 100 %
+  infill slices to 8.06 cm³ vs the exact 8.00 cm³ (the excess is the skirt).
 
 Filament density is read from the Materials DB
 (``driftpin.analysis.materials``) by name, with an explicit ``density_g_cc``
@@ -130,4 +140,110 @@ def slice_estimate(
         "print_time_min": (round(print_time_min, 2)
                            if math.isfinite(print_time_min) else None),
         "infill_fraction": infill_fraction,
+    }
+
+
+# --- external-CLI upgrade (Sprint 4 follow-on): PrusaSlicer on a real STL ------
+
+def slicer_cmd(
+    stl_path: str,
+    gcode_path: str,
+    *,
+    layer_height_mm: float = 0.2,
+    infill_fraction: float = 0.2,
+    supports: bool = False,
+    extra_args: list | None = None,
+) -> list:
+    """The headless PrusaSlicer argv slicing ``stl_path`` into ``gcode_path``.
+
+    ``--export-gcode`` with ``--layer-height`` and ``--fill-density`` (percent);
+    ``supports`` adds ``--support-material``. PrusaSlicer's default fill pattern
+    refuses 100 % density, so ``infill_fraction >= 0.99`` switches the pattern to
+    ``rectilinear`` (which supports it). ``extra_args`` append verbatim (e.g.
+    ``--filament-diameter``). The binary name is NOT included — the worker prepends
+    the resolved ``prusaslicer`` solver path. Raises ValueError on bad inputs."""
+    if not stl_path or not gcode_path:
+        raise ValueError("stl_path and gcode_path are required")
+    if layer_height_mm <= 0:
+        raise ValueError("layer_height_mm must be > 0")
+    if not 0.0 < infill_fraction <= 1.0:
+        raise ValueError("infill_fraction must be in (0, 1]")
+    argv = ["--export-gcode", "--output", gcode_path,
+            "--layer-height", f"{layer_height_mm:g}",
+            "--fill-density", f"{round(infill_fraction * 100)}%"]
+    if infill_fraction >= 0.99:
+        argv += ["--fill-pattern", "rectilinear"]
+    if supports:
+        argv.append("--support-material")
+    argv += [str(a) for a in (extra_args or [])]
+    argv.append(stl_path)
+    return argv
+
+
+def parse_gcode_time(text: str) -> int:
+    """PrusaSlicer's footer duration ('19m 21s', '1h 2m 3s', '2d 1h …') in
+    seconds. Raises ValueError when no d/h/m/s token parses."""
+    import re
+    total, found = 0, False
+    for value, unit in re.findall(r"(\d+)\s*([dhms])", text):
+        total += int(value) * {"d": 86400, "h": 3600, "m": 60, "s": 1}[unit]
+        found = True
+    if not found:
+        raise ValueError(f"unparseable duration {text!r}")
+    return total
+
+
+def parse_gcode_stats(gcode_text: str, density_g_cc: float | None = None) -> dict:
+    """Statistics of a PrusaSlicer G-code file (pass the TEXT — read the file
+    first): the footer's filament length/volume, the estimated print time, the
+    layer count (``;LAYER_CHANGE``/``AFTER_LAYER_CHANGE`` markers), and the echoed
+    slicing config. PrusaSlicer reports 0 g unless a filament density was
+    configured, so ``filament_g`` is recomputed from the volume when
+    ``density_g_cc`` is given.
+
+    Returns {filament_mm, filament_cm3, filament_g, print_time_s, print_time_text,
+    layer_count, config: {layer_height_mm, first_layer_height_mm,
+    fill_density_pct, perimeters, nozzle_mm, filament_dia_mm}} (missing footer
+    entries are None). Raises ValueError when the text has no filament footer at
+    all (not a PrusaSlicer G-code)."""
+    import re
+
+    def footer(pattern, cast=float):
+        m = re.search(pattern, gcode_text, re.M)
+        return cast(m.group(1)) if m else None
+
+    filament_mm = footer(r"^; filament used \[mm\]\s*=\s*([\d.]+)")
+    filament_cm3 = footer(r"^; filament used \[cm3\]\s*=\s*([\d.]+)")
+    if filament_mm is None and filament_cm3 is None:
+        raise ValueError("no '; filament used' footer — not a PrusaSlicer G-code")
+
+    time_m = re.search(r"^; estimated printing time \(normal mode\)\s*=\s*(.+)$",
+                       gcode_text, re.M)
+    print_time_text = time_m.group(1).strip() if time_m else None
+    print_time_s = parse_gcode_time(print_time_text) if print_time_text else None
+
+    layer_count = gcode_text.count(";LAYER_CHANGE")
+    if not layer_count:
+        layer_count = gcode_text.count("AFTER_LAYER_CHANGE")
+
+    filament_g = footer(r"^; total filament used \[g\]\s*=\s*([\d.]+)")
+    if density_g_cc is not None and filament_cm3 is not None:
+        filament_g = round(filament_cm3 * density_g_cc, 3)
+
+    config = {
+        "layer_height_mm": footer(r"^; layer_height\s*=\s*([\d.]+)"),
+        "first_layer_height_mm": footer(r"^; first_layer_height\s*=\s*([\d.]+)"),
+        "fill_density_pct": footer(r"^; fill_density\s*=\s*([\d.]+)%"),
+        "perimeters": footer(r"^; perimeters\s*=\s*(\d+)", int),
+        "nozzle_mm": footer(r"^; nozzle_diameter\s*=\s*([\d.]+)"),
+        "filament_dia_mm": footer(r"^; filament_diameter\s*=\s*([\d.]+)"),
+    }
+    return {
+        "filament_mm": filament_mm,
+        "filament_cm3": filament_cm3,
+        "filament_g": filament_g,
+        "print_time_s": print_time_s,
+        "print_time_text": print_time_text,
+        "layer_count": layer_count,
+        "config": config,
     }

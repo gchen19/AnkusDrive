@@ -125,6 +125,26 @@ _SOLVERS: dict = {
         "install_hint": "pip install 'driftpin[optics]'  (pulls rayoptics), "
                         "or: pip install rayoptics optiland",
     },
+    # --- Sprint 4 follow-on: slicer CLI (apt/AppImage, not vendored) ----------
+    "prusaslicer": {
+        "kind": "binary",
+        "family": "slicing",
+        "extra": None,
+        # prusa-slicer is the apt/AppImage binary; the console build and the
+        # capitalised AppImage name cover the other common installs.
+        "binaries": ("prusa-slicer", "prusa-slicer-console", "PrusaSlicer"),
+        "dirs": {
+            "Linux":   ("/usr/bin", "/usr/local/bin",
+                        os.path.expanduser("~/Applications")),
+            "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin",
+                        "/Applications/PrusaSlicer.app/Contents/MacOS"),
+            "Windows": (r"C:\Program Files\Prusa3D\PrusaSlicer",),
+        },
+        "install_hint": "'apt install prusa-slicer' (Linux), the PrusaSlicer "
+                        "AppImage/installer from https://www.prusa3d.com/prusaslicer/ "
+                        "— then ensure prusa-slicer is on PATH or set "
+                        "DRIFTPIN_PRUSASLICER_PATH",
+    },
 }
 
 
