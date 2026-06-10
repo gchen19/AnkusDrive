@@ -66,3 +66,26 @@ The advanced toys are the standard second tier per family — see
 Excluded as duplicative of the basic tests: CFD D⁴ scaling, Miles 7.0 g, slider
 stroke = 2R, beam mode ratios — their *sharper* siblings (invariants/independence)
 are used instead.
+
+## Figures
+
+The same closed-form laws, plotted. [`examples/plot_advanced_toys.py`](../examples/plot_advanced_toys.py)
+sweeps each `analysis/` function across a parameter range and overlays the analytic
+reference (red dashed) on the sampled tool output (blue) — so the invariant / scaling /
+exact-limit each toy gates on is visible at a glance. One figure per batch; regenerate
+with `.venv/bin/python examples/plot_advanced_toys.py`.
+
+**Batch 1 — pure-math cores** (√N RSS-vs-worstcase · `f·Re≡64` · `Cd·Re≡24` · Ashby `σy/ρ`)
+![Advanced toys Batch 1 — tolerance, materials, cfd](../examples/results/toys_batch1.png)
+
+**Batch 2 — scaling laws** (ISO 281 `(C/P)ᵖ` · belt `e^(μθ)` · beam `1/L²` · `f_n∝n²` · Goodman · S-N)
+![Advanced toys Batch 2 — machine_elements, vibration, durability](../examples/results/toys_batch2.png)
+
+**Batch 3 — M6 newcomers** (composite-wall T-profile · skin depth `1/√f` · wire `1/r` · solenoid `μ₀nI`)
+![Advanced toys Batch 3 — cht, em](../examples/results/toys_batch3.png)
+
+**Batch 4 — design-for-X & throughput** (cost `1/qty`→floor · infill-linear · `layer=⌈z/h⌉` · stroke≡2R · Grübler `n−3` · DfA↓)
+![Advanced toys Batch 4 — dfx, cost, slicing, kinematics](../examples/results/toys_batch4.png)
+
+**Batch 5 — round-out** (SIMP penalty `E(x)` · compliance `1/keep_fraction` · TIR edge at θc · lumped 63.2 %@τ)
+![Advanced toys Batch 5 — topology, optics, thermal](../examples/results/toys_batch5.png)

@@ -48,6 +48,12 @@ degradation) — **every item in this plan is now built.** Candidate next famili
 (acoustics, convection correlations, harmonic response, turbulent RANS, …) are
 scoped in [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md).
 
+Beyond these happy-path toys, every `analysis/` family now carries a sharper
+**advanced tier** — 64 closed-form gates in
+[`tests/test_toys_advanced.py`](../tests/test_toys_advanced.py), with a per-batch
+[figure gallery](ADVANCED_TOYS_PLAN.md#figures); see
+[`ADVANCED_TOYS_PLAN.md`](ADVANCED_TOYS_PLAN.md) for the coverage map.
+
 ---
 
 ## Sprint anatomy (every sprint is this vertical slice)
