@@ -21,10 +21,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from driftpin.analysis import cfd               # noqa: E402
 from driftpin.analysis import durability as du  # noqa: E402
 from driftpin.analysis import materials as mat  # noqa: E402
 from driftpin.analysis import optics as op      # noqa: E402
 from driftpin.analysis import thermal as th     # noqa: E402
+from driftpin.analysis import tolerance as tol  # noqa: E402
 
 _N_PMMA = 1.49062
 
@@ -188,6 +190,142 @@ def test_thin_3d_slab_reproduces_the_2d_plane_stress_cantilever():
                                penal=1.0, max_iter=1)
     ratio = r3["compliance_initial"] / r2["compliance_initial"]
     assert 1.0 < ratio < 1.12, ratio
+
+
+# === Batch 1 — pure-math cores (tolerance · materials · cfd) ==================
+
+# --- tolerance: the √N statistics + fit reciprocity ---------------------------
+
+def test_rss_band_is_sqrt_n_smaller_than_worstcase():
+    # Scaling law: for N identical ±t links the worst-case spread is N·2t but the
+    # RSS 3σ spread is only √N·2t, so worstcase/RSS = √N exactly. This is THE reason
+    # to stack statistically — the basic test only checks one chain's numbers.
+    for n in (1, 4, 9, 16):
+        chain = [{"nominal": 10.0, "tol": 0.1}] * n
+        r = tol.stackup(chain, "rss")
+        wc = r["worstcase"]["spread"]
+        rss = r["rss"]["max_3s"] - r["rss"]["min_3s"]
+        assert abs(wc - n * 0.2) < 1e-9, (n, wc)            # worst-case is exact N·2t
+        assert abs(wc / rss - math.sqrt(n)) < 1e-9, (n, wc / rss)
+
+
+def test_montecarlo_band_converges_to_rss():
+    # Conservation/closure: the sampled σ must converge to the analytic RSS σ
+    # (same underlying normal links), and the MC mean to the nominal.
+    chain = [{"nominal": 25.0, "tol": 0.05},     # symmetric links: center == nominal,
+             {"nominal": 12.0, "tol": 0.04},     # so the MC mean lands on the nominal
+             {"nominal": 8.0, "tol": 0.03}]
+    r = tol.stackup(chain, "montecarlo", samples=40000)
+    assert abs(r["montecarlo"]["mean"] - r["nominal"]) < 5e-3, r["montecarlo"]["mean"]
+    assert abs(r["montecarlo"]["std"] / r["rss"]["sigma"] - 1.0) < 0.03, r
+
+
+def test_fit_check_hole_shaft_reciprocity():
+    # Reciprocity: clearance = hole − shaft, so swapping the two negates every
+    # clearance bound and turns a clearance fit into an interference fit.
+    hole = {"nominal": 20.0, "plus": 0.05, "minus": 0.0}
+    shaft = {"nominal": 20.0, "plus": 0.0, "minus": -0.03}
+    a = tol.fit_check(hole, shaft)
+    b = tol.fit_check(shaft, hole)                          # swapped
+    assert abs(b["min_clearance"] + a["max_clearance"]) < 1e-9, (a, b)
+    assert abs(b["max_clearance"] + a["min_clearance"]) < 1e-9, (a, b)
+    assert abs(b["nominal_clearance"] + a["nominal_clearance"]) < 1e-9, (a, b)
+    assert a["fit_class"] == "clearance" and b["fit_class"] == "interference"
+
+
+def test_subtractive_link_flips_its_contribution():
+    # Exact identity: a direction=-1 link subtracts — its nominal and bounds enter
+    # with the opposite sign, so adding A then A⁻ cancels to zero ± the doubled band.
+    a = {"nominal": 50.0, "plus": 0.1, "minus": -0.1}
+    minus_a = {"nominal": 50.0, "plus": 0.1, "minus": -0.1, "direction": -1}
+    solo = tol.stackup([a], "worstcase")
+    pair = tol.stackup([a, minus_a], "worstcase")
+    assert abs(solo["nominal"] - 50.0) < 1e-9
+    assert abs(pair["nominal"]) < 1e-9, pair["nominal"]      # 50 − 50 = 0
+    assert abs(pair["worstcase"]["spread"] - 2 * solo["worstcase"]["spread"]) < 1e-9
+
+
+# --- materials: canonical-unit round-trip + Ashby ranking ---------------------
+
+def test_numeric_accessor_is_a_unit_consistent_roundtrip():
+    # Exact identity: the canonical accessors are just the parsed quantity rescaled —
+    # youngs_gpa = MPa·1e-3, density_kg_m3 = (g/cc value)·1000.
+    card = mat.get("AL6061-T6")
+    e_mpa = mat.parse_quantity(card["YoungsModulus"])[0]
+    assert abs(mat.numeric(card, "youngs_gpa") - e_mpa * 1e-3) < 1e-9
+    assert abs(mat.numeric(card, "youngs_mpa") - e_mpa) < 1e-6
+    assert abs(mat.numeric(card, "density_kg_m3")
+               - mat.numeric(card, "density_g_cc") * 1000.0) < 1e-6
+
+
+def test_specific_strength_ranking_is_monotone_and_exact():
+    # Exact identity + monotonicity: the specific-strength score IS yield/density for
+    # every candidate, and select() returns them strictly best-first.
+    sel = mat.select(rank_by="specific_strength")
+    cands = sel["candidates"]
+    assert len(cands) >= 3, sel
+    for c in cands:
+        assert abs(c["score"] - c["yield_mpa"] / c["density_g_cc"]) < 1e-3, c
+    scores = [c["score"] for c in cands]
+    assert scores == sorted(scores, reverse=True), scores
+
+
+def test_select_min_filter_excludes_below_threshold():
+    # Behavioural envelope: a min_yield filter admits only cards at/above it (a card
+    # missing the property fails a min, conservatively).
+    thresh = 250.0
+    sel = mat.select(criteria={"min_yield_mpa": thresh}, rank_by="strength")
+    for c in sel["candidates"]:
+        assert c["yield_mpa"] >= thresh, c
+
+
+# --- cfd: the dimensionless invariants behind the dimensional anchors ----------
+
+def test_poiseuille_number_f_re_is_64():
+    # Exact invariant: the laminar Darcy friction factor obeys f·Re ≡ 64 for ANY
+    # fluid, diameter, or speed — the dimensionless core the D⁴ Δp law rides on.
+    # (Tested at moderate Re where the 3-decimal display rounding of Re is negligible;
+    # at creeping Re≈1 the rounding alone shifts the product ~0.05.)
+    for fluid, d, v in (("water-20c", 10, 0.05), ("air-20c", 20, 0.5),
+                        ("water-20c", 20, 0.08), ("air-20c", 10, 1.5)):
+        r = cfd.pipe_pressure_drop(diameter_mm=d, length_mm=1000, velocity_m_s=v,
+                                   fluid=fluid)
+        assert 50 < r["reynolds"] < 2300, (fluid, r["reynolds"])
+        assert abs(r["friction_factor"] * r["reynolds"] - 64.0) < 0.02, (fluid, r)
+
+
+def test_blasius_cf_sqrt_re_is_invariant():
+    # Exact invariant: the Blasius average skin-friction obeys Cf·√Re_L ≡ 1.328,
+    # independent of length, speed, or fluid (laminar).
+    for fluid, L, v in (("air-20c", 100, 5.0), ("water-20c", 50, 1.0),
+                        ("air-20c", 250, 2.5)):
+        r = cfd.flat_plate_drag(length_mm=L, velocity_m_s=v, fluid=fluid)
+        assert r["laminar"], (fluid, r["reynolds_l"])
+        assert abs(r["cf_avg"] * math.sqrt(r["reynolds_l"]) - 1.328) < 1e-3, (fluid, r)
+
+
+def test_stokes_cd_re_product_is_24():
+    # Exact invariant: creeping-flow drag obeys Cd·Re ≡ 24 regardless of size, speed,
+    # or fluid (Re ≪ 1).
+    for fluid, d, v in (("glycerin-20c", 2, 0.001), ("glycerin-20c", 0.5, 0.002),
+                        ("oil-sae30-20c", 1, 0.0005)):
+        r = cfd.stokes_sphere_drag(diameter_mm=d, velocity_m_s=v, fluid=fluid)
+        assert r["stokes_valid"], (fluid, r["reynolds"])
+        assert abs(r["cd"] * r["reynolds"] - 24.0) < 0.05, (fluid, r)
+
+
+def test_pipe_regime_thresholds_are_sharp():
+    # Behavioural envelope: the regime classification flips exactly at Re=2300 and
+    # Re=4000 (set the velocity to straddle each threshold for water).
+    mu, rho, d = 1.002e-3, 998.2, 0.01                      # water-20c, 10 mm
+    def regime_at(re):
+        v = re * mu / (rho * d)
+        return cfd.pipe_pressure_drop(diameter_mm=10, length_mm=1000,
+                                      velocity_m_s=v, fluid="water-20c")["regime"]
+    assert regime_at(2299.0) == "laminar"
+    assert regime_at(2301.0) == "transitional"
+    assert regime_at(3999.0) == "transitional"
+    assert regime_at(4001.0) == "turbulent"
 
 
 # --- runner -------------------------------------------------------------------
