@@ -23,11 +23,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin.analysis import cfd               # noqa: E402
 from driftpin.analysis import cht               # noqa: E402
+from driftpin.analysis import cost              # noqa: E402
+from driftpin.analysis import dfx               # noqa: E402
 from driftpin.analysis import durability as du  # noqa: E402
 from driftpin.analysis import em                # noqa: E402
+from driftpin.analysis import kinematics        # noqa: E402
 from driftpin.analysis import machine_elements as me  # noqa: E402
 from driftpin.analysis import materials as mat  # noqa: E402
 from driftpin.analysis import optics as op      # noqa: E402
+from driftpin.analysis import slicing as sl     # noqa: E402
 from driftpin.analysis import thermal as th     # noqa: E402
 from driftpin.analysis import tolerance as tol  # noqa: E402
 from driftpin.analysis import vibration as vib  # noqa: E402
@@ -628,6 +632,274 @@ def test_static_overload_fails_regardless_of_cycle_count():
     assert ov["governing_mode"] == "static_overload"
     assert ov["pass"] is False
     assert ov["life_cycles"] == 0
+
+
+# === Batch 4 — design-for-X & throughput (dfx · cost · slicing · kinematics) ==
+
+# --- dfx: the score arithmetic, the monotone assembly ladder, the fit/billable rules ---
+
+def test_dfm_score_is_exactly_one_minus_violation_fraction():
+    # Exact identity: score ≡ 1 − (#violations / max(#faces, 1)) where #violations is
+    # the SUM of the three flagged lists (draft + undercut + min-wall), each face
+    # counting once per kind it trips. Sharper than the basic 0-and-1 endpoints: this
+    # pins the fractional arithmetic and that all three violation kinds add into it.
+    # 3 faces, exactly 1 draft violation -> 1 − 1/3 = 0.667 (display-rounded to 3 dp).
+    r3 = dfx.dfm_check([{"name": "wall_a", "draft_deg": 0.0},
+                        {"name": "wall_b", "draft_deg": 5.0},
+                        {"name": "wall_c", "draft_deg": 5.0}], process="injection")
+    assert r3["draft_violations"] == ["wall_a"], r3
+    assert abs(r3["score"] - round(1.0 - 1.0 / 3.0, 3)) < 1e-9, r3["score"]
+    # one of each kind among 6 faces -> 3/6 -> score 0.5 (exact, no rounding).
+    rm = dfx.dfm_check([{"name": "f0", "draft_deg": 0.5},                 # draft viol
+                        {"name": "f1", "draft_deg": -2.0},                # undercut
+                        {"name": "f2", "draft_deg": 5.0, "wall_mm": 0.4}, # wall viol
+                        {"name": "f3", "draft_deg": 5.0},
+                        {"name": "f4", "draft_deg": 5.0},
+                        {"name": "f5", "draft_deg": 5.0}], process="injection")
+    nviol = (len(rm["draft_violations"]) + len(rm["undercut_faces"])
+             + len(rm["min_wall_violations"]))
+    assert nviol == 3, rm
+    assert abs(rm["score"] - 0.5) < 1e-9, rm["score"]
+    assert rm["pass"] is False
+    # the empty-face guard: max(#faces, 1) keeps the denominator at 1 -> score 1.0.
+    assert dfx.dfm_check([], process="injection")["score"] == 1.0
+
+
+def test_dfa_score_is_monotone_non_increasing_as_count_rises():
+    # Monotonicity: assembly_score can only fall as part_count or fastener_count grows.
+    # With the default symmetric_fraction=0 the handling band pins to 'medium'
+    # (penalty 0.8) for the whole ladder, so the score is exactly 0.8·efficiency and
+    # the strict decrease rides entirely on the falling efficiency = 1/(parts+fast).
+    ladder = [dfx.dfa_check(2, 0), dfx.dfa_check(3, 0), dfx.dfa_check(3, 1),
+              dfx.dfa_check(4, 1), dfx.dfa_check(4, 3), dfx.dfa_check(8, 5)]
+    bands = {c["handling_difficulty"] for c in ladder}
+    assert bands == {"medium"}, bands                       # handling held constant
+    scores = [c["assembly_score"] for c in ladder]
+    for lo, hi in zip(scores[1:], scores[:-1]):
+        assert lo < hi, scores                              # strictly down each rung
+    assert scores == sorted(scores, reverse=True), scores   # ...hence non-increasing
+    for c in ladder:                                        # score == efficiency·handling
+        assert abs(c["assembly_score"] - 0.8 * c["assembly_efficiency"]) < 1e-4, c
+
+
+def test_pack_sort_to_fit_reorientation_and_billable_is_the_max():
+    # Composition + exact identity: a part fits iff each SORTED dimension <= the carton's
+    # matching SORTED dimension (orientation-free), and billable weight is
+    # max(actual_mass, dim_weight) — what a carrier actually charges.
+    carton = [300, 100, 400]
+    # fits ONLY after reorientation: 350 > carton's 300 axis-for-axis, but the sorted
+    # triples [90,90,350] <= [100,300,400] clear, so the part rotates in.
+    reorient = [350, 90, 90]
+    assert not all(p <= c for p, c in zip(reorient, carton))      # naive axis check fails
+    assert all(p <= c for p, c in zip(sorted(reorient), sorted(carton)))
+    assert dfx.pack_check(reorient, carton, mass_g=100)["fits"] is True
+    # too big in EVERY orientation: its longest dim (450) beats the carton's (400).
+    toobig = dfx.pack_check([450, 90, 90], carton, mass_g=100)
+    assert toobig["fits"] is False and toobig["void_fraction"] is None
+    # billable = max(actual, dim). Carton vol 1.2e7 mm³ -> 12000 cm³ -> 12000/5000 =
+    # 2.4 kg DIM weight. A light part bills the DIM weight; a heavy one bills its mass.
+    light = dfx.pack_check(reorient, carton, mass_g=500)          # 0.5 kg < 2.4 kg DIM
+    assert abs(light["dim_weight_kg"] - 2.4) < 1e-9, light
+    assert abs(light["billable_weight_kg"] - 2.4) < 1e-9, light
+    heavy = dfx.pack_check(reorient, carton, mass_g=9000)         # 9.0 kg > 2.4 kg DIM
+    assert abs(heavy["actual_mass_kg"] - 9.0) < 1e-9, heavy
+    assert abs(heavy["billable_weight_kg"] - 9.0) < 1e-9, heavy
+    assert abs(heavy["billable_weight_kg"]
+               - max(heavy["actual_mass_kg"], heavy["dim_weight_kg"])) < 1e-9
+
+
+# --- cost: the amortization asymptote + the linear/ratio drivers ---------------
+
+def test_unit_cost_asymptotes_to_the_material_plus_process_floor():
+    # Asymptotic/scaling law: unit_cost = floor + (tooling + setup_usd)/quantity, so the
+    # fixed-cost share falls as 1/qty and unit_cost descends MONOTONICALLY to the
+    # material+process floor (no tooling/setup share). The sharper sibling of the basic
+    # "10000-off < 1-off" point check: an exact 1/qty law, not just an inequality.
+    quants = (1, 10, 100, 1000, 10000)
+    rs = [cost.cost_estimate(volume_mm3=1e6, material="AL6061-T6",
+                             tooling_usd=5000.0, quantity=q, setup_min=10.0)
+          for q in quants]
+    ucs = [r["unit_cost"] for r in rs]
+    assert all(ucs[i] > ucs[i + 1] for i in range(len(ucs) - 1)), ucs   # strictly ↓
+    # floor = material + machining ONLY; the residual above it is exactly fixed/qty
+    floor = rs[0]["material_cost"] + rs[0]["breakdown"]["machining_cost"]
+    fixed = 5000.0 + (10.0 / 60.0) * 60.0                  # tooling + setup_usd = 5010
+    for r, q in zip(rs, quants):
+        assert abs((r["unit_cost"] - floor) * q - fixed) < 1e-3, (q, r["unit_cost"])
+    # a very large lot amortizes the fixed cost to ~0: unit_cost lands ON the floor
+    huge = cost.cost_estimate(volume_mm3=1e6, material="AL6061-T6",
+                              tooling_usd=5000.0, quantity=10_000_000, setup_min=10.0)
+    assert huge["unit_cost"] > floor                       # approached strictly from above
+    assert abs(huge["unit_cost"] - floor) < 1e-3, huge["unit_cost"]
+
+
+def test_scrap_fraction_is_linear_in_material_cost_only():
+    # Exact identity: material_cost = mass·price·(1+scrap_fraction), so scrap enters
+    # linearly — scrap=0.1 → material cost ×1.1 — and it touches NOTHING else (process
+    # and tooling are untouched). The basic anchor only spot-checks scrap=0.20.
+    base = cost.cost_estimate(volume_mm3=1e6, material="AL6061-T6")
+    s10 = cost.cost_estimate(volume_mm3=1e6, material="AL6061-T6", scrap_fraction=0.1)
+    assert abs(s10["material_cost"] - 1.1 * base["material_cost"]) < 1e-4, s10["material_cost"]
+    assert s10["process_cost"] == base["process_cost"]         # scrap is material-only
+    assert s10["tooling_amortized"] == base["tooling_amortized"]
+    # the (1+f) law holds across the whole fraction, including the f=0 identity
+    for f in (0.0, 0.25, 0.5, 1.0):
+        rr = cost.cost_estimate(volume_mm3=1e6, material="AL6061-T6", scrap_fraction=f)
+        assert abs(rr["material_cost"] - (1.0 + f) * base["material_cost"]) < 1e-4, (f, rr)
+
+
+def test_process_factor_ratio_is_part_independent():
+    # Reciprocity/invariant: machine_time_hr = volume_cm3·factor(process), so the RATIO
+    # between two processes is the pure factor ratio (cnc/injection = 3e-3/5e-5 = 60,
+    # cnc/fdm = 3e-3/8e-4 = 3.75) — independent of volume, quantity, AND material card.
+    # The basic anchor only asserts cnc > injection; this pins the exact multiplier.
+    def ratios(p1, p2, vol, qty, mat="ABS"):
+        a = cost.cost_estimate(volume_mm3=vol, material=mat, process=p1, quantity=qty)
+        b = cost.cost_estimate(volume_mm3=vol, material=mat, process=p2, quantity=qty)
+        return (a["breakdown"]["machine_time_hr"] / b["breakdown"]["machine_time_hr"],
+                a["breakdown"]["machining_cost"] / b["breakdown"]["machining_cost"])
+
+    # cnc/injection ≡ 60 across geometries and lot sizes (and material)
+    for vol, qty in ((1e6, 1), (2e6, 50), (5e6, 1000), (8e6, 7)):
+        t, c = ratios("cnc", "injection", vol, qty)
+        assert abs(t - 60.0) < 1e-9 and abs(c - 60.0) < 1e-9, (vol, qty, t, c)
+    assert abs(ratios("cnc", "injection", 1e6, 1, mat="AL6061-T6")[0] - 60.0) < 1e-9
+    # a second pair (cnc/fdm ≡ 3.75) is equally part-independent
+    for vol, qty in ((1e6, 1), (2e6, 7), (5e6, 250)):
+        assert abs(ratios("cnc", "fdm", vol, qty)[0] - 3.75) < 1e-9, (vol, qty)
+
+
+# --- slicing: solid mass, infill linearity, the ceil boundary, flow-inverse time ---
+
+def test_solid_mass_is_exactly_density_times_volume():
+    # Exact identity: at 100% infill mass_g ≡ ρ·V with V in cm³ (mm³·1e-3), and the
+    # deposited volume collapses to the solid volume so filament_g ≡ mass_g. Pinned
+    # with an explicit ρ to isolate the closed form from the Materials-DB lookup, and
+    # cross-checked against the DB value for PLA. Sharper than the basic point anchor:
+    # this nails the *identity* mass≡filament≡ρV, not one happy-path number.
+    V = 60000.0                                          # 60 cm³
+    r = sl.slice_estimate(V, bbox_mm=[50, 40, 30], infill_fraction=1.0, density_g_cc=1.25)
+    assert abs(r["mass_g"] - 1.25 * (V * 1e-3)) < 1e-6, r["mass_g"]        # ρ·V = 75.0 g
+    assert r["mass_g"] == r["filament_g"], (r["mass_g"], r["filament_g"])  # solid ≡ deposited
+    assert abs(r["deposited_volume_mm3"] - V) < 1e-6, r["deposited_volume_mm3"]
+    # and the default material really reads ρ from the Materials DB (PLA = 1.24 g/cc)
+    rho = mat.numeric(mat.get("PLA"), "density_g_cc")
+    db = sl.slice_estimate(V, bbox_mm=[50, 40, 30], material="PLA", infill_fraction=1.0)
+    assert abs(db["mass_g"] - rho * (V * 1e-3)) < 1e-3, (db["mass_g"], rho)
+
+
+def test_deposited_infill_term_is_linear_in_infill_fraction():
+    # Scaling law: deposited = V·(wall + infill·(1−wall)), so at a FIXED wall fraction the
+    # *infill term* dep(f)−dep(0) ≡ V·(1−wall)·f is exactly linear — doubling the infill
+    # doubles that term, the walls cancelling out. Isolates the infill contribution from
+    # the always-solid perimeter, which a single-point filament number can't see.
+    V, wf = 100000.0, 0.35
+    def dep(f):
+        return sl.slice_estimate(V, [50, 40, 30], infill_fraction=f,
+                                 wall_fraction=wf, density_g_cc=1.25)["deposited_volume_mm3"]
+    d0, d25, d50, d100 = dep(0.0), dep(0.25), dep(0.5), dep(1.0)
+    assert abs(d0 - V * wf) < 1e-6, d0                            # infill=0 ⇒ walls only
+    assert abs((d25 - d0) - V * (1 - wf) * 0.25) < 1e-6, (d25, d0)
+    assert abs((d50 - d0) / (d25 - d0) - 2.0) < 1e-9, (d50, d25, d0)   # 2× infill → 2× term
+    assert abs((d100 - d0) / (d50 - d0) - 2.0) < 1e-9, (d100, d50, d0)
+
+
+def test_layer_count_is_sharp_at_the_ceil_boundary():
+    # Exact identity: layer_count ≡ ceil(bbox_z / layer_height). At layer_height=1.0 the
+    # boundary lives at z=10: z=9.99 → ceil=10 but z=10.01 → ceil=11, so the two MUST
+    # differ by one. The exact integer z=10.0 stays at 10 (ceil(10.0)=10, no spurious +1).
+    lo = sl.slice_estimate(1000.0, bbox_mm=[10, 10, 9.99], layer_height_mm=1.0)
+    hi = sl.slice_estimate(1000.0, bbox_mm=[10, 10, 10.01], layer_height_mm=1.0)
+    assert lo["layer_count"] == math.ceil(9.99 / 1.0) == 10, lo["layer_count"]
+    assert hi["layer_count"] == math.ceil(10.01 / 1.0) == 11, hi["layer_count"]
+    assert hi["layer_count"] - lo["layer_count"] == 1                # the ceil step
+    ex = sl.slice_estimate(1000.0, bbox_mm=[10, 10, 10.0], layer_height_mm=1.0)
+    assert ex["layer_count"] == 10, ex["layer_count"]               # exact divisor, no +1
+
+
+def test_print_time_is_inverse_in_speed_and_flow():
+    # Scaling law: time = deposited/(nozzle·layer_height·speed)/60, so with everything but
+    # speed held fixed, 2× print speed → exactly ½ time (and 2× nozzle the same — flow is
+    # linear in both). Holds the deposited volume constant via fixed geometry/infill.
+    V = 200000.0
+    base = sl.slice_estimate(V, [80, 50, 30], print_speed_mm_s=50.0, density_g_cc=1.25)
+    fast = sl.slice_estimate(V, [80, 50, 30], print_speed_mm_s=100.0, density_g_cc=1.25)
+    wide = sl.slice_estimate(V, [80, 50, 30], nozzle_mm=0.8, density_g_cc=1.25)
+    flow = 0.4 * 0.2 * 50.0                                          # nozzle·layer·speed
+    assert abs(base["print_time_min"] - V / flow / 60.0) < 0.05, base["print_time_min"]
+    assert abs(base["print_time_min"] / fast["print_time_min"] - 2.0) < 1e-3, \
+        (base["print_time_min"], fast["print_time_min"])            # 2× speed → ½ time
+    assert abs(base["print_time_min"] / wide["print_time_min"] - 2.0) < 1e-3, \
+        (base["print_time_min"], wide["print_time_min"])            # 2× nozzle → ½ time
+
+
+# --- kinematics: the closed-form mobility/stroke limits ------------------------
+
+def test_slider_crank_stroke_is_independent_of_conrod_length():
+    # Exact identity: for the in-line slider-crank the peak-to-peak stroke is 2R *exactly*,
+    # so two conrods L=50 and L=200 (same crank, e=0) give an IDENTICAL stroke even though
+    # their absolute TDC/BDC positions differ by the conrod length. The basic test pins
+    # stroke==2R for one chain; this is the sharper "independence of L" sibling.
+    R = 15.0
+    short = kinematics.slider_crank(crank_mm=R, conrod_mm=50.0)
+    longc = kinematics.slider_crank(crank_mm=R, conrod_mm=200.0)
+    assert short["stroke_mm"] == longc["stroke_mm"], (short["stroke_mm"], longc["stroke_mm"])
+    assert short["stroke_mm"] == 2.0 * R, short["stroke_mm"]          # exact, e=0
+    # independence holds right down to the validity edge L > R+|e| (here L just > R)
+    edge = kinematics.slider_crank(crank_mm=R, conrod_mm=R + 0.001)
+    assert edge["stroke_mm"] == short["stroke_mm"], edge["stroke_mm"]
+    # the absolute piston positions, by contrast, DO ride on L (sanity: it is the
+    # stroke that is invariant, not the geometry)
+    assert short["x_tdc_mm"] != longc["x_tdc_mm"], (short["x_tdc_mm"], longc["x_tdc_mm"])
+    assert short["inline_stroke_exact"] is True and longc["inline_stroke_exact"] is True
+
+
+def test_offset_slider_crank_stroke_depends_on_conrod_and_decays_to_2r():
+    # Asymptotic envelope (the boundary of the identity above): once the wrist is offset
+    # (e≠0) the L-independence BREAKS — the stroke exceeds 2R and shrinks monotonically
+    # toward 2R as the conrod lengthens. A shorter conrod gives the larger stroke, and
+    # inline_stroke_exact is False throughout.
+    R, e = 15.0, 5.0
+    short = kinematics.slider_crank(crank_mm=R, conrod_mm=40.0, wrist_offset_mm=e)
+    longc = kinematics.slider_crank(crank_mm=R, conrod_mm=300.0, wrist_offset_mm=e)
+    assert short["stroke_mm"] > 2.0 * R and longc["stroke_mm"] > 2.0 * R, (short, longc)
+    assert short["stroke_mm"] > longc["stroke_mm"], "shorter conrod -> larger offset stroke"
+    assert short["inline_stroke_exact"] is False and longc["inline_stroke_exact"] is False
+
+
+def test_grashof_change_point_is_the_knife_edge_between_grashof_and_non_grashof():
+    # Exact identity at the boundary: the change-point is S+L == P+Q to within the code's
+    # 1e-9 guard. Straddling that boundary by a nudge a million-fold larger than the guard
+    # flips the classification grashof -> change_point -> non_grashof. The basic test only
+    # pins one set sitting ON the boundary; this is the sharper straddle (a knife-edge).
+    on = kinematics.grashof_classify(crank=2, coupler=5, rocker=5, ground=8.0)   # S+L=10=P+Q
+    assert on["condition"] == "change_point" and on["type"] == "change-point", on
+    assert on["input_crank_fully_rotates"] is False, on                          # not Grashof
+    below = kinematics.grashof_classify(crank=2, coupler=5, rocker=5, ground=7.99)
+    above = kinematics.grashof_classify(crank=2, coupler=5, rocker=5, ground=8.01)
+    assert below["condition"] == "grashof", below                                # S+L < P+Q
+    assert above["condition"] == "non_grashof", above                            # S+L > P+Q
+    # the boundary is shortest-link agnostic: ground-shortest on the boundary is
+    # still a change-point (same lengths, permuted onto a different shortest link)
+    gnd = kinematics.grashof_classify(crank=5, coupler=5, rocker=8, ground=2)     # S+L=10=P+Q
+    assert gnd["condition"] == "change_point" and gnd["shortest"] == "ground", gnd
+
+
+def test_gruebler_single_loop_dof_is_n_minus_3_and_goes_negative_when_overconstrained():
+    # Exact identity + sequence: for an n-link single-loop chain of n revolutes the planar
+    # Grübler DOF is exactly n−3, an arithmetic progression (triangle 0, four-bar 1,
+    # five-bar 2, six-bar 3, ...). Past the kinematic chain it goes negative — a
+    # redundantly-constrained (statically indeterminate) structure. The basic test pins
+    # the 4-bar/5-bar/triangle points; this pins the recurrence and the negative tail.
+    for n in range(3, 8):
+        assert kinematics.gruebler_dof(n, ["revolute"] * n) == n - 3, n
+    assert kinematics.gruebler_dof(4, ["revolute"] * 5) == -1            # over-constrained
+    assert kinematics.gruebler_dof(5, ["revolute"] * 7) == -2
+    # each added lower pair removes exactly 2 DOF; each added higher pair exactly 1
+    five = kinematics.gruebler_dof(5, ["revolute"] * 5)                  # DOF 2
+    assert five - kinematics.gruebler_dof(5, ["revolute"] * 6) == 2      # +1 lower pair
+    fourbar = kinematics.gruebler_dof(4, ["revolute"] * 4)               # DOF 1
+    assert fourbar - kinematics.gruebler_dof(4, ["revolute"] * 4 + ["gear"]) == 1  # +1 higher pair
 
 
 # --- runner -------------------------------------------------------------------

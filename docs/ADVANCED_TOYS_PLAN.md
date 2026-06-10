@@ -31,10 +31,10 @@ It must NOT merely restate a happy-path anchor already pinned in the basic test.
 | durability (more) | Goodman fully-reversed collapse, Archard linear, S-N slope, overload guard | ✅ shipped |
 | cht | series R-sum, interface walk, h-free outlet T, solid ΔT decoupled | ✅ shipped |
 | em | δ∝1/√f, R=L/σA + Joule, wire B∝1/r, solenoid uniform | ✅ shipped |
-| dfx | DfM score exact, DfA monotone, pack billable=max() | ☐ Batch 4 |
-| cost | unit cost monotone↓, amortization 1/qty, scrap linear | ☐ Batch 4 |
-| slicing | mass≡ρV, infill linear, layer≡ceil, time∝deposited/flow | ☐ Batch 4 |
-| kinematics | stroke independent of L, Grashof change-point, Grübler sequence | ☐ Batch 4 |
+| dfx | DfM score exact, DfA monotone, pack billable=max() + sort-to-fit | ✅ shipped |
+| cost | unit cost monotone↓ → floor, amortization 1/qty, scrap linear, process-ratio invariant | ✅ shipped |
+| slicing | mass≡ρV, infill linear, layer≡ceil, time∝deposited/flow | ✅ shipped |
+| kinematics | stroke independent of L, Grashof change-point, Grübler n−3 sequence | ✅ shipped |
 | topology (more) | SIMP E(x) penalty, compliance monotone↓ in keep_fraction | ☐ Batch 5 |
 | optics (more) | energy balance to 1e-12, TIR sharp edge | ☐ Batch 5 |
 | thermal (more) | Heisler→lumped (Bi→0), lumped t=τ → 63.2% | ☐ Batch 5 |
@@ -51,8 +51,8 @@ NumPy on the fast lane (already wired into `tests/run_all.sh` under the venv).
   shipped — power laws and invariants; double-an-input → known factor.
 - **Batch 3 — M6 newcomers (cht · em).** ✅ shipped — pinned the new oracles' exact
   identities while the code is fresh.
-- **Batch 4 — design-for-X & throughput (dfx · cost · slicing · kinematics).**
-  Monotonicity / limit envelopes.
+- **Batch 4 — design-for-X & throughput (dfx · cost · slicing · kinematics).** ✅
+  shipped — monotonicity / limit envelopes.
 - **Batch 5 (optional round-out)** — deepen the four already-covered families.
 
 Excluded as duplicative of the basic tests: CFD D⁴ scaling, Miles 7.0 g, slider
