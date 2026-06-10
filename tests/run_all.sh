@@ -101,6 +101,10 @@ echo "== OpenFOAM pipe CFD (case gen always; blockMesh+simpleFoam gate when pres
 python3 tests/test_openfoam.py
 
 echo
+echo "== Geometry bridge (case gen always; ElmerGrid/snappyHexMesh gates when present) =="
+python3 tests/test_meshbridge.py
+
+echo
 echo "== MBD dynamics (PyBullet; skip if the mbd extra is absent) =="
 $VENV_PY tests/test_mbd.py
 

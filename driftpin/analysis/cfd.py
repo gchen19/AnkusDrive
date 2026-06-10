@@ -105,3 +105,84 @@ def pipe_pressure_drop(
         "hagen_poiseuille_pa": round(dp_hp, 4),
         "laminar": regime == "laminar",
     }
+
+
+def stokes_sphere_drag(
+    diameter_mm: float,
+    velocity_m_s: float,
+    fluid: str = "water-20c",
+    mu_pa_s=None,
+    rho_kg_m3=None,
+) -> dict:
+    """Creeping-flow (Stokes) drag on a sphere — the exact external-flow oracle for the
+    CFD family at Re ≪ 1.
+
+    The Stokes drag force is F = 3·π·μ·U·D = 6·π·μ·U·R (exact as Re→0), giving the drag
+    coefficient Cd = F/(½·ρ·U²·A) = **24/Re** on the frontal area A = π·R². The form is
+    only valid for creeping flow (``stokes_valid`` flags Re < 1; by Re ≈ 1 the true Cd
+    already runs ~10 % above 24/Re). Re = ρ·U·D/μ.
+
+    Diameter mm, velocity m/s; fluid μ,ρ from a name or explicit ``mu_pa_s``+``rho_kg_m3``.
+    Returns {reynolds, cd, cd_stokes (=24/Re), drag_force_n, frontal_area_m2,
+    velocity_m_s, stokes_valid}. Raises ValueError on non-positive geometry/velocity."""
+    mu, rho = _fluid_props(fluid, mu_pa_s, rho_kg_m3)
+    D = diameter_mm / 1000.0
+    if D <= 0 or velocity_m_s <= 0:
+        raise ValueError("diameter_mm and velocity_m_s must be > 0")
+    R = D / 2.0
+    U = float(velocity_m_s)
+    Re = rho * U * D / mu if mu > 0 else float("inf")
+    drag = 6.0 * math.pi * mu * U * R                 # = 3·π·μ·U·D, exact Stokes
+    area = math.pi * R * R
+    cd = drag / (0.5 * rho * U * U * area)            # identically 24/Re
+    return {
+        "reynolds": round(Re, 6),
+        "cd": round(cd, 6),
+        "cd_stokes": round(24.0 / Re, 6) if Re > 0 else float("inf"),
+        "drag_force_n": drag,
+        "frontal_area_m2": area,
+        "velocity_m_s": U,
+        "stokes_valid": Re < 1.0,
+    }
+
+
+def flat_plate_drag(
+    length_mm: float,
+    velocity_m_s: float,
+    width_mm: float | None = None,
+    fluid: str = "water-20c",
+    mu_pa_s=None,
+    rho_kg_m3=None,
+) -> dict:
+    """Laminar (Blasius) friction drag on one side of a flat plate aligned with the flow.
+
+    The Blasius boundary layer gives the local skin-friction Cf(x) = 0.664/√Re_x and the
+    length-averaged **Cf = 1.328/√Re_L** (Re_L = ρ·U·L/μ); the friction drag on one wetted
+    side is F = Cf·(½·ρ·U²)·(L·b) for plate length L and width b (default 1 m, i.e. drag
+    per unit width). Laminar until transition near Re_L ≈ 5·10⁵ (``laminar``).
+
+    Length/width mm, velocity m/s; fluid μ,ρ from a name or explicit overrides. Returns
+    {reynolds_l, cf_avg, drag_force_n (one side), drag_per_width_n_m, dynamic_pressure_pa,
+    wetted_area_m2, velocity_m_s, laminar}. Raises ValueError on non-positive
+    geometry/velocity."""
+    mu, rho = _fluid_props(fluid, mu_pa_s, rho_kg_m3)
+    L = length_mm / 1000.0
+    if L <= 0 or velocity_m_s <= 0:
+        raise ValueError("length_mm and velocity_m_s must be > 0")
+    b = (width_mm / 1000.0) if width_mm else 1.0
+    U = float(velocity_m_s)
+    Re_L = rho * U * L / mu if mu > 0 else float("inf")
+    cf_avg = 1.328 / math.sqrt(Re_L) if Re_L > 0 else float("inf")
+    q = 0.5 * rho * U * U
+    drag_per_width = cf_avg * q * L                   # N per metre of span
+    drag = drag_per_width * b
+    return {
+        "reynolds_l": round(Re_L, 3),
+        "cf_avg": round(cf_avg, 8),
+        "drag_force_n": drag,
+        "drag_per_width_n_m": drag_per_width,
+        "dynamic_pressure_pa": round(q, 6),
+        "wetted_area_m2": L * b,
+        "velocity_m_s": U,
+        "laminar": Re_L < 5e5,
+    }

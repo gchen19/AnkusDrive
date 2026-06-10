@@ -98,6 +98,51 @@ def test_input_validation():
             raise AssertionError("expected ValueError")
 
 
+# --- flat-plate structure (no solver) -----------------------------------------
+
+def test_flat_plate_blockmesh_is_three_blocks():
+    bm = openfoam.flat_plate_blockmeshdict(
+        plate_length_m=0.1, upstream_m=0.03, wake_m=0.06, height_m=1.0,
+        thickness_m=0.002, nx_plate=20, nx_upstream=6, nx_wake=8, n_y=10, grading_y=100.0)
+    # 16 vertices (4 x-stations x 2 heights x 2 z-layers), 3 hex blocks
+    verts = re.search(r"vertices\s*\((.*?)\);", bm, re.S).group(1)
+    assert verts.count("(") == 16, verts
+    assert bm.count("hex (") == 3, bm
+    for patch in ("inlet", "outlet", "plate", "slip", "top", "frontAndBack"):
+        assert patch in bm, f"missing patch {patch}"
+    assert "type wall" in bm and "type symmetryPlane" in bm and "type empty" in bm
+
+
+def test_flat_plate_case_files_complete():
+    files = openfoam.flat_plate_case_files(velocity_m_s=1.5, nu_m2_s=1.5e-5)
+    for rel in ("system/blockMeshDict", "constant/transportProperties",
+                "constant/turbulenceProperties", "0/U", "0/p", "system/controlDict",
+                "system/fvSchemes", "system/fvSolution"):
+        assert rel in files, f"missing {rel}"
+    assert "nu              1.5e-05" in files["constant/transportProperties"]
+    assert "simulationType  laminar" in files["constant/turbulenceProperties"]
+    assert "noSlip" in files["0/U"] and "(1.5 0 0)" in files["0/U"]
+
+
+def test_flat_plate_write_case_and_meta():
+    with tempfile.TemporaryDirectory() as d:
+        meta = openfoam.write_flat_plate_case(d, velocity_m_s=1.5, nu_m2_s=1.5e-5,
+                                              plate_length_m=0.1)
+        assert os.path.isfile(os.path.join(d, "system", "blockMeshDict"))
+        assert os.path.isfile(os.path.join(d, "0", "U"))
+        assert abs(meta["reynolds_l"] - 1.5 * 0.1 / 1.5e-5) < 1e-6
+        assert meta["nx_plate"] == 160 and meta["nx_upstream"] == 40
+
+
+def test_flat_plate_parse_absent_is_none():
+    with tempfile.TemporaryDirectory() as d:
+        got = openfoam.parse_flat_plate_drag(
+            d, rho_kg_m3=1.2, nu_m2_s=1.5e-5, velocity_m_s=1.5, plate_length_m=0.1,
+            thickness_m=0.002, nx_plate=160, nx_upstream=40, n_y=140, grading_y=3000.0,
+            height_m=1.5)
+        assert got is None       # no converged field -> None, never raises
+
+
 # --- solver-backed (skips when OpenFOAM is absent) ----------------------------
 
 def _solve_pipe(D_mm, L_mm, U, nu, rho, na=120, nr=15, et=4000):
@@ -146,6 +191,50 @@ def test_pipe_d4_scaling_law():
     assert big and small, (big, small)
     ratio = small["dp_developed_pa"] / big["dp_developed_pa"]
     assert 13.5 <= ratio <= 18.5, f"D^4 scaling ratio {ratio:.2f} not ~16"
+
+
+def _solve_flat_plate(U, nu, rho, L=0.1):
+    """Build + run a flat-plate case, return (parse_flat_plate_drag dict, Blasius oracle)."""
+    d = tempfile.mkdtemp(prefix="foam_plate_test_")
+    built = openfoam.write_flat_plate_case(d, velocity_m_s=U, nu_m2_s=nu, plate_length_m=L)
+    bashrc = solvers.openfoam_bashrc()
+    src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
+    subprocess.run(["bash", "-c", src + "blockMesh > log.bm 2>&1 && simpleFoam > log.sf 2>&1"],
+                   cwd=d, capture_output=True, text=True)
+    got = openfoam.parse_flat_plate_drag(
+        d, rho_kg_m3=rho, nu_m2_s=nu, velocity_m_s=U, plate_length_m=L,
+        thickness_m=built["thickness_m"], nx_plate=built["nx_plate"],
+        nx_upstream=built["nx_upstream"], n_y=built["n_y"], grading_y=built["grading_y"],
+        height_m=built["height_m"])
+    orc = cfd.flat_plate_drag(length_mm=L * 1000, velocity_m_s=U,
+                              width_mm=built["thickness_m"] * 1000, mu_pa_s=nu * rho,
+                              rho_kg_m3=rho)
+    return got, orc
+
+
+def test_flat_plate_matches_blasius():
+    """Laminar flat plate (Re_L≈1e4): the solved wall-shear Cd is within 15% of the
+    Blasius average Cf=1.328/√Re_L (it lands ~9% high and converges down with Re)."""
+    if not solvers.is_available("openfoam"):
+        print("    SKIP — OpenFOAM not installed")
+        return
+    got, orc = _solve_flat_plate(U=1.5, nu=1.5e-5, rho=1.2)
+    assert got is not None, "no converged U field (solve failed)"
+    ratio = got["cf_solved"] / orc["cf_avg"]
+    assert 0.85 <= ratio <= 1.15, (ratio, got["cf_solved"], orc["cf_avg"])
+
+
+def test_flat_plate_blasius_u_scaling():
+    """Blasius friction drag ∝ U^1.5 — two solved plates (U and 2U) reproduce the
+    exponent the analytic oracle predicts, within the solver's tolerance."""
+    if not solvers.is_available("openfoam"):
+        print("    SKIP — OpenFOAM not installed")
+        return
+    lo, _o1 = _solve_flat_plate(U=1.0, nu=1.5e-5, rho=1.2)
+    hi, _o2 = _solve_flat_plate(U=2.0, nu=1.5e-5, rho=1.2)
+    assert lo and hi, (lo, hi)
+    ratio = hi["drag_force_n"] / lo["drag_force_n"]
+    assert abs(ratio - 2.0 ** 1.5) / (2.0 ** 1.5) < 0.1, f"U^1.5 scaling: got {ratio:.3f}"
 
 
 # --- runner -------------------------------------------------------------------

@@ -63,6 +63,60 @@ def test_explicit_fluid_and_errors():
             raise AssertionError("expected ValueError")
 
 
+# --- external-flow oracles (P3 M3): Stokes sphere + Blasius flat plate ---------
+
+def test_stokes_sphere_cd_is_24_over_re():
+    # creeping flow: a 2 mm sphere in glycerin at 1 mm/s -> Re << 1, Cd = 24/Re,
+    # F = 6 pi mu U R exactly.
+    r = cfd.stokes_sphere_drag(diameter_mm=2.0, velocity_m_s=0.001, fluid="glycerin-20c")
+    assert r["reynolds"] < 1.0 and r["stokes_valid"] is True, r
+    assert abs(r["cd"] * r["reynolds"] - 24.0) < 0.05, r       # Cd·Re ≡ 24 (Stokes)
+    assert abs(r["cd"] - r["cd_stokes"]) < 1e-9, r
+    # F = 6 pi mu U R (mu_glycerin = 1.41, R = 1e-3, U = 1e-3)
+    import math
+    assert abs(r["drag_force_n"] - 6 * math.pi * 1.41 * 0.001 * 0.001) < 1e-12, r
+
+
+def test_stokes_high_re_flags_invalid():
+    # a fast sphere in water is far past creeping flow: stokes_valid is False
+    r = cfd.stokes_sphere_drag(diameter_mm=20.0, velocity_m_s=1.0, fluid="water-20c")
+    assert r["reynolds"] > 1.0 and r["stokes_valid"] is False, r["reynolds"]
+
+
+def test_blasius_flat_plate_cf():
+    # air over a 0.1 m plate at 5 m/s -> Re_L ~ 3.3e4 (laminar), Cf = 1.328/sqrt(Re_L)
+    import math
+    r = cfd.flat_plate_drag(length_mm=100, velocity_m_s=5.0, fluid="air-20c")
+    assert r["laminar"] is True, r["reynolds_l"]
+    assert abs(r["cf_avg"] - 1.328 / math.sqrt(r["reynolds_l"])) < 1e-6, r
+    # drag per unit width = Cf * 0.5 rho U^2 * L (returned values are display-rounded,
+    # so compare with a relative tolerance)
+    recomputed = r["cf_avg"] * r["dynamic_pressure_pa"] * 0.1
+    assert abs(r["drag_per_width_n_m"] - recomputed) < 1e-4 * r["drag_per_width_n_m"], r
+
+
+def test_blasius_u_to_the_1p5_scaling():
+    # Blasius friction drag ∝ U^1.5 (F = 1.328/sqrt(Re_L) * 0.5 rho U^2 L ∝ U^1.5)
+    a = cfd.flat_plate_drag(length_mm=100, velocity_m_s=1.0, fluid="air-20c")
+    b = cfd.flat_plate_drag(length_mm=100, velocity_m_s=4.0, fluid="air-20c")
+    assert abs(b["drag_force_n"] / a["drag_force_n"] - 4.0 ** 1.5) < 1e-6, (a, b)
+
+
+def test_external_input_validation():
+    for bad in (
+        lambda: cfd.stokes_sphere_drag(diameter_mm=0, velocity_m_s=1),
+        lambda: cfd.stokes_sphere_drag(diameter_mm=1, velocity_m_s=0),
+        lambda: cfd.flat_plate_drag(length_mm=0, velocity_m_s=1),
+        lambda: cfd.flat_plate_drag(length_mm=10, velocity_m_s=1, fluid="unobtainium"),
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

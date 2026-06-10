@@ -24,6 +24,19 @@ Four examples, each a kickoff gate:
     (``optics_raytrace``) is gated against Snell when the ``optics`` wheel resolves in
     the worker, else reported as degraded — the oracle gate still runs (it needs no
     solver), so D is the one example that never SKIPs.
+  * **E — radiation thermal** (§M2): ``thermal_radiation_submit`` builds two parallel
+    plates and runs **ElmerSolver + ViewFactors** (diffuse-gray enclosure radiation);
+    the net flux must match the exact two infinite parallel plates exchange
+    q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) within 2%, for symmetric and asymmetric emissivities.
+  * **F — external CFD** (§M3): ``cfd_external_flow_submit`` builds a 2-D laminar flat
+    plate and runs **blockMesh + simpleFoam**; the wall-shear drag (read straight from
+    the U field — OpenFOAM's force function objects abort on this build) must match the
+    Blasius friction coefficient Cf=1.328/√Re_L within 15%, and the drag must follow
+    the U^1.5 law.
+  * **G — geometry bridge** (§M4): real FreeCAD solids through the meshing bridge —
+    a 20 mm cube → Gmsh UNV → **ElmerGrid + ElmerSolver** as a plane wall (must match
+    the Heisler oracle within 3%), and a Ø10×100 mm cylinder → multi-region STL →
+    **snappyHexMesh + simpleFoam** (developed Δp within 10% of Hagen–Poiseuille).
 
 Each example **degrades gracefully**: a missing solver (ElmerSolver / OpenFOAM) or a
 worker that lacks NumPy is reported as SKIP, not a failure, so the script is safe to
@@ -192,6 +205,117 @@ def example_optics(w, log):
         "oracle gate still runs")
     log(f"  GATE Snell/Fresnel/TIR/energy oracle exact: {'PASS' if oracle_ok else 'FAIL'}")
     return oracle_ok
+
+
+def example_radiation(w, log):
+    """§M2 — Elmer diffuse-gray two-plate radiation vs the σ-exchange closed form."""
+    log("### Example E — thermal_radiation_submit (ElmerSolver + ViewFactors) vs 2-plate σ-exchange  (§M2)")
+    sub = w.call("thermal_radiation_submit", t1_c=500, t2_c=100,
+                 emissivity_1=0.8, emissivity_2=0.8)
+    if not _submitted(sub):
+        log(f"  SKIP — ElmerSolver not installed ({sub.get('install', '')})")
+        return None
+    res = _poll(w, sub["job_id"])["result"]
+    if not res.get("ok") or res.get("oracle_ratio") is None:
+        log(f"  FAIL — solve did not produce a flux: {str(res)[:200]}")
+        return False
+    log("- two parallel plates T₁=500°C, T₂=100°C, ε₁=ε₂=0.8 (gap 10 mm)")
+    log(f"- ElmerSolver (Diffuse Gray + ViewFactors): net flux {res['flux_w_m2']:.1f} W/m²")
+    log(f"- two-plate σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1): {res['two_plate_flux_w_m2']:.1f} W/m² "
+        f"→ oracle_ratio {res['oracle_ratio']}")
+    sigma_ok = 0.98 <= res["oracle_ratio"] <= 1.02
+
+    # Asymmetric emissivity exercises the 1/ε₁+1/ε₂−1 denominator, not just ε₁=ε₂.
+    asym = _poll(w, w.call("thermal_radiation_submit", t1_c=450, t2_c=50,
+                           emissivity_1=0.5, emissivity_2=0.9)["job_id"])["result"]
+    asym_ok = asym.get("oracle_ratio") is not None and 0.98 <= asym["oracle_ratio"] <= 1.02
+    log(f"- asymmetric ε₁=0.5, ε₂=0.9: Elmer {asym.get('flux_w_m2', float('nan')):.1f} vs "
+        f"oracle {asym.get('two_plate_flux_w_m2', float('nan')):.1f} W/m² → "
+        f"oracle_ratio {asym.get('oracle_ratio')}")
+    log(f"  GATE both oracle_ratios within 2%: {'PASS' if sigma_ok and asym_ok else 'FAIL'}")
+    return sigma_ok and asym_ok
+
+
+def example_external(w, log):
+    """§M3 — OpenFOAM flat plate vs Blasius friction drag, plus the U^1.5 scaling."""
+    log("### Example F — cfd_external_flow_submit (blockMesh+simpleFoam) vs Blasius drag  (§M3)")
+    sub = w.call("cfd_external_flow_submit", velocity_m_s=1.5, plate_length_mm=100,
+                 fluid="air-20c")
+    if not _submitted(sub):
+        log(f"  SKIP — OpenFOAM not installed ({sub.get('install', '')})")
+        return None
+    res = _poll(w, sub["job_id"])["result"]
+    if not res.get("ok") or res.get("blasius_ratio") is None:
+        log(f"  FAIL — solve did not produce a drag: {str(res)[:200]}")
+        return False
+    log(f"- flat plate L=100 mm, U=1.5 m/s air → Re_L {res['reynolds_l']} "
+        f"({'laminar' if res['laminar'] else 'turbulent'}), {res['n_cells']} cells")
+    log(f"- simpleFoam wall-shear drag: Cd {res['cf_solved']} (drag {res['drag_force_n']:.3e} N, "
+        f"momentum-deficit cross-check {res['drag_momentum_n']:.3e} N)")
+    log(f"- Blasius Cf=1.328/√Re_L: {res['cf_blasius']} → blasius_ratio {res['blasius_ratio']}")
+    bl_ok = 0.85 <= res["blasius_ratio"] <= 1.15
+
+    # Blasius friction drag ∝ U^1.5 — a second solve at 2U must scale by 2^1.5.
+    hi = _poll(w, w.call("cfd_external_flow_submit", velocity_m_s=3.0,
+                         plate_length_mm=100, fluid="air-20c")["job_id"])["result"]
+    scale = hi["drag_force_n"] / res["drag_force_n"]
+    scale_ok = abs(scale - 2.0 ** 1.5) / (2.0 ** 1.5) < 0.1
+    log(f"- U^1.5 law: drag(3 m/s)/drag(1.5 m/s) = {scale:.3f} (expect 2^1.5 = {2.0**1.5:.3f})")
+    log(f"  GATE blasius_ratio within 15% and U^1.5 scaling: {'PASS' if bl_ok and scale_ok else 'FAIL'}")
+    return bl_ok and scale_ok
+
+
+def example_bridge(w, log):
+    """§M4 — the geometry bridge: REAL FreeCAD solids through Gmsh/ElmerGrid
+    (thermal) and snappyHexMesh (internal flow), vs the same analytic oracles the
+    parametric builders gate against."""
+    log("### Example G — the geometry bridge: FreeCAD solid → mesh → solve  (§M4)")
+    w.call("new_document", name="bridge_example")
+
+    # Elmer half: a 20 mm cube as a plane wall (convection on the two x faces).
+    box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
+    sub = w.call("thermal_transient_submit", body=box["handle"],
+                 convection_faces=[1, 2], h_conv=10000.0, duration_s=0.6,
+                 k=200.0, rho=2700.0, cp=900.0)
+    if not _submitted(sub):
+        log(f"  SKIP — ElmerSolver/ElmerGrid not installed ({sub.get('reason', '')})")
+        return None
+    res = _poll(w, sub["job_id"])["result"]
+    if not res.get("ok") or res.get("t_max_c") is None:
+        log(f"  FAIL — bridged thermal solve failed: {str(res)[:200]}")
+        return False
+    oracle = thermal.thermal_transient_1d(half_thickness_mm=10.0, h_conv=10000.0,
+                                          duration_s=0.6, k=200.0, rho=2700.0, cp=900.0)
+    rc = (res["t_max_c"] - 25.0) / (oracle["t_center_c"] - 25.0)
+    rs = (res["t_min_c"] - 25.0) / (oracle["t_surface_c"] - 25.0)
+    log(f"- FreeCAD 20 mm cube → Gmsh ({res['tets']} tets) → ElmerGrid → ElmerSolver "
+        f"(convection on faces 1+2: a plane wall, Bi=0.5)")
+    log(f"- centre {res['t_max_c']:.2f} °C vs Heisler {oracle['t_center_c']:.2f} °C "
+        f"(ratio {rc:.4f}); surface {res['t_min_c']:.2f} vs "
+        f"{oracle['t_surface_c']:.2f} °C (ratio {rs:.4f})")
+    th_ok = 0.97 < rc < 1.03 and 0.97 < rs < 1.03
+
+    # OpenFOAM half: a Ø10×100 mm cylinder, inlet face 3 (z=0), outlet face 2.
+    cyl = w.call("add_primitive", kind="cylinder", r=5, h=100)
+    sub = w.call("cfd_internal_flow_submit", body=cyl["handle"], inlet_face=3,
+                 outlet_face=2, velocity_m_s=0.005, fluid="water-20c",
+                 diameter_mm=10, length_mm=100)
+    if not _submitted(sub):
+        log(f"- (CFD half) SKIP — OpenFOAM not installed; thermal half "
+            f"{'PASS' if th_ok else 'FAIL'}")
+        return th_ok
+    res2 = _poll(w, sub["job_id"])["result"]
+    if not res2.get("ok") or res2.get("hp_ratio") is None:
+        log(f"  FAIL — bridged flow solve failed: {str(res2)[:200]}")
+        return False
+    log(f"- FreeCAD Ø10×100 mm cylinder → multi-region STL → snappyHexMesh "
+        f"({res2['n_cells']} cells) → simpleFoam (Re=50)")
+    log(f"- Δp(developed) {res2['pressure_drop_pa']:.4g} Pa vs Hagen–Poiseuille "
+        f"{res2['hagen_poiseuille_pa']:.4g} Pa → hp_ratio {res2['hp_ratio']}")
+    hp_ok = 0.9 < res2["hp_ratio"] < 1.1
+    log(f"  GATE bridged wall vs Heisler within 3% and bridged pipe hp_ratio "
+        f"within 10%: {'PASS' if th_ok and hp_ok else 'FAIL'}")
+    return th_ok and hp_ok
 
 
 # --- figures (--plots) --------------------------------------------------------
@@ -432,8 +556,212 @@ def _plot_optics(outdir):
     return ro is not None
 
 
+def _run_elmer_radiation(t1_c, t2_c, e1, e2):
+    """Build + run the two-plate Elmer radiation case (ViewFactors then ElmerSolver),
+    return the solved net flux (W/m²), or None on failure. Used by the figure."""
+    import os
+    import subprocess
+    import tempfile
+    from driftpin import solvers
+    from driftpin.analysis import elmer
+    d = tempfile.mkdtemp(prefix="rad_fig_")
+    built = elmer.write_radiation_plates_case(d, t1_c=t1_c, t2_c=t2_c,
+                                              emissivity_1=e1, emissivity_2=e2, n_x=80)
+    elmer_bin = solvers.find_solver("elmer")["path"]
+    import shutil as _sh
+    vf = _sh.which("ViewFactors") or os.path.join(os.path.dirname(elmer_bin), "ViewFactors")
+    subprocess.run([vf, built["sif"]], cwd=d, capture_output=True, text=True)
+    subprocess.run([elmer_bin, built["sif"]], cwd=d, capture_output=True, text=True)
+    parsed = elmer.parse_radiation_flux(d, built["scalars"], built["area_1_m2"])
+    return parsed["flux_w_m2"] if parsed else None
+
+
+def _plot_radiation(outdir):
+    """Panel E: Elmer diffuse-gray two-plate flux over the σ(T⁴) law (temperature sweep)
+    and the 1/ε denominator (emissivity sweep), each on the exact two-plate oracle line.
+    Needs ElmerSolver; returns False (skip) when absent."""
+    from driftpin import solvers
+    if not solvers.is_available("elmer"):
+        return False
+    import matplotlib.pyplot as plt
+    from driftpin.analysis import thermal as _thermal
+    fig, axes = plt.subplots(1, 2, figsize=(9.4, 4.0))
+
+    # (left) net flux vs hot-plate temperature, T2=100C, eps=0.8 — the σ(T1^4-T2^4) law.
+    T2, e1, e2 = 100.0, 0.8, 0.8
+    T1s = [200, 300, 400, 500, 600, 700]
+    orc = [_thermal.radiation_exchange(t, T2, e1, e2)["two_plate_flux_w_m2"] for t in T1s]
+    elm = [_run_elmer_radiation(t, T2, e1, e2) for t in T1s]
+    ax = axes[0]
+    ax.plot(T1s, orc, "-", color="C3", lw=2, label="two-plate oracle  σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1)")
+    ax.plot(T1s, elm, "o", color="C0", ms=7, mfc="white", label="ElmerSolver (Diffuse Gray)")
+    ax.set_xlabel("hot plate T₁ (°C),  T₂ = 100 °C")
+    ax.set_ylabel("net radiative flux (W/m²)")
+    ax.set_title(f"σ(T⁴) law  (ε₁=ε₂={e1})", fontsize=9, weight="bold")
+    ax.legend(fontsize=7.5, loc="upper left"); ax.grid(True, ls=":", alpha=0.4)
+
+    # (right) net flux vs emissivity (eps1=eps2=eps), T1=500/T2=100 — the gray denominator.
+    eps = [0.3, 0.45, 0.6, 0.75, 0.9, 1.0]
+    orc2 = [_thermal.radiation_exchange(500, 100, e, e)["two_plate_flux_w_m2"] for e in eps]
+    elm2 = [_run_elmer_radiation(500, 100, e, e) for e in eps]
+    ax = axes[1]
+    ax.plot(eps, orc2, "-", color="C3", lw=2, label="oracle  q ∝ 1/(2/ε−1)")
+    ax.plot(eps, elm2, "s", color="C2", ms=7, mfc="white", label="ElmerSolver")
+    ax.set_xlabel("surface emissivity  ε₁ = ε₂")
+    ax.set_ylabel("net radiative flux (W/m²)")
+    ax.set_title("gray-body denominator  (T₁=500, T₂=100 °C)", fontsize=9, weight="bold")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(True, ls=":", alpha=0.4)
+
+    fig.suptitle("Example E — Elmer diffuse-gray radiation vs the two-plate σ-exchange  (§M2)",
+                 fontsize=11, weight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(f"{outdir}/radiation.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
+def _plot_external(outdir):
+    """Panel F: solved flat-plate Cd over a Reynolds sweep on the Blasius
+    Cf=1.328/√Re_L line. Needs OpenFOAM; returns False (skip) when absent."""
+    from driftpin import solvers
+    if not solvers.is_available("openfoam"):
+        return False
+    import math as _m
+    import subprocess
+    import tempfile
+    import matplotlib.pyplot as plt
+    from driftpin.analysis import cfd, openfoam
+    nu, rho, L = 1.5e-5, 1.2, 0.1
+    bashrc = solvers.openfoam_bashrc()
+    src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
+    Us = [0.75, 1.0, 1.5, 2.5, 4.0]
+    Re, cd_cfd, cf_blasius = [], [], []
+    for U in Us:
+        d = tempfile.mkdtemp(prefix="foam_plate_fig_")
+        built = openfoam.write_flat_plate_case(d, velocity_m_s=U, nu_m2_s=nu, plate_length_m=L)
+        subprocess.run(["bash", "-c", src + "blockMesh >bm 2>&1 && simpleFoam >sf 2>&1"],
+                       cwd=d, capture_output=True, text=True)
+        got = openfoam.parse_flat_plate_drag(
+            d, rho_kg_m3=rho, nu_m2_s=nu, velocity_m_s=U, plate_length_m=L,
+            thickness_m=built["thickness_m"], nx_plate=built["nx_plate"],
+            nx_upstream=built["nx_upstream"], n_y=built["n_y"],
+            grading_y=built["grading_y"], height_m=built["height_m"])
+        Re.append(built["reynolds_l"])
+        cd_cfd.append(got["cf_solved"] if got else float("nan"))
+        cf_blasius.append(cfd.flat_plate_drag(length_mm=L * 1000, velocity_m_s=U,
+                                              mu_pa_s=nu * rho, rho_kg_m3=rho)["cf_avg"])
+    fig, ax = plt.subplots(figsize=(7.2, 4.2))
+    Re_line = sorted(Re)
+    ax.plot(Re_line, [1.328 / _m.sqrt(r) for r in Re_line], "-", color="C2", lw=2,
+            label="Blasius  Cf = 1.328/√Re_L")
+    ax.plot(Re, cd_cfd, "o", color="C1", ms=8, label="simpleFoam (wall-shear Cd)")
+    ax.set_xlabel("plate Reynolds number  Re_L")
+    ax.set_ylabel("average skin-friction coefficient  C_f")
+    ax.set_title("Example F — OpenFOAM flat plate vs Blasius friction drag  (§M3)",
+                 weight="bold", fontsize=11)
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/external.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
+def _plot_bridge(outdir):
+    """Panel G: the bridged box cooling history on the Heisler lines (left) and the
+    bridged snappy cylinder Δp on the Hagen–Poiseuille line (right). FreeCAD-free:
+    the box is the committed Gmsh UNV fixture; the cylinder is the pure-Python STL."""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    import matplotlib.pyplot as plt
+
+    from driftpin import solvers
+    from driftpin.analysis import cfd as _cfd
+    from driftpin.analysis import meshbridge as mb
+    from driftpin.analysis import openfoam as of
+    if not (solvers.is_available("elmer") and shutil.which("ElmerGrid")
+            and solvers.is_available("openfoam")):
+        return False
+    fixture = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "box20_coarse.unv"
+    k, rho, cp, h, dur = 200.0, 2700.0, 900.0, 10000.0, 0.6
+
+    with tempfile.TemporaryDirectory() as d:
+        shutil.copy(fixture, os.path.join(d, "body.unv"))
+        built = mb.write_body_transient_case(
+            d, k=k, rho=rho, cp=cp, h_conv=h, duration_s=dur, convection_tags=[1, 2])
+        subprocess.run([shutil.which("ElmerGrid")] + built["elmergrid_argv"][1:],
+                       cwd=d, capture_output=True)
+        subprocess.run([solvers.find_solver("elmer")["path"], built["sif"]],
+                       cwd=d, capture_output=True)
+        rows = [r.split() for r in open(os.path.join(d, built["scalars"])).read().splitlines()
+                if r.strip()]
+    t_solved = [(i + 1) * built["dt"] for i in range(len(rows))]
+    tmax = [float(r[0]) for r in rows]
+    tmin = [float(r[1]) for r in rows]
+    # the one-term Heisler series needs Fo >= 0.2 -> start the oracle lines there
+    t_or = [t for t in t_solved if t >= 0.2 * 0.01 * 0.01 / (k / (rho * cp))]
+    orc = [thermal.thermal_transient_1d(half_thickness_mm=10, h_conv=h, duration_s=t,
+                                        k=k, rho=rho, cp=cp) for t in t_or]
+
+    env = solvers.openfoam_bashrc()
+    D, L, nu, rho_w = 0.01, 0.1, 1e-6, 1000.0
+    vels = [0.0025, 0.005, 0.01]
+    dps = []
+    for U in vels:
+        with tempfile.TemporaryDirectory() as d:
+            mb.write_snappy_internal_case(
+                d, stl_text=mb.ascii_stl_regions(mb.cylinder_stl_regions(D, L)),
+                bbox_min_m=(-D / 2, -D / 2, 0.0), bbox_max_m=(D / 2, D / 2, L),
+                inlet_velocity_m_s=(0.0, 0.0, U), nu_m2_s=nu)
+            chain = " && ".join(" ".join(a) for a in mb.snappy_mesh_cmds())
+            script = (f"source '{env}' >/dev/null 2>&1\n" if env else "") + chain
+            subprocess.run(["bash", "-c", script], cwd=d, capture_output=True)
+            parsed = of.parse_pressure_drop(d, rho_kg_m3=rho_w)
+            dps.append(parsed["dp_developed_pa"] if parsed else float("nan"))
+    hp_line = [_cfd.pipe_pressure_drop(diameter_mm=D * 1000, length_mm=L * 1000,
+                                       velocity_m_s=U, mu_pa_s=nu * rho_w,
+                                       rho_kg_m3=rho_w)["hagen_poiseuille_pa"]
+               for U in vels]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.0))
+    ax = axes[0]
+    ax.plot(t_or, [o["t_center_c"] for o in orc], "-", color="C0",
+            label="Heisler centre (exact)")
+    ax.plot(t_or, [o["t_surface_c"] for o in orc], "-", color="C1",
+            label="Heisler surface (exact)")
+    step = max(1, len(t_solved) // 24)
+    ax.plot(t_solved[::step], tmax[::step], "o", ms=4, color="C0",
+            label="bridged box max(T)")
+    ax.plot(t_solved[::step], tmin[::step], "s", ms=4, color="C1",
+            label="bridged box min(T)")
+    ax.set_xlabel("time  [s]")
+    ax.set_ylabel("temperature  [°C]")
+    ax.set_title("FreeCAD box → Gmsh UNV → ElmerGrid → Elmer\n"
+                 "plane wall, Bi=0.5 (faces 1+2 convective)", fontsize=9)
+    ax.grid(True, ls=":", alpha=0.5)
+    ax.legend(fontsize=8)
+    ax = axes[1]
+    ax.plot(vels, hp_line, "-", color="C0", label="Hagen–Poiseuille (exact)")
+    ax.plot(vels, dps, "o", ms=8, color="C1", label="snappyHexMesh + simpleFoam\n(2·mean(p), developed)")
+    ax.set_xlabel("mean velocity  [m/s]")
+    ax.set_ylabel("pressure drop  [Pa]")
+    ax.set_title("cylinder STL → snappyHexMesh → simpleFoam\nØ10×100 mm, water",
+                 fontsize=9)
+    ax.grid(True, ls=":", alpha=0.5)
+    ax.legend(fontsize=8)
+    fig.suptitle("Example G — the geometry bridge: solid → mesh → solve  (§M4)",
+                 weight="bold", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/bridge.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
 def make_plots(outdir):
-    """Generate the four result figures into ``outdir``; skip a panel when its solver
+    """Generate the six result figures into ``outdir``; skip a panel when its solver
     is absent. matplotlib is imported lazily so the gated run needs no plotting deps."""
     import os
     try:
@@ -450,6 +778,10 @@ def make_plots(outdir):
     print("  openfoam.png " + ("✓" if _plot_cfd(outdir) else "SKIP (OpenFOAM absent)"))
     print("  optics.png " + ("✓ (with rayoptics overlay)" if _plot_optics(outdir)
                              else "✓ (oracle only — rayoptics absent)"))
+    print("  radiation.png " + ("✓" if _plot_radiation(outdir) else "SKIP (ElmerSolver absent)"))
+    print("  external.png " + ("✓" if _plot_external(outdir) else "SKIP (OpenFOAM absent)"))
+    print("  bridge.png " + ("✓" if _plot_bridge(outdir)
+                             else "SKIP (ElmerSolver/ElmerGrid/OpenFOAM absent)"))
 
 
 def main():
@@ -472,7 +804,10 @@ def main():
         for name, fn in (("topology", example_topology),
                          ("thermal", example_thermal),
                          ("cfd", example_cfd),
-                         ("optics", example_optics)):
+                         ("optics", example_optics),
+                         ("radiation", example_radiation),
+                         ("external", example_external),
+                         ("bridge", example_bridge)):
             try:
                 results[name] = fn(w, log)
             except Exception as e:  # one example failing must not abort the rest

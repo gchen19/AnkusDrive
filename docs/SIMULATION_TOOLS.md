@@ -143,19 +143,33 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Answers:** "How hot does it get after 5 min? Does radiation matter?"
 - **Backend:** lumped-mass quick estimates pure-Python; transient / radiation via
   Elmer or OpenFOAM `chtMultiRegionFoam`. **Weight: none (lumped) → heavy (CFD-class).**
-- **Signatures:**
+- **Signatures (implemented):**
   ```
   thermal_lumped(mass_g, c_p, power_w, h_conv, area_mm2, t_ambient_c, duration_s)
-  thermal_transient(analysis, duration_s, dt_s)        # Elmer-backed, later phase
-  thermal_radiation(analysis, emissivity, view_factors)
+  thermal_transient_1d(half_thickness_mm, h_conv, duration_s, k, rho, cp, …)  # Heisler oracle
+  thermal_transient_submit(half_thickness_mm|body+convection_faces|case_dir, …)  # Elmer, async
+    # body mode (P3 M4 bridge): Gmsh-mesh a real FreeCAD solid (UNV face groups →
+    # boundary tags, tag i == Faces[i-1]) → ElmerGrid → HeatSolver; convection_faces
+    # get h_conv/t_ambient_c, the rest are adiabatic -> {t_max_c, t_min_c, nodes, tets}
+  thermal_radiation_submit(t1_c, t2_c, emissivity_1, emissivity_2, …)  # Elmer enclosure, async
+    -> {ok:false, reason, install}                               # when ElmerSolver absent
+     | {job_id, status, cache_hit}  # poll job_result for {ok, flux_w_m2, q_net_w,
+       two_plate_flux_w_m2, oracle_ratio (≈1), t1_c, t2_c, emissivity_1, emissivity_2}
   ```
 - CCX already covers steady-state conduction via `fem_thermal_results`; this fills
   the *time* and *radiation* gaps. Lumped version ships in the pure-Python wave.
-- **Status: lumped shipped (P0)** in `driftpin/analysis/thermal.py` —
-  `thermal_lumped` (first-order RC: ΔT_ss, τ, T(t), plus an h_rad-vs-h_conv
-  radiation screen), 5 two-sided toys in `tests/test_thermal.py` (τ=450 s,
-  T(300 s)=55.4 °C against the exact exponential). `thermal_transient` /
-  `thermal_radiation` (Elmer/CFD-backed) stay P2.
+- **Status: lumped + transient + radiation shipped.** `thermal_lumped` (P0; first-order
+  RC: ΔT_ss, τ, T(t), plus an h_rad-vs-h_conv radiation screen). `thermal_transient_*`
+  (P2 M4; Elmer 1-D plane-wall vs the one-term Heisler oracle to <0.1%). **`thermal_radiation_submit`
+  (P3 M2):** Elmer **diffuse-gray** two-plate enclosure radiation (ViewFactors + HeatSolver),
+  gated against the exact two infinite parallel plates exchange
+  q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) — `oracle_ratio` lands within ~0.2% (residual is
+  finite-plate edge leakage), and the small-ΔT limit matches `thermal_lumped`'s h_rad
+  screen. The exact closed form is `analysis/thermal.radiation_exchange` (general
+  two-surface network + the two-plate limit); the Elmer case builder is
+  `analysis/elmer.write_radiation_plates_case`. Acceptance: **Example E** +
+  `radiation.png`; oracle gates in `tests/test_thermal.py`, the ElmerSolver gate in
+  `tests/test_elmer.py`.
 
 ### 5. Structural extensions
 
@@ -171,19 +185,37 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - `topology_optimize` *returns geometry*, not just numbers — the one family here
   that closes the loop back into the modeller.
 
-### 6. Fluids / CFD
+### 6. Fluids / CFD  ✅ shipped (P2 M5 internal; P3 M3 external)
 
 - **Answers:** "What's the pressure drop through this manifold? Drag on this housing?"
-- **Backend:** OpenFOAM (via CfdOF or directly) / SU2; Elmer for light cases.
-  **Weight: heavy** (large install, long solves) — **later phase.**
-- **Signatures:**
+- **Backend:** OpenFOAM (`blockMesh`+`simpleFoam`, laminar) / SU2; the exact analytic
+  oracles are pure-Python in [`analysis/cfd.py`](../driftpin/analysis/cfd.py).
+- **Signatures (implemented):**
   ```
-  cfd_internal_flow(model, inlet={flow_or_pressure}, outlet, fluid)
-    -> {pressure_drop_pa, flow_rate, recirculation_zones}
-  cfd_external_flow(model, velocity, fluid)
-    -> {drag_n, lift_n, cd, cl}
+  cfd_pipe_flow(diameter_mm, length_mm, flow_rate_lpm|velocity_m_s, fluid)  # Hagen–Poiseuille oracle
+  cfd_internal_flow_submit(diameter_mm,length_mm,…|body+inlet_face+outlet_face|case_dir)  # async
+    -> {ok, reynolds, pressure_drop_pa, hagen_poiseuille_pa, hp_ratio (≈1), …}
+    # body mode (P3 M4 bridge): tessellate a real FreeCAD solid into per-face STL
+    # regions (inlet/outlet by 1-based face index, the rest no-slip walls) →
+    # blockMesh box → snappyHexMesh → simpleFoam; use the developed pressure_drop_pa
+  cfd_external_flow_submit(velocity_m_s, plate_length_mm, fluid, …|case_dir)  # OpenFOAM flat plate, async
+    -> {ok:false, reason, install}                            # when no CFD solver resolves
+     | {job_id, status, cache_hit}  # poll job_result for {ok, reynolds_l, cd, cf_solved,
+       cf_blasius, blasius_ratio (≈1, ~15%), drag_force_n, drag_momentum_n, n_cells}
   ```
-- Gated on the async/long-solve work (below) — a CFD run can't block the MCP channel.
+- **External-flow oracles** (`analysis/cfd.py`): **Stokes sphere** Cd = 24/Re,
+  F = 6πμUR (exact at Re≪1) and the **laminar flat plate** (Blasius
+  Cf = 1.328/√Re_L). The external builder (P3 M3) builds a 2-D flat plate with a clean
+  leading edge (slip→plate→slip, far-field top), runs simpleFoam, and integrates the
+  **wall-shear drag straight from the converged U field** — OpenFOAM's force /
+  wallShearStress function objects abort with a `sha1` IOstream error in this build, so
+  drag is read from fields (τ_w ≈ μ·u₁/y₁ over the plate; trailing-edge momentum
+  thickness as a cross-check), gating Cd vs Blasius within ~15% (it lands ~9% high and
+  converges with Re). Acceptance: **Example F** + `external.png`; oracle gates in
+  `tests/test_cfd.py`, the simpleFoam gate (Blasius + U^1.5 law) in
+  `tests/test_openfoam.py`.
+- Long solves run async via [`jobs.py`](../driftpin/jobs.py) so a CFD run never blocks
+  the MCP channel.
 
 ### 7. Optics  ✅ shipped (P3 M1)
 

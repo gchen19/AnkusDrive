@@ -2822,6 +2822,9 @@ def thermal_transient_submit(
     case_dir: str | None = None,
     sif: str = "case.sif",
     half_thickness_mm: float | None = None,
+    body: str | None = None,
+    convection_faces: list | None = None,
+    char_length_mm: float | None = None,
     h_conv: float | None = None,
     duration_s: float | None = None,
     k: float | None = None,
@@ -2835,7 +2838,7 @@ def thermal_transient_submit(
 ) -> dict:
     """Transient thermal FEM via Elmer, asynchronous. Requires ElmerSolver (apt
     `elmerfem-csc` / conda); when absent this returns {ok:false, reason, install}
-    rather than raising. Two modes:
+    rather than raising. Three modes:
 
     - **Build the analytic-slab case** (no solver case prep needed): pass the
       plane-wall transient — `half_thickness_mm`, `h_conv` (W/m²K), `duration_s`, and
@@ -2845,19 +2848,72 @@ def thermal_transient_submit(
       ElmerSolver, and returns the centre/surface temperatures — the same plane-wall
       BVP `thermal_transient_1d` solves analytically, so the two are directly
       comparable (the kickoff's relative gate).
+    - **Solve a real FreeCAD solid — the geometry bridge**: pass a `body` handle plus
+      `convection_faces` (1-based indices into the solid's faces; those faces get the
+      `h_conv`/`t_ambient_c` convective BC, every other face is adiabatic), the
+      physics (`h_conv`, `duration_s`, `k`+`rho`+`cp` or `material`), and an optional
+      `char_length_mm` Gmsh element size. The solid is Gmsh-meshed and solved as a
+      true 3-D body (ElmerGrid + ElmerSolver); the result's {t_max_c, t_min_c} are
+      the interior/convective-surface temperatures (for a slab-like body, directly
+      gateable against thermal_transient_1d).
     - **Run a prepared `case_dir`** containing its own `.sif` + mesh.
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
     {ok, returncode, solver, case_dir, stdout_tail} plus, for the slab case,
-    {t_center_c, t_surface_c, n_steps_written} (or {scalars_final} for a prepared case)."""
+    {t_center_c, t_surface_c, n_steps_written}, for a body {t_max_c, t_min_c, nodes,
+    tets} (or {scalars_final} for a prepared case)."""
     params = {"sif": sif, "t_initial_c": t_initial_c, "t_ambient_c": t_ambient_c,
               "n_elements": n_elements, "n_steps": n_steps}
     for key, v in (("case_dir", case_dir), ("half_thickness_mm", half_thickness_mm),
+                   ("body", body), ("convection_faces", convection_faces),
+                   ("char_length_mm", char_length_mm),
                    ("h_conv", h_conv), ("duration_s", duration_s),
                    ("k", k), ("rho", rho), ("cp", cp), ("material", material)):
         if v is not None:
             params[key] = v
     return _call("thermal_transient_submit", **params)
+
+
+@mcp.tool()
+def thermal_radiation_submit(
+    t1_c: float | None = None,
+    t2_c: float | None = None,
+    emissivity_1: float = 0.8,
+    emissivity_2: float = 0.8,
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+    width_m: float = 1.0,
+    gap_m: float = 0.01,
+    plate_thickness_m: float = 0.01,
+    n_x: int = 80,
+    k_plate: float = 400.0,
+) -> dict:
+    """Diffuse-gray radiation FEM via Elmer, asynchronous — the radiation sibling of
+    thermal_transient_submit. Requires ElmerSolver + the ViewFactors binary (apt
+    `elmerfem-csc` / conda); when absent this returns {ok:false, reason, install}
+    rather than raising. Two modes:
+
+    - **Build the two-plate enclosure case** (no case prep): pass `t1_c`, `t2_c` (°C)
+      and the two surface emissivities `emissivity_1`/`emissivity_2` (default 0.8). The
+      handler writes a 2-D pair of parallel plates radiating across an unmeshed vacuum
+      gap, runs ViewFactors then ElmerSolver, and extracts the net radiative exchange —
+      directly gated against the exact two infinite parallel plates oracle
+      q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) (`oracle_ratio` ≈ 1). Mesh/geometry knobs: `width_m`,
+      `gap_m`, `plate_thickness_m`, `n_x`, `k_plate`.
+    - **Run a prepared `case_dir`** containing its `.sif` + mesh (ViewFactors is run
+      first when no factor file is present).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, case_dir, stdout_tail} plus, for the plate case,
+    {flux_w_m2, q_net_w, two_plate_flux_w_m2, oracle_ratio, t1_c, t2_c, emissivity_1,
+    emissivity_2} (or {scalars_final} for a prepared case)."""
+    params = {"emissivity_1": emissivity_1, "emissivity_2": emissivity_2, "sif": sif,
+              "width_m": width_m, "gap_m": gap_m,
+              "plate_thickness_m": plate_thickness_m, "n_x": n_x, "k_plate": k_plate}
+    for key, v in (("t1_c", t1_c), ("t2_c", t2_c), ("case_dir", case_dir)):
+        if v is not None:
+            params[key] = v
+    return _call("thermal_radiation_submit", **params)
 
 
 @mcp.tool()
@@ -2893,6 +2949,9 @@ def cfd_internal_flow_submit(
     application: str | None = None,
     diameter_mm: float | None = None,
     length_mm: float | None = None,
+    body: str | None = None,
+    inlet_face: int | None = None,
+    outlet_face: int | None = None,
     velocity_m_s: float | None = None,
     flow_rate_lpm: float | None = None,
     fluid: str = "water-20c",
@@ -2900,11 +2959,14 @@ def cfd_internal_flow_submit(
     rho_kg_m3: float | None = None,
     n_axial: int = 120,
     n_radial: int = 15,
+    base_cell_mm: float | None = None,
+    location_in_mesh_mm: list | None = None,
+    stl_tolerance_mm: float = 0.2,
     end_time: int = 4000,
 ) -> dict:
     """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, asynchronous. Requires an
     OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
-    reason, install} rather than raising. Two modes:
+    reason, install} rather than raising. Three modes:
 
     - **Build the straight-pipe validation case** (no case prep): pass `diameter_mm`,
       `length_mm`, and `velocity_m_s` (or `flow_rate_lpm`), with a `fluid` name or
@@ -2912,17 +2974,29 @@ def cfd_internal_flow_submit(
       via `end_time`). The handler builds the axisymmetric laminar pipe, runs
       blockMesh+simpleFoam, and returns the solved Δp next to the Hagen–Poiseuille
       analytic reference (`cfd_pipe_flow`) — the kickoff's exact CFD gate, `hp_ratio`≈1.
+    - **Solve a real FreeCAD solid — the geometry bridge**: pass a `body` handle plus
+      `inlet_face`/`outlet_face` (1-based indices into the solid's faces; every other
+      face becomes a no-slip wall) and `velocity_m_s` (applied along the inlet face's
+      inward normal). The solid tessellates into a multi-region STL and meshes with
+      blockMesh + snappyHexMesh; `base_cell_mm` sets the background cell size,
+      `location_in_mesh_mm` the kept-region seed point (default: bbox centre — set it
+      for non-convex solids), `stl_tolerance_mm` the tessellation sag. Use the
+      developed-profile `pressure_drop_pa`; also pass `diameter_mm`+`length_mm` to get
+      an `hp_ratio` reference for pipe-like bodies.
     - **Run a prepared OpenFOAM `case_dir`** (optionally an `application`, e.g.
       'simpleFoam'/'foamRun'); the OpenFOAM environment is sourced before the run.
 
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Pipe
-    case: {ok, returncode, reynolds, regime, pressure_drop_pa (developed),
-    pressure_drop_inlet_pa, hagen_poiseuille_pa, hp_ratio, n_cells, case_dir}. Prepared
-    case: {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result.
+    Pipe/body cases: {ok, returncode, pressure_drop_pa (developed),
+    pressure_drop_inlet_pa, hagen_poiseuille_pa?, hp_ratio?, n_cells, case_dir}.
+    Prepared case: {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
     params = {"fluid": fluid, "n_axial": n_axial, "n_radial": n_radial,
-              "end_time": end_time}
+              "stl_tolerance_mm": stl_tolerance_mm, "end_time": end_time}
     for k, v in (("case_dir", case_dir), ("application", application),
                  ("diameter_mm", diameter_mm), ("length_mm", length_mm),
+                 ("body", body), ("inlet_face", inlet_face),
+                 ("outlet_face", outlet_face), ("base_cell_mm", base_cell_mm),
+                 ("location_in_mesh_mm", location_in_mesh_mm),
                  ("velocity_m_s", velocity_m_s), ("flow_rate_lpm", flow_rate_lpm),
                  ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3)):
         if v is not None:
@@ -2932,19 +3006,40 @@ def cfd_internal_flow_submit(
 
 @mcp.tool()
 def cfd_external_flow_submit(
+    velocity_m_s: float | None = None,
+    plate_length_mm: float | None = None,
+    fluid: str = "air-20c",
+    mu_pa_s: float | None = None,
+    rho_kg_m3: float | None = None,
     case_dir: str | None = None,
     application: str | None = None,
     model: str | None = None,
+    nx_plate: int = 160,
+    n_y: int = 140,
+    end_time: int = 3000,
 ) -> dict:
-    """External-flow CFD (drag / lift) via OpenFOAM or SU2, asynchronous. Same contract
-    as cfd_internal_flow_submit: degrades to {ok:false, reason, install} when no CFD
-    solver resolves, else runs the solver app in a prepared `case_dir` in the background
-    (forces vs pressure-drop extraction lives in the case's functionObjects).
+    """External-flow CFD (drag) via OpenFOAM or SU2, asynchronous. Requires an OpenFOAM
+    (apt/conda) or SU2 binary; when none resolves this returns {ok:false, reason,
+    install} rather than raising. Two modes:
 
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    - **Build the flat-plate validation case** (no case prep): pass `velocity_m_s`, with
+      optional `plate_length_mm` (default 100), a `fluid` name ('air-20c','water-20c',…)
+      or explicit `mu_pa_s`+`rho_kg_m3`, and mesh knobs `nx_plate`/`n_y`/`end_time`. The
+      handler builds a 2-D laminar flat plate with a clean leading edge (slip→plate→slip,
+      far-field top), runs blockMesh+simpleFoam, integrates the wall-shear drag straight
+      from the converged U field (OpenFOAM's force function objects abort with a 'sha1'
+      IOstream error in this build), and returns the solved Cd next to the Blasius
+      reference Cf=1.328/√Re_L — the kickoff's external gate (`blasius_ratio`≈1, ~15%).
+    - **Run a prepared OpenFOAM `case_dir`** (optionally an `application`).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Flat
+    plate: {ok, returncode, reynolds_l, cd, cf_solved, cf_blasius, blasius_ratio,
+    drag_force_n, drag_momentum_n, drag_blasius_n, n_cells, case_dir}. Prepared case:
     {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
-    params = {}
-    for k, v in (("case_dir", case_dir), ("application", application), ("model", model)):
+    params = {"fluid": fluid, "nx_plate": nx_plate, "n_y": n_y, "end_time": end_time}
+    for k, v in (("velocity_m_s", velocity_m_s), ("plate_length_mm", plate_length_mm),
+                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3), ("case_dir", case_dir),
+                 ("application", application), ("model", model)):
         if v is not None:
             params[k] = v
     return _call("cfd_external_flow_submit", **params)

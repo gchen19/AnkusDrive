@@ -15,6 +15,7 @@ Run:  python3 tests/test_elmer.py
 """
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -103,6 +104,61 @@ def test_input_validation():
             raise AssertionError("expected ValueError")
 
 
+# --- radiation structure (no solver) ------------------------------------------
+
+def test_radiation_mesh_two_plates_well_formed():
+    files = elmer.radiation_plates_mesh_files(n_x=8, width_m=1.0,
+                                              plate_thickness_m=0.01, gap_m=0.01, n_y=2)
+    assert set(files) == {"mesh.header", "mesh.nodes", "mesh.elements", "mesh.boundary"}
+    # two 8x2 quad grids = 32 bulk elems; 4 boundary tags x 8 edges = 32 boundary elems
+    n_nodes, n_bulk, n_bnd = files["mesh.header"].split("\n")[0].split()
+    assert (n_bulk, n_bnd) == ("32", "32"), files["mesh.header"]
+    assert len(files["mesh.elements"].strip().splitlines()) == 32
+    tags = sorted({line.split()[1] for line in files["mesh.boundary"].strip().splitlines()})
+    assert tags == ["1", "2", "3", "4"], tags          # 4 plate faces
+    # all bulk elements are 404 quads
+    assert all(line.split()[2] == "404" for line in files["mesh.elements"].strip().splitlines())
+
+
+def test_radiation_sif_is_diffuse_gray_in_kelvin():
+    sif = elmer.radiation_plates_sif(t1_c=500.0, t2_c=100.0,
+                                     emissivity_1=0.8, emissivity_2=0.6)
+    for token in ("Simulation Type = Steady State", "Stefan Boltzmann",
+                  "Radiation = Diffuse Gray", "Emissivity = 0.8", "Emissivity = 0.6",
+                  "View Factors", "Gebhart Factors", 'Operator 1 = "diffusive flux"'):
+        assert token in sif, f"missing {token!r} in radiation .sif"
+    # temperatures are imposed in Kelvin (radiation is T^4): 500C -> 773.15, 100C -> 373.15
+    assert "773.15" in sif and "373.15" in sif, sif
+
+
+def test_radiation_write_case_and_parse_flux():
+    with tempfile.TemporaryDirectory() as d:
+        meta = elmer.write_radiation_plates_case(
+            d, t1_c=500.0, t2_c=100.0, emissivity_1=0.8, emissivity_2=0.8,
+            width_m=2.0, gap_m=0.01, n_x=8)
+        assert os.path.isfile(os.path.join(d, "case.sif"))
+        assert os.path.isfile(os.path.join(d, "rad", "mesh.header"))
+        assert abs(meta["area_1_m2"] - 2.0) < 1e-12       # width 2 x depth 1
+        # parse: col 1 of the last row is the net flux (W); /area -> W/m^2
+        with open(os.path.join(d, meta["scalars"]), "w") as f:
+            f.write("  100.0 1 1\n  25510.0 1 1\n")        # net 25510 W over 2 m^2
+        got = elmer.parse_radiation_flux(d, meta["scalars"], meta["area_1_m2"])
+        assert abs(got["q_net_w"] - 25510.0) < 1e-9
+        assert abs(got["flux_w_m2"] - 12755.0) < 1e-9
+    with tempfile.TemporaryDirectory() as d:
+        assert elmer.parse_radiation_flux(d) is None       # absent -> None, no raise
+
+
+def test_radiation_input_validation():
+    try:
+        elmer.write_radiation_plates_case("/tmp/nope_rad", t1_c=500, t2_c=100,
+                                          emissivity_1=1.5, emissivity_2=0.8)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError on emissivity > 1")
+
+
 # --- solver-backed (skips when ElmerSolver is absent) -------------------------
 
 def _run_slab(half_mm, h, dur, k, rho, cp, ti=100.0, ta=25.0, ne=40, ns=120):
@@ -151,6 +207,64 @@ def test_solve_agrees_with_lumped_at_small_biot():
     # near-isothermal: centre and surface within a few hundredths of a degree
     assert abs(got["t_center_c"] - got["t_surface_c"]) < 0.1, got
     assert abs(got["t_center_c"] - orc["t_center_lumped_c"]) < 0.2, (got, orc)
+
+
+def _run_radiation(t1_c, t2_c, e1, e2, width_m=1.0, gap_m=0.01, n_x=80):
+    """Build + run the two-plate radiation case (ViewFactors then ElmerSolver), return
+    (parse_radiation_flux dict, area). Returns (None, area) when the solve produced no
+    scalars."""
+    d = tempfile.mkdtemp(prefix="elmer_rad_test_")
+    built = elmer.write_radiation_plates_case(
+        d, t1_c=t1_c, t2_c=t2_c, emissivity_1=e1, emissivity_2=e2,
+        width_m=width_m, gap_m=gap_m, n_x=n_x)
+    elmer_bin = solvers.find_solver("elmer")["path"]
+    vf_bin = shutil.which("ViewFactors") or os.path.join(
+        os.path.dirname(elmer_bin), "ViewFactors")
+    subprocess.run([vf_bin, built["sif"]], cwd=d, capture_output=True, text=True)
+    subprocess.run([elmer_bin, built["sif"]], cwd=d, capture_output=True, text=True)
+    return elmer.parse_radiation_flux(d, built["scalars"], built["area_1_m2"]), built["area_1_m2"]
+
+
+def test_radiation_matches_two_plate_oracle():
+    """Two parallel plates exchanging diffuse-gray radiation: the Elmer net flux matches
+    the exact two-plate closed form q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) within 2% (the residual
+    is finite-plate edge leakage), across symmetric and asymmetric emissivities."""
+    if not solvers.is_available("elmer"):
+        print("    SKIP — ElmerSolver not installed")
+        return
+    if not (shutil.which("ViewFactors")
+            or os.path.isfile(os.path.join(
+                os.path.dirname(solvers.find_solver("elmer")["path"]), "ViewFactors"))):
+        print("    SKIP — Elmer ViewFactors binary not found")
+        return
+    for t1, t2, e1, e2 in ((500, 100, 0.8, 0.8), (450, 50, 0.5, 0.9), (300, 20, 0.9, 1.0)):
+        got, _area = _run_radiation(t1, t2, e1, e2)
+        assert got is not None, f"no radiation flux output for {(t1, t2, e1, e2)}"
+        orc = thermal.radiation_exchange(t1, t2, e1, e2)
+        ratio = got["flux_w_m2"] / orc["two_plate_flux_w_m2"]
+        assert 0.98 <= ratio <= 1.02, (t1, t2, e1, e2, got["flux_w_m2"],
+                                       orc["two_plate_flux_w_m2"], ratio)
+
+
+def test_radiation_emissivity_lowers_flux():
+    """Halving both emissivities cuts the exchanged flux (the 1/ε₁+1/ε₂−1 denominator
+    grows), and Elmer tracks the oracle's drop."""
+    if not solvers.is_available("elmer"):
+        print("    SKIP — ElmerSolver not installed")
+        return
+    if not (shutil.which("ViewFactors")
+            or os.path.isfile(os.path.join(
+                os.path.dirname(solvers.find_solver("elmer")["path"]), "ViewFactors"))):
+        print("    SKIP — Elmer ViewFactors binary not found")
+        return
+    hi, _a = _run_radiation(500, 100, 0.9, 0.9)
+    lo, _b = _run_radiation(500, 100, 0.45, 0.45)
+    assert hi is not None and lo is not None
+    assert lo["flux_w_m2"] < hi["flux_w_m2"], (lo, hi)
+    # the ratio of the two solves tracks the ratio of the two oracles within 2%
+    o_hi = thermal.radiation_exchange(500, 100, 0.9, 0.9)["two_plate_flux_w_m2"]
+    o_lo = thermal.radiation_exchange(500, 100, 0.45, 0.45)["two_plate_flux_w_m2"]
+    assert abs((lo["flux_w_m2"] / hi["flux_w_m2"]) - (o_lo / o_hi)) < 0.02, (lo, hi)
 
 
 # --- runner -------------------------------------------------------------------
