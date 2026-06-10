@@ -186,10 +186,18 @@ M5  3-D topology   ✅ simp_topology_3d (trilinear hexes; scipy/dense/PCG backen
                        exact, z-symmetry, keep-outs void, uniform cantilever within
                        the Euler-Bernoulli+Timoshenko band. (FreeCAD-extracted load
                        cases ride on the M4 bridge.)
-M6  Frontier       ◑ modal SHIPPED: beam_modal exact Euler-Bernoulli oracle +
-                       fem_modal (CalculiX, 2nd-order tets) gate — fundamental within
-                       ~0.5% of E-B; fem_mesh element_order added. Example H + modal.png.
-                       (conjugate heat transfer · EM still open)
+M6  Frontier       ✅ modal: beam_modal exact Euler-Bernoulli oracle + fem_modal
+                       (CalculiX, 2nd-order tets) gate — fundamental within ~0.5% of
+                       E-B; fem_mesh element_order added. Example H + modal.png.
+                       CHT: analysis/cht.py — thermal_composite_wall exact network +
+                       cht_channel_submit (one Elmer solve, coupled plug-flow fluid +
+                       solid wall) gated h-free: energy balance 0.5%, q″t/k drop 0.2%
+                       (cell-Péclet ≤25 envelope documented). Example I + cht.png.
+                       EM: analysis/em.py — skin_depth/dc_resistance/wire/solenoid
+                       exact oracles + em_conduction_submit (StatCurrentSolver,
+                       R = L/σA machine-exact) and em_induction_submit
+                       (MagnetoDynamics2DHarmonic — |A| AND phase e-fold at δ to
+                       0.1%). Example J + em.png.
 ```
 
 Each Mn is the established vertical slice: a module/handler/tool, the `*_submit` wired

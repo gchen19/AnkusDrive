@@ -7598,6 +7598,291 @@ def _h_thermal_radiation_submit(p):
                              "t2_c": plates["t2_c"]})
 
 
+# --- conjugate heat transfer (P3 M6 frontier; Elmer-backed) --------------------
+
+@handler("thermal_composite_wall")
+def _h_thermal_composite_wall(p):
+    """Exact series thermal-resistance network of a plane composite wall (the
+    classic overall-U calculation and the CHT family's closed-form oracle):
+    U = 1/(1/h_in + Σ tᵢ/kᵢ + 1/h_out), q = U·ΔT, every interface temperature
+    exact. `layers` is the in→out list of {thickness_mm, k|material}; `h_in`/
+    `h_out` optional film coefficients. Pure-Python, no solver. Returns
+    {u_w_m2k, r_total_m2k_w, q_w_m2, q_w, layer_resistances_m2k_w,
+    interface_temps_c, t_in_c, t_out_c, area_m2}."""
+    from driftpin.analysis import cht as _cht
+    return _cht.composite_wall(
+        p["layers"], float(p["t_in_c"]), float(p["t_out_c"]),
+        h_in=(float(p["h_in"]) if p.get("h_in") is not None else None),
+        h_out=(float(p["h_out"]) if p.get("h_out") is not None else None),
+        area_m2=float(p.get("area_m2", 1.0)))
+
+
+@handler("cht_channel_submit")
+def _h_cht_channel_submit(p):
+    """Conjugate heat transfer via Elmer, OFF the MCP channel — one solve spanning
+    a plug-flow fluid channel AND a conducting solid wall, coupled at their shared
+    interface (the P3 M6 frontier family). Degrades to {ok:false, reason, install}
+    when ElmerSolver is absent.
+
+    Builds the two-body channel case (constant outer heat flux, inlet Dirichlet,
+    everything else adiabatic) whose gates are exact WITHOUT a Nusselt correlation:
+    the outlet bulk temperature follows the energy balance q″·L = ṁ·c_p·ΔT and the
+    solid-layer drop is q″·t/k. Params: `flux_w_m2`, `velocity_m_s`, `t_in_c`,
+    geometry (`length_m`, `fluid_height_m`, `solid_thickness_m`), fluid `k_fluid`/
+    `rho_fluid`/`cp_fluid`, `k_solid`, mesh (`nx`, `ny_fluid`, `ny_solid`). The
+    writer rejects cell Péclet > 25 (the stabilized-advection envelope). Also
+    accepts a prepared `case_dir`.
+
+    The background job runs ONLY the ElmerSolver subprocess. Returns the
+    degradation dict or {job_id, status, cache_hit}; poll job_result for {ok,
+    t_outlet_mean_c, t_out_exact_c, energy_balance_ratio (≈1), dt_solid_k,
+    dt_solid_exact_k, solid_drop_ratio (≈1), pe_cell, case_dir, stdout_tail}."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import subprocess
+    import tempfile
+
+    from driftpin import jobs
+    from driftpin.analysis import cht as _cht
+    elmer_bin = info["path"]
+
+    case_dir = p.get("case_dir")
+    if case_dir:                                     # --- prepared case directory ---
+        if not os.path.isdir(case_dir):
+            raise ValueError(f"case_dir {case_dir!r} is not a directory")
+        sif = p.get("sif", "case.sif")
+        key = jobs.content_key("cht_channel",
+                               {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+        def _work_prepared():
+            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                                  capture_output=True, text=True)
+            return {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "case_dir": case_dir,
+                "scalars": _cht.parse_cht_scalars(case_dir),
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+
+        return jobs.submit("cht_channel", _work_prepared, key=key,
+                           meta={"case_dir": case_dir})
+
+    params = {k: float(p[k]) for k in (
+        "flux_w_m2", "velocity_m_s", "t_in_c", "length_m", "fluid_height_m",
+        "solid_thickness_m", "k_fluid", "rho_fluid", "cp_fluid", "k_solid")
+        if p.get(k) is not None}
+    for k in ("nx", "ny_fluid", "ny_solid"):
+        if p.get(k) is not None:
+            params[k] = int(p[k])
+    key = jobs.content_key("cht_channel", {"channel": params})
+
+    def _work():
+        cdir = tempfile.mkdtemp(prefix="elmer_cht_")
+        built = _cht.write_cht_channel_case(cdir, **params)
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                              capture_output=True, text=True)
+        orc = built["oracle"]
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "case_dir": cdir,
+            "pe_cell": built["pe_cell"],
+            "t_out_exact_c": orc["t_out_c"],
+            "dt_solid_exact_k": orc["dt_solid_k"],
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        parsed = _cht.parse_cht_scalars(cdir, built["scalars"])
+        if parsed:
+            out.update(parsed)
+            t_in = params.get("t_in_c", 20.0)
+            if orc["dt_out_k"] > 0:
+                out["energy_balance_ratio"] = round(
+                    (parsed["t_outlet_mean_c"] - t_in) / orc["dt_out_k"], 5)
+            if orc["dt_solid_k"] > 0:
+                out["solid_drop_ratio"] = round(
+                    parsed["dt_solid_k"] / orc["dt_solid_k"], 5)
+        return out
+
+    return jobs.submit("cht_channel", _work, key=key,
+                       meta={"mode": "channel",
+                             "flux_w_m2": params.get("flux_w_m2", 10000.0)})
+
+
+# --- low-frequency EM (P3 M6 frontier; Elmer-backed) ---------------------------
+
+@handler("em_skin_depth")
+def _h_em_skin_depth(p):
+    """Exact AC skin depth δ = √(2/(ω·μ₀·μ_r·σ)) + the per-square surface
+    resistance R_s = 1/(σ·δ) — the closed-form induction/skin oracle. σ from
+    `conductivity_s_m` or a `conductor` name (copper, aluminum, …). Pure-Python,
+    no solver. Returns {skin_depth_m, skin_depth_mm, surface_resistance_ohm,
+    angular_frequency_rad_s, conductivity_s_m, mu_r}."""
+    from driftpin.analysis import em as _em
+    return _em.skin_depth(float(p["frequency_hz"]),
+                          conductivity_s_m=p.get("conductivity_s_m"),
+                          mu_r=float(p.get("mu_r", 1.0)),
+                          conductor=p.get("conductor"))
+
+
+@handler("em_dc_resistance")
+def _h_em_dc_resistance(p):
+    """Exact DC resistance of a uniform conductor, R = L/(σ·A), with the Ohm/Joule
+    pair (I = V/R, P = V·I) when `voltage_v` is given. σ from `conductivity_s_m` or
+    a `conductor` name. Pure-Python, no solver. Returns {resistance_ohm,
+    conductivity_s_m, length_m, area_m2, current_a?, joule_w?}."""
+    from driftpin.analysis import em as _em
+    return _em.dc_resistance(
+        float(p["length_mm"]), float(p["area_mm2"]),
+        conductivity_s_m=p.get("conductivity_s_m"), conductor=p.get("conductor"),
+        voltage_v=(float(p["voltage_v"]) if p.get("voltage_v") is not None else None))
+
+
+@handler("em_field")
+def _h_em_field(p):
+    """Exact magnetostatic field of the two canonical sources: kind='wire' is the
+    long straight wire B = μ₀·I/(2π·r) at `distance_mm`; kind='solenoid' is the
+    long-solenoid interior B = μ₀·μ_r·n·I with `turns_per_m`. Pure-Python, no
+    solver. Returns {b_t, b_mt, …}."""
+    from driftpin.analysis import em as _em
+    kind = p.get("kind", "wire")
+    if kind == "wire":
+        return _em.wire_field(float(p["current_a"]), float(p["distance_mm"]))
+    if kind == "solenoid":
+        return _em.solenoid_field(float(p["turns_per_m"]), float(p["current_a"]),
+                                  mu_r=float(p.get("mu_r", 1.0)))
+    raise ValueError(f"kind must be 'wire' or 'solenoid', got {kind!r}")
+
+
+@handler("em_conduction_submit")
+def _h_em_conduction_submit(p):
+    """DC current conduction via Elmer's StatCurrentSolver, OFF the MCP channel —
+    the first half of the P3 M6 EM family. Degrades to {ok:false, reason, install}
+    when ElmerSolver is absent.
+
+    Builds a rectangular strip (`length_m` × `width_m`, unit depth) with
+    `voltage_v` across its ends, runs the solve, and reads the electrode current
+    (the diffusive flux of Potential × conductivity), the total Joule heating and
+    Elmer's own effective resistance — all three machine-exact against R = L/(σ·A)
+    (verified live to 1e-6). σ from `conductivity_s_m` or a `conductor` name.
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, current_a, joule_w, effective_resistance_ohm, resistance_exact_ohm,
+    current_exact_a, resistance_ratio (≈1), case_dir, stdout_tail}."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import subprocess
+    import tempfile
+
+    from driftpin import jobs
+    from driftpin.analysis import em as _em
+    elmer_bin = info["path"]
+    params = {k: float(p[k]) for k in ("voltage_v", "length_m", "width_m",
+                                       "conductivity_s_m") if p.get(k) is not None}
+    for k in ("nx", "ny"):
+        if p.get(k) is not None:
+            params[k] = int(p[k])
+    if p.get("conductor") is not None:
+        params["conductor"] = str(p["conductor"])
+    key = jobs.content_key("em_conduction", {"strip": params})
+
+    def _work():
+        cdir = tempfile.mkdtemp(prefix="elmer_dc_")
+        built = _em.write_dc_strip_case(cdir, **params)
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                              capture_output=True, text=True)
+        orc = built["oracle"]
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "case_dir": cdir,
+            "resistance_exact_ohm": orc["resistance_ohm"],
+            "current_exact_a": orc.get("current_a"),
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        parsed = _em.parse_dc_scalars(cdir, built["scalars"])
+        if parsed:
+            out.update(parsed)
+            if parsed.get("effective_resistance_ohm") and orc["resistance_ohm"] > 0:
+                out["resistance_ratio"] = round(
+                    parsed["effective_resistance_ohm"] / orc["resistance_ohm"], 6)
+        return out
+
+    return jobs.submit("em_conduction", _work, key=key,
+                       meta={"mode": "strip", "voltage_v": params.get("voltage_v", 0.001)})
+
+
+@handler("em_induction_submit")
+def _h_em_induction_submit(p):
+    """AC skin effect via Elmer's harmonic 2-D magnetodynamics, OFF the MCP channel
+    — the induction-heating half of the P3 M6 EM family. Degrades to {ok:false,
+    reason, install} when ElmerSolver is absent.
+
+    Builds a conductor slab `depths` skin depths deep driven by the surface vector
+    potential at `frequency_hz`, runs MagnetoDynamics2DHarmonic, and least-squares
+    fits the e-folding length of the solved complex A(x) in BOTH magnitude and
+    phase — each must equal the exact δ = √(2/(ω·μ·σ)) (verified live to 0.1 %).
+    σ from `conductivity_s_m` or a `conductor` name; optional `mu_r`.
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, skin_depth_exact_m, decay_length_m, phase_length_m, decay_ratio (≈1),
+    phase_ratio (≈1), case_dir, stdout_tail}."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import subprocess
+    import tempfile
+
+    from driftpin import jobs
+    from driftpin.analysis import em as _em
+    elmer_bin = info["path"]
+    params = {k: float(p[k]) for k in ("frequency_hz", "conductivity_s_m", "mu_r",
+                                       "depths") if p.get(k) is not None}
+    for k in ("nx", "ny"):
+        if p.get(k) is not None:
+            params[k] = int(p[k])
+    if p.get("conductor") is not None:
+        params["conductor"] = str(p["conductor"])
+    key = jobs.content_key("em_induction", {"skin": params})
+
+    def _work():
+        cdir = tempfile.mkdtemp(prefix="elmer_skin_")
+        built = _em.write_skin_effect_case(cdir, **params)
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                              capture_output=True, text=True)
+        delta = built["oracle"]["skin_depth_m"]
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "case_dir": cdir,
+            "skin_depth_exact_m": delta,
+            "frequency_hz": built["oracle"]["angular_frequency_rad_s"] / (2 * 3.141592653589793),
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        pts = _em.parse_line_profile(cdir, built["line_file"])
+        if pts:
+            try:
+                fit = _em.fit_decay_length(pts, 0.5 * delta, 2.5 * delta)
+            except ValueError as exc:
+                out["ok"] = False
+                out["reason"] = f"profile fit failed: {exc}"
+                return out
+            out["decay_length_m"] = fit["decay_length_m"]
+            out["phase_length_m"] = fit["phase_length_m"]
+            out["decay_ratio"] = round(fit["decay_length_m"] / delta, 5)
+            out["phase_ratio"] = round(fit["phase_length_m"] / delta, 5)
+        return out
+
+    return jobs.submit("em_induction", _work, key=key,
+                       meta={"mode": "skin", "frequency_hz": params.get("frequency_hz", 50.0)})
+
+
 # --- CFD (family 6 P2; OpenFOAM/SU2-backed) -----------------------------------
 
 def _run_foam(case_dir, argv_list, env_bashrc):

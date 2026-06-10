@@ -155,6 +155,10 @@ Each family lists: the agent question it answers · backend · new-dependency we
     -> {ok:false, reason, install}                               # when ElmerSolver absent
      | {job_id, status, cache_hit}  # poll job_result for {ok, flux_w_m2, q_net_w,
        two_plate_flux_w_m2, oracle_ratio (≈1), t1_c, t2_c, emissivity_1, emissivity_2}
+  thermal_composite_wall(layers, t_in_c, t_out_c, h_in, h_out)  # exact U/q/interface temps, no solver
+  cht_channel_submit(flux_w_m2, velocity_m_s, …)  # P3 M6: ONE Elmer solve over coupled
+    # plug-flow fluid + solid wall regions; gated h-free (energy balance q″L=ṁ·c_p·ΔT
+    # ≈0.5%, solid drop q″t/k ≈0.2%; the builder rejects cell Péclet > 25)
   ```
 - CCX already covers steady-state conduction via `fem_thermal_results`; this fills
   the *time* and *radiation* gaps. Lumped version ships in the pure-Python wave.
@@ -380,12 +384,33 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
   `tests/test_machine_elements.py`. Chain/sprocket and weld-group ratings extend
   the same module next.
 
+### Frontier: low-frequency EM  ✅ shipped (P3 M6)
+
+- **Answers:** "What's this conductor's resistance and Joule heat? How deep does
+  induction heating reach at this frequency?"
+- **Backend:** Elmer's `StatCurrentSolver` (DC) and `MagnetoDynamics2DHarmonic`
+  (AC); exact closed forms in
+  [`analysis/em.py`](../driftpin/analysis/em.py) (a small handbook conductor
+  table ships there — the Materials DB has no electrical layer yet).
+- **Signatures (implemented):**
+  ```
+  em_skin_depth(frequency_hz, conductivity_s_m|conductor, mu_r)   # δ=√(2/ωμσ) + R_s, exact
+  em_dc_resistance(length_mm, area_mm2, …, voltage_v)             # R=L/σA + Ohm/Joule, exact
+  em_field(kind='wire'|'solenoid', …)                             # μ₀I/2πr · μ₀μ_r·n·I, exact
+  em_conduction_submit(voltage_v, length_m, width_m, …)   # Elmer DC strip, async
+    -> resistance_ratio == 1.000000 (machine-exact vs R=L/σA, live)
+  em_induction_submit(frequency_hz, conductor, mu_r, …)   # Elmer harmonic skin slab, async
+    -> decay_ratio/phase_ratio ≈ 1 (|A| AND phase e-fold at exactly δ; 0.1% live)
+  ```
+- Gates in `tests/test_em.py`; acceptance Example J + `em.png`. RF/wave EM stays
+  on the horizon below.
+
 ### 11. Horizon (table-only)
 
 | Domain | Tooling | Priority |
 |---|---|---|
 | Acoustics | Elmer, pyfar, acoular | low |
-| Electromagnetics | OpenEMS / FEniCSx (RF), FEMM (2D motors), Elmer | low |
+| Electromagnetics (RF/wave) | OpenEMS / FEniCSx (RF), FEMM (2D motors) | low |
 | Machining toolpaths | FreeCAD Path, pycam, kiri:moto | low |
 
 ---

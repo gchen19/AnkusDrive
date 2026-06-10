@@ -105,6 +105,14 @@ echo "== Geometry bridge (case gen always; ElmerGrid/snappyHexMesh gates when pr
 python3 tests/test_meshbridge.py
 
 echo
+echo "== Conjugate heat transfer (composite-wall oracle always; Elmer gate when present) =="
+python3 tests/test_cht.py
+
+echo
+echo "== Low-frequency EM (skin/DC oracles always; Elmer gates when present) =="
+python3 tests/test_em.py
+
+echo
 echo "== MBD dynamics (PyBullet; skip if the mbd extra is absent) =="
 $VENV_PY tests/test_mbd.py
 
