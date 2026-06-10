@@ -35,7 +35,7 @@ from __future__ import annotations
 import math
 import os
 
-from .openfoam import _header
+from .openfoam import _header, steady_laminar_common_files
 
 # SaveScalars column order fixed by body_transient_sif: operator 1 = max, 2 = min.
 _COL_MAX = 0
@@ -469,12 +469,9 @@ meshQualityControls
 }}
 mergeTolerance 1e-6;
 """)
-    files["constant/transportProperties"] = (
-        _header("dictionary", "transportProperties", "constant")
-        + f"\ntransportModel  Newtonian;\nnu              {nu_m2_s:.10g};\n")
-    files["constant/turbulenceProperties"] = (
-        _header("dictionary", "turbulenceProperties", "constant")
-        + "\nsimulationType  laminar;\n")
+    # transport/turbulence/control + the central-scheme fvSchemes/fvSolution are
+    # shared verbatim with the parametric wedge pipe
+    files.update(steady_laminar_common_files(nu_m2_s=nu_m2_s, end_time=end_time))
     files["0/U"] = (
         _header("volVectorField", "U", "0")
         + "\ndimensions      [0 1 -1 0 0 0 0];\n"
@@ -493,33 +490,6 @@ mergeTolerance 1e-6;
         "    outlet { type fixedValue; value uniform 0; }\n"
         "    walls  { type zeroGradient; }\n"
         "    background { type zeroGradient; }\n}\n")
-    files["system/controlDict"] = (
-        _header("dictionary", "controlDict", "system")
-        + "\napplication     simpleFoam;\nstartFrom       startTime;\nstartTime       0;\n"
-        "stopAt          endTime;\n"
-        f"endTime         {int(end_time)};\ndeltaT          1;\n"
-        "writeControl    timeStep;\n"
-        f"writeInterval   {int(end_time)};\npurgeWrite      1;\nwriteFormat     ascii;\n"
-        "writePrecision  10;\nwriteCompression off;\ntimeFormat      general;\n"
-        "runTimeModifiable false;\n")
-    files["system/fvSchemes"] = (
-        _header("dictionary", "fvSchemes", "system")
-        + "\nddtSchemes { default steadyState; }\n"
-        "gradSchemes { default Gauss linear; }\n"
-        "divSchemes\n{\n    default none;\n    div(phi,U) bounded Gauss linear;\n"
-        "    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n}\n"
-        "laplacianSchemes { default Gauss linear corrected; }\n"
-        "interpolationSchemes { default linear; }\n"
-        "snGradSchemes { default corrected; }\n")
-    files["system/fvSolution"] = (
-        _header("dictionary", "fvSolution", "system")
-        + "\nsolvers\n{\n"
-        "    p { solver GAMG; smoother GaussSeidel; tolerance 1e-9; relTol 0.01; }\n"
-        "    U { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }\n"
-        "}\n"
-        "SIMPLE\n{\n    nNonOrthogonalCorrectors 2;\n    consistent yes;\n"
-        "    residualControl { p 1e-7; U 1e-7; }\n}\n"
-        "relaxationFactors { equations { U 0.9; } fields { p 0.9; } }\n")
     return files
 
 
