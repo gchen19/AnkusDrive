@@ -29,8 +29,8 @@ It must NOT merely restate a happy-path anchor already pinned in the basic test.
 | machine_elements | ISO 281 (C/P)ᵖ, Wahl C-only, Lewis Y(Z)↑, belt Eytelwein, Lamé linear | ☐ Batch 2 |
 | vibration | SRSS energy independence, out-of-band→0, f∝1/L²/∝h, SS βL≡nπ | ☐ Batch 2 |
 | durability (more) | Goodman fully-reversed collapse, Archard linear, S-N slope, overload guard | ☐ Batch 2 |
-| cht | series R-sum, interface walk, h-free outlet T, solid ΔT decoupled | ☐ Batch 3 |
-| em | δ∝1/√f, R=L/σA + Joule, wire B∝1/r, solenoid uniform | ☐ Batch 3 |
+| cht | series R-sum, interface walk, h-free outlet T, solid ΔT decoupled | ✅ shipped |
+| em | δ∝1/√f, R=L/σA + Joule, wire B∝1/r, solenoid uniform | ✅ shipped |
 | dfx | DfM score exact, DfA monotone, pack billable=max() | ☐ Batch 4 |
 | cost | unit cost monotone↓, amortization 1/qty, scrap linear | ☐ Batch 4 |
 | slicing | mass≡ρV, infill linear, layer≡ceil, time∝deposited/flow | ☐ Batch 4 |
@@ -49,8 +49,8 @@ NumPy on the fast lane (already wired into `tests/run_all.sh` under the venv).
   zero-risk, high reuse downstream.
 - **Batch 2 — scaling laws (machine_elements · vibration · durability extras).** Power
   laws and invariants; double-an-input → known factor.
-- **Batch 3 — M6 newcomers (cht · em).** Pin the new oracles' exact identities while
-  the code is fresh.
+- **Batch 3 — M6 newcomers (cht · em).** ✅ shipped — pinned the new oracles' exact
+  identities while the code is fresh.
 - **Batch 4 — design-for-X & throughput (dfx · cost · slicing · kinematics).**
   Monotonicity / limit envelopes.
 - **Batch 5 (optional round-out)** — deepen the four already-covered families.

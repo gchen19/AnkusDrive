@@ -22,7 +22,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin.analysis import cfd               # noqa: E402
+from driftpin.analysis import cht               # noqa: E402
 from driftpin.analysis import durability as du  # noqa: E402
+from driftpin.analysis import em                # noqa: E402
 from driftpin.analysis import materials as mat  # noqa: E402
 from driftpin.analysis import optics as op      # noqa: E402
 from driftpin.analysis import thermal as th     # noqa: E402
@@ -326,6 +328,110 @@ def test_pipe_regime_thresholds_are_sharp():
     assert regime_at(2301.0) == "transitional"
     assert regime_at(3999.0) == "transitional"
     assert regime_at(4001.0) == "turbulent"
+
+
+# === Batch 3 — the M6 newcomers (cht · em) ====================================
+
+# --- cht: the series resistance network + the h-free channel balance ----------
+
+def test_composite_wall_resistance_adds_and_commutes():
+    # Conservation/composition: R_total is the exact series sum of the layer
+    # resistances, and reordering the layers leaves U and q unchanged (series
+    # resistances commute) while shifting the interface temperatures.
+    a = cht.composite_wall([{"thickness_mm": 10, "k": 50.0},
+                            {"thickness_mm": 5, "k": 1.0}], 200.0, 25.0)
+    assert abs(a["r_total_m2k_w"] - sum(a["layer_resistances_m2k_w"])) < 1e-9, a
+    b = cht.composite_wall([{"thickness_mm": 5, "k": 1.0},
+                            {"thickness_mm": 10, "k": 50.0}], 200.0, 25.0)
+    assert abs(a["u_w_m2k"] - b["u_w_m2k"]) < 1e-9, (a["u_w_m2k"], b["u_w_m2k"])
+    assert abs(a["q_w_m2"] - b["q_w_m2"]) < 1e-9
+    assert a["interface_temps_c"] != b["interface_temps_c"]      # order changes drops
+
+
+def test_composite_wall_film_resistance_vanishes_in_the_limit():
+    # Asymptotic limit: a perfect inner film (h_in → ∞) adds 1/h_in → 0, so R_total
+    # converges to the no-film value — the conjugate coupling degenerates to a fixed
+    # wall temperature.
+    big = cht.composite_wall([{"thickness_mm": 10, "k": 50.0}], 200.0, 25.0,
+                             h_in=1e12, h_out=20.0)
+    none = cht.composite_wall([{"thickness_mm": 10, "k": 50.0}], 200.0, 25.0,
+                              h_out=20.0)
+    assert abs(big["r_total_m2k_w"] - none["r_total_m2k_w"]) < 1e-6, (big, none)
+
+
+def test_composite_wall_interface_temps_walk_the_drops_exactly():
+    # Exact identity: q ≡ U·ΔT and each surface temperature is the running sum of the
+    # upstream drops — T₀ = t_in − q/h_in, then minus q·rᵢ per layer, landing within
+    # q/h_out of t_out at the last surface.
+    h_in, h_out = 500.0, 20.0
+    w = cht.composite_wall([{"thickness_mm": 8, "k": 30.0},
+                            {"thickness_mm": 4, "k": 0.5}], 180.0, 20.0,
+                           h_in=h_in, h_out=h_out)
+    q = w["q_w_m2"]
+    t = 180.0 - q / h_in
+    walk = [t]
+    for r in w["layer_resistances_m2k_w"]:
+        t -= q * r
+        walk.append(t)
+    for got, exp in zip(w["interface_temps_c"], walk):
+        assert abs(got - exp) < 1e-3, (w["interface_temps_c"], walk)
+    assert abs(walk[-1] - q / h_out - 20.0) < 1e-3, walk[-1]    # closes on t_out
+
+
+def test_cht_channel_outlet_is_h_free_and_solid_drop_decoupled():
+    # Conservation + decoupling: the plug-flow outlet rise is the exact energy balance
+    # T_out = T_in + q″L/(ρ·U·H·c_p) (no heat-transfer coefficient anywhere), and the
+    # solid ΔT = q″·t/k depends ONLY on the wall — doubling the flow leaves it intact.
+    kw = dict(flux_w_m2=5000.0, length_m=0.1, t_in_c=20.0, rho=1000.0, cp=4180.0,
+              solid_thickness_m=0.005, k_solid=50.0)
+    a = cht.cht_channel_oracle(fluid_height_m=0.01, velocity_m_s=1.0, **kw)
+    b = cht.cht_channel_oracle(fluid_height_m=0.02, velocity_m_s=2.0, **kw)
+    hand = 5000.0 * 0.1 / (1000.0 * 1.0 * 0.01 * 4180.0)
+    assert abs(a["dt_out_k"] - hand) < 1e-6, (a["dt_out_k"], hand)
+    assert abs(a["dt_solid_k"] - 5000.0 * 0.005 / 50.0) < 1e-9, a    # q″t/k = 0.5 K
+    assert abs(a["dt_solid_k"] - b["dt_solid_k"]) < 1e-12            # fluid-independent
+    assert b["dt_out_k"] < a["dt_out_k"]                            # 4× ṁ → ¼ rise
+
+
+# --- em: skin-depth scaling, Ohm/Joule, and the field laws --------------------
+
+def test_skin_depth_scales_as_inverse_sqrt_frequency():
+    # Scaling law: δ ∝ f^(−1/2) and the per-square surface resistance R_s = 1/(σδ)
+    # ∝ f^(+1/2) — quadruple the frequency, halve δ and double R_s. Exact.
+    lo = em.skin_depth(50.0, conductivity_s_m=5.8e7)
+    hi = em.skin_depth(200.0, conductivity_s_m=5.8e7)               # 4× frequency
+    assert abs(lo["skin_depth_m"] / hi["skin_depth_m"] - 2.0) < 1e-9
+    assert abs(hi["surface_resistance_ohm"] / lo["surface_resistance_ohm"] - 2.0) < 1e-9
+    assert abs(lo["surface_resistance_ohm"] - 1.0 / (5.8e7 * lo["skin_depth_m"])) < 1e-15
+
+
+def test_dc_resistance_and_joule_identity():
+    # Exact identity: R = L/(σA) (so 2×L → 2×R, 2×A → ½R), and the Joule pair is
+    # self-consistent: P ≡ V²/R ≡ I²R.
+    r = em.dc_resistance(1000.0, 1.0, conductivity_s_m=5.8e7, voltage_v=1.0)
+    assert abs(r["resistance_ohm"] - 1.0 / (5.8e7 * 1e-6)) < 1e-9
+    longer = em.dc_resistance(2000.0, 1.0, conductivity_s_m=5.8e7)
+    fatter = em.dc_resistance(1000.0, 2.0, conductivity_s_m=5.8e7)
+    assert abs(longer["resistance_ohm"] / r["resistance_ohm"] - 2.0) < 1e-9
+    assert abs(fatter["resistance_ohm"] / r["resistance_ohm"] - 0.5) < 1e-9
+    assert abs(r["joule_w"] - r["current_a"] ** 2 * r["resistance_ohm"]) < 1e-9
+    assert abs(r["joule_w"] - 1.0 / r["resistance_ohm"]) < 1e-12   # V=1 → P=1/R
+
+
+def test_wire_field_is_inverse_distance_solenoid_is_uniform():
+    # Exact field laws: a straight wire's B ∝ 1/r (so B·r is invariant, and 2×r → ½B,
+    # 2×I → 2×B); a long solenoid's interior B = μ₀·μ_r·n·I is linear in n, I, μ_r and
+    # independent of radius.
+    b1 = em.wire_field(100.0, 10.0)
+    b2 = em.wire_field(100.0, 20.0)
+    assert abs(b1["b_t"] * b1["distance_m"] - b2["b_t"] * b2["distance_m"]) < 1e-18
+    assert abs(b1["b_t"] / b2["b_t"] - 2.0) < 1e-9
+    assert abs(em.wire_field(200.0, 10.0)["b_t"] / b1["b_t"] - 2.0) < 1e-9
+    mu0 = 4.0e-7 * math.pi
+    s = em.solenoid_field(1000.0, 2.0)
+    assert abs(s["b_t"] - mu0 * 1000.0 * 2.0) < 1e-12
+    assert abs(em.solenoid_field(2000.0, 2.0)["b_t"] / s["b_t"] - 2.0) < 1e-9
+    assert abs(em.solenoid_field(1000.0, 2.0, mu_r=100.0)["b_t"] / s["b_t"] - 100.0) < 1e-6
 
 
 # --- runner -------------------------------------------------------------------
