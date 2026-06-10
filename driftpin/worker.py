@@ -6650,6 +6650,105 @@ def _h_slice_estimate(p):
     return slicing.slice_estimate(**p)
 
 
+@handler("slice_gcode_submit")
+def _h_slice_gcode_submit(p):
+    """Slice a real body with the PrusaSlicer CLI, OFF the MCP channel — the
+    Sprint 4 external-CLI upgrade of the analytic slice_estimate (real perimeters,
+    infill patterns, supports, travel/acceleration). Degrades to {ok:false,
+    reason, install} when no slicer resolves.
+
+    Pass a `body` handle (exported to STL on the MAIN thread — the jobs.py
+    contract) or a prepared `stl_path`. Knobs: `layer_height_mm`,
+    `infill_fraction` (0..1; full infill auto-switches the fill pattern —
+    PrusaSlicer's default refuses 100%), `supports`, `material` (filament density
+    for grams — PrusaSlicer reports 0 g without one). The result carries the
+    analytic slice_estimate for the same body alongside, with the
+    `deposited_ratio` between them (live: a 20 mm cube at 100% lands 1.008 — the
+    skirt).
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, gcode_path, filament_mm, filament_cm3, filament_g, print_time_s,
+    print_time_text, layer_count, config, analytic?, deposited_ratio?,
+    stdout_tail}."""
+    info = _require_solver("prusaslicer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import tempfile
+
+    from driftpin import jobs
+    from driftpin.analysis import slicing as _slicing
+    slicer_bin = info["path"]
+
+    layer_height_mm = float(p.get("layer_height_mm", 0.2))
+    infill_fraction = float(p.get("infill_fraction", 0.2))
+    supports = bool(p.get("supports", False))
+    material = p.get("material", "PLA")
+    density = p.get("density_g_cc")
+
+    body = p.get("body")
+    stl_path = p.get("stl_path")
+    analytic = None
+    if body:                                         # export on the MAIN thread
+        obj = _shape_handle_to_obj(body)
+        work_dir = tempfile.mkdtemp(prefix="slice_")
+        stl_path = os.path.join(work_dir, "body.stl")
+        obj.Shape.exportStl(stl_path)
+        bb = obj.Shape.BoundBox
+        analytic = _slicing.slice_estimate(
+            volume_mm3=obj.Shape.Volume,
+            bbox_mm=[bb.XLength, bb.YLength, bb.ZLength],
+            material=material, infill_fraction=infill_fraction,
+            layer_height_mm=layer_height_mm,
+            **({"density_g_cc": float(density)} if density is not None else {}))
+    elif stl_path:
+        if not os.path.isfile(stl_path):
+            raise ValueError(f"stl_path {stl_path!r} is not a file")
+        work_dir = tempfile.mkdtemp(prefix="slice_")
+    else:
+        raise ValueError("provide a `body` handle or a prepared `stl_path`")
+
+    rho = (float(density) if density is not None
+           else _slicing._mat_value(material, "density_g_cc"))
+    gcode_path = os.path.join(work_dir, "out.gcode")
+    argv = [slicer_bin] + _slicing.slicer_cmd(
+        stl_path, gcode_path, layer_height_mm=layer_height_mm,
+        infill_fraction=infill_fraction, supports=supports,
+        extra_args=p.get("extra_args"))
+    key = jobs.content_key("slice_gcode", {
+        "stl": os.path.abspath(stl_path), "argv": argv[1:], "rho": rho})
+
+    def _work():
+        import subprocess
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "prusaslicer",
+            "gcode_path": gcode_path,
+            "stdout_tail": ((proc.stdout or "") + (proc.stderr or ""))[-2000:],
+        }
+        if proc.returncode == 0 and os.path.isfile(gcode_path):
+            try:
+                stats = _slicing.parse_gcode_stats(
+                    open(gcode_path, errors="replace").read(), density_g_cc=rho)
+            except ValueError as exc:
+                out["ok"] = False
+                out["reason"] = f"unparseable G-code: {exc}"
+                return out
+            out.update(stats)
+            if analytic:
+                out["analytic"] = analytic
+                if analytic["deposited_volume_mm3"] > 0 and stats["filament_cm3"]:
+                    out["deposited_ratio"] = round(
+                        stats["filament_cm3"] * 1000.0
+                        / analytic["deposited_volume_mm3"], 4)
+        return out
+
+    return jobs.submit("slice_gcode", _work, key=key,
+                       meta={"layer_height_mm": layer_height_mm,
+                             "infill_fraction": infill_fraction})
+
+
 # --- optics (family 7) --------------------------------------------------------
 # Two surfaces, mirroring the rest of the heavy tier: the exact closed-form core
 # (Snell / Fresnel / TIR + an energy-conserving bundle trace) lives in

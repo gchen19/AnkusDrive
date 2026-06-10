@@ -104,6 +104,144 @@ def test_unknown_material_raises():
     assert abs(r["mass_g"] - 1000.0 * 1e-3 * 7.85) < 1e-3, r["mass_g"]
 
 
+# --- external-CLI upgrade (Sprint 4 follow-on) ----------------------------------
+# Structure/parse tests run always (pure-Python, synthetic G-code); the live gate
+# runs the real PrusaSlicer CLI when the `prusaslicer` solver resolves, else SKIPs.
+
+_SYNTHETIC_GCODE = """;LAYER_CHANGE
+G1 X1 Y1 E0.5
+;LAYER_CHANGE
+G1 X2 Y2 E1.0
+;LAYER_CHANGE
+; filament used [mm] = 1506.75
+; filament used [cm3] = 3.62
+; total filament used [g] = 0.00
+; estimated printing time (normal mode) = 1h 19m 21s
+; layer_height = 0.2
+; first_layer_height = 0.35
+; fill_density = 20%
+; perimeters = 3
+; nozzle_diameter = 0.4
+; filament_diameter = 1.75
+"""
+
+
+def test_slicer_cmd_builds_headless_argv():
+    argv = sl.slicer_cmd("a.stl", "out.gcode", layer_height_mm=0.2,
+                         infill_fraction=0.2)
+    assert argv[0] == "--export-gcode" and argv[-1] == "a.stl"
+    assert "--fill-density" in argv and argv[argv.index("--fill-density") + 1] == "20%"
+    assert "--fill-pattern" not in argv
+    # PrusaSlicer's default pattern refuses 100% -> rectilinear is forced
+    full = sl.slicer_cmd("a.stl", "o.gcode", infill_fraction=1.0)
+    assert full[full.index("--fill-pattern") + 1] == "rectilinear"
+    assert "--support-material" in sl.slicer_cmd("a.stl", "o.gcode", supports=True)
+    for bad in (lambda: sl.slicer_cmd("", "o.gcode"),
+                lambda: sl.slicer_cmd("a.stl", "o.gcode", layer_height_mm=0),
+                lambda: sl.slicer_cmd("a.stl", "o.gcode", infill_fraction=0.0)):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+
+
+def test_parse_gcode_time_formats():
+    assert sl.parse_gcode_time("19m 21s") == 19 * 60 + 21
+    assert sl.parse_gcode_time("1h 2m 3s") == 3723
+    assert sl.parse_gcode_time("2d 1h") == 2 * 86400 + 3600
+    assert sl.parse_gcode_time("5s") == 5
+    try:
+        sl.parse_gcode_time("soon")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_parse_gcode_stats_reads_footer_and_layers():
+    r = sl.parse_gcode_stats(_SYNTHETIC_GCODE, density_g_cc=1.24)
+    assert abs(r["filament_mm"] - 1506.75) < 1e-9
+    assert abs(r["filament_cm3"] - 3.62) < 1e-9
+    # grams recomputed from cm3 x density (the slicer reported 0.00)
+    assert abs(r["filament_g"] - 3.62 * 1.24) < 1e-3, r["filament_g"]
+    assert r["print_time_s"] == 3600 + 19 * 60 + 21
+    assert r["layer_count"] == 3
+    cfg = r["config"]
+    assert cfg["layer_height_mm"] == 0.2 and cfg["first_layer_height_mm"] == 0.35
+    assert cfg["fill_density_pct"] == 20 and cfg["perimeters"] == 3
+    try:
+        sl.parse_gcode_stats("G1 X0 Y0\n")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for a non-PrusaSlicer G-code")
+
+
+def _cube_stl_text(side_mm: float) -> str:
+    """A closed ASCII-STL cube with outward winding (the live-gate part)."""
+    s = side_mm
+    quads = [
+        ((0, 0, 0), (0, s, 0), (s, s, 0), (s, 0, 0)),
+        ((0, 0, s), (s, 0, s), (s, s, s), (0, s, s)),
+        ((0, 0, 0), (s, 0, 0), (s, 0, s), (0, 0, s)),
+        ((0, s, 0), (0, s, s), (s, s, s), (s, s, 0)),
+        ((0, 0, 0), (0, 0, s), (0, s, s), (0, s, 0)),
+        ((s, 0, 0), (s, s, 0), (s, s, s), (s, 0, s)),
+    ]
+    out = ["solid cube"]
+    for q in quads:
+        for t in ((q[0], q[1], q[2]), (q[0], q[2], q[3])):
+            out.append("  facet normal 0 0 0\n    outer loop")
+            out += [f"      vertex {p[0]} {p[1]} {p[2]}" for p in t]
+            out.append("    endloop\n  endfacet")
+    out.append("endsolid cube")
+    return "\n".join(out) + "\n"
+
+
+def test_real_slicer_brackets_the_analytic_estimate():
+    """The live Sprint-4 gate: PrusaSlicer on a 20 mm cube. At 100% infill the
+    sliced filament volume must land on the exact 8 cm3 within 10% (measured
+    +0.75% — the skirt); at 20% it must deposit strictly less; the layer count
+    must match the first-layer + layer-height arithmetic."""
+    import subprocess
+    import tempfile
+
+    from driftpin import solvers
+    if not solvers.is_available("prusaslicer"):
+        print("    SKIP — PrusaSlicer not installed")
+        return
+    slicer = solvers.find_solver("prusaslicer")["path"]
+    side = 20.0
+    with tempfile.TemporaryDirectory() as d:
+        stl = f"{d}/cube.stl"
+        open(stl, "w").write(_cube_stl_text(side))
+        results = {}
+        for frac in (1.0, 0.2):
+            gcode = f"{d}/cube_{int(frac * 100)}.gcode"
+            argv = [slicer] + sl.slicer_cmd(stl, gcode, layer_height_mm=0.2,
+                                            infill_fraction=frac)
+            proc = subprocess.run(argv, capture_output=True, text=True)
+            assert proc.returncode == 0, (proc.stdout + proc.stderr)[-600:]
+            results[frac] = sl.parse_gcode_stats(
+                open(gcode, errors="replace").read(), density_g_cc=1.24)
+    full, sparse = results[1.0], results[0.2]
+    exact_cm3 = side ** 3 / 1000.0
+    ratio = full["filament_cm3"] / exact_cm3
+    assert 0.95 < ratio < 1.10, (full["filament_cm3"], exact_cm3, ratio)
+    assert sparse["filament_cm3"] < 0.7 * full["filament_cm3"], (sparse, full)
+    # layers: first_layer_height + n*layer_height fills the cube height
+    cfg = full["config"]
+    expect = 1 + math.floor((side - cfg["first_layer_height_mm"])
+                            / cfg["layer_height_mm"] + 1e-9)
+    assert abs(full["layer_count"] - expect) <= 1, (full["layer_count"], expect)
+    assert full["print_time_s"] and full["print_time_s"] > sparse["print_time_s"]
+    print(f"    PrusaSlicer cube: 100% -> {full['filament_cm3']} cm3 "
+          f"(exact {exact_cm3}, ratio {ratio:.3f}); 20% -> {sparse['filament_cm3']} cm3; "
+          f"{full['layer_count']} layers")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
