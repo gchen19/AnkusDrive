@@ -7,7 +7,7 @@ runs the actual solver via ``jobs.py``, polls the shared ``job_result`` surface,
 compares the solved numbers to the closed-form answer from
 ``docs/SIMULATION_EXAMPLES.md``.
 
-Eight examples, each a kickoff gate:
+Ten examples, each a kickoff gate:
   * **A — topology** (§5): ``topology_optimize_submit`` → ``topology_to_solid`` →
     ``mass_properties``; the reconstructed solid must hold mass_fraction ≤ keep_fraction
     and be a valid (watertight) body. Needs NumPy in the worker; no external solver.
@@ -41,6 +41,15 @@ Eight examples, each a kickoff gate:
     **CalculiX** (``fem_modal`` eigenanalysis); the fundamental must match the exact
     Euler-Bernoulli oracle (``beam_modal``) within 3% — linear tets shear-lock and
     overshoot ~50%, which the ``element_order='2nd'`` mesh fixes.
+  * **I — conjugate heat transfer** (§M6): ``cht_channel_submit`` runs ONE **ElmerSolver**
+    solve across a plug-flow fluid channel and a conducting solid wall coupled at their
+    interface; the outlet bulk temperature must match the exact h-free energy balance
+    q″·L = ṁ·c_p·ΔT within 3% and the solid-layer drop must match q″·t/k within 3% —
+    no Nusselt correlation involved.
+  * **J — low-frequency EM** (§M6): ``em_conduction_submit`` (Elmer StatCurrentSolver)
+    must reproduce R = L/(σ·A) to machine precision, and ``em_induction_submit``
+    (MagnetoDynamics2DHarmonic) must decay the complex A(x) with e-folding length equal
+    to the exact skin depth δ = √(2/(ωμσ)) in BOTH magnitude and phase within 2%.
 
 Each example **degrades gracefully**: a missing solver (ElmerSolver / OpenFOAM) or a
 worker that lacks NumPy is reported as SKIP, not a failure, so the script is safe to
@@ -359,6 +368,63 @@ def example_modal(w, log):
         f"→ ratio {ratio:.4f}; 2nd bending mode found: {f2_found}")
     ok = 0.97 <= ratio <= 1.05 and f2_found
     log(f"  GATE fundamental within 3% of Euler-Bernoulli and 2nd mode present: "
+        f"{'PASS' if ok else 'FAIL'}")
+    return ok
+
+
+def example_cht(w, log):
+    """§M6 — one Elmer solve across coupled fluid+solid regions vs the exact
+    h-free energy balance and the q″·t/k solid drop."""
+    log("### Example I — cht_channel_submit (Elmer conjugate fluid+solid) vs exact balances  (§M6)")
+    sub = w.call("cht_channel_submit")
+    if not _submitted(sub):
+        log(f"  SKIP — ElmerSolver not installed ({sub.get('install', '')})")
+        return None
+    res = _poll(w, sub["job_id"])["result"]
+    if not res.get("ok") or res.get("energy_balance_ratio") is None:
+        log(f"  FAIL — conjugate solve did not produce the gates: {str(res)[:200]}")
+        return False
+    log(f"- plug-flow water channel under a flux-heated solid wall (one mesh, two "
+        f"coupled bodies; cell Péclet {res['pe_cell']})")
+    log(f"- outlet bulk: {res['t_outlet_mean_c']:.3f} °C vs exact energy balance "
+        f"{res['t_out_exact_c']:.3f} °C → ratio {res['energy_balance_ratio']}")
+    log(f"- solid-layer drop: {res['dt_solid_k']:.3f} K vs exact q″·t/k "
+        f"{res['dt_solid_exact_k']:.3f} K → ratio {res['solid_drop_ratio']}")
+    ok = (0.97 < res["energy_balance_ratio"] < 1.03
+          and 0.97 < res["solid_drop_ratio"] < 1.03)
+    log(f"  GATE energy balance and solid drop within 3% (no Nusselt correlation "
+        f"needed): {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
+def example_em(w, log):
+    """§M6 — Elmer DC conduction (machine-exact R) + harmonic skin effect (exact δ)."""
+    log("### Example J — em_conduction_submit + em_induction_submit vs exact EM  (§M6)")
+    orc = w.call("em_skin_depth", frequency_hz=50, conductor="copper")
+    log(f"- exact anchors: copper δ(50 Hz) = {orc['skin_depth_mm']} mm; "
+        f"strip R = L/(σ·A)")
+    sub = w.call("em_conduction_submit")
+    if not _submitted(sub):
+        log(f"  SKIP — ElmerSolver not installed ({sub.get('install', '')})")
+        return None
+    dc = _poll(w, sub["job_id"])["result"]
+    if not dc.get("ok") or dc.get("resistance_ratio") is None:
+        log(f"  FAIL — DC solve did not produce a resistance: {str(dc)[:200]}")
+        return False
+    log(f"- StatCurrentSolver strip: I {dc['current_a']:.6g} A, "
+        f"R {dc['effective_resistance_ohm']:.6g} Ω vs exact "
+        f"{dc['resistance_exact_ohm']:.6g} Ω → ratio {dc['resistance_ratio']}")
+    sk = _poll(w, w.call("em_induction_submit")["job_id"])["result"]
+    if not sk.get("ok") or sk.get("decay_ratio") is None:
+        log(f"  FAIL — skin-effect solve did not produce a profile: {str(sk)[:200]}")
+        return False
+    log(f"- MagnetoDynamics2DHarmonic slab: |A| e-folding "
+        f"{sk['decay_length_m'] * 1000:.3f} mm, phase {sk['phase_length_m'] * 1000:.3f} mm "
+        f"vs exact δ {sk['skin_depth_exact_m'] * 1000:.3f} mm → ratios "
+        f"{sk['decay_ratio']} / {sk['phase_ratio']}")
+    ok = (abs(dc["resistance_ratio"] - 1.0) < 1e-3
+          and 0.98 < sk["decay_ratio"] < 1.02 and 0.98 < sk["phase_ratio"] < 1.02)
+    log(f"  GATE DC machine-exact and skin decay/phase within 2% of δ: "
         f"{'PASS' if ok else 'FAIL'}")
     return ok
 
@@ -859,6 +925,142 @@ def _plot_modal(outdir):
     return True
 
 
+def _plot_cht(outdir):
+    """Panel I: the conjugate channel's two exact, h-free gates over a flux sweep —
+    outlet bulk temperature on the energy-balance line, solid-layer drop on q″·t/k."""
+    import subprocess
+    import tempfile
+
+    import matplotlib.pyplot as plt
+
+    from driftpin import solvers
+    from driftpin.analysis import cht
+    if not solvers.is_available("elmer"):
+        return False
+    elmer = solvers.find_solver("elmer")["path"]
+    fluxes = [4000.0, 10000.0, 20000.0]
+    t_out, dt_solid = [], []
+    for q in fluxes:
+        with tempfile.TemporaryDirectory() as d:
+            cht.write_cht_channel_case(d, flux_w_m2=q)
+            subprocess.run([elmer, "case.sif"], cwd=d, capture_output=True)
+            p = cht.parse_cht_scalars(d)
+            t_out.append(p["t_outlet_mean_c"] if p else float("nan"))
+            dt_solid.append(p["dt_solid_k"] if p else float("nan"))
+    qs = [0.0] + fluxes
+    exact_to = [cht.cht_channel_oracle(
+        flux_w_m2=q, length_m=0.1, fluid_height_m=0.005, velocity_m_s=0.001,
+        t_in_c=20.0, rho=1000.0, cp=4180.0, solid_thickness_m=0.002,
+        k_solid=1.0)["t_out_c"] for q in qs]
+    exact_dt = [q * 0.002 / 1.0 for q in qs]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.0))
+    ax = axes[0]
+    ax.plot(qs, exact_to, "-", color="C0", label="energy balance q″L = ṁ·c_p·ΔT (exact)")
+    ax.plot(fluxes, t_out, "o", ms=8, color="C1", label="Elmer conjugate solve (outlet mean)")
+    ax.set_xlabel("outer heat flux q″  [W/m²]")
+    ax.set_ylabel("outlet bulk temperature  [°C]")
+    ax.set_title("coupled fluid+solid channel — outlet vs exact\n(no Nusselt correlation involved)",
+                 fontsize=9)
+    ax.grid(True, ls=":", alpha=0.5)
+    ax.legend(fontsize=8)
+    ax = axes[1]
+    ax.plot(qs, exact_dt, "-", color="C0", label="ΔT_solid = q″·t/k (exact)")
+    ax.plot(fluxes, dt_solid, "s", ms=8, color="C1", label="Elmer (outer − interface mean)")
+    ax.set_xlabel("outer heat flux q″  [W/m²]")
+    ax.set_ylabel("solid-layer temperature drop  [K]")
+    ax.set_title("the conducting wall the heat crosses\ninto the moving fluid", fontsize=9)
+    ax.grid(True, ls=":", alpha=0.5)
+    ax.legend(fontsize=8)
+    fig.suptitle("Example I — conjugate heat transfer: one solve, two coupled regions  (§M6)",
+                 weight="bold", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/cht.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
+def _plot_em(outdir):
+    """Panel J: the harmonic skin-effect profile on the exact e^(−x/δ) lines
+    (magnitude + phase) and the machine-exact DC strip resistance across
+    conductors."""
+    import math as _math
+    import subprocess
+    import tempfile
+
+    import matplotlib.pyplot as plt
+
+    from driftpin import solvers
+    from driftpin.analysis import em
+    if not solvers.is_available("elmer"):
+        return False
+    elmer = solvers.find_solver("elmer")["path"]
+
+    with tempfile.TemporaryDirectory() as d:
+        built = em.write_skin_effect_case(d)
+        subprocess.run([elmer, "case.sif"], cwd=d, capture_output=True)
+        pts = em.parse_line_profile(d)
+    delta = built["oracle"]["skin_depth_m"]
+    xs = [x for x, _ in pts]
+    mag = [abs(a) for _, a in pts]
+    ph = [_math.atan2(a.imag, a.real) for _, a in pts]
+    for i in range(1, len(ph)):
+        while ph[i] - ph[i - 1] > _math.pi:
+            ph[i] -= 2 * _math.pi
+        while ph[i] - ph[i - 1] < -_math.pi:
+            ph[i] += 2 * _math.pi
+
+    sigmas = {"stainless-304": 1.39e6, "brass": 1.6e7, "copper": 5.8e7}
+    r_solved, r_exact = [], []
+    for name, sigma in sigmas.items():
+        with tempfile.TemporaryDirectory() as d:
+            b = em.write_dc_strip_case(d, conductor=name)
+            subprocess.run([elmer, "case.sif"], cwd=d, capture_output=True)
+            p = em.parse_dc_scalars(d)
+            r_solved.append(p["effective_resistance_ohm"] if p else float("nan"))
+            r_exact.append(b["oracle"]["resistance_ohm"])
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.0))
+    ax = axes[0]
+    xn = [x / delta for x in xs]
+    ax.semilogy(xn, [m / mag[0] for m in mag], "o", ms=3, color="C1",
+                label="|A| (MagnetoDynamics2DHarmonic)")
+    ax.semilogy(xn, [_math.exp(-x) for x in xn], "-", color="C0",
+                label="e^(−x/δ) (exact)")
+    ax2 = ax.twinx()
+    ax2.plot(xn, ph, "s", ms=3, color="C2", label="phase")
+    ax2.plot(xn, [-x for x in xn], "--", color="C3", lw=1, label="−x/δ (exact)")
+    ax2.set_ylabel("phase  [rad]")
+    ax.set_xlim(0, 4)
+    ax.set_ylim(5e-3, 1.5)              # the Dirichlet-truncated far end is ~0
+    ax.set_xlabel("depth into conductor  x/δ")
+    ax.set_ylabel("|A| / |A₀|")
+    ax.set_title(f"copper at 50 Hz: skin depth δ = {delta * 1000:.2f} mm\n"
+                 "magnitude AND phase e-fold at exactly δ", fontsize=9)
+    ax.grid(True, which="both", ls=":", alpha=0.4)
+    lines = ax.get_legend_handles_labels()
+    lines2 = ax2.get_legend_handles_labels()
+    ax.legend(lines[0] + lines2[0], lines[1] + lines2[1], fontsize=8, loc="lower left")
+    ax = axes[1]
+    ax.loglog(r_exact, r_exact, "-", color="C0", label="R = L/(σ·A) (exact)")
+    ax.loglog(r_exact, r_solved, "o", ms=9, color="C1",
+              label="StatCurrentSolver effective resistance")
+    for x, name in zip(r_exact, sigmas):
+        ax.annotate(name, (x, x), textcoords="offset points", xytext=(6, -12),
+                    fontsize=8)
+    ax.set_xlabel("exact resistance  [Ω]")
+    ax.set_ylabel("solved resistance  [Ω]")
+    ax.set_title("DC strip across conductors —\nmachine-exact (ratio 1.000000)", fontsize=9)
+    ax.grid(True, which="both", ls=":", alpha=0.4)
+    ax.legend(fontsize=8)
+    fig.suptitle("Example J — low-frequency EM: DC conduction + AC skin effect  (§M6)",
+                 weight="bold", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(f"{outdir}/em.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
 def make_plots(outdir):
     """Generate the eight result figures into ``outdir``; skip a panel when its solver
     is absent. matplotlib is imported lazily so the gated run needs no plotting deps."""
@@ -881,6 +1083,8 @@ def make_plots(outdir):
     print("  external.png " + ("✓" if _plot_external(outdir) else "SKIP (OpenFOAM absent)"))
     print("  bridge.png " + ("✓" if _plot_bridge(outdir)
                              else "SKIP (ElmerSolver/ElmerGrid/OpenFOAM absent)"))
+    print("  cht.png " + ("✓" if _plot_cht(outdir) else "SKIP (ElmerSolver absent)"))
+    print("  em.png " + ("✓" if _plot_em(outdir) else "SKIP (ElmerSolver absent)"))
     print("  modal.png " + ("✓" if _plot_modal(outdir) else "SKIP"))
 
 
@@ -908,7 +1112,9 @@ def main():
                          ("radiation", example_radiation),
                          ("external", example_external),
                          ("bridge", example_bridge),
-                         ("modal", example_modal)):
+                         ("modal", example_modal),
+                         ("cht", example_cht),
+                         ("em", example_em)):
             try:
                 results[name] = fn(w, log)
             except Exception as e:  # one example failing must not abort the rest

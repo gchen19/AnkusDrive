@@ -2927,6 +2927,200 @@ def thermal_radiation_submit(
 
 
 @mcp.tool()
+def thermal_composite_wall(
+    layers: list,
+    t_in_c: float,
+    t_out_c: float,
+    h_in: float | None = None,
+    h_out: float | None = None,
+    area_m2: float = 1.0,
+) -> dict:
+    """Exact series thermal-resistance network of a plane composite wall (NO solver)
+    — the classic overall-U calculation and the conjugate-heat-transfer family's
+    closed-form oracle. `layers` is the in→out list of solid layers, each
+    {thickness_mm, k | material} (k in W/m·K, or a Materials-DB name); `h_in`/`h_out`
+    are optional convection film coefficients (W/m²K). Per unit area
+    R = 1/h_in + Σ tᵢ/kᵢ + 1/h_out, U = 1/R, q = U·(t_in − t_out), and every
+    surface/interface temperature follows exactly.
+
+    Returns {u_w_m2k, r_total_m2k_w, q_w_m2, q_w, layer_resistances_m2k_w,
+    interface_temps_c (inner surface → outer surface), t_in_c, t_out_c, area_m2}."""
+    params = {"layers": layers, "t_in_c": t_in_c, "t_out_c": t_out_c,
+              "area_m2": area_m2}
+    for k, v in (("h_in", h_in), ("h_out", h_out)):
+        if v is not None:
+            params[k] = v
+    return _call("thermal_composite_wall", **params)
+
+
+@mcp.tool()
+def cht_channel_submit(
+    flux_w_m2: float = 10000.0,
+    velocity_m_s: float = 0.001,
+    t_in_c: float = 20.0,
+    length_m: float = 0.1,
+    fluid_height_m: float = 0.005,
+    solid_thickness_m: float = 0.002,
+    k_fluid: float = 0.6,
+    rho_fluid: float = 1000.0,
+    cp_fluid: float = 4180.0,
+    k_solid: float = 1.0,
+    nx: int = 80,
+    ny_fluid: int = 10,
+    ny_solid: int = 4,
+    case_dir: str | None = None,
+    sif: str = "case.sif",
+) -> dict:
+    """Conjugate heat transfer via Elmer (P3 M6 frontier), asynchronous — ONE solve
+    spanning a plug-flow fluid channel AND a conducting solid wall coupled at their
+    shared interface. Requires ElmerSolver; when absent this returns {ok:false,
+    reason, install} rather than raising.
+
+    Builds the two-body channel (constant outer `flux_w_m2`, inlet Dirichlet
+    `t_in_c`, all else adiabatic) whose gates are exact WITHOUT a Nusselt
+    correlation: the outlet bulk temperature follows the energy balance
+    q″·L = ṁ·c_p·ΔT and the solid-layer drop is q″·t/k. Defaults are the
+    live-validated water channel (cell Péclet ≈ 9 — the builder rejects > 25, where
+    stabilized advection visibly leaks the energy balance). Also accepts a prepared
+    `case_dir`.
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, t_outlet_mean_c, t_out_exact_c, energy_balance_ratio (≈1, ±3%),
+    dt_solid_k, dt_solid_exact_k, solid_drop_ratio (≈1), pe_cell, case_dir}."""
+    params = {"flux_w_m2": flux_w_m2, "velocity_m_s": velocity_m_s,
+              "t_in_c": t_in_c, "length_m": length_m,
+              "fluid_height_m": fluid_height_m,
+              "solid_thickness_m": solid_thickness_m, "k_fluid": k_fluid,
+              "rho_fluid": rho_fluid, "cp_fluid": cp_fluid, "k_solid": k_solid,
+              "nx": nx, "ny_fluid": ny_fluid, "ny_solid": ny_solid, "sif": sif}
+    if case_dir is not None:
+        params["case_dir"] = case_dir
+    return _call("cht_channel_submit", **params)
+
+
+@mcp.tool()
+def em_skin_depth(
+    frequency_hz: float,
+    conductivity_s_m: float | None = None,
+    conductor: str | None = None,
+    mu_r: float = 1.0,
+) -> dict:
+    """Exact AC skin depth (NO solver) — δ = √(2/(ω·μ₀·μ_r·σ)) plus the per-square
+    surface resistance R_s = 1/(σ·δ); fields/current decay e^(−x/δ) into the
+    conductor (~95% of induction heating deposits within 1.5·δ). σ from an explicit
+    `conductivity_s_m` or a `conductor` name (copper, aluminum, silver, gold, brass,
+    steel-mild, stainless-304).
+
+    Returns {skin_depth_m, skin_depth_mm, surface_resistance_ohm,
+    angular_frequency_rad_s, conductivity_s_m, mu_r}."""
+    params = {"frequency_hz": frequency_hz, "mu_r": mu_r}
+    for k, v in (("conductivity_s_m", conductivity_s_m), ("conductor", conductor)):
+        if v is not None:
+            params[k] = v
+    return _call("em_skin_depth", **params)
+
+
+@mcp.tool()
+def em_dc_resistance(
+    length_mm: float,
+    area_mm2: float,
+    conductivity_s_m: float | None = None,
+    conductor: str | None = None,
+    voltage_v: float | None = None,
+) -> dict:
+    """Exact DC resistance of a uniform conductor (NO solver) — R = L/(σ·A), the
+    closed-form anchor the Elmer em_conduction_submit gate reproduces to machine
+    precision. With `voltage_v` the Ohm/Joule pair is included (I = V/R, P = V·I).
+    σ from `conductivity_s_m` or a `conductor` name.
+
+    Returns {resistance_ohm, conductivity_s_m, length_m, area_m2, current_a?,
+    joule_w?}."""
+    params = {"length_mm": length_mm, "area_mm2": area_mm2}
+    for k, v in (("conductivity_s_m", conductivity_s_m), ("conductor", conductor),
+                 ("voltage_v", voltage_v)):
+        if v is not None:
+            params[k] = v
+    return _call("em_dc_resistance", **params)
+
+
+@mcp.tool()
+def em_field(
+    kind: str = "wire",
+    current_a: float = 1.0,
+    distance_mm: float | None = None,
+    turns_per_m: float | None = None,
+    mu_r: float = 1.0,
+) -> dict:
+    """Exact magnetostatic field of the two canonical sources (NO solver):
+    `kind='wire'` is the long straight wire B = μ₀·I/(2π·r) at `distance_mm`
+    (Ampère's law); `kind='solenoid'` is the long-solenoid interior
+    B = μ₀·μ_r·n·I with `turns_per_m`.
+
+    Returns {b_t, b_mt, …} (the field in tesla and millitesla)."""
+    params = {"kind": kind, "current_a": current_a, "mu_r": mu_r}
+    for k, v in (("distance_mm", distance_mm), ("turns_per_m", turns_per_m)):
+        if v is not None:
+            params[k] = v
+    return _call("em_field", **params)
+
+
+@mcp.tool()
+def em_conduction_submit(
+    voltage_v: float = 0.001,
+    length_m: float = 0.1,
+    width_m: float = 0.02,
+    conductivity_s_m: float | None = None,
+    conductor: str = "copper",
+    nx: int = 40,
+    ny: int = 8,
+) -> dict:
+    """DC current conduction via Elmer's StatCurrentSolver (P3 M6 frontier),
+    asynchronous. Requires ElmerSolver; when absent this returns {ok:false, reason,
+    install} rather than raising. Builds a rectangular strip with `voltage_v`
+    across its ends and reads the electrode current, total Joule heating and
+    Elmer's effective resistance — all machine-exact against R = L/(σ·A)
+    (`resistance_ratio` = 1.000000 live).
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, current_a, joule_w, effective_resistance_ohm, resistance_exact_ohm,
+    current_exact_a, resistance_ratio, case_dir}."""
+    params = {"voltage_v": voltage_v, "length_m": length_m, "width_m": width_m,
+              "conductor": conductor, "nx": nx, "ny": ny}
+    if conductivity_s_m is not None:
+        params["conductivity_s_m"] = conductivity_s_m
+    return _call("em_conduction_submit", **params)
+
+
+@mcp.tool()
+def em_induction_submit(
+    frequency_hz: float = 50.0,
+    conductivity_s_m: float | None = None,
+    conductor: str = "copper",
+    mu_r: float = 1.0,
+    depths: float = 5.3,
+    nx: int = 100,
+    ny: int = 2,
+) -> dict:
+    """AC skin effect / induction via Elmer's harmonic 2-D magnetodynamics (P3 M6
+    frontier), asynchronous. Requires ElmerSolver; when absent this returns
+    {ok:false, reason, install} rather than raising. Builds a conductor slab
+    `depths` skin depths deep driven by the surface vector potential at
+    `frequency_hz`, solves the complex field, and fits the e-folding length of
+    BOTH the magnitude and the phase of A(x) — each must equal the exact
+    δ = √(2/(ω·μ₀·μ_r·σ)) (live: decay_ratio 0.999, phase_ratio 1.000). The Joule
+    deposition profile |J|² ∝ e^(−2x/δ) is the induction-heating answer.
+
+    Returns the degradation dict or {job_id, status, cache_hit}; poll job_result
+    for {ok, skin_depth_exact_m, decay_length_m, phase_length_m, decay_ratio,
+    phase_ratio, case_dir}."""
+    params = {"frequency_hz": frequency_hz, "conductor": conductor, "mu_r": mu_r,
+              "depths": depths, "nx": nx, "ny": ny}
+    if conductivity_s_m is not None:
+        params["conductivity_s_m"] = conductivity_s_m
+    return _call("em_induction_submit", **params)
+
+
+@mcp.tool()
 def cfd_pipe_flow(
     diameter_mm: float,
     length_mm: float,
