@@ -806,9 +806,9 @@ def _plot_bridge(outdir):
 
 
 def _plot_modal(outdir):
-    """Panel G: CalculiX cantilever modal vs the exact Euler-Bernoulli oracle. The
+    """Panel H: CalculiX cantilever modal vs the exact Euler-Bernoulli oracle. The
     modal solve needs FreeCAD+CalculiX (not available on the venv --plots path), so the
-    CalculiX bars are the measured live results from Example G / tests/test_worker.py —
+    CalculiX bars are the measured live results from Example H / tests/test_worker.py —
     they reproduce on the provisioned box. The oracle bars are computed here."""
     import matplotlib.pyplot as plt
     from driftpin.analysis import vibration as vib

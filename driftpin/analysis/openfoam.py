@@ -47,6 +47,54 @@ def _header(cls: str, obj: str, location: str) -> str:
     )
 
 
+def steady_laminar_common_files(*, nu_m2_s: float, end_time: int) -> dict:
+    """The case files every central-scheme steady laminar ``simpleFoam`` builder
+    shares verbatim — ``constant/transportProperties`` (Newtonian ``nu_m2_s``),
+    ``constant/turbulenceProperties`` (laminar), ``system/controlDict`` (``end_time``
+    iterations, final write only) and the central-scheme ``system/fvSchemes`` /
+    ``system/fvSolution`` (SIMPLEC, Gauss linear) used by the wedge pipe and the M4
+    snappy bridge. The flat plate keeps its own bounded-linearUpwind variants, NOT
+    these. Returns ``{relpath: contents}`` for the caller to extend with its mesh
+    and 0/ fields."""
+    if nu_m2_s <= 0:
+        raise ValueError("nu_m2_s must be > 0")
+    files = {}
+    files["constant/transportProperties"] = (
+        _header("dictionary", "transportProperties", "constant")
+        + f"\ntransportModel  Newtonian;\nnu              {nu_m2_s:.10g};\n")
+    files["constant/turbulenceProperties"] = (
+        _header("dictionary", "turbulenceProperties", "constant")
+        + "\nsimulationType  laminar;\n")
+    files["system/controlDict"] = (
+        _header("dictionary", "controlDict", "system")
+        + "\napplication     simpleFoam;\nstartFrom       startTime;\nstartTime       0;\n"
+        "stopAt          endTime;\n"
+        f"endTime         {int(end_time)};\ndeltaT          1;\n"
+        "writeControl    timeStep;\n"
+        f"writeInterval   {int(end_time)};\npurgeWrite      1;\nwriteFormat     ascii;\n"
+        "writePrecision  10;\nwriteCompression off;\ntimeFormat      general;\n"
+        "runTimeModifiable false;\n")
+    files["system/fvSchemes"] = (
+        _header("dictionary", "fvSchemes", "system")
+        + "\nddtSchemes { default steadyState; }\n"
+        "gradSchemes { default Gauss linear; }\n"
+        "divSchemes\n{\n    default none;\n    div(phi,U) bounded Gauss linear;\n"
+        "    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n}\n"
+        "laplacianSchemes { default Gauss linear corrected; }\n"
+        "interpolationSchemes { default linear; }\n"
+        "snGradSchemes { default corrected; }\n")
+    files["system/fvSolution"] = (
+        _header("dictionary", "fvSolution", "system")
+        + "\nsolvers\n{\n"
+        "    p { solver GAMG; smoother GaussSeidel; tolerance 1e-9; relTol 0.01; }\n"
+        "    U { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }\n"
+        "}\n"
+        "SIMPLE\n{\n    nNonOrthogonalCorrectors 2;\n    consistent yes;\n"
+        "    residualControl { p 1e-7; U 1e-7; }\n}\n"
+        "relaxationFactors { equations { U 0.9; } fields { p 0.9; } }\n")
+    return files
+
+
 def pipe_blockmeshdict(*, diameter_m: float, length_m: float,
                        half_angle_deg: float, n_axial: int, n_radial: int) -> str:
     """blockMeshDict for the axisymmetric wedge pipe (one collapsed-axis hex).
@@ -107,16 +155,10 @@ def pipe_case_files(*, diameter_m: float, length_m: float, velocity_m_s: float,
     ``constant/transportProperties``, ``constant/turbulenceProperties``, ``0/U``,
     ``0/p``, ``system/{controlDict,fvSchemes,fvSolution}``)."""
     U = velocity_m_s
-    files = {}
+    files = steady_laminar_common_files(nu_m2_s=nu_m2_s, end_time=end_time)
     files["system/blockMeshDict"] = pipe_blockmeshdict(
         diameter_m=diameter_m, length_m=length_m, half_angle_deg=half_angle_deg,
         n_axial=n_axial, n_radial=n_radial)
-    files["constant/transportProperties"] = (
-        _header("dictionary", "transportProperties", "constant")
-        + f"\ntransportModel  Newtonian;\nnu              {nu_m2_s:.10g};\n")
-    files["constant/turbulenceProperties"] = (
-        _header("dictionary", "turbulenceProperties", "constant")
-        + "\nsimulationType  laminar;\n")
     files["0/U"] = (
         _header("volVectorField", "U", "0")
         + "\ndimensions      [0 1 -1 0 0 0 0];\n"
@@ -137,33 +179,6 @@ def pipe_case_files(*, diameter_m: float, length_m: float, velocity_m_s: float,
         "    wall   { type zeroGradient; }\n"
         "    wedge1 { type wedge; }\n"
         "    wedge2 { type wedge; }\n}\n")
-    files["system/controlDict"] = (
-        _header("dictionary", "controlDict", "system")
-        + "\napplication     simpleFoam;\nstartFrom       startTime;\nstartTime       0;\n"
-        "stopAt          endTime;\n"
-        f"endTime         {int(end_time)};\ndeltaT          1;\n"
-        "writeControl    timeStep;\n"
-        f"writeInterval   {int(end_time)};\npurgeWrite      1;\nwriteFormat     ascii;\n"
-        "writePrecision  10;\nwriteCompression off;\ntimeFormat      general;\n"
-        "runTimeModifiable false;\n")
-    files["system/fvSchemes"] = (
-        _header("dictionary", "fvSchemes", "system")
-        + "\nddtSchemes { default steadyState; }\n"
-        "gradSchemes { default Gauss linear; }\n"
-        "divSchemes\n{\n    default none;\n    div(phi,U) bounded Gauss linear;\n"
-        "    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n}\n"
-        "laplacianSchemes { default Gauss linear corrected; }\n"
-        "interpolationSchemes { default linear; }\n"
-        "snGradSchemes { default corrected; }\n")
-    files["system/fvSolution"] = (
-        _header("dictionary", "fvSolution", "system")
-        + "\nsolvers\n{\n"
-        "    p { solver GAMG; smoother GaussSeidel; tolerance 1e-9; relTol 0.01; }\n"
-        "    U { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }\n"
-        "}\n"
-        "SIMPLE\n{\n    nNonOrthogonalCorrectors 2;\n    consistent yes;\n"
-        "    residualControl { p 1e-7; U 1e-7; }\n}\n"
-        "relaxationFactors { equations { U 0.9; } fields { p 0.9; } }\n")
     return files
 
 
