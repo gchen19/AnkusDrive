@@ -2350,16 +2350,22 @@ def fem_mesh(
     body: str,
     char_length: float = 0.0,
     name: str = "Mesh",
+    element_order: str | None = None,
 ) -> dict:
     """Create a Gmsh mesh of `body`, attached to `analysis`.
 
     char_length: max characteristic element length in mm. 0 = let Gmsh pick.
+    element_order: '1st' or '2nd' (quadratic). Use '2nd' for bending/modal accuracy —
+    linear tets (C3D4) shear-lock and overstiffen thin sections (a cantilever's first
+    natural frequency lands ~50% high with only 1-2 elements through the thickness;
+    2nd-order tets bring it within ~1% of beam theory). Default lets Gmsh choose.
     Returns {handle, name, nodes, tets}.
     """
-    return _call(
-        "fem_mesh", analysis=analysis, body=body,
-        char_length=char_length, name=name,
-    )
+    params = {"analysis": analysis, "body": body, "char_length": char_length,
+              "name": name}
+    if element_order is not None:
+        params["element_order"] = element_order
+    return _call("fem_mesh", **params)
 
 
 @mcp.tool()
@@ -3074,6 +3080,37 @@ def random_vibration(
         if v is not None:
             params[k] = v
     return _call("random_vibration", **params)
+
+
+@mcp.tool()
+def beam_modal(
+    length_mm: float,
+    width_mm: float,
+    height_mm: float,
+    boundary: str = "cantilever",
+    n_modes: int = 3,
+    youngs_gpa: float | None = None,
+    density_kg_m3: float | None = None,
+    material: str | None = None,
+) -> dict:
+    """Exact Euler-Bernoulli natural frequencies of a uniform rectangular beam — the
+    closed-form modal oracle (no solver), and the band the CalculiX `fem_modal`
+    eigen-solve is gated against. f_n = (βL)_n²/(2π)·sqrt(E·I/(ρ·A·L⁴)); the beam bends
+    in `height_mm` (I = width·height³/12, so a slender beam's lowest mode is the
+    thinnest-direction bend). `boundary`: 'cantilever' | 'simply_supported' |
+    'clamped_clamped' | 'free_free' | 'clamped_pinned' (up to 5 modes each). Material
+    via `youngs_gpa`+`density_kg_m3`, or a Materials-DB `material` name. Slender-beam
+    theory — accurate while length ≫ height (thick beams need a Timoshenko correction).
+
+    Returns {boundary, n_modes, frequencies_hz, beta_l, first_mode_hz, youngs_gpa,
+    density_kg_m3, area_mm2, I_mm4, slenderness}."""
+    params = {"length_mm": length_mm, "width_mm": width_mm, "height_mm": height_mm,
+              "boundary": boundary, "n_modes": n_modes}
+    for k, v in (("youngs_gpa", youngs_gpa), ("density_kg_m3", density_kg_m3),
+                 ("material", material)):
+        if v is not None:
+            params[k] = v
+    return _call("beam_modal", **params)
 
 
 @mcp.tool()

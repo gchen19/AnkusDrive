@@ -5907,7 +5907,10 @@ def _h_fem_add_constraint(p):
 @handler("fem_mesh")
 def _h_fem_mesh(p):
     """Create a Gmsh mesh on a body handle and add it to an analysis.
-    Returns handle + node/element counts."""
+    `char_length` caps the element size (mm). `element_order` is '1st' or '2nd'
+    (quadratic): use '2nd' for bending/modal accuracy — linear tets (C3D4) shear-lock
+    and badly overstiffen thin sections (a cantilever's first mode comes out ~50% high
+    with 1-2 elements through the thickness). Returns handle + node/element counts."""
     from femmesh.gmshtools import GmshTools
     doc = _active_doc()
     analysis = _resolve_analysis(p["analysis"])
@@ -5918,6 +5921,11 @@ def _h_fem_mesh(p):
     mesh.Shape = body_obj
     if char_length > 0:
         mesh.CharacteristicLengthMax = char_length
+    order = p.get("element_order")
+    if order is not None:
+        if order not in ("1st", "2nd"):
+            raise ValueError("element_order must be '1st' or '2nd'")
+        mesh.ElementOrder = order
     doc.recompute()
     analysis.addObject(mesh)
 
@@ -6089,6 +6097,20 @@ def _h_random_vibration(p):
         modal_stress_mpa_per_g=p.get("modal_stress_mpa_per_g"),
         allowable_stress_mpa=p.get("allowable_stress_mpa"),
     )
+
+
+@handler("beam_modal")
+def _h_beam_modal(p):
+    """Exact Euler-Bernoulli natural frequencies of a uniform rectangular beam (no
+    solver) — the closed-form oracle the CalculiX `fem_modal` eigen-solve is gated
+    against, and a fast modal screen on its own. f_n = (βL)_n²/(2π)·sqrt(E·I/(ρ·A·L⁴));
+    the beam bends in `height_mm` (I = width·height³/12). `boundary` is one of
+    cantilever / simply_supported / clamped_clamped / free_free / clamped_pinned; E,ρ
+    from youngs_gpa+density_kg_m3 or a Materials-DB `material`. See
+    driftpin.analysis.vibration. Returns {boundary, n_modes, frequencies_hz, beta_l,
+    first_mode_hz, youngs_gpa, density_kg_m3, area_mm2, I_mm4, slenderness}."""
+    from driftpin.analysis import vibration
+    return vibration.beam_natural_frequencies(**p)
 
 
 @handler("contact_setup")

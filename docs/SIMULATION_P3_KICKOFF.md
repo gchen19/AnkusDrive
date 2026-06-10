@@ -180,7 +180,10 @@ M4  Geometry bridge ✅ analysis/meshbridge.py + body modes on thermal_transient
                        gated vs Hagen–Poiseuille on the developed Δp (cylinder:
                        hp_ratio 1.0006). Example G + bridge.png.
 M5  3-D topology   ⏳ 3-D SIMP + real load cases/keep-outs → topology_to_solid (3-D)
-M6  Frontier       ⏳ (optional) modal/harmonic · conjugate heat transfer · EM
+M6  Frontier       ◑ modal SHIPPED: beam_modal exact Euler-Bernoulli oracle +
+                       fem_modal (CalculiX, 2nd-order tets) gate — fundamental within
+                       ~0.5% of E-B; fem_mesh element_order added. Example G + modal.png.
+                       (conjugate heat transfer · EM still open)
 ```
 
 Each Mn is the established vertical slice: a module/handler/tool, the `*_submit` wired

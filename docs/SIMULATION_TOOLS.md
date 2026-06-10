@@ -176,14 +176,24 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Answers:** "Where can I remove material? Does it survive random vibration?"
 - **Backend:** CCX nonlinear/contact flags (partly exposed already);
   `topopt` / `solidspy` / FEniCS for topology; PSD math on top of `fem_modal`.
-- **Signatures:**
+- **Signatures (implemented):**
   ```
-  topology_optimize(body, load_cases, keep_fraction, keep_out_regions)
-  random_vibration(analysis, psd_profile)              # builds on fem_modal results
-  contact_setup(analysis, face_pairs, friction)        # promotes existing CCX flags
+  topology_optimize_submit(body, keep_fraction, nelz?, loads?, keep_out?, keep_in?)  # SIMP, returns geometry
+  random_vibration(analysis|frequencies_hz, psd_profile)   # Miles SRSS on fem_modal results
+  beam_modal(length_mm, width_mm, height_mm, boundary, n_modes, youngs_gpa, density_kg_m3|material)
+    -> {boundary, frequencies_hz, beta_l, first_mode_hz, area_mm2, I_mm4, slenderness}
+  contact_setup(analysis, face_pairs, friction)            # promotes existing CCX flags
   ```
 - `topology_optimize` *returns geometry*, not just numbers — the one family here
   that closes the loop back into the modeller.
+- **Modal (P3 M6):** `beam_modal` is the exact Euler-Bernoulli natural-frequency oracle
+  (f_n = (βL)_n²/(2π)·√(EI/ρAL⁴), cantilever / simply-supported / clamped-clamped /
+  free-free / clamped-pinned) in [`analysis/vibration.py`](../driftpin/analysis/vibration.py).
+  The existing CalculiX `fem_modal` eigen-solve is gated against it — within ~0.5% of the
+  fundamental once `fem_mesh(element_order='2nd')` is used (linear C3D4 tets shear-lock
+  and overshoot ~50%; quadratic C3D10 fix it). Acceptance: **Example G** + `modal.png`;
+  oracle gates in `tests/test_vibration.py`, the CalculiX gate in `tests/test_worker.py`
+  (`test_fem_modal_cantilever`).
 
 ### 6. Fluids / CFD  ✅ shipped (P2 M5 internal; P3 M3 external)
 

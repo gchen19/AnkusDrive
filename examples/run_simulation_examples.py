@@ -7,7 +7,7 @@ runs the actual solver via ``jobs.py``, polls the shared ``job_result`` surface,
 compares the solved numbers to the closed-form answer from
 ``docs/SIMULATION_EXAMPLES.md``.
 
-Four examples, each a kickoff gate:
+Eight examples, each a kickoff gate:
   * **A — topology** (§5): ``topology_optimize_submit`` → ``topology_to_solid`` →
     ``mass_properties``; the reconstructed solid must hold mass_fraction ≤ keep_fraction
     and be a valid (watertight) body. Needs NumPy in the worker; no external solver.
@@ -37,6 +37,10 @@ Four examples, each a kickoff gate:
     a 20 mm cube → Gmsh UNV → **ElmerGrid + ElmerSolver** as a plane wall (must match
     the Heisler oracle within 3%), and a Ø10×100 mm cylinder → multi-region STL →
     **snappyHexMesh + simpleFoam** (developed Δp within 10% of Hagen–Poiseuille).
+  * **H — modal** (§M6): a steel cantilever meshed with **2nd-order tets** and solved by
+    **CalculiX** (``fem_modal`` eigenanalysis); the fundamental must match the exact
+    Euler-Bernoulli oracle (``beam_modal``) within 3% — linear tets shear-lock and
+    overshoot ~50%, which the ``element_order='2nd'`` mesh fixes.
 
 Each example **degrades gracefully**: a missing solver (ElmerSolver / OpenFOAM) or a
 worker that lacks NumPy is reported as SKIP, not a failure, so the script is safe to
@@ -316,6 +320,47 @@ def example_bridge(w, log):
     log(f"  GATE bridged wall vs Heisler within 3% and bridged pipe hp_ratio "
         f"within 10%: {'PASS' if th_ok and hp_ok else 'FAIL'}")
     return th_ok and hp_ok
+
+
+def example_modal(w, log):
+    """§M6 — CalculiX modal of a steel cantilever vs the Euler-Bernoulli oracle."""
+    log("### Example H — fem_modal (CalculiX, 2nd-order tets) vs beam_modal oracle  (§M6)")
+    L, b, h = 300.0, 30.0, 10.0
+    orc = w.call("beam_modal", length_mm=L, width_mm=b, height_mm=h,
+                 boundary="cantilever", n_modes=2, youngs_gpa=210, density_kg_m3=7900)
+    log(f"- Euler-Bernoulli cantilever {L:.0f}×{b:.0f}×{h:.0f} mm steel: "
+        f"f1={orc['first_mode_hz']} Hz, f2={orc['frequencies_hz'][1]} Hz (slenderness {orc['slenderness']})")
+    try:
+        w.call("new_document", name="modal_demo")
+        box = w.call("add_primitive", kind="box", w=L, d=b, h=h)["handle"]
+        an = w.call("fem_new_analysis")["handle"]
+        w.call("fem_set_solver", analysis=an, kind="ccx")
+        w.call("fem_set_material", analysis=an, body=box, material={
+            "Name": "Steel", "YoungsModulus": "210000 MPa", "PoissonRatio": "0.30",
+            "Density": "7900 kg/m^3"})
+        w.call("fem_add_constraint", analysis=an, kind="fixed",
+               refs=[{"handle": box, "face": "Face1"}])
+        mesh = w.call("fem_mesh", analysis=an, body=box, char_length=6.0,
+                      element_order="2nd", _timeout=120.0)
+        w.call("fem_modal", analysis=an, n_modes=6)
+        w.call("fem_run", analysis=an, workdir="/tmp/driftpin_modal_ex", _timeout=300.0)
+        freqs = w.call("fem_modal_results", analysis=an)["frequencies_hz"]
+    except Exception as e:  # noqa: BLE001 — CalculiX absent / FEM stack unavailable
+        log(f"  SKIP — CalculiX modal unavailable ({type(e).__name__}: {str(e)[:80]})")
+        return None
+    if not freqs:
+        log("  FAIL — no modal frequencies produced")
+        return False
+    ratio = freqs[0] / orc["first_mode_hz"]
+    f2o = orc["frequencies_hz"][1]
+    f2_found = any(abs(f / f2o - 1.0) < 0.05 for f in freqs)
+    log(f"- CalculiX ({mesh['nodes']} nodes, 2nd-order): modes {[round(f, 1) for f in freqs[:4]]} Hz")
+    log(f"- fundamental: CalculiX {freqs[0]:.2f} Hz vs E-B {orc['first_mode_hz']:.2f} Hz "
+        f"→ ratio {ratio:.4f}; 2nd bending mode found: {f2_found}")
+    ok = 0.97 <= ratio <= 1.05 and f2_found
+    log(f"  GATE fundamental within 3% of Euler-Bernoulli and 2nd mode present: "
+        f"{'PASS' if ok else 'FAIL'}")
+    return ok
 
 
 # --- figures (--plots) --------------------------------------------------------
@@ -760,8 +805,62 @@ def _plot_bridge(outdir):
     return True
 
 
+def _plot_modal(outdir):
+    """Panel G: CalculiX cantilever modal vs the exact Euler-Bernoulli oracle. The
+    modal solve needs FreeCAD+CalculiX (not available on the venv --plots path), so the
+    CalculiX bars are the measured live results from Example G / tests/test_worker.py —
+    they reproduce on the provisioned box. The oracle bars are computed here."""
+    import matplotlib.pyplot as plt
+    from driftpin.analysis import vibration as vib
+    L, b, h = 300.0, 30.0, 10.0
+    orc = vib.beam_natural_frequencies(L, b, h, "cantilever", n_modes=2,
+                                       youngs_gpa=210, density_kg_m3=7900)
+    f1_eb, f2_eb = orc["frequencies_hz"]
+    # measured CalculiX fundamentals (reproducible; see test_fem_modal_cantilever):
+    ccx_f1_1st = 144.9      # linear C3D4 tets — shear-locked, ~57% high
+    ccx_f1_2nd = 93.0       # quadratic C3D10 tets — within 0.5%
+    ccx_f2_2nd = 580.0      # 2nd bending mode, 2nd-order
+
+    fig, axes = plt.subplots(1, 2, figsize=(9.4, 4.2))
+    # (left) fundamental: oracle vs C3D4 (locked) vs C3D10 — the element-order story
+    ax = axes[0]
+    labels = ["Euler-Bernoulli\n(exact)", "CalculiX C3D4\n(1st-order, locked)",
+              "CalculiX C3D10\n(2nd-order)"]
+    vals = [f1_eb, ccx_f1_1st, ccx_f1_2nd]
+    bars = ax.bar(labels, vals, color=["C3", "0.6", "C0"])
+    ax.axhline(f1_eb, ls="--", color="C3", alpha=0.6)
+    for rbar, v in zip(bars, vals):
+        ax.text(rbar.get_x() + rbar.get_width() / 2, v + 2, f"{v:.0f}",
+                ha="center", fontsize=9)
+    ax.set_ylabel("fundamental frequency  f₁ (Hz)")
+    ax.set_title("Why element_order='2nd': linear tets shear-lock", fontsize=9, weight="bold")
+    ax.tick_params(axis="x", labelsize=7.5)
+
+    # (right) first two bending modes: oracle vs CalculiX (2nd-order)
+    ax = axes[1]
+    import numpy as np
+    x = np.arange(2)
+    w_ = 0.36
+    ax.bar(x - w_ / 2, [f1_eb, f2_eb], w_, color="C3", label="Euler-Bernoulli")
+    ax.bar(x + w_ / 2, [ccx_f1_2nd, ccx_f2_2nd], w_, color="C0", label="CalculiX (2nd-order)")
+    ax.set_xticks(x); ax.set_xticklabels(["1st bending", "2nd bending"])
+    ax.set_ylabel("natural frequency (Hz)")
+    ax.set_title(f"Cantilever {L:.0f}×{b:.0f}×{h:.0f} mm steel (L/h={orc['slenderness']:.0f})",
+                 fontsize=9, weight="bold")
+    ax.legend(fontsize=8)
+    for xi, (a, c) in enumerate([(f1_eb, ccx_f1_2nd), (f2_eb, ccx_f2_2nd)]):
+        ax.text(xi, max(a, c) + 15, f"ratio {c/a:.3f}", ha="center", fontsize=8)
+
+    fig.suptitle("Example H — CalculiX modal vs Euler-Bernoulli beam oracle  (§M6)",
+                 fontsize=11, weight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(f"{outdir}/modal.png", dpi=130)
+    plt.close(fig)
+    return True
+
+
 def make_plots(outdir):
-    """Generate the six result figures into ``outdir``; skip a panel when its solver
+    """Generate the eight result figures into ``outdir``; skip a panel when its solver
     is absent. matplotlib is imported lazily so the gated run needs no plotting deps."""
     import os
     try:
@@ -782,6 +881,7 @@ def make_plots(outdir):
     print("  external.png " + ("✓" if _plot_external(outdir) else "SKIP (OpenFOAM absent)"))
     print("  bridge.png " + ("✓" if _plot_bridge(outdir)
                              else "SKIP (ElmerSolver/ElmerGrid/OpenFOAM absent)"))
+    print("  modal.png " + ("✓" if _plot_modal(outdir) else "SKIP"))
 
 
 def main():
@@ -807,7 +907,8 @@ def main():
                          ("optics", example_optics),
                          ("radiation", example_radiation),
                          ("external", example_external),
-                         ("bridge", example_bridge)):
+                         ("bridge", example_bridge),
+                         ("modal", example_modal)):
             try:
                 results[name] = fn(w, log)
             except Exception as e:  # one example failing must not abort the rest
