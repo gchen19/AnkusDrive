@@ -902,6 +902,142 @@ def test_gruebler_single_loop_dof_is_n_minus_3_and_goes_negative_when_overconstr
     assert fourbar - kinematics.gruebler_dof(4, ["revolute"] * 4 + ["gear"]) == 1  # +1 higher pair
 
 
+# === Batch 5 — deepen the covered families (topology · optics · thermal) ======
+
+# --- topology: the SIMP penalty law + the OC volume/compliance invariants -------
+
+def test_simp_penalty_exponent_is_wired_into_the_initial_compliance():
+    # Exact identity through the real solve: the uniform start has E=Emin+kf^p·(E0−Emin)
+    # ≈ kf^p, so the initial compliance c₀=FᵀK⁻¹F ∝ kf^(−p). At fixed keep_fraction kf,
+    # raising the penalty from p₁→p₂ multiplies c₀ by exactly kf^(−(p₂−p₁)) — the gate
+    # that the SIMP exponent actually penalizes intermediate density inside the solver.
+    from driftpin.analysis import topology as topo
+    kf = 0.5
+    p1 = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=kf, penal=1.0, max_iter=1)
+    p2 = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=kf, penal=2.0, max_iter=1)
+    p3 = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=kf, penal=3.0, max_iter=1)
+    c1, c2, c3 = (r["compliance_initial"] for r in (p1, p2, p3))
+    assert c1 < c2 < c3, (c1, c2, c3)                       # stiffer at p=1, softer as p↑
+    assert abs(c2 / c1 - kf ** -1) < 1e-4, c2 / c1          # kf^-(2-1) = 2
+    assert abs(c3 / c1 - kf ** -2) < 1e-4, c3 / c1          # kf^-(3-1) = 4
+
+
+def test_initial_compliance_is_monotone_in_keep_fraction():
+    # Asymptotic/scaling law: more material → equal-or-lower compliance (stiffer). At
+    # penal=1 the uniform start makes E linear in the density kf, so K ∝ kf and the
+    # initial compliance c₀ ∝ 1/kf — c₀·kf is an exact invariant across keep_fractions
+    # (doubling kf exactly halves c₀). max_iter=1, tiny grid: one solve each.
+    from driftpin.analysis import topology as topo
+    lean = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=0.3, penal=1.0, max_iter=1)
+    rich = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=0.6, penal=1.0, max_iter=1)
+    assert rich["compliance_initial"] < lean["compliance_initial"], \
+        (lean["compliance_initial"], rich["compliance_initial"])
+    # the c₀·kf invariant: 0.6/0.3 = 2× material ⇒ exactly ½ the compliance
+    assert abs(lean["compliance_initial"] * 0.3
+               - rich["compliance_initial"] * 0.6) < 1e-4, \
+        (lean["compliance_initial"], rich["compliance_initial"])
+    assert abs(rich["compliance_initial"] / lean["compliance_initial"] - 0.5) < 1e-4, \
+        rich["compliance_initial"] / lean["compliance_initial"]
+
+
+def test_oc_update_realizes_the_volume_fraction_exactly():
+    # Conservation/composition: the Optimality-Criteria bisection drives Σx to
+    # keep_fraction·N every step, so the reported mass_fraction (mean density) equals
+    # keep_fraction to the OC bisection tolerance — grid- and keep_fraction-independent.
+    # Observed |error| ≤ 2.3e-5 over the sweep; assert a safe 1e-3 (sharper than the basic).
+    from driftpin.analysis import topology as topo
+    for nelx, nely, kf in ((8, 4, 0.3), (8, 4, 0.5), (6, 6, 0.4), (8, 4, 0.7)):
+        r = topo.simp_topology_2d(nelx=nelx, nely=nely, keep_fraction=kf,
+                                  penal=1.0, max_iter=1)
+        assert abs(r["mass_fraction"] - kf) < 1e-3, (nelx, nely, kf, r["mass_fraction"])
+
+
+# --- optics: bundle energy closure + the razor-sharp TIR edge ------------------
+
+def test_trace_bundle_energy_partition_closes_to_machine_eps():
+    # Conservation: every ray's unit energy is partitioned exactly into transmitted
+    # (efficiency), reflected/trapped (leakage), and bulk-absorbed (absorbed), so
+    # efficiency + leakage + absorbed ≡ 1. The partition is a re-bucketing of the
+    # source weights (which sum to 1 to float eps), so closure holds to ~1e-16 even
+    # after the dict's display rounding — far tighter than the basic anchor's 1%.
+    for n1, n2, cfg, absn, target in (
+        (1.0, _N_PMMA, {"kind": "collimated", "angle_deg": 0.0}, 0.0, None),
+        (1.0, _N_PMMA, {"kind": "cone", "half_angle_deg": 60.0}, 0.05, 25.0),
+        (1.0, _N_PMMA, {"kind": "lambertian", "max_angle_deg": 85.0}, 0.08, None),
+        (_N_PMMA, 1.0, {"kind": "cone", "half_angle_deg": 89.0}, 0.123, None),  # trapped
+    ):
+        r = op.trace_bundle(n1, n2, cfg, n_rays=48,
+                            absorption=absn, target_half_angle_deg=target)
+        partition = r["efficiency"] + r["leakage_fraction"] + r["absorbed_fraction"]
+        assert abs(partition - 1.0) < 1e-12, (cfg, partition)
+        assert r["energy_balance"] == 1.0, (cfg, r["energy_balance"])  # reported sum is exact
+        assert abs(r["absorbed_fraction"] - absn) < 1e-6, (cfg, r["absorbed_fraction"])
+        # TIR-trapped energy is a subset of leakage — never its own escape channel
+        assert r["tir_fraction"] <= r["leakage_fraction"] + 1e-12, r
+
+
+def test_tir_transmittance_edge_is_razor_sharp_at_critical_angle():
+    # Regression / exact-edge: at θc = asin(n2/n1) (n1>n2) the transmittance drops
+    # from a finite value to EXACTLY zero across an infinitesimal step. Just below
+    # θc a real refracted ray exits (T>0, tir False); just above it the wave is
+    # totally internally reflected (T==0, R==1, tir True, refract_angle → None).
+    for n1, n2 in ((_N_PMMA, 1.0), (1.5, 1.0), (_N_PMMA, 1.33)):
+        theta_c = op.critical_angle(n1, n2)
+        assert abs(theta_c - math.degrees(math.asin(n2 / n1))) < 1e-12, (n1, n2, theta_c)
+        eps = 1e-3
+        below = op.fresnel_reflectance(theta_c - eps, n1, n2)
+        above = op.fresnel_reflectance(theta_c + eps, n1, n2)
+        assert not below["tir"] and below["transmittance"] > 0.0, (n1, n2, below)
+        assert op.refract_angle(theta_c - eps, n1, n2) is not None, (n1, n2)
+        assert above["tir"] and above["transmittance"] == 0.0 \
+            and above["reflectance"] == 1.0, (n1, n2, above)
+        assert op.refract_angle(theta_c + eps, n1, n2) is None, (n1, n2)
+
+
+# --- thermal: the lumped-capacitance limit + the RC time-constant signature ----
+
+def test_transient_1d_collapses_to_lumped_as_biot_vanishes():
+    # Asymptotic limit: as Bi = h·L/k → 0 the slab is isothermal and the Heisler
+    # one-term series collapses to the lumped exponential exp(−Bi·Fo) — ζ₁→√Bi→0,
+    # C₁→1, so θ_center → θ_lumped EXACTLY. A thin, high-conductivity slab
+    # (1 mm AL6061-T6, k≈167) drives Bi≈3e-5; the transient center temperature and
+    # the lumped reference must coincide, and the agreement flag must fire.
+    s = th.thermal_transient_1d(half_thickness_mm=1, h_conv=5, duration_s=100,
+                                material="AL6061-T6", t_initial_c=100, t_ambient_c=25)
+    assert s["biot"] < 1e-4, s["biot"]
+    assert abs(s["c1"] - 1.0) < 1e-3, s["c1"]                 # C₁ → 1 at Bi→0
+    # both keys are rounded to 3 dp; at this Bi they are bit-identical, so 1e-3 is slack
+    assert abs(s["t_center_c"] - s["t_center_lumped_c"]) < 1e-3, s
+    assert s["lumped_agrees"] is True, s
+    # the transient's own time constant is the slab lumped τ = ρ·cₚ·L/h, exactly
+    rho_cp_L_over_h = 2700.0 * 896.0 * 1e-3 / 5.0
+    assert abs(s["time_constant_s"] - rho_cp_L_over_h) < 1e-2, s["time_constant_s"]
+    # contrast: at Bi=1 the distributed center leads the lumped point and the flag drops
+    hot = th.thermal_transient_1d(half_thickness_mm=100, h_conv=100, duration_s=100,
+                                  k=10, alpha_m2_s=1e-4, t_initial_c=100, t_ambient_c=25)
+    assert hot["t_center_c"] - hot["t_center_lumped_c"] > 5.0, hot
+    assert hot["lumped_agrees"] is False, hot
+
+
+def test_lumped_reaches_one_minus_one_over_e_after_one_time_constant():
+    # Exact identity: the first-order RC response T(t)=T_amb+ΔT_ss·(1−e^(−t/τ)) reaches
+    # EXACTLY 1−1/e ≈ 0.63212 of the steady rise at t=τ. Read the reported τ, evaluate
+    # the model there, and recover the fraction from the temperatures — independent of
+    # the absolute ΔT. Sharper than the anchor's hardcoded 0.632 constant.
+    base = th.thermal_lumped(mass_g=120, power_w=15, h_conv=12, area_mm2=20000,
+                             c_p=900, t_ambient_c=25)
+    tau = base["time_constant_s"]                            # = ρ·V·cₚ/(h·A) = 450.0 s
+    at_tau = th.thermal_lumped(mass_g=120, power_w=15, h_conv=12, area_mm2=20000,
+                               c_p=900, t_ambient_c=25, duration_s=tau)
+    frac = (at_tau["t_final_c"] - at_tau["t_ambient_c"]) / at_tau["delta_t_steady_k"]
+    # t_final_c is 2-dp display-rounded; over ΔT_ss=62.5 the worst-case ~5e-3 K rounding
+    # is ~8e-5 in frac, so 5e-4 is comfortably safe (observed err 3.9e-5).
+    assert abs(frac - (1.0 - 1.0 / math.e)) < 5e-4, (frac, 1.0 - 1.0 / math.e)
+    # reached_steady_pct is 1-dp rounded; the true 63.212% rounds to 63.2 (err 0.012)
+    assert abs(at_tau["reached_steady_pct"] - 100.0 * (1.0 - 1.0 / math.e)) < 0.05, \
+        at_tau["reached_steady_pct"]
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

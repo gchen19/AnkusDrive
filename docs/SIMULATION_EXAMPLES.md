@@ -18,6 +18,16 @@ implementation against before trusting it on real geometry.
   only ever passes proves nothing — every toy is two-sided, the same discipline
   [`tests/TOYS.md`](../tests/TOYS.md) uses for the multi-agent gates.
 
+**The advanced tier.** The happy-path **Toy** in each section is the first tier.
+Every analysis family also carries a sharper *second tier* — the **advanced toys**
+in [`tests/test_toys_advanced.py`](../tests/test_toys_advanced.py) (64 fast-lane
+gates) — that probes the *exact closed-form limit* rather than one dimensional
+point value: invariants (`f·Re≡64`, Wahl-is-index-only), scaling laws (ISO 281
+`(C/P)ᵖ`, beam `f∝1/L²`), reciprocity (Helmholtz, fit hole↔shaft), conservation
+(SRSS energy, trace-bundle energy balance to 1e-12), and regression guards
+(out-of-band→0, static-overload). See [`ADVANCED_TOYS_PLAN.md`](ADVANCED_TOYS_PLAN.md)
+for the per-family coverage map.
+
 **Status legend**
 
 - ✅ **Implemented today** — FEM family (`fem_*`), callable now.

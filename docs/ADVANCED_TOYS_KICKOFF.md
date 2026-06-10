@@ -7,9 +7,12 @@ already in `tests/run_all.sh` under the venv lane). Run with
 
 ## Done so far
 - **Shipped on main:** optics, thermal-radiation, durability (Goodman), topology (2-D/3-D).
-- **In flight:** Batch 1 (#47 — tolerance, materials, cfd), Batch 3 (#48 — cht, em),
-  and Batch 2 (#50 — machine_elements, vibration, durability), stacked; 43 toys total.
-  Merge #47 → #48 → #50, then branch the remaining batches (4, 5) off `main`.
+- **All batches authored** (64 toys total), stacked in one chain off `main`:
+  Batch 1 (#47 — tolerance, materials, cfd) → Batch 3 (#48 — cht, em) →
+  Batch 2 (#50 — machine_elements, vibration, durability) →
+  Batch 4 (#51 — dfx, cost, slicing, kinematics) →
+  Batch 5 (#52 — topology, optics, thermal). Merge in that order; each rebases
+  cleanly onto `main` as its parent lands. Coverage table in the plan doc is all ✅.
 
 ## The contract for a new advanced toy
 1. It must be **one of the five kinds** (state which in a one-line comment): exact
