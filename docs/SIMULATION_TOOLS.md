@@ -194,6 +194,12 @@ Each family lists: the agent question it answers · backend · new-dependency we
   random_vibration(analysis|frequencies_hz, psd_profile)   # Miles SRSS on fem_modal results
   beam_modal(length_mm, width_mm, height_mm, boundary, n_modes, youngs_gpa, density_kg_m3|material)
     -> {boundary, frequencies_hz, beta_l, first_mode_hz, area_mm2, I_mm4, slenderness}
+  beam_buckling(length_mm, end_condition, width/height|diameter|area+I, E, sigma_y|material, load_n?)
+    # Tier A: exact Euler + Johnson — the closed-form twin of fem_buckling
+    -> {governing, slenderness, transition_slenderness, sigma_cr_mpa, p_cr_n, safety_factor, …}
+  plate_check(shape, thickness_mm, pressure_kpa, a_mm+b_mm|diameter_mm, support, E|material)
+    # Tier A: Roark/Timoshenko uniform-load plates, "do I need FEM at all?"
+    -> {sigma_max_mpa, deflection_max_mm, thin_plate_ok, small_deflection_ok, …}
   contact_setup(analysis, face_pairs, friction)            # promotes existing CCX flags
   ```
 - `topology_optimize` *returns geometry*, not just numbers — the one family here
@@ -299,6 +305,12 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - Assembly carries constraints but no dynamics today — this is the only family that
   reasons about *time-varying* geometry.
+- **Status: shipped.** `mechanism_kinematics` (exact closed-form planar gates —
+  four-bar Grashof class + coupler path, slider-crank stroke ≡ 2·R, Grübler DOF;
+  `analysis/kinematics.py`, toys in `tests/test_kinematics.py`) +
+  `mechanism_simulate_submit` (PyBullet rigid-link dynamics behind the `mbd`
+  extra, async with through-motion contact; `analysis/mbd.py`, gates in
+  `tests/test_mbd.py` — kinematics gates the dynamics).
 
 ### 9. Design for X (DfX)
 
@@ -347,6 +359,12 @@ process. Several reuse existing DriftPin tools directly.
   geometry summaries (face draft angles, bbox, volume) like `tolerance.py` takes an
   explicit chain; reading those off a `Shape` (via `draft`/`thickness`/`query_faces`/
   `mass_properties`) is the v2 wiring.
+- **Tier A screens (SIMULATION_NEXT):** `molding_screen`
+  (`analysis/molding.py` — exact one-term cooling time t ∝ s² + the ±30 %
+  spiral-flow fill check, per-polymer defaults, feeding dfm/cost) and
+  `drop_impact` (`analysis/impact.py` — exact energy-balance G = h/d with
+  pulse-shape bounds, fragility ↔ crush-stroke inversion for packaging). Toys in
+  `tests/test_molding.py` / `tests/test_impact.py`.
 
 ### 10. Machine-element rating  *(highest leverage on existing tools)*
 
@@ -420,7 +438,7 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
 
 | Domain | Tooling | Priority |
 |---|---|---|
-| Acoustics | Elmer, pyfar, acoular | low |
+| Acoustics | Elmer, pyfar, acoular | **screening shipped** (`acoustic_screen`, Tier A: exact cavity modes / duct cutoff + Helmholtz ±10 % + mass law ±3 dB — `analysis/acoustics.py`); the Elmer `HelmholtzSolve` FEM is SIMULATION_NEXT B1, gated against the cavity modes |
 | Electromagnetics (RF/wave) | OpenEMS / FEniCSx (RF), FEMM (2D motors) | low |
 | Machining toolpaths | FreeCAD Path, pycam, kiri:moto | low |
 

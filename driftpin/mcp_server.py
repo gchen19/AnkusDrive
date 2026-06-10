@@ -2804,6 +2804,189 @@ def h_estimate(
 
 
 @mcp.tool()
+def acoustic_screen(
+    kind: str,
+    lx_mm: float | None = None,
+    ly_mm: float | None = None,
+    lz_mm: float | None = None,
+    n_modes: int = 10,
+    neck_area_mm2: float | None = None,
+    neck_length_mm: float | None = None,
+    cavity_volume_mm3: float | None = None,
+    frequency_hz: float | None = None,
+    surface_density_kg_m2: float | None = None,
+    duct_width_mm: float | None = None,
+    duct_diameter_mm: float | None = None,
+    t_ambient_c: float = 20.0,
+    c_m_s: float | None = None,
+) -> dict:
+    """Closed-form acoustics screen (NO solver). `kind`: 'cavity_modes' (lx/ly/lz_mm
+    -> the lowest n_modes rigid-cavity eigenfrequencies f=(c/2)·√(Σ(n/L)²) with
+    [nx,ny,nz] indices — exact, and the future oracle for the planned Elmer
+    HelmholtzSolve FEM) | 'helmholtz' (neck_area_mm2 + neck_length_mm +
+    cavity_volume_mm3 -> resonance with flanged end correction — ±10 %) |
+    'mass_law' (frequency_hz + surface_density_kg_m2 -> limp-wall TL =
+    20·log₁₀(f·m″)−47 dB — ±3 dB) | 'duct_cutoff' (duct_width_mm or
+    duct_diameter_mm -> first cross-mode; plane waves only below — exact). Sound
+    speed from air at t_ambient_c unless c_m_s given. Fidelity is labeled per kind;
+    no higher-order acoustic solve is shipped yet (escalate_to=None until Tier B1).
+
+    Returns {kind, c_m_s, fidelity, band_pct, band_db, valid_range_ok, warnings,
+    escalate_to} plus per kind: {modes:[{f_hz,n}], f_fundamental_hz} |
+    {f_resonance_hz, neck_radius_mm, l_eff_mm} | {tl_db, fm_product} |
+    {f_cutoff_hz, geometry}."""
+    params = {"kind": kind, "n_modes": n_modes, "t_ambient_c": t_ambient_c}
+    for k, v in (("lx_mm", lx_mm), ("ly_mm", ly_mm), ("lz_mm", lz_mm),
+                 ("neck_area_mm2", neck_area_mm2), ("neck_length_mm", neck_length_mm),
+                 ("cavity_volume_mm3", cavity_volume_mm3),
+                 ("frequency_hz", frequency_hz),
+                 ("surface_density_kg_m2", surface_density_kg_m2),
+                 ("duct_width_mm", duct_width_mm),
+                 ("duct_diameter_mm", duct_diameter_mm), ("c_m_s", c_m_s)):
+        if v is not None:
+            params[k] = v
+    return _call("acoustic_screen", **params)
+
+
+@mcp.tool()
+def plate_check(
+    shape: str,
+    thickness_mm: float,
+    pressure_kpa: float,
+    a_mm: float | None = None,
+    b_mm: float | None = None,
+    diameter_mm: float | None = None,
+    support: str = "simply_supported",
+    youngs_gpa: float | None = None,
+    material: str | None = None,
+    poisson: float = 0.3,
+) -> dict:
+    """Handbook bending of a uniformly loaded flat plate (NO solver) — the
+    "do I need FEM at all?" screen. `shape`: 'rectangular' (a_mm × b_mm, short side
+    drives; Roark/Timoshenko ν=0.3 coefficients σ=β·q·b²/t², δ=α·q·b⁴/(E·t³),
+    interpolated in a/b) | 'circular' (diameter_mm; exact closed forms).
+    `support`: 'simply_supported' | 'clamped' (all edges). E from youngs_gpa or a
+    Materials-DB `material` (which also supplies yield for yield_safety_factor).
+    Exact within thin-plate theory, and the limits are returned as flags
+    (thin_plate_ok: span/t ≥ 10; small_deflection_ok: δ ≤ t/2) — a tripped flag
+    means escalate to the CCX fem_* pipeline (escalate_to='fem_run').
+
+    Returns {shape, support, aspect_ratio, beta, alpha, sigma_max_mpa,
+    deflection_max_mm, yield_safety_factor, thin_plate_ok, small_deflection_ok,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"shape": shape, "thickness_mm": thickness_mm,
+              "pressure_kpa": pressure_kpa, "support": support, "poisson": poisson}
+    for k, v in (("a_mm", a_mm), ("b_mm", b_mm), ("diameter_mm", diameter_mm),
+                 ("youngs_gpa", youngs_gpa), ("material", material)):
+        if v is not None:
+            params[k] = v
+    return _call("plate_check", **params)
+
+
+@mcp.tool()
+def beam_buckling(
+    length_mm: float,
+    end_condition: str = "pinned_pinned",
+    width_mm: float | None = None,
+    height_mm: float | None = None,
+    diameter_mm: float | None = None,
+    area_mm2: float | None = None,
+    i_min_mm4: float | None = None,
+    youngs_gpa: float | None = None,
+    yield_mpa: float | None = None,
+    material: str | None = None,
+    load_n: float | None = None,
+) -> dict:
+    """Exact column-buckling screen (Euler + Johnson, NO solver) — the closed-form
+    twin the CalculiX `fem_buckling` eigen-solve is gated against (as `beam_modal`
+    is to `fem_modal`). Section: width_mm+height_mm (solid rectangle, weak axis
+    automatic), diameter_mm (round), or explicit area_mm2+i_min_mm4. E/σ_y from
+    youngs_gpa/yield_mpa or a Materials-DB `material`. `end_condition`:
+    'pinned_pinned' | 'fixed_free' | 'fixed_pinned' | 'fixed_fixed' (theoretical K).
+    Euler σ_cr=π²E/λ² above the transition slenderness √(2π²E/σ_y), Johnson
+    parabola below (both exactly σ_y/2 at it). With load_n the safety factor
+    P_cr/P is returned. Escalate to `fem_buckling` for non-prismatic /
+    eccentric / built-up cases.
+
+    Returns {end_condition, k_factor, slenderness, transition_slenderness,
+    governing, sigma_cr_mpa, p_cr_n, area_mm2, i_min_mm4, radius_gyration_mm,
+    safety_factor, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"length_mm": length_mm, "end_condition": end_condition}
+    for k, v in (("width_mm", width_mm), ("height_mm", height_mm),
+                 ("diameter_mm", diameter_mm), ("area_mm2", area_mm2),
+                 ("i_min_mm4", i_min_mm4), ("youngs_gpa", youngs_gpa),
+                 ("yield_mpa", yield_mpa), ("material", material),
+                 ("load_n", load_n)):
+        if v is not None:
+            params[k] = v
+    return _call("beam_buckling", **params)
+
+
+@mcp.tool()
+def molding_screen(
+    wall_thickness_mm: float,
+    material: str | None = None,
+    flow_length_mm: float | None = None,
+    t_melt_c: float | None = None,
+    t_mold_c: float | None = None,
+    t_eject_c: float | None = None,
+    alpha_mm2_s: float | None = None,
+    flow_ratio_limit: float | None = None,
+) -> dict:
+    """Injection-molding screen (NO solver): one-term cooling time (exact given α,
+    t_cool = s²/(π²α)·ln(8·(T_melt−T_mold)/(π²·(T_eject−T_mold))) — the t ∝ s²
+    design lever) + the spiral-flow fill check (fill_ok when flow_length ≤
+    (L/t-limit)·wall — chart correlation, ±30 %). `material` picks per-polymer
+    defaults (ABS | PP | PC | PA66 | POM | HDPE | PS), each individually
+    overridable; with all temps + alpha_mm2_s explicit no material is needed.
+    A cooling-only call returns fidelity='exact'; adding flow_length_mm makes the
+    headline answer fidelity='correlation', band_pct=30 (cooling stays exact).
+    No mold-filling solver is shipped (escalate_to=None).
+
+    Returns {material, wall_thickness_mm, t_melt_c, t_mold_c, t_eject_c,
+    alpha_mm2_s, cooling_time_s, flow_length_mm, flow_ratio, flow_ratio_limit,
+    fill_ok, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"wall_thickness_mm": wall_thickness_mm}
+    for k, v in (("material", material), ("flow_length_mm", flow_length_mm),
+                 ("t_melt_c", t_melt_c), ("t_mold_c", t_mold_c),
+                 ("t_eject_c", t_eject_c), ("alpha_mm2_s", alpha_mm2_s),
+                 ("flow_ratio_limit", flow_ratio_limit)):
+        if v is not None:
+            params[k] = v
+    return _call("molding_screen", **params)
+
+
+@mcp.tool()
+def drop_impact(
+    drop_height_mm: float,
+    crush_distance_mm: float | None = None,
+    deceleration_limit_g: float | None = None,
+    pulse: str = "linear_spring",
+    mass_g: float | None = None,
+) -> dict:
+    """Drop/impact screen by exact energy balance (NO solver). Give
+    crush_distance_mm (available cushion/crumple stroke) -> deceleration, OR
+    deceleration_limit_g (fragility spec) -> required stroke — exactly one.
+    G_avg = h/d exactly (mass cancels); g_peak = pulse_factor·G_avg with `pulse`
+    bounding the shape: 'constant' (ideal crush, 1×) | 'linear_spring' (elastic,
+    2×) | 'half_sine' (π/2×). v = √(2gh). mass_g only adds peak_force_n and
+    energy_j. fidelity='exact'; no explicit impact-dynamics solve is shipped
+    (escalate_to=None — horizon scope).
+
+    Returns {drop_height_mm, impact_velocity_m_s, pulse, pulse_factor,
+    crush_distance_mm, g_avg, g_peak, pulse_duration_ms, deceleration_limit_g,
+    required_crush_mm, energy_j, peak_force_n, fidelity, band_pct,
+    valid_range_ok, warnings, escalate_to}."""
+    params = {"drop_height_mm": drop_height_mm, "pulse": pulse}
+    for k, v in (("crush_distance_mm", crush_distance_mm),
+                 ("deceleration_limit_g", deceleration_limit_g),
+                 ("mass_g", mass_g)):
+        if v is not None:
+            params[k] = v
+    return _call("drop_impact", **params)
+
+
+@mcp.tool()
 def thermal_lumped(
     mass_g: float,
     power_w: float,

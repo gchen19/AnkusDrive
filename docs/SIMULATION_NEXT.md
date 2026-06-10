@@ -25,7 +25,7 @@ framing leaves, and the two tiers this doc proposes to fill them:
 
 ---
 
-## Two contract additions (small, do these first)
+## Two contract additions (small, do these first) — ✅ shipped (PR #49)
 
 These address the "ballpark" need directly and cost almost nothing:
 
@@ -43,10 +43,14 @@ These address the "ballpark" need directly and cost almost nothing:
 
 ---
 
-## Tier A — screening estimators (pure-Python, no solver, S-effort each)
+## Tier A — screening estimators (pure-Python, no solver, S-effort each) — ✅ shipped
 
 Ordered by leverage. Each is a 1–2 day Sprint-1-style vertical with handbook
-two-sided toys.
+two-sided toys. **All six are built**: `h_estimate` (PR #49,
+`analysis/convection.py`), then `acoustic_screen` / `plate_check` /
+`beam_buckling` / `molding_screen` / `drop_impact`
+(`analysis/{acoustics,plates,buckling,molding,impact}.py`), every one on the
+fidelity/escalation contract with two-sided toys in `tests/test_<module>.py`.
 
 | Candidate | Answers | Closed form / correlation | Fidelity |
 |---|---|---|---|
@@ -78,9 +82,10 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
 
 ## Recommended sequence (when picked up)
 
-1. The two **contract additions** (days — they retrofit value onto everything).
-2. **Tier A** as one sprint wave (`h_estimate` first — it unblocks honest inputs
-   to four existing thermal tools).
+1. ✅ The two **contract additions** (days — they retrofit value onto everything).
+   *Shipped, PR #49.*
+2. ✅ **Tier A** as one sprint wave (`h_estimate` first — it unblocks honest inputs
+   to four existing thermal tools). *Shipped: all six screens.*
 3. **B1 acoustics + B2 harmonic response** (zero new installs, low risk, and the
    pair finally covers the Horizon table's "Acoustics" row).
 4. **B3 RANS** (extends the CFD validity envelope past Re≈2300 — the most common
