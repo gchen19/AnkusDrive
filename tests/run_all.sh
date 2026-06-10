@@ -59,6 +59,14 @@ echo "== Convection-coefficient screening toys (pure-Python; no FreeCAD) =="
 python3 tests/test_convection.py
 
 echo
+echo "== Tier A screening toys (acoustics · plates · buckling · molding · impact) =="
+python3 tests/test_acoustics.py
+python3 tests/test_plates.py
+python3 tests/test_buckling.py
+python3 tests/test_molding.py
+python3 tests/test_impact.py
+
+echo
 echo "== Design-for-X toys (DfM/DfA/packaging; pure-Python; no FreeCAD) =="
 python3 tests/test_dfx.py
 

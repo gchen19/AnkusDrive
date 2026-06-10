@@ -6610,6 +6610,61 @@ def _h_h_estimate(p):
     return convection.h_estimate(**p)
 
 
+@handler("acoustic_screen")
+def _h_acoustic_screen(p):
+    """Closed-form acoustics screen: rigid-cavity modes (exact), Helmholtz
+    resonator (±10%), mass-law TL (±3 dB), duct cutoff (exact) — fidelity labeled
+    per kind. See driftpin.analysis.acoustics. Returns {kind, c_m_s, fidelity,
+    band_pct, band_db, valid_range_ok, warnings, escalate_to} + per-kind fields."""
+    from driftpin.analysis import acoustics
+    return acoustics.acoustic_screen(**p)
+
+
+@handler("plate_check")
+def _h_plate_check(p):
+    """Handbook bending of a uniformly loaded flat plate (Roark/Timoshenko —
+    exact within thin-plate theory, limits flagged). See driftpin.analysis.plates.
+    Returns {shape, support, aspect_ratio, beta, alpha, sigma_max_mpa,
+    deflection_max_mm, yield_safety_factor, thin_plate_ok, small_deflection_ok,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import plates
+    return plates.plate_check(**p)
+
+
+@handler("beam_buckling")
+def _h_beam_buckling(p):
+    """Exact Euler + Johnson column buckling — the closed-form twin the CalculiX
+    fem_buckling eigen-solve is gated against. See driftpin.analysis.buckling.
+    Returns {end_condition, k_factor, slenderness, transition_slenderness,
+    governing, sigma_cr_mpa, p_cr_n, area_mm2, i_min_mm4, radius_gyration_mm,
+    safety_factor, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import buckling
+    return buckling.beam_buckling(**p)
+
+
+@handler("molding_screen")
+def _h_molding_screen(p):
+    """Injection-molding screen: exact one-term cooling time + spiral-flow fill
+    reach (±30% chart). See driftpin.analysis.molding. Returns {material,
+    wall_thickness_mm, t_melt_c, t_mold_c, t_eject_c, alpha_mm2_s, cooling_time_s,
+    flow_length_mm, flow_ratio, flow_ratio_limit, fill_ok, fidelity, band_pct,
+    valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import molding
+    return molding.molding_screen(**p)
+
+
+@handler("drop_impact")
+def _h_drop_impact(p):
+    """Drop/impact screen by exact energy balance: G_avg = h/d, pulse-shape peak
+    factors, v = sqrt(2gh), fragility-to-crush inversion. See
+    driftpin.analysis.impact. Returns {drop_height_mm, impact_velocity_m_s, pulse,
+    pulse_factor, crush_distance_mm, g_avg, g_peak, pulse_duration_ms,
+    deceleration_limit_g, required_crush_mm, energy_j, peak_force_n, fidelity,
+    band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import impact
+    return impact.drop_impact(**p)
+
+
 @handler("thermal_transient_1d")
 def _h_thermal_transient_1d(p):
     """Analytic 1-D plane-wall transient (one-term Heisler series) — the closed-form
