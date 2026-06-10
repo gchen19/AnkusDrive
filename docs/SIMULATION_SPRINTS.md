@@ -1,4 +1,12 @@
-# DriftPin simulation tools — dedicated sprint plan
+# DriftPin simulation tools — dedicated sprint plan  ✅ COMPLETE
+
+> **Status (2026-06-10): every sprint in this plan is shipped** — the pure-Python
+> P0 wave, the P1 CLI tier (slicer analytic + the PrusaSlicer external-CLI
+> upgrade), the async infrastructure, and the full P2/P3 heavy-solver tier
+> through the geometry bridge, 3-D topology and the M6 frontier (modal, conjugate
+> heat transfer, low-frequency EM). This document is retained as the executed
+> plan of record; **what comes next** (screening estimators + higher-order
+> solves) is assessed in [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md).
 
 The **execution sequence** for building out DriftPin's physical-simulation
 algorithms and exposing them over MCP. Sits between the two existing docs:
@@ -36,7 +44,9 @@ point is proven across every family above. The P3 M6 frontier (modal, conjugate
 heat transfer, low-frequency EM) shipped with
 [`SIMULATION_P3_KICKOFF.md`](SIMULATION_P3_KICKOFF.md), and the Sprint 4 slicer
 external-CLI upgrade shipped as `slice_gcode_submit` (PrusaSlicer, graceful
-degradation) — **every item in this plan is now built.**
+degradation) — **every item in this plan is now built.** Candidate next families
+(acoustics, convection correlations, harmonic response, turbulent RANS, …) are
+scoped in [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md).
 
 ---
 
