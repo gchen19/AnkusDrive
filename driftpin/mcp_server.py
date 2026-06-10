@@ -2841,6 +2841,7 @@ def thermal_transient_submit(
     t_ambient_c: float = 25.0,
     n_elements: int = 40,
     n_steps: int = 120,
+    element_order: str | None = None,
 ) -> dict:
     """Transient thermal FEM via Elmer, asynchronous. Requires ElmerSolver (apt
     `elmerfem-csc` / conda); when absent this returns {ok:false, reason, install}
@@ -2858,10 +2859,12 @@ def thermal_transient_submit(
       `convection_faces` (1-based indices into the solid's faces; those faces get the
       `h_conv`/`t_ambient_c` convective BC, every other face is adiabatic), the
       physics (`h_conv`, `duration_s`, `k`+`rho`+`cp` or `material`), and an optional
-      `char_length_mm` Gmsh element size. The solid is Gmsh-meshed and solved as a
-      true 3-D body (ElmerGrid + ElmerSolver); the result's {t_max_c, t_min_c} are
-      the interior/convective-surface temperatures (for a slab-like body, directly
-      gateable against thermal_transient_1d).
+      `char_length_mm` Gmsh element size and `element_order` ('1st'|'2nd'). The solid
+      is Gmsh-meshed and solved as a true 3-D body (ElmerGrid + ElmerSolver); the
+      result's {t_max_c, t_min_c} are the interior/convective-surface temperatures (for
+      a slab-like body, directly gateable against thermal_transient_1d). Prefer
+      `element_order='2nd'` for a sharp transient — quadratic tets resolve the wall
+      gradient accurately even on a coarse mesh.
     - **Run a prepared `case_dir`** containing its own `.sif` + mesh.
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
@@ -2873,6 +2876,7 @@ def thermal_transient_submit(
     for key, v in (("case_dir", case_dir), ("half_thickness_mm", half_thickness_mm),
                    ("body", body), ("convection_faces", convection_faces),
                    ("char_length_mm", char_length_mm),
+                   ("element_order", element_order),
                    ("h_conv", h_conv), ("duration_s", duration_s),
                    ("k", k), ("rho", rho), ("cp", cp), ("material", material)):
         if v is not None:

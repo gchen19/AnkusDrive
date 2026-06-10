@@ -7289,12 +7289,20 @@ def _thermal_body_submit(p, info):
     t_ambient_c = float(p.get("t_ambient_c", 25.0))
     n_steps = int(p.get("n_steps", 120))
     char_length = float(p.get("char_length_mm", 0.0))
+    element_order = p.get("element_order")
 
     # mesh + export on the MAIN thread; the temp FemMesh never outlives this call
     mesh = ObjectsFem.makeMeshGmsh(doc, "BridgeMesh")
     mesh.Shape = obj
     if char_length > 0:
         mesh.CharacteristicLengthMax = char_length
+    # 2nd-order (quadratic) tets resolve a sharp transient gradient far better than
+    # linear C3D4 — a coarse linear box can under-resolve a high-Biot wall and report
+    # too little cooling. Default keeps Gmsh's choice.
+    if element_order is not None:
+        if element_order not in ("1st", "2nd"):
+            raise ValueError("element_order must be '1st' or '2nd'")
+        mesh.ElementOrder = element_order
     doc.recompute()
     case_dir = tempfile.mkdtemp(prefix="elmer_body_")
     try:
