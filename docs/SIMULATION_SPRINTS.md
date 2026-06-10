@@ -32,10 +32,11 @@ negative is caught.
 | — · Geometry bridge | ✅ **shipped** (P3 M4) — `meshbridge.py`: FreeCAD solid → Gmsh/ElmerGrid (thermal) · STL/snappyHexMesh (internal flow), body modes on the `*_submit` tools |
 
 Pure-Python `analysis/` is FreeCAD-free and standalone-testable; that extension
-point is proven across every family above. Still open from this plan: the Sprint 4
-**slicer external-CLI upgrade** (PrusaSlicer/Orca behind an extra) and the optional
-P3 M6 frontier remainder (conjugate heat transfer, low-frequency EM) — see
-[`SIMULATION_P3_KICKOFF.md`](SIMULATION_P3_KICKOFF.md).
+point is proven across every family above. The P3 M6 frontier (modal, conjugate
+heat transfer, low-frequency EM) shipped with
+[`SIMULATION_P3_KICKOFF.md`](SIMULATION_P3_KICKOFF.md); the only item still open
+from this plan is the Sprint 4 **slicer external-CLI upgrade** (PrusaSlicer/Orca
+behind an extra).
 
 ---
 
