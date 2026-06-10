@@ -25,10 +25,12 @@ from driftpin.analysis import cfd               # noqa: E402
 from driftpin.analysis import cht               # noqa: E402
 from driftpin.analysis import durability as du  # noqa: E402
 from driftpin.analysis import em                # noqa: E402
+from driftpin.analysis import machine_elements as me  # noqa: E402
 from driftpin.analysis import materials as mat  # noqa: E402
 from driftpin.analysis import optics as op      # noqa: E402
 from driftpin.analysis import thermal as th     # noqa: E402
 from driftpin.analysis import tolerance as tol  # noqa: E402
+from driftpin.analysis import vibration as vib  # noqa: E402
 
 _N_PMMA = 1.49062
 
@@ -432,6 +434,200 @@ def test_wire_field_is_inverse_distance_solenoid_is_uniform():
     assert abs(s["b_t"] - mu0 * 1000.0 * 2.0) < 1e-12
     assert abs(em.solenoid_field(2000.0, 2.0)["b_t"] / s["b_t"] - 2.0) < 1e-9
     assert abs(em.solenoid_field(1000.0, 2.0, mu_r=100.0)["b_t"] / s["b_t"] - 100.0) < 1e-6
+
+
+# === Batch 2 — scaling laws (machine_elements · vibration · durability) =======
+
+# --- machine_elements: power laws + the size-free invariants ------------------
+
+def test_bearing_life_follows_the_iso281_power_law():
+    # Scaling law: L10 = (C/P)^p revolutions, p=3 (ball) / 10/3 (roller). So doubling
+    # the dynamic capacity C multiplies life by exactly 2^p, and halving the load P
+    # does the same — the (C/P) ratio is all that matters. Sharper than the basic
+    # test's single L10h point value.
+    ball = me.bearing_life(10000, 2500, 1500, kind="ball")
+    ball_2c = me.bearing_life(20000, 2500, 1500, kind="ball")     # 2× capacity
+    ball_halfp = me.bearing_life(10000, 1250, 1500, kind="ball")  # ½ load
+    assert ball["exponent"] == 3.0
+    assert abs(ball_2c["l10_million_rev"] / ball["l10_million_rev"] - 8.0) < 1e-6
+    assert abs(ball_halfp["l10_million_rev"] / ball["l10_million_rev"] - 8.0) < 1e-6
+    roller = me.bearing_life(10000, 2500, 1500, kind="roller")
+    roller_2c = me.bearing_life(20000, 2500, 1500, kind="roller")
+    assert abs(roller["exponent"] - 10.0 / 3.0) < 1e-12
+    assert abs(roller_2c["l10_million_rev"] / roller["l10_million_rev"]
+               - 2.0 ** (10.0 / 3.0)) < 1e-3       # rounding of l10 to 2 dp
+
+
+def test_spring_rate_scaling_and_wahl_is_index_only():
+    # Scaling + invariant: rate k ∝ d⁴/(D³·Na), so 2×Na → ½ rate and 2×d (D fixed) →
+    # 16× rate. The Wahl factor depends ONLY on the index C=D/d — a geometrically
+    # scaled spring (d and D both doubled, same C) has an identical Wahl factor.
+    base = me.spring_check(2.0, 16.0, 8.0, force_n=50.0)
+    twice_coils = me.spring_check(2.0, 16.0, 16.0, force_n=50.0)   # 2×Na
+    thick_wire = me.spring_check(4.0, 16.0, 8.0, force_n=50.0)     # 2×d, D fixed
+    scaled = me.spring_check(4.0, 32.0, 8.0, force_n=50.0)         # same C=8, 2× size
+    assert abs(base["rate_n_mm"] / twice_coils["rate_n_mm"] - 2.0) < 1e-3
+    assert abs(thick_wire["rate_n_mm"] / base["rate_n_mm"] - 16.0) < 1e-3
+    assert base["spring_index"] == scaled["spring_index"] == 8.0
+    assert base["wahl_factor"] == scaled["wahl_factor"]            # C-only, exact
+    assert thick_wire["wahl_factor"] > base["wahl_factor"]         # smaller C → larger Kw
+
+
+def test_lewis_bending_stress_falls_monotonically_with_tooth_count():
+    # Monotonicity: the Lewis form factor Y(Z)=0.484−2.87/Z rises with tooth count, so
+    # at a FIXED tangential load the bending stress σ=Ft/(b·m·Y) falls monotonically —
+    # more (smaller) teeth spread the load. Independent of the changing pitch diameter.
+    ys, stresses = [], []
+    for z in (10, 20, 50):
+        g = me.gear_rating(2.0, z, 20.0, tangential_force_n=500.0)
+        ys.append(g["lewis_form_factor"])
+        stresses.append(g["bending_stress_mpa"])
+    assert ys == sorted(ys), ys                       # Y strictly ↑ in teeth
+    assert stresses == sorted(stresses, reverse=True), stresses   # σ strictly ↓
+
+
+def test_belt_tension_ratio_squares_when_friction_doubles():
+    # Exact scaling: Eytelwein T1/T2 = e^(μθ) with θ a geometry-only wrap angle, so
+    # doubling μ SQUARES the tension ratio (e^(2μθ)=(e^(μθ))²). The wrap angle itself
+    # is independent of μ.
+    lo = me.belt_drive(1000, 100, 200, 300, 1500, friction_coef=0.3)
+    hi = me.belt_drive(1000, 100, 200, 300, 1500, friction_coef=0.6)
+    assert lo["wrap_angle_deg"] == hi["wrap_angle_deg"]            # μ-independent
+    theta = math.radians(lo["wrap_angle_deg"])
+    assert abs(lo["tension_ratio"] - math.exp(0.3 * theta)) < 1e-3
+    assert abs(hi["tension_ratio"] - lo["tension_ratio"] ** 2) < 1e-3
+
+
+def test_press_fit_pressure_is_linear_in_interference():
+    # Linear: Lamé contact pressure p ∝ δ (the radial interference), so 2×δ doubles the
+    # contact pressure, the hub hoop stress, and the friction-limited torque/axial
+    # capacity alike — everything rides off the one linear pressure.
+    a = me.press_fit_stress(20, 40, 0.02, 30)
+    b = me.press_fit_stress(20, 40, 0.04, 30)                      # 2× interference
+    assert abs(b["contact_pressure_mpa"] / a["contact_pressure_mpa"] - 2.0) < 1e-6
+    assert abs(b["hub_hoop_stress_mpa"] / a["hub_hoop_stress_mpa"] - 2.0) < 1e-6
+    assert abs(b["torque_capacity_nm"] / a["torque_capacity_nm"] - 2.0) < 1e-3
+    assert abs(b["axial_force_n"] / a["axial_force_n"] - 2.0) < 1e-4
+
+
+def test_bolt_separation_load_is_independent_of_the_external_load():
+    # Regression/invariant: the separation load P_sep = F_preload/(1−C) is a property of
+    # the preload and stiffness split ALONE — it does not move when the applied external
+    # load changes. The separation margin (P_sep / P_ext) then scales inversely with the
+    # load: double the external load, halve the margin.
+    light = me.bolted_joint_check(10, preload_n=20000, external_load_n=5000,
+                                  joint_stiffness_ratio=0.3)
+    heavy = me.bolted_joint_check(10, preload_n=20000, external_load_n=10000,
+                                  joint_stiffness_ratio=0.3)
+    assert light["separation_load_n"] == heavy["separation_load_n"]      # exact
+    assert abs(light["separation_load_n"] - 20000 / 0.7) < 0.1
+    assert abs(light["separation_margin"] - light["separation_load_n"] / 5000) < 0.01
+    assert heavy["separation_margin"] < light["separation_margin"]       # inverse in P_ext
+
+
+# --- vibration: SRSS energy composition + the beam frequency scalings ----------
+
+def test_srss_combines_modal_energy_with_no_cross_term():
+    # Conservation/composition: SRSS treats each mode as an independent SDOF resonator,
+    # so the combined response is pure energy addition rms_g² ≡ Σ gᵢ² with NO cross
+    # term — running both modes together equals the root-sum-square of each mode alone.
+    prof = [{"hz": 50, "g2_hz": 0.04}, {"hz": 2000, "g2_hz": 0.04}]   # flat band 50–2000
+    both = vib.random_vibration([300.0, 1200.0], prof, q=10.0)
+    only_1 = vib.random_vibration([300.0], prof, q=10.0)["rms_g"]
+    only_2 = vib.random_vibration([1200.0], prof, q=10.0)["rms_g"]
+    assert abs(both["rms_g"] - math.sqrt(only_1 ** 2 + only_2 ** 2)) < 1e-3
+    contribs = [m["contribution_g"] for m in both["modes"]]
+    assert abs(both["rms_g"] - math.sqrt(sum(c * c for c in contribs))) < 1e-3
+    # and the energy equals the closed-form (π/2)·W·Q·Σfᵢ (flat PSD)
+    energy = (math.pi / 2) * 0.04 * 10 * (300.0 + 1200.0)
+    assert abs(both["rms_g"] ** 2 - energy) < 1e-3 * energy
+
+
+def test_a_mode_above_the_psd_band_contributes_exactly_zero():
+    # Regression guard (the ruggedization rule): a mode stiffened past the top of the
+    # excitation band sees zero specified PSD and contributes EXACTLY zero to the RMS —
+    # adding it leaves the response identical to the in-band mode alone.
+    prof = [{"hz": 50, "g2_hz": 0.04}, {"hz": 2000, "g2_hz": 0.04}]
+    with_oob = vib.random_vibration([300.0, 5000.0], prof, q=10.0)     # 5000 > 2000
+    oob = with_oob["modes"][1]
+    assert oob["psd_g2_hz"] == 0.0 and oob["contribution_g"] == 0.0 and not oob["in_band"]
+    in_band_only = vib.random_vibration([300.0], prof, q=10.0)["rms_g"]
+    assert with_oob["rms_g"] == in_band_only
+
+
+def test_beam_frequency_scales_as_inverse_length_squared_and_linear_in_height():
+    # Scaling law: f_n = (βL)²/(2π)·√(E·I/(ρ·A·L⁴)) with I=b·h³/12, A=b·h ⇒ √(I/A)=h/√12.
+    # So f ∝ 1/L² (double the length → quarter the frequency) and f ∝ h (double the
+    # height → double the frequency), both exact for the slender Euler–Bernoulli beam.
+    kw = dict(boundary="cantilever", n_modes=3, youngs_gpa=200, density_kg_m3=7850)
+    base = vib.beam_natural_frequencies(200, 20, 10, **kw)
+    longer = vib.beam_natural_frequencies(400, 20, 10, **kw)           # 2× length
+    taller = vib.beam_natural_frequencies(200, 20, 20, **kw)           # 2× height
+    assert base["slenderness"] >= 10 and longer["slenderness"] >= 10   # stay slender
+    assert abs(base["first_mode_hz"] / longer["first_mode_hz"] - 4.0) < 1e-4
+    assert abs(taller["first_mode_hz"] / base["first_mode_hz"] - 2.0) < 1e-4
+
+
+def test_simply_supported_beta_l_is_n_pi_and_frequency_scales_as_n_squared():
+    # Exact identity + scaling: the pinned–pinned eigenvalues are βL ≡ nπ exactly, and
+    # since f_n ∝ (βL)² the harmonic series is f_n ∝ n² (f₂/f₁=4, f₃/f₁=9, f₄/f₁=16).
+    # Excludes the basic cantilever βL=1.875 anchor — this is the exact-multiple sibling.
+    ss = vib.beam_natural_frequencies(300, 25, 12, boundary="simply_supported",
+                                      n_modes=4, youngs_gpa=200, density_kg_m3=7850)
+    for n, bl in zip((1, 2, 3, 4), ss["beta_l"]):
+        assert abs(bl - n * math.pi) < 1e-5, (n, bl)
+    f = ss["frequencies_hz"]
+    for n in (2, 3, 4):
+        assert abs(f[n - 1] / f[0] - n * n) < 1e-3, (n, f[n - 1] / f[0])
+
+
+# --- durability: the fully-reversed limit, Archard, the S-N slope, overload ----
+
+def test_goodman_correction_collapses_to_the_amplitude_at_zero_mean():
+    # Exact limit: the equivalent fully-reversed amplitude σ_ar = σ_a/(1−σ_m/σ_uts)
+    # degenerates to σ_a itself when the mean stress is zero — the mean-stress
+    # correction vanishes and the governing mode is plain fully-reversed fatigue.
+    r = du.fatigue_check(stress_range_mpa=400, mean_stress_mpa=0.0, material="AL6061-T6")
+    assert r["equiv_reversed_mpa"] == r["stress_amplitude_mpa"] == 200.0
+    assert r["governing_mode"] == "fully_reversed_fatigue"
+
+
+def test_archard_wear_is_linear_in_load_and_distance_inverse_in_hardness():
+    # Linear: Archard V = k·F·s/H, so the wear volume doubles with load, doubles with
+    # sliding distance, and halves when the hardness doubles — each input enters to the
+    # first power. Pinned with explicit k and H to isolate the scaling from the lookups.
+    kw = dict(wear_coef=5e-4, hardness_mpa=1000)
+    base = du.wear_estimate(100, 1000, **kw)
+    assert abs(base["volume_loss_mm3"] - 5e-4 * 100 * 1000 / (1000e6) * 1e9) < 1e-9  # =50
+    assert du.wear_estimate(200, 1000, **kw)["volume_loss_mm3"] == 2 * base["volume_loss_mm3"]
+    assert du.wear_estimate(100, 2000, **kw)["volume_loss_mm3"] == 2 * base["volume_loss_mm3"]
+    assert du.wear_estimate(100, 1000, wear_coef=5e-4, hardness_mpa=2000)[
+        "volume_loss_mm3"] == 0.5 * base["volume_loss_mm3"]
+
+
+def test_sn_life_ratio_follows_the_basquin_log_log_slope():
+    # Scaling law: on the finite-life Basquin line log10(N)=3+(log10(σ_ar)−log10(s1000))/b,
+    # so at fixed (zero) mean a 2× stress amplitude changes life by exactly 2^(1/b),
+    # where b is the log-log slope set by the endurance/1000-cycle strengths. A fixed,
+    # material-defined ratio — no dependence on the absolute stress level.
+    a = du.fatigue_check(stress_range_mpa=300, mean_stress_mpa=0, material="AL6061-T6")
+    b2 = du.fatigue_check(stress_range_mpa=600, mean_stress_mpa=0, material="AL6061-T6")
+    assert a["governing_mode"] == b2["governing_mode"] == "fully_reversed_fatigue"
+    se, uts = a["endurance_mpa"], a["uts_mpa"]
+    slope = math.log10(se / (0.9 * uts)) / math.log10(1e6 / 1e3)       # default S-N line
+    expected = 2.0 ** (1.0 / slope)
+    assert abs(b2["life_cycles"] / a["life_cycles"] / expected - 1.0) < 3e-3
+
+
+def test_static_overload_fails_regardless_of_cycle_count():
+    # Regression guard: a mean (or peak) stress at/above σ_uts is a static overload, not
+    # a fatigue problem — the governing mode flips to "static_overload", pass is False,
+    # and life collapses to zero no matter how few cycles are required.
+    ov = du.fatigue_check(stress_range_mpa=100, mean_stress_mpa=400, material="AL6061-T6",
+                          cycles=1)
+    assert ov["governing_mode"] == "static_overload"
+    assert ov["pass"] is False
+    assert ov["life_cycles"] == 0
 
 
 # --- runner -------------------------------------------------------------------
