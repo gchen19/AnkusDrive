@@ -87,6 +87,12 @@ echo "== Internal-flow / Hagen-Poiseuille toys (pure-Python; no FreeCAD) =="
 python3 tests/test_cfd.py
 
 echo
+echo "== Optics toys (Snell/Fresnel/TIR oracle always; rayoptics gate when present) =="
+# Run under the venv so the rayoptics gate actually exercises the wheel (the optics
+# extra installs into .venv); falls back to system python3 if the venv is absent.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_optics.py; else python3 tests/test_optics.py; fi
+
+echo
 echo "== Elmer transient-thermal (case gen always; ElmerSolver gate when present) =="
 python3 tests/test_elmer.py
 
