@@ -58,7 +58,7 @@ def fresnel_reflectance(theta_i_deg: float, n1: float, n2: float,
     theta_i = math.radians(theta_i_deg)
     cos_i = math.cos(theta_i)
     sin_t = n1 * math.sin(theta_i) / n2
-    if sin_t > 1.0:                                   # total internal reflection
+    if abs(sin_t) > 1.0:                              # TIR (either sign of incidence)
         return {"r_s": 1.0, "r_p": 1.0, "reflectance": 1.0,
                 "transmittance": 0.0, "tir": True}
     cos_t = math.sqrt(1.0 - sin_t * sin_t)

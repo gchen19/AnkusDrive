@@ -7045,84 +7045,141 @@ def _h_mechanism_simulate_submit(p):
 def _h_topology_optimize_submit(p):
     """Minimum-compliance topology optimization (in-house NumPy SIMP — no external
     solver), run OFF the MCP channel because each iteration solves an FE system.
-    Optimizes a 2-D rectangular design domain (nelx×nely unit cells) to the stiffest
+    Optimizes a 2-D rectangular design domain (nelx×nely unit cells) — or, when
+    `nelz` >= 1, a 3-D nelx×nely×nelz grid of trilinear hexahedra — to the stiffest
     layout subject to Σdensity = keep_fraction (held exactly by the OC update).
-    Default BCs: left edge clamped + unit downward load at the right-edge mid-height
-    (override `fixed_dofs` / `load`=[dof_index, value]).
+    Default BCs (both): left face clamped + unit downward load at the right-face
+    centre. 2-D overrides: `fixed_dofs` / `load`=[dof_index, value]. 3-D overrides:
+    `loads`=[[i,j,k,axis,value],...] (node grid coords, axis 'x'|'y'|'z'),
+    `fixed_nodes`=[[i,j,k],...], and `keep_out`/`keep_in` half-open element-index
+    boxes [i0,i1,j0,j1,k0,k1] forced void / forced solid.
 
-    Returns {job_id, status, cache_hit}; poll job_result for {density (nely×nelx grid
-    0..1 — this is geometry), mass_fraction, compliance, compliance_initial,
-    iterations, converged, gray_fraction}. Pure-Python background body (no FreeCAD)."""
+    Returns {job_id, status, cache_hit}; poll job_result for {density (2-D: nely×nelx
+    grid; 3-D: nelz×nely×nelx voxel field — this is geometry), mass_fraction,
+    compliance, compliance_initial, iterations, converged, gray_fraction}.
+    Pure-Python background body (no FreeCAD)."""
     from driftpin import jobs
     from driftpin.analysis import topology as topo
-    nelx = int(p.get("nelx", 60))
-    nely = int(p.get("nely", 20))
+    nelz = int(p.get("nelz") or 0)
+    # 3-D DOFs grow as the product of three dims, so a 3-D run must NOT inherit the
+    # 2-D grid defaults (nelx=60,nely=20 → ~40k DOFs in 3-D, a multi-minute solve).
+    # Use the small 3-D defaults the optimizer itself ships with, unless overridden.
+    if nelz >= 1:
+        nelx = int(p.get("nelx", 16))
+        nely = int(p.get("nely", 8))
+        max_iter = int(p.get("max_iter", 40))
+    else:
+        nelx = int(p.get("nelx", 60))
+        nely = int(p.get("nely", 20))
+        max_iter = int(p.get("max_iter", 60))
+    # Guard against a runaway grid (accidental or otherwise): cap total DOFs.
+    ndof_est = (3 * (nelx + 1) * (nely + 1) * (nelz + 1) if nelz >= 1
+                else 2 * (nelx + 1) * (nely + 1))
+    if ndof_est > 250000:
+        raise ValueError(
+            f"requested grid is ~{ndof_est} DOFs (cap 250000) — reduce nelx/nely"
+            + ("/nelz" if nelz >= 1 else "") + " to avoid a runaway solve")
     keep_fraction = float(p.get("keep_fraction", 0.4))
     penal = float(p.get("penal", 3.0))
     rmin = float(p.get("rmin", 1.5))
-    max_iter = int(p.get("max_iter", 60))
     tol = float(p.get("tol", 0.01))
     load = p.get("load")
     fixed_dofs = p.get("fixed_dofs")
+    loads = p.get("loads")
+    fixed_nodes = p.get("fixed_nodes")
+    keep_out = p.get("keep_out")
+    keep_in = p.get("keep_in")
     key = jobs.content_key("topology_optimize", {
-        "nelx": nelx, "nely": nely, "keep_fraction": keep_fraction, "penal": penal,
-        "rmin": rmin, "max_iter": max_iter, "tol": tol, "load": load,
-        "fixed_dofs": fixed_dofs})
+        "nelx": nelx, "nely": nely, "nelz": nelz, "keep_fraction": keep_fraction,
+        "penal": penal, "rmin": rmin, "max_iter": max_iter, "tol": tol, "load": load,
+        "fixed_dofs": fixed_dofs, "loads": loads, "fixed_nodes": fixed_nodes,
+        "keep_out": keep_out, "keep_in": keep_in})
 
-    def _work():
-        return topo.simp_topology_2d(
-            nelx=nelx, nely=nely, keep_fraction=keep_fraction, penal=penal,
-            rmin=rmin, max_iter=max_iter, tol=tol, load=load, fixed_dofs=fixed_dofs)
+    if nelz >= 1:
+        def _work():
+            return topo.simp_topology_3d(
+                nelx=nelx, nely=nely, nelz=nelz, keep_fraction=keep_fraction,
+                penal=penal, rmin=rmin, max_iter=max_iter, tol=tol, loads=loads,
+                fixed_nodes=fixed_nodes, keep_out=keep_out, keep_in=keep_in)
+    else:
+        def _work():
+            return topo.simp_topology_2d(
+                nelx=nelx, nely=nely, keep_fraction=keep_fraction, penal=penal,
+                rmin=rmin, max_iter=max_iter, tol=tol, load=load, fixed_dofs=fixed_dofs)
 
     return jobs.submit("topology_optimize", _work, key=key,
-                       meta={"nelx": nelx, "nely": nely, "keep_fraction": keep_fraction})
+                       meta={"nelx": nelx, "nely": nely, "nelz": nelz or None,
+                             "keep_fraction": keep_fraction})
 
 
 @handler("topology_to_solid")
 def _h_topology_to_solid(p):
     """Reconstruct a FreeCAD solid from a topology-optimization density field — the
     modeller-side follow-on that closes the loop opened by topology_optimize_submit
-    (whose `density` grid this consumes). Thresholds the nely×nelx grid (a cell is
+    (whose `density` this consumes). 2-D: thresholds the nely×nelx grid (a cell is
     solid when density >= `threshold`, default 0.5), run-length-merges each row into
-    solid spans, tiles each span as a `cell_mm` box extruded `thickness_mm` in Z,
-    fuses them into one shape and bakes a static Part::Feature. `cell_mm` is a scalar
-    (square cells) or [cx, cy] mm; `thickness_mm` defaults to the smaller cell edge;
-    `placement` is an optional [x, y, z] mm origin offset. Grid row 0 sits at the top
-    (+Y), matching the density grid's reading order. This runs synchronously on the
-    main thread (it builds geometry — unlike the *_submit solves it does NOT use
-    jobs.py). Returns {handle, name, volume (mm^3), solid_cells, total_cells,
-    mass_fraction (==solid_cells/total_cells), n_solids (>1 = a split load path),
-    threshold, nelx, nely, bbox_mm}."""
+    solid spans, tiles each span as a `cell_mm` box extruded `thickness_mm` in Z
+    (grid row 0 at the top (+Y), matching the grid's reading order). 3-D (a
+    nelz×nely×nelx voxel field from the `nelz` mode): greedy-merges voxels into
+    maximal boxes tiled at (i·cx, j·cy, k·cz) — j=0 at the BOTTOM, no flip;
+    `thickness_mm` is ignored. Fuses the boxes and bakes a static Part::Feature.
+    `cell_mm` is a scalar or [cx, cy(, cz)] mm; `placement` an optional [x, y, z] mm
+    origin offset. Runs synchronously on the main thread (it builds geometry —
+    unlike the *_submit solves it does NOT use jobs.py). Returns {handle, name,
+    volume (mm^3), solid_cells, total_cells, mass_fraction (==solid_cells/
+    total_cells), n_solids (>1 = a split load path), threshold, nelx, nely,
+    nelz (None for 2-D), bbox_mm}."""
     doc = _active_doc()
     from driftpin.analysis import topology as topo
     density = p.get("density")
     if not density:
-        raise ValueError("density (nely×nelx grid 0..1) is required")
+        raise ValueError("density (nely×nelx grid or nelz×nely×nelx field, 0..1) is required")
     threshold = float(p.get("threshold", 0.5))
+    is_3d = (isinstance(density[0], (list, tuple)) and density[0]
+             and isinstance(density[0][0], (list, tuple)))
     cell = p.get("cell_mm", 1.0)
     if isinstance(cell, (list, tuple)):
-        if len(cell) != 2:
-            raise ValueError("cell_mm must be a number or [cx, cy] in mm")
+        if len(cell) not in (2, 3):
+            raise ValueError("cell_mm must be a number, [cx, cy] or [cx, cy, cz] in mm")
         cx, cy = float(cell[0]), float(cell[1])
+        cz = float(cell[2]) if len(cell) == 3 else min(cx, cy)
     else:
-        cx = cy = float(cell)
-    thickness = float(p.get("thickness_mm", p.get("thickness", min(cx, cy))))
-    if cx <= 0 or cy <= 0 or thickness <= 0:
-        raise ValueError("cell_mm and thickness_mm must be > 0")
+        cx = cy = cz = float(cell)
 
-    dec = topo.density_to_rects(density, threshold)
-    rects = dec["rects"]
-    if not rects:
-        raise ValueError(
-            f"no cells at or above threshold {threshold}; lower `threshold` or "
-            f"check the density field (max cell < {threshold})")
-    nelx, nely = dec["nelx"], dec["nely"]
+    if is_3d:
+        # 3-D voxel field from simp_topology_3d: density[k][j][i], j=0 at the
+        # BOTTOM (no display flip) — boxes tile at (i·cx, j·cy, k·cz).
+        if cx <= 0 or cy <= 0 or cz <= 0:
+            raise ValueError("cell_mm must be > 0")
+        dec = topo.density_to_boxes(density, threshold)
+        if not dec["boxes"]:
+            raise ValueError(
+                f"no cells at or above threshold {threshold}; lower `threshold` or "
+                f"check the density field (max cell < {threshold})")
+        nelx, nely, nelz = dec["nelx"], dec["nely"], dec["nelz"]
+        boxes = [
+            Part.makeBox(w * cx, h * cy, d * cz,
+                         App.Vector(i0 * cx, j0 * cy, k0 * cz))
+            for (i0, j0, k0, w, h, d) in dec["boxes"]
+        ]
+        total = nelx * nely * nelz
+    else:
+        thickness = float(p.get("thickness_mm", p.get("thickness", min(cx, cy))))
+        if cx <= 0 or cy <= 0 or thickness <= 0:
+            raise ValueError("cell_mm and thickness_mm must be > 0")
+        dec = topo.density_to_rects(density, threshold)
+        if not dec["rects"]:
+            raise ValueError(
+                f"no cells at or above threshold {threshold}; lower `threshold` or "
+                f"check the density field (max cell < {threshold})")
+        nelx, nely, nelz = dec["nelx"], dec["nely"], None
+        boxes = [
+            Part.makeBox(w * cx, cy, thickness,
+                         App.Vector(i0 * cx, (nely - 1 - j) * cy, 0.0))
+            for (i0, j, w) in dec["rects"]
+        ]
+        total = nelx * nely
 
-    boxes = [
-        Part.makeBox(w * cx, cy, thickness,
-                     App.Vector(i0 * cx, (nely - 1 - j) * cy, 0.0))
-        for (i0, j, w) in rects
-    ]
     solid = boxes[0] if len(boxes) == 1 else boxes[0].multiFuse(boxes[1:])
     # adjacent boxes leave coplanar seams; collapse them into single faces.
     solid = solid.removeSplitter()
@@ -7137,7 +7194,6 @@ def _h_topology_to_solid(p):
     doc.recompute()
     h = _register("toposolid", out)
     bb = solid.BoundBox
-    total = nelx * nely
     return {
         "handle": h,
         "name": out.Name,
@@ -7147,7 +7203,7 @@ def _h_topology_to_solid(p):
         "mass_fraction": round(dec["solid_cells"] / total, 6),
         "n_solids": len(solid.Solids),
         "threshold": threshold,
-        "nelx": nelx, "nely": nely,
+        "nelx": nelx, "nely": nely, "nelz": nelz,
         "bbox_mm": [round(bb.XLength, 4), round(bb.YLength, 4), round(bb.ZLength, 4)],
     }
 

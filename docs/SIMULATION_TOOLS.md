@@ -186,12 +186,22 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - `topology_optimize` *returns geometry*, not just numbers — the one family here
   that closes the loop back into the modeller.
+- **3-D mode shipped (P3 M5):** `topology_optimize_submit(nelz=…)` runs the
+  in-house SIMP on trilinear hexahedra (`analysis/topology.simp_topology_3d` —
+  scipy.sparse / dense / matrix-free-PCG backends, all agreeing to 1e-4) with
+  point `loads`=[[i,j,k,axis,value]], clamped `fixed_nodes`, and `keep_out` /
+  `keep_in` element boxes (forced void / forced solid). Returns a
+  nelz×nely×nelx voxel `density` field; `topology_to_solid` consumes it
+  directly (greedy voxel→box merge, `density_to_boxes`). Gates in
+  `tests/test_topology.py`: volume held exactly, z-mirror symmetry of a
+  mid-plane-loaded design, keep-out/keep-in respected, and the uniform-density
+  cantilever within the Euler-Bernoulli+Timoshenko band.
 - **Modal (P3 M6):** `beam_modal` is the exact Euler-Bernoulli natural-frequency oracle
   (f_n = (βL)_n²/(2π)·√(EI/ρAL⁴), cantilever / simply-supported / clamped-clamped /
   free-free / clamped-pinned) in [`analysis/vibration.py`](../driftpin/analysis/vibration.py).
   The existing CalculiX `fem_modal` eigen-solve is gated against it — within ~0.5% of the
   fundamental once `fem_mesh(element_order='2nd')` is used (linear C3D4 tets shear-lock
-  and overshoot ~50%; quadratic C3D10 fix it). Acceptance: **Example G** + `modal.png`;
+  and overshoot ~50%; quadratic C3D10 fix it). Acceptance: **Example H** + `modal.png`;
   oracle gates in `tests/test_vibration.py`, the CalculiX gate in `tests/test_worker.py`
   (`test_fem_modal_cantilever`).
 

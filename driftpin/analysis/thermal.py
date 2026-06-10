@@ -124,7 +124,8 @@ def radiation_exchange(
     Temperatures are °C (converted to K internally); areas m², F₁₂ the surface-1→2
     view factor in (0, 1]. Returns {t1_k, t2_k, view_factor, area_1_m2, area_2_m2,
     q_net_w, flux_w_m2, two_plate_flux_w_m2, h_rad_w_m2k}. Raises ValueError on a
-    non-positive emissivity/area/F or an emissivity > 1."""
+    non-positive emissivity/area/F, an emissivity > 1, or a view factor that
+    violates reciprocity (A1·F12 > A2 would need F21 > 1)."""
     if not (0.0 < emissivity_1 <= 1.0 and 0.0 < emissivity_2 <= 1.0):
         raise ValueError("emissivities must be in (0, 1]")
     if area_1_m2 <= 0 or (area_2_m2 is not None and area_2_m2 <= 0):
@@ -133,6 +134,13 @@ def radiation_exchange(
         raise ValueError("view_factor must be in (0, 1]")
     a1 = float(area_1_m2)
     a2 = float(area_2_m2) if area_2_m2 is not None else a1
+    # view-factor reciprocity: A1·F12 = A2·F21 with F21 <= 1, so A1·F12 <= A2 —
+    # an "enclosure" violating it is unphysical and the network formula would
+    # silently return a wrong number for it.
+    if a1 * view_factor > a2 * (1.0 + 1e-9):
+        raise ValueError(
+            f"view_factor violates reciprocity: A1*F12 = {a1 * view_factor:.6g} "
+            f"> A2 = {a2:.6g} (would need F21 > 1)")
     t1_k = t1_c + 273.15
     t2_k = t2_c + 273.15
     sigma = _STEFAN_BOLTZMANN

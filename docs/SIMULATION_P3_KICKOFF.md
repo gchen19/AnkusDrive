@@ -179,10 +179,16 @@ M4  Geometry bridge ✅ analysis/meshbridge.py + body modes on thermal_transient
                        per-face STL regions → blockMesh box → snappyHexMesh → simpleFoam;
                        gated vs Hagen–Poiseuille on the developed Δp (cylinder:
                        hp_ratio 1.0006). Example G + bridge.png.
-M5  3-D topology   ⏳ 3-D SIMP + real load cases/keep-outs → topology_to_solid (3-D)
+M5  3-D topology   ✅ simp_topology_3d (trilinear hexes; scipy/dense/PCG backends) +
+                       point loads / fixed_nodes / keep_out / keep_in element boxes →
+                       topology_optimize_submit(nelz=…) → topology_to_solid consumes
+                       the voxel field (density_to_boxes greedy merge). Gated: volume
+                       exact, z-symmetry, keep-outs void, uniform cantilever within
+                       the Euler-Bernoulli+Timoshenko band. (FreeCAD-extracted load
+                       cases ride on the M4 bridge.)
 M6  Frontier       ◑ modal SHIPPED: beam_modal exact Euler-Bernoulli oracle +
                        fem_modal (CalculiX, 2nd-order tets) gate — fundamental within
-                       ~0.5% of E-B; fem_mesh element_order added. Example G + modal.png.
+                       ~0.5% of E-B; fem_mesh element_order added. Example H + modal.png.
                        (conjugate heat transfer · EM still open)
 ```
 
