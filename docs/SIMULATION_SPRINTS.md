@@ -26,14 +26,16 @@ negative is caught.
 | 3 · Wear / fatigue / fracture | ✅ **shipped** — `fatigue_check` / `fracture_check` / `wear_estimate` / `creep_flag`, 9 hand-verified toys (Sprint 2) |
 | 4 · Thermal (lumped) | ✅ **shipped** — `thermal_lumped` (RC transient + radiation screen), 5 hand-verified toys (Sprint 3) |
 | 9 · Design for X | ✅ **shipped (v1 explicit-input)** — `dfm_check` / `dfa_check` / `pack_check` / `cost_estimate` / `slice_estimate`, 21 hand-verified toys (Sprints 3–4) |
-| 7 · Optics | 📋 specced; optical **corpus already shipped** with family 2 |
+| 7 · Optics | ✅ **shipped** (P3 M1) — Snell/Fresnel/TIR exact oracle + `optics_raytrace` (rayoptics, degrades) + `optics_moldability_check`, 16 toys |
 | 6 · Async / long-solve infra | ✅ **shipped** — `driftpin/jobs.py` (submit/poll/cache) + `job_status`/`job_result`/`job_list`, 7 toys (Sprint 6); unblocks all P2 |
-| 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | 📋 specced — async infra now in place; need external solvers |
+| 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | ✅ **shipped** (P2 M0–M5 + P3) — OpenFOAM pipe/flat-plate vs Hagen–Poiseuille/Blasius, Elmer slab/radiation vs Heisler/σ-exchange, in-house SIMP (2-D+3-D), PyBullet MBD, Miles PSD + `beam_modal` vs CalculiX `fem_modal` |
+| — · Geometry bridge | ✅ **shipped** (P3 M4) — `meshbridge.py`: FreeCAD solid → Gmsh/ElmerGrid (thermal) · STL/snappyHexMesh (internal flow), body modes on the `*_submit` tools |
 
 Pure-Python `analysis/` is FreeCAD-free and standalone-testable; that extension
-point is proven by families 1, 2, 3, 4-lumped, 9 and 10 — **82 two-sided toys**
-across nine suites. The remaining work (async infra, external solvers) is a
-different shape, not more of the same.
+point is proven across every family above. Still open from this plan: the Sprint 4
+**slicer external-CLI upgrade** (PrusaSlicer/Orca behind an extra) and the optional
+P3 M6 frontier remainder (conjugate heat transfer, low-frequency EM) — see
+[`SIMULATION_P3_KICKOFF.md`](SIMULATION_P3_KICKOFF.md).
 
 ---
 
@@ -132,7 +134,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   print. **CLI-upgrade negative (pending):** missing CLI returns
   `{ok:false, reason:"slicer not installed"}`, not a stack trace.
 
-### Sprint 5 — Optics
+### Sprint 5 — Optics ✅ shipped (P3 M1)
 - **Tools:** `optics_raytrace(model, source_config, n_refractive, n_rays)` ·
   `optics_moldability_check(model, pull_axis)`.
 - **Backend / deps:** wrap the in-house `~/diffuser` pipeline (already imports
@@ -172,14 +174,14 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
 
 ## P2 — heavy external solvers (each gated on Sprint 6)
 
-### Sprint 7 — CFD
+### Sprint 7 — CFD ✅ shipped (P2 M2 + P3 M3/M4)
 - **Tools:** `cfd_internal_flow` · `cfd_external_flow`. OpenFOAM (CfdOF/SU2) behind
   `pip install driftpin[cfd]`.
 - **Acceptance:** straight Ø10 mm pipe, water, Re≈1700 → Hagen–Poiseuille
   Δp≈53 Pa within 10%; halving D raises laminar Δp ~16× (D⁴). **Negative:** missing
   OpenFOAM → graceful "solver not installed".
 
-### Sprint 8 — Structural extensions
+### Sprint 8 — Structural extensions ✅ shipped (P2 M3/M4 + P3 M5/M6-modal)
 - **Tools:** `random_vibration(analysis, psd_profile)` (PSD math on `fem_modal`) ·
   `contact_setup` (promotes existing CCX flags) · `topology_optimize` (returns
   *geometry* — closes the loop back into the modeller).
@@ -187,7 +189,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   part; doubling Q raises GRMS by √2. `topology_optimize` result gated by
   `interference_check` + `mass_properties` (mass ≤ keep_fraction·original).
 
-### Sprint 9 — Transient/radiation thermal + Multibody dynamics
+### Sprint 9 — Transient/radiation thermal + Multibody dynamics ✅ shipped (P2 M1/M5 + P3 M2)
 - **Tools:** `thermal_transient` / `thermal_radiation` (Elmer) ·
   `mechanism_simulate(assembly, joints, drivers, duration_s)` (MuJoCo/PyBullet).
 - **Acceptance (MBD):** slider-crank stroke = 2R within 0.5% (independent of conrod
