@@ -7879,6 +7879,228 @@ def _h_cht_channel_submit(p):
                              "flux_w_m2": params.get("flux_w_m2", 10000.0)})
 
 
+# --- acoustics + harmonic response (SIMULATION_NEXT B1/B2; Elmer-backed) --------
+
+@handler("acoustic_fem_submit")
+def _h_acoustic_fem_submit(p):
+    """Acoustic FEM via Elmer HelmholtzSolve, OFF the MCP channel (SIMULATION_NEXT
+    Tier B1) — the higher-order twin of the acoustic_screen closed forms, gated
+    against them. Degrades to {ok:false, reason, install} when ElmerSolver is
+    absent. kind='duct': driven closed duct, gate = exact rigid-end standing-wave
+    pressure 1/cos(kL) -> p_end_ratio ~ 1 (machine-tight). kind='cavity': rigid
+    rectangular cavity swept around the exact (mode_nx, mode_ny) eigenfrequency
+    by a Wave Flux corner source; the in-phase corner-probe response flips sign
+    through resonance -> f_solved_hz / f_exact_hz ~ 1 (<0.1% in practice). Also
+    accepts a prepared case_dir. Returns the degradation dict or {job_id, status,
+    cache_hit}; poll job_result."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import subprocess
+    import tempfile
+
+    from driftpin import jobs
+    from driftpin.analysis import acoustics as _ac
+    elmer_bin = info["path"]
+
+    case_dir = p.get("case_dir")
+    if case_dir:                                     # --- prepared case directory ---
+        if not os.path.isdir(case_dir):
+            raise ValueError(f"case_dir {case_dir!r} is not a directory")
+        sif = p.get("sif", "case.sif")
+        key = jobs.content_key("acoustic_fem",
+                               {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+        def _work_prepared():
+            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                                  capture_output=True, text=True)
+            return {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "case_dir": case_dir,
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+
+        return jobs.submit("acoustic_fem", _work_prepared, key=key,
+                           meta={"case_dir": case_dir})
+
+    kind = p.get("kind", "duct")
+    if kind == "duct":
+        params = {k: float(p[k]) for k in ("length_m", "kl", "c_m_s")
+                  if p.get(k) is not None}
+        if p.get("n_elements") is not None:
+            params["n_elements"] = int(p["n_elements"])
+        key = jobs.content_key("acoustic_fem", {"duct": params})
+
+        def _work():
+            cdir = tempfile.mkdtemp(prefix="elmer_ac_duct_")
+            built = _ac.write_helmholtz_duct_case(cdir, **params)
+            proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                                  capture_output=True, text=True)
+            out = {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "kind": "duct",
+                "case_dir": cdir,
+                "frequency_hz": round(built["frequency_hz"], 4),
+                "kl": built["kl"],
+                "p_end_exact": round(built["p_end_exact"], 6),
+                "p_mean_exact": round(built["p_mean_exact"], 6),
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+            parsed = _ac.parse_helmholtz_duct(cdir, built["scalars"])
+            if parsed:
+                out["p_end_re"] = round(parsed["p_end_re"], 6)
+                out["p_mean_re"] = round(parsed["p_mean_re"], 6)
+                out["p_end_ratio"] = round(parsed["p_end_re"] / built["p_end_exact"], 6)
+                out["p_mean_ratio"] = round(parsed["p_mean_re"] / built["p_mean_exact"], 6)
+            return out
+
+        return jobs.submit("acoustic_fem", _work, key=key,
+                           meta={"kind": "duct"})
+
+    if kind == "cavity":
+        params = {k: float(p[k]) for k in ("lx_m", "ly_m", "span_pct", "c_m_s")
+                  if p.get(k) is not None}
+        for k in ("nx", "ny", "mode_nx", "mode_ny", "n_steps"):
+            if p.get(k) is not None:
+                params[k] = int(p[k])
+        key = jobs.content_key("acoustic_fem", {"cavity": params})
+
+        def _work_cavity():
+            cdir = tempfile.mkdtemp(prefix="elmer_ac_cav_")
+            built = _ac.write_helmholtz_cavity_case(cdir, **params)
+            proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                                  capture_output=True, text=True)
+            out = {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "kind": "cavity",
+                "case_dir": cdir,
+                "mode": built["mode"],
+                "f_exact_hz": round(built["f_exact_hz"], 4),
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+            rows = _ac.parse_helmholtz_cavity(cdir, built["scalars"])
+            if rows:
+                f_est = _ac.locate_resonance(rows)
+                if f_est is not None:
+                    out["f_solved_hz"] = round(f_est, 4)
+                    out["mode_ratio"] = round(f_est / built["f_exact_hz"], 6)
+                else:
+                    out["ok"] = False
+                    out["reason"] = ("no resonance sign-flip captured in the sweep "
+                                     "window — widen span_pct or check the mode")
+            return out
+
+        return jobs.submit("acoustic_fem", _work_cavity, key=key,
+                           meta={"kind": "cavity"})
+
+    raise ValueError(f"unknown kind {kind!r}; choose 'duct' or 'cavity'")
+
+
+@handler("harmonic_response")
+def _h_harmonic_response(p):
+    """Exact SDOF harmonic FRF (no solver): |H|, phase, Q = 1/(2ζ√(1−ζ²)), peak
+    frequency, half-power bandwidth — the oracle the Elmer harmonic sweep is gated
+    against. See driftpin.analysis.vibration. Returns {natural_frequency_hz,
+    damping_ratio, q_factor, f_peak_hz, half_power_bandwidth_hz, frequency_ratio,
+    amplification, phase_deg, amplitude_mm, fidelity, band_pct, valid_range_ok,
+    warnings, escalate_to}."""
+    from driftpin.analysis import vibration
+    return vibration.harmonic_response(**p)
+
+
+@handler("harmonic_response_submit")
+def _h_harmonic_response_submit(p):
+    """Harmonic forced response via Elmer StressSolve (Harmonic Analysis), OFF the
+    MCP channel (SIMULATION_NEXT Tier B2). A plane-stress cantilever driven by a
+    harmonic tip traction is swept through its first resonance; gates from the
+    in-phase response: f1_ratio (Re(H)=0 exactly at f_n, vs the Euler-Bernoulli
+    beam_modal closed form), static_ratio (quasi-static point vs F·L³/3EI), and
+    q_ratio (max|Re|/static vs Q/2 = 1/(4ζ), the SDOF light-damping identity).
+    Degrades to {ok:false, reason, install} when ElmerSolver is absent. Also
+    accepts a prepared case_dir. Returns the degradation dict or {job_id, status,
+    cache_hit}; poll job_result."""
+    info = _require_solver("elmer")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import subprocess
+    import tempfile
+
+    from driftpin import jobs
+    from driftpin.analysis import vibration as _vib
+    elmer_bin = info["path"]
+
+    case_dir = p.get("case_dir")
+    if case_dir:                                     # --- prepared case directory ---
+        if not os.path.isdir(case_dir):
+            raise ValueError(f"case_dir {case_dir!r} is not a directory")
+        sif = p.get("sif", "case.sif")
+        key = jobs.content_key("harmonic_response",
+                               {"case_dir": os.path.abspath(case_dir), "sif": sif})
+
+        def _work_prepared():
+            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                                  capture_output=True, text=True)
+            return {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "solver": "elmer",
+                "case_dir": case_dir,
+                "stdout_tail": (proc.stdout or "")[-2000:],
+            }
+
+        return jobs.submit("harmonic_response", _work_prepared, key=key,
+                           meta={"case_dir": case_dir})
+
+    params = {k: float(p[k]) for k in (
+        "length_m", "height_m", "youngs_pa", "density_kg_m3", "poisson",
+        "damping_ratio", "traction_pa", "span_pct") if p.get(k) is not None}
+    for k in ("nx", "ny", "n_sweep"):
+        if p.get(k) is not None:
+            params[k] = int(p[k])
+    key = jobs.content_key("harmonic_response", {"beam": params})
+
+    def _work():
+        cdir = tempfile.mkdtemp(prefix="elmer_frf_")
+        built = _vib.write_harmonic_beam_case(cdir, **params)
+        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+                              capture_output=True, text=True)
+        out = {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "solver": "elmer",
+            "case_dir": cdir,
+            "f1_eb_hz": round(built["f1_eb_hz"], 4),
+            "static_exact_m": built["static_exact_m"],
+            "q_factor": built["q_factor"],
+            "damping_ratio": built["damping_ratio"],
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        tips = _vib.parse_harmonic_beam(cdir, n_steps=built["n_steps"],
+                                        tip_node=built["tip_node"])
+        if tips:
+            static = abs(tips[0])
+            out["static_solved_m"] = static
+            out["static_ratio"] = round(static / built["static_exact_m"], 5)
+            f_est = _vib.locate_frf_resonance(built["freqs"][1:], tips[1:])
+            if f_est is not None:
+                out["f1_solved_hz"] = round(f_est, 4)
+                out["f1_ratio"] = round(f_est / built["f1_eb_hz"], 5)
+            peak = max(abs(t) for t in tips[1:])
+            out["peak_over_static"] = round(peak / static, 4)
+            out["q_ratio"] = round((peak / static) / (built["q_factor"] / 2.0), 5)
+            out["frf"] = [[round(f, 3), t] for f, t in zip(built["freqs"], tips)]
+        return out
+
+    return jobs.submit("harmonic_response", _work, key=key,
+                       meta={"mode": "beam"})
+
+
 # --- low-frequency EM (P3 M6 frontier; Elmer-backed) ---------------------------
 
 @handler("em_skin_depth")

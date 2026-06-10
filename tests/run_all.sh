@@ -109,6 +109,14 @@ echo "== Elmer transient-thermal (case gen always; ElmerSolver gate when present
 python3 tests/test_elmer.py
 
 echo
+echo "== Acoustic FEM / HelmholtzSolve (case gen always; ElmerSolver gate when present) =="
+python3 tests/test_acoustic_fem.py
+
+echo
+echo "== Harmonic FRF / StressSolve (case gen always; ElmerSolver gate when present) =="
+python3 tests/test_harmonic_fem.py
+
+echo
 echo "== OpenFOAM pipe CFD (case gen always; blockMesh+simpleFoam gate when present) =="
 python3 tests/test_openfoam.py
 

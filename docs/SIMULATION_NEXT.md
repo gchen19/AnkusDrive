@@ -72,8 +72,8 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
 
 | Candidate | Backend (status) | Oracle / gate | Effort, risk |
 |---|---|---|---|
-| **Acoustic FEM** | Elmer `HelmholtzSolve` (**installed**) | rigid rectangular cavity modes — exact eigenfrequencies; duct plane-wave standing field | M, low — the M2/M6 deck pattern verbatim |
-| **Harmonic forced response** | CCX 2.21 `*STEADY STATE DYNAMICS` or Elmer `StressSolve` (**installed**) | SDOF FRF: peak = Q·x_static, half-power bandwidth f_n/Q (exact); cross-links `beam_modal` + `random_vibration` | M, low |
+| ✅ **Acoustic FEM** (`acoustic_fem_submit`) | Elmer `HelmholtzSolve` (**installed**) | rigid rectangular cavity modes — exact eigenfrequencies; duct plane-wave standing field | M, low — the M2/M6 deck pattern verbatim |
+| ✅ **Harmonic forced response** (`harmonic_response` + `harmonic_response_submit`) | Elmer `StressSolve` Harmonic Analysis (**installed**; CCX `*STEADY STATE DYNAMICS` remains an option) | SDOF FRF: peak = Q·x_static, half-power bandwidth f_n/Q (exact); cross-links `beam_modal` + `random_vibration` | M, low |
 | **Turbulent RANS** (internal + external) | OpenFOAM kOmegaSST (**installed**) | turbulent flat plate Cf=0.0592·Re^−1/5, Colebrook/Moody pipe Δp (correlations, ±10–15 % band) | M, medium — y+/wall-function discipline; gates must be banded, not exact |
 | **Flow-coupled CHT** | Elmer `FlowSolve`+Heat (**installed**) or `chtMultiRegionFoam` | Graetz–Nusselt developed Nu=3.66 / 7.54 (exact eigenvalue results) — upgrades M6's plug flow to a *true Nusselt validation*, closing the loop with `h_estimate` | M/L, medium |
 | **Coupled induction heating** | Elmer `MagnetoDynamics` + HeatSolver (**installed**) | total Joule power = R_s·|H|²/2 over the face (from the shipped `em_skin_depth`) + adiabatic ΔT energy balance | M, medium — completes `em_induction_submit` into a thermal answer |
@@ -86,8 +86,12 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
    *Shipped, PR #49.*
 2. ✅ **Tier A** as one sprint wave (`h_estimate` first — it unblocks honest inputs
    to four existing thermal tools). *Shipped: all six screens.*
-3. **B1 acoustics + B2 harmonic response** (zero new installs, low risk, and the
-   pair finally covers the Horizon table's "Acoustics" row).
+3. ✅ **B1 acoustics + B2 harmonic response** (zero new installs, low risk, and the
+   pair finally covers the Horizon table's "Acoustics" row). *Shipped:
+   `acoustic_fem_submit` (HelmholtzSolve duct gated machine-tight on 1/cos(kL),
+   cavity-mode sweep localized <0.1 % via the in-phase sign flip) +
+   `harmonic_response` / `harmonic_response_submit` (SDOF FRF oracle; StressSolve
+   harmonic cantilever gated on f₁ / static compliance / Q-over-2).*
 4. **B3 RANS** (extends the CFD validity envelope past Re≈2300 — the most common
    real-world escape from the current laminar gates).
 5. **B4 flow-CHT and B5 induction heating** as the coupled-physics capstones.
