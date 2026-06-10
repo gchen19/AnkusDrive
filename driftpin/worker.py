@@ -6597,6 +6597,19 @@ def _h_thermal_lumped(p):
     return thermal.thermal_lumped(**p)
 
 
+@handler("h_estimate")
+def _h_h_estimate(p):
+    """Screening convection coefficient from handbook correlations (no solver):
+    Churchill–Chu natural (vertical plate / horizontal cylinder), averaged flat-plate
+    and Hilpert crossflow forced, plus the linearized radiation screen. Carries the
+    fidelity contract (fidelity='correlation', band_pct). See
+    driftpin.analysis.convection. Returns {geometry, mode, correlation, h_conv_w_m2k,
+    h_rad_w_m2k, h_total_w_m2k, nusselt, reynolds, rayleigh, prandtl, film_temp_c,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import convection
+    return convection.h_estimate(**p)
+
+
 @handler("thermal_transient_1d")
 def _h_thermal_transient_1d(p):
     """Analytic 1-D plane-wall transient (one-term Heisler series) — the closed-form

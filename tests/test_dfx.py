@@ -94,6 +94,14 @@ def test_dfa_monotone_in_fasteners_and_parts():
         raise AssertionError("expected ValueError for part_count=0")
 
 
+def test_dfa_fidelity_contract_is_ordinal():
+    # SIMULATION_NEXT.md contract: the grade is an ordinal ranking index —
+    # fidelity 'correlation' with NO physical scatter band (band_pct None).
+    r = dfx.dfa_check(6, 2)
+    assert r["fidelity"] == "correlation", r
+    assert r["band_pct"] is None, r["band_pct"]
+
+
 def test_pack_fits_and_void_fraction():
     # part [300,200,150] in carton [310,210,160] -> fits, void = 1 - 9e6/1.0416e7.
     r = dfx.pack_check([300, 200, 150], [310, 210, 160], mass_g=1500)

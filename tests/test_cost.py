@@ -82,6 +82,14 @@ def test_process_factor_orders_cnc_above_injection():
         raise AssertionError("expected ValueError on an unknown process")
 
 
+def test_fidelity_contract_labels_rollup_as_correlation():
+    # SIMULATION_NEXT.md contract: the process-time table is order-of-magnitude,
+    # so the rollup must label itself a focusing estimate, never a gate.
+    r = cost.cost_estimate(volume_mm3=1e6, material="ABS", process="cnc")
+    assert r["fidelity"] == "correlation", r
+    assert r["band_pct"] == 100.0, r["band_pct"]
+
+
 def test_override_density_and_price():
     # explicit overrides bypass the DB and are flagged in the breakdown
     r = cost.cost_estimate(volume_mm3=1e6, material="AL6061-T6",

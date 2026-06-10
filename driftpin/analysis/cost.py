@@ -90,12 +90,19 @@ def cost_estimate(
 
         unit_cost = material_cost + process_cost + tooling_amortized
 
+    Fidelity (``SIMULATION_NEXT.md`` contract): ``material_cost`` is exact given
+    its density/price inputs, but the machine-time table is order-of-magnitude, so
+    the rollup carries ``fidelity = "correlation"`` with ``band_pct = 100`` —
+    trust the *ratios* between processes and quantities, not the absolute dollars,
+    until the factors are calibrated to a real shop.
+
     Returns {material_cost, process_cost, tooling_amortized, unit_cost, mass_kg,
-    breakdown:{volume_mm3, mass_kg, density_kg_m3, price_usd_kg, scrap_fraction,
-    process, machine_time_hr, machine_rate_usd_hr, setup_min, quantity,
-    setup_amortized, machining_cost, tooling_usd, density_basis, price_basis}}.
-    Raises ValueError on a non-positive volume/quantity, an unknown process, or a
-    material with no usable density/price."""
+    fidelity, band_pct, breakdown:{volume_mm3, mass_kg, density_kg_m3,
+    price_usd_kg, scrap_fraction, process, machine_time_hr, machine_rate_usd_hr,
+    setup_min, quantity, setup_amortized, machining_cost, tooling_usd,
+    density_basis, price_basis}}. Raises ValueError on a non-positive
+    volume/quantity, an unknown process, or a material with no usable
+    density/price."""
     if volume_mm3 <= 0:
         raise ValueError("volume_mm3 must be > 0")
     if quantity < 1:
@@ -149,6 +156,11 @@ def cost_estimate(
         "tooling_amortized": round(tooling_amortized, 4),
         "unit_cost": round(unit_cost, 4),
         "mass_kg": round(mass_kg, 6),
+        # SIMULATION_NEXT.md fidelity contract: the process-time model is an
+        # order-of-magnitude screen, so the rollup is a focusing estimate, not a
+        # gate. material_cost alone is exact given its inputs.
+        "fidelity": "correlation",
+        "band_pct": 100.0,
         "breakdown": {
             "volume_mm3": round(volume_mm3, 3),
             "mass_kg": round(mass_kg, 6),

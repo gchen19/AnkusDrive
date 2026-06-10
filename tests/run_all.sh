@@ -55,6 +55,10 @@ echo "== Lumped transient thermal toys (pure-Python; no FreeCAD) =="
 python3 tests/test_thermal.py
 
 echo
+echo "== Convection-coefficient screening toys (pure-Python; no FreeCAD) =="
+python3 tests/test_convection.py
+
+echo
 echo "== Design-for-X toys (DfM/DfA/packaging; pure-Python; no FreeCAD) =="
 python3 tests/test_dfx.py
 
