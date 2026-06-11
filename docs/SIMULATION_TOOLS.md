@@ -522,12 +522,27 @@ immediately useful:
 5. **Machine-element rating** — closed-form life/SF on the existing `add_*` component tools. *(shipped: bolt, bearing, spring, gear, belt, press-fit, seal)*
 
 **P1 — external CLI, self-contained.** One new tool dependency each, bounded runtime:
-5. **Slicer estimate** (PrusaSlicer CLI on STL). *(shipped: analytic `slice_estimate` + the `slice_gcode_submit` CLI upgrade)*
-6. **Optics** (wrap `~/diffuser`).
-7. **Cost** rollup (depends on Materials DB + a process-time model).
+6. **Slicer estimate** (PrusaSlicer CLI on STL). *(shipped: analytic `slice_estimate` + the `slice_gcode_submit` CLI upgrade)*
+7. **Optics** (`rayoptics` wheel behind the `optics` extra). *(shipped, P3 M1: `optics_raytrace` + `optics_moldability_check`)*
+8. **Cost** rollup (depends on Materials DB + a process-time model). *(shipped: `cost_estimate` in `cost.py`)*
 
 **P2 — heavy external solvers.** Gated on async-solve + optional-extras packaging:
-8. **CFD**, **transient/radiation thermal**, **topology optimization**, **MBD**.
+9. **CFD**, **transient/radiation thermal**, **topology optimization**, **MBD**.
+   *(all shipped — P2 M5 / P3 M2-M5 / SIMULATION_NEXT B1-B5; see the family
+   sections above for the gates)*
+
+**Remaining stubs** (the only unbuilt items in this catalog; each family section
+names its own):
+- `fit_class` interference/transition shaft letters (k, n, p, s) — currently
+  `NotImplementedError` (§1).
+- Chain/sprocket + weld-group ratings in `machine_elements.py` (§10).
+- DfX / tolerance **v2 Shape wiring** — read geometry summaries off a live
+  handle instead of explicit descriptors (§9, Appendix A).
+- Materials DB **electrical layer** — fold `em.py`'s handbook conductor table
+  into the DB (§2, Frontier EM).
+- **Nonlinear structural** (CCX plasticity / large deflection) — the one
+  unshipped SIMULATION_NEXT Tier B row.
+- Horizon table rows (§11) — RF/wave EM, machining toolpaths — on concrete need only.
 
 ---
 
