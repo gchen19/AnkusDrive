@@ -12,7 +12,7 @@ agent can do; this doc is about *many* agents sharing the work.
 ("Phase 0 is runnable today, everything past it is a plan") is history — the
 partition+merge substrate (`publish_interface`, `merge_assembly`, mate-by-frame,
 recursive BOM, the envelope / interference / alignment gates, the lockfile) landed
-2026-05-30, and a 29-toy eval suite has since produced the first empirical results
+2026-05-30, and a 30-toy eval suite has since produced the first empirical results
 on when partitioning helps (§10). The forward-looking part of this doc is now
 **Phase 3 (§11): the contract and gate extensions needed for assemblies of
 *advanced* components** — gear trains, fits, kinematic interfaces, physics
@@ -369,37 +369,59 @@ all without reading geometry.
 ## 10. What the evals taught (and what it changes)
 
 The eval suite ([`MULTI_AGENT_EVAL.md`](../tests/MULTI_AGENT_EVAL.md)) ran the
-shipped substrate with scripted builders (Layer M1, 29 toys, every gate validated
+shipped substrate with scripted builders (Layer M1, 30 toys, every gate validated
 against negative controls) and live agents (Layer M2, partition vs a single-agent
-baseline on every toy). Four findings change the design:
+baseline on every toy). Five findings change the design:
 
-1. **Partition pays at high context load, and only there.** Easy two-part toys tie
-   (twopin: partition 57% vs single 60%, statistically indistinguishable). The
-   divergence appears when one agent can't hold the whole contract: nslot8
-   (9 components) — partition completed 12/20 builds vs single's 4/20; tchain6 —
-   partition passed 20/20 vs single's 0/20. **Partition by context load, not by part
-   count** (§11, granularity rule). And note pass-rate undersells partition: its
-   builders run concurrently, single's are sequential — wall-clock is the unmeasured
-   second win.
+1. **Partition's measured wins are on *coupled-constraint* toys, not raw breadth
+   (so far).** Easy two-part toys tie (twopin: 57% vs 60%); the corrected nslot
+   k-sweep (2026-06-12, after an underspecified-baseline fix — see §10.5) shows
+   partition flat at 90–95% while a *fairly-prompted* single holds 80%/75% at
+   k=4/6 — a trend in the predicted direction, not yet significant (p≈0.08). The
+   decisive divergences are the chains: tchain6 partition 20/20 vs single 4/20
+   (replicated across two rounds). **Partition by context load, not by part count**
+   (§11, granularity rule) stands, but the load that demonstrably kills agents is
+   a *shared derivation*, not component count alone. Pass-rate also undersells
+   partition: its builders run concurrently — wall-clock is the unmeasured second
+   win.
 
-2. **The dominant failure mode is agents re-deriving shared math.** twopin fails when
-   two agents independently derive `x = center ± spacing/2` and one slips; the
-   unequal tolerance chain fails when nobody reconciles a global total against a
-   manufacturing grid. The contract should not hand agents *derivations* — it should
-   hand them *results* (§11.1, the resolve step).
+2. **The dominant failure mode is agents re-deriving shared math — and *no* agent
+   condition escapes it.** twopin fails when two agents independently derive
+   `x = center ± spacing/2` and one slips. tchainu (the unequal grid chain) made
+   it conclusive: partition 2/20 — 13 of 18 failures the exact unreconciled
+   round-up signature — and single 0/20, drifting in *both* directions. The
+   contract should not hand agents *derivations* — it should hand them *results*
+   (§11.1, the resolve step). That gate-validated failure pair is §11.1's direct
+   empirical mandate.
 
-3. **Holding the whole design can hurt, not help.** tchain6's single agent — the one
-   condition that could see the running total — consistently built every segment too
-   long and never reconciled. The original prediction (partition loses on tolerance
-   chains because errors accumulate) was wrong for equal segments: independent agents
-   building the same correct part don't accumulate anything. Error accumulates when
-   one agent juggles a running total and fumbles it. This strengthens the case for
-   resolved per-slice values over whole-design context.
+3. **Holding the whole contract doesn't rescue a global constraint.** A caveat
+   first: the eval's "single" condition is k+1 *cold* calls each carrying the full
+   contract — not one growing conversation — so it measures prompt-held contract
+   load, and *no* condition could actually hold a running total (a true
+   single-conversation baseline is queued in the eval follow-ups). With that lens,
+   tchain6/tchainu single's failures are independent cold calls re-deriving the
+   global plan and disagreeing — drift comes from re-derivation, not accumulation
+   across correct parts (equal-segment partition: identical rounding cancels,
+   20/20). Either way the design conclusion is the same: resolved per-slice values
+   beat whole-design context.
 
 4. **The gates are trustworthy, with one sharp edge.** Every reference build passes,
    every negative control is caught, the interference boundary sits exactly where
    hand calculation puts it — but exact-touch reports no interference (§6), so
-   clearance-fit contracts need a clearance gate, not a collision gate.
+   clearance-fit contracts need a clearance gate, not a collision gate. A second
+   edge found by code review: `interface_align_check` verifies only that frame
+   *origins* coincide — a secondary interface positioned right but **rotated**
+   passes. Typed interfaces (§11.2) should gate orientation (z/x axis alignment)
+   too.
+
+5. **The baseline is part of the experiment.** The first nslot single round
+   measured 0/20 at k=4 *and* k=6 — an artifact: the single task named the peg
+   diameters but omitted the plate spec entirely (dimensions, hole positions,
+   hole diameters), so its plates put holes where the gate doesn't look. With the
+   contract equalized, single recovered to 16/20 / 15/20. The fairness rule "run
+   every toy both ways" has a sharper form the eval now encodes: **both conditions
+   must receive the same total contract.** (The older nslot8 single numbers carry
+   this taint; re-baseline before citing.)
 
 ---
 

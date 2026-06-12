@@ -669,10 +669,18 @@ def _nslot_peg_task(i):
 
 
 def _nslot_single_task(k):
+    # Must carry the SAME full contract the partition agents get between them
+    # (plate dims + hole positions/diameters + peg diameters) — the original
+    # wording omitted the plate spec entirely, so single's plate put holes where
+    # the gate doesn't look and 0/20 was an artifact, not a context-load result.
+    holes = "; ".join(f"slot {i} at x={15.0 + i*NSLOT_PITCH:.0f} y={NSLOT_Y:.0f} "
+                      f"diameter {NSLOT_HOLE_D[i]:.0f} mm" for i in range(k))
     pegs = "; ".join(f"peg {i}: Ø{NSLOT_HOLE_D[i]-NSLOT_CLEAR:.1f} mm" for i in range(k))
-    return (f"You will build a baseplate and {k} pegs, one at a time. The plate has "
-            f"{k} holes of distinct diameters and each peg fits one specific hole "
-            f"with {NSLOT_CLEAR} mm clearance. Peg diameters: {pegs}. "
+    return (f"You will build a baseplate and {k} pegs, one at a time. The BASEPLATE "
+            f"is {_nslot_plate_w(k):.0f} x {NSLOT_PLATE_D:.0f} x {NSLOT_PLATE_H:.0f} mm "
+            f"with {k} vertical through-holes, each a DIFFERENT diameter: {holes}. "
+            f"Each peg is {NSLOT_PEG_H:.0f} mm long and slip-fits one specific hole "
+            f"with {NSLOT_CLEAR} mm clearance: {pegs}. "
             f"Keep each peg matched to its hole.")
 
 
@@ -721,6 +729,7 @@ def _make_nslot(k):
 
 
 TOY5_NSLOT4 = _make_nslot(4)
+TOY5_NSLOT6 = _make_nslot(6)   # k-sweep midpoint (Probe D validated the k=6 oracle)
 TOY5_NSLOT8 = _make_nslot(8)
 
 
@@ -2920,7 +2929,7 @@ TOY29_THERMO_STRUCT = Toy(
 
 
 TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
-                           TOY5_NSLOT4, TOY5_NSLOT8,
+                           TOY5_NSLOT4, TOY5_NSLOT6, TOY5_NSLOT8,
                            TOY6_TCHAIN3, TOY6_TCHAIN6,
                            TOY7_TCHAINU, TOY8_PINSLOT,
                            TOY9_POSITION, TOY10_CONCENTRIC, TOY11_SYMMETRY,
@@ -3201,7 +3210,11 @@ def main():
                         print(err)
                 continue
 
-            for cond_name, fn in (("partition", run_partition), ("single", run_single)):
+            conds = (("partition", run_partition), ("single", run_single))
+            sel_cond = os.environ.get("M2_COND")  # e.g. "single" — rerun one condition
+            if sel_cond:
+                conds = [(n, f) for n, f in conds if n in sel_cond.split(",")]
+            for cond_name, fn in conds:
                 trial_results = []
                 for i in range(trials):
                     tmp = root / f"{toy.key}_{cond_name}_{i}"

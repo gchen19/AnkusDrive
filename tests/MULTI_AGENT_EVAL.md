@@ -463,6 +463,80 @@ too-thick one at 341 > 213 g). Here both physics favour more material and the ma
 budget is the opposing constraint; a genuine thermal-vs-structural *shape* tradeoff
 (thin tall fins cool but flex, stubby is strong but hot) is the natural next extension.
 
-**Suite status:** 29 toys, selftest two-sided green throughout, dryrun OK. Dedicated
+**Suite status:** 30 toys, selftest two-sided green throughout, dryrun OK. Dedicated
 simulation tooling (promoting these gate helpers to typed tools) follows
 `docs/SIMULATION_TOOLS.md`.
+
+---
+
+## k-sweep, tchainu & tchain6 rerun — 2026-06-12 (Haiku, n=20/cond, ~$12.8)
+
+Ran the three billed experiments the probes unlocked — and found **two
+harness-validity bugs by code review mid-run**, one of which invalidated a full
+round of nslot *single* numbers and forced a prompt fix + rerun (~$3.15 extra,
+still inside the planned $12–15 envelope).
+
+### Two harness findings (the actual headline)
+
+1. **The nslot single task was underspecified — single's 0/20 was an artifact.**
+   `_nslot_single_task` gave the single agent the peg diameters but *not* the plate
+   spec: no plate dimensions, no hole positions, no hole diameters — while
+   partition's plate agent got all of it. Single dutifully built plates with holes
+   where the gate doesn't look; round-1 failures were "peg fully embedded in solid
+   plate" signatures (2433 mm³ = π·8.8²·10 to the digit), guaranteed regardless of
+   agent skill. Round 1 measured **0/20 at both k=4 and k=6**; with the contract
+   equalized, single recovered to **16/20 / 15/20**. Two corollaries: the eval's
+   own fairness rule ("run every toy both ways") needs a stronger form — *both
+   conditions must receive the same total contract* — and **the earlier nslot8
+   single numbers (built 4/20, §divergence) carry the same taint; re-baseline
+   before citing them.** Also: registered `nslot6` (Probe D's validated oracle,
+   selftest green) and added `M2_COND` for single-condition reruns.
+
+2. **"Single" is k+1 cold calls, not one growing conversation.** `run_single`
+   re-prompts a *fresh* agent per component (full contract + "now build X");
+   nothing carries between calls. So the single condition measures
+   **full-contract-in-prompt** (a retrieval/consistency load), not a conversation
+   that could hold a running total. For the chain toys this changes the story:
+   single *cannot* remember its own reconciliation between segments — each cold
+   call re-derives the global plan, and disagreement between calls *is* the
+   observed drift (tchainu single failed in both directions, 96–108 mm). RFC §10's
+   "single fumbles the running total" mechanism is adjusted accordingly.
+
+### Results (gates unchanged; selftest green incl. nslot6)
+
+| toy | partition | single (fair prompt) | reading |
+|---|---|---|---|
+| nslot4 | 18/20 | 16/20 | tie at k=4 (p≈0.66) |
+| nslot6 | 19/20 | 15/20 | trend the right way, not significant (p≈0.08) |
+| tchain6 rerun | **20/20** | 4/20 | original 20/0 **replicates** — not a prompt artifact |
+| tchainu | **2/20** | **0/20** | **both lose** — see below |
+
+- **nslot k-sweep: no cliff at k=4–6.** With a fair baseline single holds 75–80%
+  while partition sits at 90–95%. Direction matches the hypothesis (single decays
+  with k, partition flat) but n=20 cannot call 95% vs 75% (two-proportion p≈0.077).
+  The dramatic round-1 separation was the prompt artifact. Worth noting: the few
+  partition nslot failures are all the **plate** agent — the one partition
+  component whose contract still grows with k (embedded-peg volumes again).
+  Natural next point: a fixed-prompt **nslot8 rerun** (~$3).
+- **tchain6 replicates.** Partition 20/20 vs single 4/20 — the original 20/0 was
+  not a wording fluke. Single's drifts cluster at unreconciled per-segment guesses
+  (102–113 mm), as the cold-call mechanism predicts.
+- **tchainu — designed as "partition loses"; actually NOBODY wins.** Partition
+  2/20: 13 of 18 failures are the *exact* predicted unreconciled-round-up
+  signature (102.0 mm); the two passes were lucky disobedient roundings that
+  happened to sum to 100. Single 0/20: failures in *both* directions (96–108 mm)
+  plus two not-saved — each cold call reconciled differently. Probe C's prediction
+  that single reconciles (probed with Opus as builder) did not transfer to Haiku.
+  **This is the strongest empirical case yet for RFC §11.1:** no agent condition
+  reliably reconciles a global constraint against a grid — resolve it
+  coordinator-side in plain code and hand every builder a literal value.
+
+### Follow-ups
+
+1. **nslot8 fixed-prompt rerun** — the only remaining tainted datapoint (~$3).
+2. **A true single-conversation condition** — one agent, one growing thread,
+   k `save_component` calls — to separate *conversation-held* context load from
+   *prompt-held* contract size. Today's "single" only measures the latter; it is
+   also the condition that could genuinely hold a running total, so it's the right
+   baseline for the chain toys.
+3. The k-sweep needs either larger n or larger k to call the nslot6 trend.
