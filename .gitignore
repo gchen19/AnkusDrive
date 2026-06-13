@@ -6,3 +6,5 @@ scratch/out/
 .venv/
 tests/reliability_cache/
 tests/multiagent_cache/
+# generated CAD artifacts (scratch/gen_artifacts.py output)
+results/

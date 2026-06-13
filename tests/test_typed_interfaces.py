@@ -52,6 +52,17 @@ def _gear(w, path, teeth, module=2.0, name="gear"):
     w.call("save_document", path=str(path))
 
 
+def _bored_gear(w, path, teeth, module=2.0):
+    """A gear with a centre bore — a boolean cut, so its shape is a Part.Compound
+    (whose .CenterOfMass is not directly available; the gate must be robust to it)."""
+    w.call("new_document", name="g")
+    g = w.call("add_gear", teeth=int(teeth), module=module, height=6, name="gear")
+    b = w.call("add_primitive", kind="cylinder", r=5.2, h=18,
+               placement=[0, 0, -6], name="bore")
+    w.call("boolean_op", op="cut", base=g["handle"], tool=b["handle"])
+    w.call("save_document", path=str(path))
+
+
 def _plate_with_frame(w, path, z_axis, name="plate"):
     w.call("new_document", name=name)
     r = w.call("add_primitive", kind="box", w=40, d=40, h=8, name="plate")
@@ -245,6 +256,28 @@ def test_mesh_exclusion_is_targeted():
         print("  PASS mesh-exclusion targeted: mesh pair excused, real clash caught")
 
 
+def test_gear_mesh_bored_gears_compound():
+    """Regression: bored gears are Part.Compound shapes, whose .CenterOfMass is not
+    directly accessible. The gear_mesh gate must measure pitch radius + centre
+    distance via the robust solids-based centre of mass, not crash on a compound."""
+    M, C = 2.0, 48.0
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        with Worker() as w:
+            _bored_gear(w, tmp / "a.FCStd", 12, M)
+        with Worker() as w:
+            _bored_gear(w, tmp / "b.FCStd", 36, M)
+        rep = _merge(
+            tmp, {"gearA": {"file": "a.FCStd"}, "gearB": {"file": "b.FCStd"}},
+            [{"component": "gearA", "name": "gearA", "placement": [0, 0, 0]},
+             {"component": "gearB", "name": "gearB", "placement": [C, 0, 0]}],
+            [{"kind": "gear_mesh", "a": "gearA", "b": "gearB", "module_mm": M,
+              "center_distance_mm": C, "ratio": 3.0, "tol_mm": 0.5}])
+        typed = rep["gates"].get("typed", [])
+        _assert_case("gear_mesh", "bored gears (compound shape)", True,
+                     not typed, typed, None)
+
+
 def _assert_case(kind, label, expect_ok, ok, typed, sub):
     if ok != expect_ok:
         raise AssertionError(
@@ -260,8 +293,8 @@ def _assert_case(kind, label, expect_ok, ok, typed, sub):
 
 
 def main():
-    tests = [test_bore_fit, test_gear_mesh, test_frame_orientation,
-             test_mesh_exclusion_is_targeted,
+    tests = [test_bore_fit, test_gear_mesh, test_gear_mesh_bored_gears_compound,
+             test_frame_orientation, test_mesh_exclusion_is_targeted,
              test_unknown_kind_is_violation,
              test_ok_reflects_typed_and_no_checks_is_backcompat]
     failed = 0
