@@ -108,9 +108,43 @@ def build_components(tmp, n):
     return files
 
 
+# --- mechanism (motion) declaration ------------------------------------------
+
+def mechanism_block(n, mode):
+    """The §11.9 `mechanism` block for the motion gate, two ways on ONE geometry:
+
+      'rigid'     — every gear keyed to its shaft (what we actually built). Six
+                    pairs demand six ratios of the same two shafts -> over-constrained,
+                    mobility DOF < 1, LOCKED.
+      'selective' — output gears freewheel on the output shaft; a dog clutch engages
+                    one pair per speed. Each state is a determinate 1-DOF train whose
+                    realised ratio = N_in/N_out (the real constant-mesh design)."""
+    in_members = ["input_shaft"] + [f"in{s}" for s in range(n)]
+    meshes = [{"a": f"in{s}", "b": f"out{s}", "id": f"pair{s}",
+               "teeth_a": teeth(RATIOS[s])[0], "teeth_b": teeth(RATIOS[s])[1]}
+              for s in range(n)]
+    if mode == "rigid":
+        links = {"input_shaft": {"members": in_members, "ground": "revolute"},
+                 "output_shaft": {"members": ["output_shaft"]
+                                  + [f"out{s}" for s in range(n)], "ground": "revolute"}}
+        return {"expected_dof": 1, "input": "input_shaft", "output": "output_shaft",
+                "links": links, "meshes": meshes}
+    links = {"input_shaft": {"members": in_members, "ground": "revolute"},
+             "output_shaft": {"members": ["output_shaft"], "ground": "revolute"}}
+    states = {f"speed{s+1}": [f"pair{s}"] for s in range(n)}
+    design = {f"speed{s+1}": teeth(RATIOS[s])[0] / teeth(RATIOS[s])[1]
+              for s in range(n)}
+    return {"expected_dof": 1, "input": "input_shaft", "output": "output_shaft",
+            "links": links, "meshes": meshes,
+            "engagement": {"freewheel": [f"out{s}" for s in range(n)],
+                           "rides_on": {f"out{s}": "output_shaft" for s in range(n)},
+                           "states": states, "design_ratios": design,
+                           "input": "input_shaft", "output": "output_shaft"}}
+
+
 # --- manifest assembly -------------------------------------------------------
 
-def build_manifest(tmp, n, files):
+def build_manifest(tmp, n, files, mechanism=None, manifest_name="manifest.json"):
     z_lo, z_hi = shaft_span(n)
     comps, insts, checks = {}, [], []
 
@@ -149,7 +183,9 @@ def build_manifest(tmp, n, files):
            "root": f"gearbox{n}.FCStd", "components": comps,
            "instances": insts, "checks": checks,
            "requirements": {"density_kg_mm3": 7.9e-6, "max_mass_g": 6000}}
-    mp = tmp / "manifest.json"
+    if mechanism:
+        man["mechanism"] = mechanism_block(n, mechanism)
+    mp = tmp / manifest_name
     mp.write_text(json.dumps(man, indent=2))
     return mp
 
