@@ -4415,7 +4415,6 @@ def _vc_feature_check(shape, feat):
       bore   {diameter_mm, tol_mm?}                    a cylindrical face of the
              nominal radius is present (the hole was actually cut)
       extent {axis: x|y|z, length_mm, tol_mm?}         bbox span along axis"""
-    import math
     kind = feat.get("kind")
     tol = float(feat.get("tol_mm", 0.5))
     if kind == "gear":
@@ -4698,25 +4697,138 @@ def _lock_state(manifest, base_dir):
     return state
 
 
+# --- manifest schema + validation (RFC §11.7) --------------------------------
+#
+# Formalize the manifest: a version string, a load-time validator that catches the
+# cross-reference errors a JSON shape can't (a `library` with no source, an
+# instance pointing at a missing component, a check referencing an unknown
+# instance), and a content hash recorded in the lockfile so "built against a stale
+# contract" is detectable as such — not only inferable from interface hashes.
+# Validation is loud and runs BEFORE any geometry, so a malformed contract fails at
+# the door, not halfway through a billed fan-out.
+
+_MANIFEST_SCHEMA = "driftpin.manifest/1"
+
+
+def _manifest_content_hash(man):
+    """blake2b of the manifest content (canonical JSON) — a single fingerprint of
+    the whole contract. The `schema` stamp is excluded so stamping a previously
+    unversioned manifest is not itself a contract change."""
+    import hashlib
+    import json as _json
+    body = {k: v for k, v in man.items() if k != "schema"}
+    return hashlib.blake2b(
+        _json.dumps(body, sort_keys=True).encode(), digest_size=12).hexdigest()
+
+
+def _validate_manifest(man):
+    """Structural + cross-reference validation. Returns a list of human-readable
+    problems; empty == valid. Schema-version-agnostic for the structure (an absent
+    `schema` is accepted as unversioned for back-compat); a PRESENT schema must be
+    the known version."""
+    problems = []
+    if not isinstance(man, dict):
+        return ["manifest must be a JSON object"]
+    schema = man.get("schema")
+    if schema is not None and schema != _MANIFEST_SCHEMA:
+        problems.append(
+            f"unknown schema {schema!r} (expected {_MANIFEST_SCHEMA!r} or none)")
+
+    comps = man.get("components")
+    if not isinstance(comps, dict) or not comps:
+        problems.append("components must be a non-empty object")
+        comps = comps if isinstance(comps, dict) else {}
+    for cid, spec in comps.items():
+        if not isinstance(spec, dict):
+            problems.append(f"component {cid!r} must be an object")
+            continue
+        sources = [k for k in ("file", "manifest", "library") if k in spec]
+        if len(sources) != 1:
+            problems.append(
+                f"component {cid!r} must have exactly one of file/manifest/library "
+                f"(has {sources or 'none'})")
+        if "library" in spec and not (isinstance(spec["library"], dict)
+                                      and spec["library"].get("tool")):
+            problems.append(f"component {cid!r} library needs a 'tool'")
+
+    insts = man.get("instances")
+    if not isinstance(insts, list):
+        problems.append("instances must be a list")
+        insts = []
+    inst_names = set()
+    for i, inst in enumerate(insts):
+        if not isinstance(inst, dict) or "component" not in inst:
+            problems.append(f"instance {i} must reference a component")
+            continue
+        if inst["component"] not in comps:
+            problems.append(
+                f"instance {i} references unknown component {inst['component']!r}")
+        inst_names.add(inst.get("name", inst["component"]))
+
+    mates = list(man.get("mates", []))
+    for inst in insts:
+        if isinstance(inst, dict) and inst.get("mate"):
+            m = dict(inst["mate"])
+            m["child"] = inst.get("name", inst.get("component"))
+            mates.append(m)
+    for m in mates:
+        for role in ("child", "parent"):
+            ref = m.get(role)
+            if ref is not None and ref not in inst_names:
+                problems.append(f"mate {role} {ref!r} is not an instance name")
+
+    for chk in man.get("checks", []):
+        if not isinstance(chk, dict) or "kind" not in chk:
+            problems.append(f"check missing a 'kind': {chk!r}")
+            continue
+        for ref in _check_pair(chk):
+            if ref is not None and ref not in inst_names:
+                problems.append(
+                    f"check {chk.get('kind')!r} references unknown instance {ref!r}")
+    return problems
+
+
+@handler("validate_manifest")
+def _h_validate_manifest(p):
+    """Validate a manifest WITHOUT building it (the cheap front door, RFC §11.7):
+    structural + cross-reference checks plus the schema-version stamp. Returns
+    {ok, problems, schema, manifest_hash} — `ok` true iff problems is empty. Use
+    before merge_assembly to reject a malformed contract before any geometry (or
+    token) is spent on it."""
+    import json as _json
+    with open(p["manifest"]) as f:
+        man = _json.load(f)
+    problems = _validate_manifest(man)
+    return {"ok": not problems, "problems": problems,
+            "schema": man.get("schema"), "manifest_hash": _manifest_content_hash(man)}
+
+
 @handler("assembly_lock")
 def _h_assembly_lock(p):
     """Write a lockfile recording each component's content hash, interface hash,
     and mate dependencies — the provenance baseline for change detection. Call
-    after a clean merge. lockfile defaults to <manifest>.lock.json. Returns
-    {lockfile, components}."""
+    after a clean merge. Validates the manifest first (§11.7) and records the
+    schema + a manifest content hash so a later check can flag a changed contract.
+    lockfile defaults to <manifest>.lock.json. Returns {lockfile, components}."""
     import os as _os
     import json as _json
     manifest_path = p["manifest"]
     with open(manifest_path) as f:
         man = _json.load(f)
+    problems = _validate_manifest(man)
+    if problems:
+        raise ValueError(f"invalid manifest: {problems}")
     base_dir = _os.path.dirname(_os.path.abspath(manifest_path))
     lockfile = p.get("lockfile") or (
         _os.path.splitext(manifest_path)[0] + ".lock.json")
     state = _lock_state(man, base_dir)
-    lock = {"manifest": _os.path.basename(manifest_path), "components": state}
+    lock = {"manifest": _os.path.basename(manifest_path),
+            "schema": man.get("schema", _MANIFEST_SCHEMA),
+            "manifest_hash": _manifest_content_hash(man), "components": state}
     with open(lockfile, "w") as f:
         _json.dump(lock, f, indent=2, sort_keys=True)
-    return {"lockfile": lockfile, "components": state}
+    return {"lockfile": lockfile, "components": state,
+            "schema": lock["schema"], "manifest_hash": lock["manifest_hash"]}
 
 
 @handler("assembly_lock_check")
@@ -4727,6 +4839,8 @@ def _h_assembly_lock_check(p):
       stale             — mates to an interface_changed component and was NOT
                           itself rebuilt -> a neighbor that needs re-dispatch
       new / removed     — components added to / dropped from the manifest
+      manifest_changed  — the manifest CONTENT changed since lock (§11.7): the
+                          contract itself drifted, detectable as such
     ok = nothing stale and no new/removed: safe to re-merge without re-dispatch.
     An interface change with no un-rebuilt dependents is still ok (links reload)."""
     import os as _os
@@ -4738,7 +4852,11 @@ def _h_assembly_lock_check(p):
     lockfile = p.get("lockfile") or (
         _os.path.splitext(manifest_path)[0] + ".lock.json")
     with open(lockfile) as f:
-        locked = _json.load(f).get("components", {})
+        lock_full = _json.load(f)
+    locked = lock_full.get("components", {})
+    locked_hash = lock_full.get("manifest_hash")
+    manifest_changed = (locked_hash is not None
+                        and locked_hash != _manifest_content_hash(man))
     current = _lock_state(man, base_dir)
 
     modified, interface_changed = [], []
@@ -4764,7 +4882,8 @@ def _h_assembly_lock_check(p):
     return {"modified": sorted(modified),
             "interface_changed": sorted(interface_changed),
             "stale": sorted(stale), "new": sorted(new),
-            "removed": sorted(removed), "ok": ok}
+            "removed": sorted(removed), "manifest_changed": manifest_changed,
+            "ok": ok}
 
 
 @handler("add_part")
@@ -5386,6 +5505,9 @@ def _h_merge_assembly(p):
     manifest_path = p["manifest"]
     with open(manifest_path) as f:
         man = _json.load(f)
+    problems = _validate_manifest(man)  # §11.7: fail a malformed contract at the door
+    if problems:
+        raise ValueError(f"invalid manifest {manifest_path!r}: {problems}")
     base_dir = _os.path.dirname(_os.path.abspath(manifest_path))
     comps = man.get("components", {})
 

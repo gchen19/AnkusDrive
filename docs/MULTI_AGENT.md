@@ -160,10 +160,12 @@ Key properties: it is **declarative** (no geometry, just contracts), **tool-agno
 (any host reads/writes it), and **the only coupling** between component owners. An
 owner reads only its own slice plus `shared_parameters` and `mates` that touch it.
 
-**Gap (Phase 3):** the schema is implemented by code, not by a spec — there is no
-`driftpin.manifest/1` version string or validation, and Phase 0 artifacts still
-carry `driftpin.manifest/0-phase0`. Formalizing the schema (and stamping a manifest
-version the lockfile can reference) is part of §11.
+**Formalized (§11.7, shipped 2026-06-12):** the manifest now carries a
+`"schema": "driftpin.manifest/1"` stamp, is validated on load (`merge_assembly` /
+`assembly_lock` raise on a malformed contract; `validate_manifest` checks it
+without building), and its content hash is recorded in the lockfile so a stale
+contract is detectable. An absent schema is still accepted as unversioned for
+back-compat.
 
 ---
 
@@ -692,11 +694,37 @@ measured correctly; an over-budget mass and an off-window CG each caught; mass
 without density loud; the physics tier surfaced as skipped; absent `requirements`
 = back-compat), in `run_all.sh`, no key.
 
-### 11.7 Manifest formalization
+### 11.7 Manifest formalization *(shipped)*
 
 Stamp `"schema": "driftpin.manifest/1"`, validate on load, and version the manifest
 content (a hash or counter in the lockfile) so "built against a stale contract" is
 detectable as such, not only inferable from interface hashes.
+
+**Shipped 2026-06-12** (`driftpin/worker.py`). Three pieces:
+
+- **A version stamp** — `"schema": "driftpin.manifest/1"`. A present schema must be
+  the known version; an absent one is accepted as unversioned (back-compat).
+- **Load-time validation** — `_validate_manifest` catches the cross-reference
+  errors a JSON shape can't: a component with not-exactly-one of
+  `file`/`manifest`/`library`, a `library` with no `tool`, an instance pointing at
+  a missing component, a mate/check referencing an unknown instance. `merge_assembly`
+  and `assembly_lock` run it and **raise before any geometry** — a malformed
+  contract fails at the door, not halfway through a billed fan-out. The new
+  **`validate_manifest` tool** is the cheap front door: `{ok, problems, schema,
+  manifest_hash}` without building.
+- **A contract fingerprint** — `assembly_lock` records a `manifest_hash` (and the
+  schema) in the lockfile, and `assembly_lock_check` returns `manifest_changed`.
+  This is the actual win over §9's per-component hashes: a contract edit that
+  changes *no component file* — moving an instance, retightening a `requirements`
+  budget, adding a `check` — leaves every component `file_hash` identical, so §9
+  alone reads it as clean; `manifest_changed` catches it. The hash *excludes* the
+  `schema` field, so stamping a previously-unversioned manifest is not itself drift.
+
+Two-sided gate-validated free in `tests/test_manifest_schema.py`
+(`validate_manifest` flags every cross-reference error and a bad schema version;
+`merge_assembly` rejects an invalid manifest; a contract-only edit reads as
+`manifest_changed` with `modified` empty; stamping the schema is not drift), in
+`run_all.sh`, no key.
 
 ### 11.8 Orchestration: ship it, pipeline it
 
@@ -739,7 +767,9 @@ rather than width when the contract grows.
   2026-06-12** (`library` components generated from a spec at merge — no owner,
   lock keyed by spec hash); requirements gates (11.6) **✅ tier-1 shipped
   2026-06-12** (mass + CG over the merged product; physics/FEM tier deferred,
-  reported as skipped); schema formalization (11.7); shipped, pipelined
+  reported as skipped); schema formalization (11.7) **✅ shipped 2026-06-12**
+  (`driftpin.manifest/1` stamp + load-time validation + `validate_manifest` tool +
+  lockfile `manifest_hash` for contract-drift detection); shipped, pipelined
   orchestration (11.8).
 - **Phase 4 — deferred.** Shared co-editing, *reframed* as **claimed-region
   editing**: an agent claims a sub-tree/feature region of one document, edits only

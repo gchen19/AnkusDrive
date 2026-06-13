@@ -209,6 +209,10 @@ echo "== Requirements gates (RFC 11.6, mass / CG over the merged product, no key
 $VENV_PY tests/test_requirements_gates.py
 
 echo
+echo "== Manifest schema + validation (RFC 11.7, contract-drift detection, no key) =="
+$VENV_PY tests/test_manifest_schema.py
+
+echo
 echo "== Reliability Layer D — harness validator (free, scripted stub) =="
 # The real Layer D benchmark needs an API key; this runs its grader negative
 # control + scripted-stub plumbing check, which require no API, so the harness
