@@ -55,7 +55,12 @@ PRICING = {
     "claude-sonnet-4-5": (3.0, 3.75, 0.30, 15.0),
     "claude-opus-4-8": (15.0, 18.75, 1.50, 75.0),
 }
-MAX_TURNS = 12
+# Per-agent turn budget. The default has a known ceiling: an nslot8 plate is
+# ~19 sequential tool calls (box + 8 cylinders + 8 cuts + save), so at 12 turns
+# only agents that BATCH tool calls per turn can finish — every unsaved k=8
+# plate in the 2026-06-12 round died at exactly turns=12. Raise via M2_MAX_TURNS
+# for big-component toys; leave the default for comparability with prior runs.
+MAX_TURNS = int(os.environ.get("M2_MAX_TURNS", "12"))
 CACHE_DIR = REPO / "tests" / "multiagent_cache"
 
 SYSTEM = (
@@ -2976,7 +2981,7 @@ def run_single(client, model, toy, tmp):
     built = all(a["ok_built"] for a in agents.values()) and all(p.exists() for p in files.values())
     gate = toy.gate(tmp, files) if built else {"ok": False, "reason": "baseline did not save"}
     return {"condition": "single", "built": built, "passed": gate["ok"],
-            "reason": gate["reason"], **_agg(*agents.values())}
+            "reason": gate["reason"], "agents": agents, **_agg(*agents.values())}
 
 
 def run_negative(client, model, toy, neg, tmp):
