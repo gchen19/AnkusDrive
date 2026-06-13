@@ -373,17 +373,18 @@ shipped substrate with scripted builders (Layer M1, 30 toys, every gate validate
 against negative controls) and live agents (Layer M2, partition vs a single-agent
 baseline on every toy). Five findings change the design:
 
-1. **Partition's measured wins are on *coupled-constraint* toys, not raw breadth
-   (so far).** Easy two-part toys tie (twopin: 57% vs 60%); the corrected nslot
-   k-sweep (2026-06-12, after an underspecified-baseline fix — see §10.5) shows
-   partition flat at 90–95% while a *fairly-prompted* single holds 80%/75% at
-   k=4/6 — a trend in the predicted direction, not yet significant (p≈0.08). The
+1. **Partition's measured wins are on *coupled-constraint* toys; breadth alone
+   does not separate the conditions (k ≤ 8).** Easy two-part toys tie (twopin:
+   57% vs 60%), and the completed nslot k-sweep (2026-06-12, after *two*
+   harness-validity fixes — §10.5) shows a fairly-run single tracking partition
+   at every width: 18v16 (k=4), 19v15 (k=6), 16v14 (k=8) out of 20 — at most a
+   small flat partition edge (pooled p≈0.06), with **no decay in k**. The
    decisive divergences are the chains: tchain6 partition 20/20 vs single 4/20
-   (replicated across two rounds). **Partition by context load, not by part count**
-   (§11, granularity rule) stands, but the load that demonstrably kills agents is
-   a *shared derivation*, not component count alone. Pass-rate also undersells
-   partition: its builders run concurrently — wall-clock is the unmeasured second
-   win.
+   (replicated across two rounds). **Partition by context load** (§11,
+   granularity rule) stands, but the load that demonstrably kills agents is a
+   *shared derivation*, not how many distinct values sit in the contract.
+   Pass-rate also undersells partition: its builders run concurrently —
+   wall-clock is the unmeasured second win.
 
 2. **The dominant failure mode is agents re-deriving shared math — and *no* agent
    condition escapes it.** twopin fails when two agents independently derive
@@ -414,14 +415,19 @@ baseline on every toy). Five findings change the design:
    passes. Typed interfaces (§11.2) should gate orientation (z/x axis alignment)
    too.
 
-5. **The baseline is part of the experiment.** The first nslot single round
-   measured 0/20 at k=4 *and* k=6 — an artifact: the single task named the peg
-   diameters but omitted the plate spec entirely (dimensions, hole positions,
-   hole diameters), so its plates put holes where the gate doesn't look. With the
-   contract equalized, single recovered to 16/20 / 15/20. The fairness rule "run
-   every toy both ways" has a sharper form the eval now encodes: **both conditions
-   must receive the same total contract.** (The older nslot8 single numbers carry
-   this taint; re-baseline before citing.)
+5. **The baseline is part of the experiment.** *Two* artifacts manufactured the
+   entire apparent nslot divergence before harness review found them. (i) The
+   single task named the peg diameters but omitted the plate spec entirely
+   (dimensions, hole positions, hole diameters), so single's plates put holes
+   where the gate doesn't look — 0/20 by construction; with the contract
+   equalized, single recovered to 75–80%. (ii) The 12-turn agent budget censored
+   k=8 for *both* conditions: an 8-hole plate is ~19 sequential tool calls, and
+   every unsaved plate agent died at exactly the cap; lifting it
+   (`M2_MAX_TURNS=30`) took nslot8 from 2v0 pass (10v1 built) to 16v14 pass
+   (20v20 built). The fairness rule the eval now encodes: **both conditions must
+   receive the same total contract, and the harness budget must not bind before
+   the model does.** (All pre-fix nslot8 numbers are superseded by the budget-30
+   run.)
 
 ---
 
@@ -564,11 +570,13 @@ detectable as such, not only inferable from interface hashes.
 Promote `orchestration/coordinator.py` to a shipped skill/workflow template (the
 Phase 2 line item that hasn't landed), upgraded with §8's pipelined fan-in, the
 round 0 contract review, the resolve step, and the per-builder isolation rules
-(§7). The partition rule it should encode, from §10.1: **partition by context
-load** — keep a subsystem with one agent until its contract approaches what one
-agent reliably tracks (empirically somewhere between 2 and 8 distinct interface
-pairs for Haiku-class builders; re-baseline per model), and lean on hierarchy
-(§11.4) rather than width when the contract grows.
+(§7). The partition rule it should encode, from §10.1–10.2: **partition where
+constraints couple, not merely where parts multiply** — the corrected k-sweep
+found no breadth cliff through eight distinct interface pairs for Haiku-class
+builders (re-baseline per model), but a single *shared derivation* reliably
+breaks whoever holds it (tchain, twopin). So split along coupled constraints,
+resolve them coordinator-side first (§11.1), and lean on hierarchy (§11.4)
+rather than width when the contract grows.
 
 ---
 
@@ -604,8 +612,9 @@ Settled since the original RFC:
 - ~~Mate solver depth~~ — **simple frame alignment shipped** (`Pc = Pp·Fp·Fc⁻¹`);
   the kinematic toys showed analytic gates cover mechanism checking without a joint
   solver. JCS joints remain a future option only if motion *authoring* is needed.
-- ~~Partition granularity~~ — **answered empirically** (§10.1): partition by context
-  load; depth via hierarchy, not width.
+- ~~Partition granularity~~ — **answered empirically** (§10.1–10.2): partition
+  along coupled constraints (no breadth cliff found through 8 interface pairs);
+  depth via hierarchy, not width.
 - ~~Cross-file parametric coupling~~ — **resolved by design** (§11.1): no live
   expression links; the resolve step propagates parameters through the manifest.
 

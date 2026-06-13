@@ -469,14 +469,14 @@ simulation tooling (promoting these gate helpers to typed tools) follows
 
 ---
 
-## k-sweep, tchainu & tchain6 rerun — 2026-06-12 (Haiku, n=20/cond, ~$12.8)
+## k-sweep, tchainu & tchain6 rerun — 2026-06-12 (Haiku, n=20/cond, ~$20.8 total)
 
-Ran the three billed experiments the probes unlocked — and found **two
-harness-validity bugs by code review mid-run**, one of which invalidated a full
-round of nslot *single* numbers and forced a prompt fix + rerun (~$3.15 extra,
-still inside the planned $12–15 envelope).
+Ran the three billed experiments the probes unlocked — and found **three
+harness-validity bugs by code review mid-run**, two of which had manufactured
+the entire apparent nslot divergence and forced fix + rerun rounds (the third
+lost a killed run's trials and motivated per-trial checkpointing).
 
-### Two harness findings (the actual headline)
+### Three harness findings (the actual headline)
 
 1. **The nslot single task was underspecified — single's 0/20 was an artifact.**
    `_nslot_single_task` gave the single agent the peg diameters but *not* the plate
@@ -502,22 +502,46 @@ still inside the planned $12–15 envelope).
    observed drift (tchainu single failed in both directions, 96–108 mm). RFC §10's
    "single fumbles the running total" mechanism is adjusted accordingly.
 
+3. **`MAX_TURNS = 12` censored k=8 — for *both* conditions.** The fixed-prompt
+   nslot8 rerun still collapsed (partition 2/20 pass, 10/20 built; single 0/20,
+   1/20 built) — but the per-agent data showed every unsaved plate agent dying at
+   *exactly* turns=12. An 8-hole plate is ~19 sequential tool calls (box + 8
+   cylinders + 8 cuts + save); at a 12-turn cap only agents that happen to batch
+   tool calls per turn can finish, so k=8 was measuring batching luck, not context
+   load. The budget is now an env knob (`M2_MAX_TURNS`, default 12 unchanged for
+   comparability); at 30 the collapse vanishes entirely (table below) and no agent
+   runs within 5 turns of the cap (one exception). **May's nslot8 numbers carried
+   both this artifact and #1 — superseded by the budget-30 run.**
+
+Tooling that fell out of the kill-and-relaunch churn: **per-trial checkpointing**
+(`checkpoint_m2.jsonl`, fsynced line per finished trial; crashed billed runs
+resume free; keys embed a prompt-contract hash so edited contracts can never
+resume stale results; auto-deleted when a run completes; `M2_FRESH=1` discards) —
+verified free by `scratch/test_ckpt_m2.py`. Plus `M2_COND` (rerun one condition)
+and per-component agent stats in `run_single`.
+
 ### Results (gates unchanged; selftest green incl. nslot6)
 
 | toy | partition | single (fair prompt) | reading |
 |---|---|---|---|
 | nslot4 | 18/20 | 16/20 | tie at k=4 (p≈0.66) |
-| nslot6 | 19/20 | 15/20 | trend the right way, not significant (p≈0.08) |
+| nslot6 | 19/20 | 15/20 | trend, not significant (p≈0.08) |
+| nslot8 @turns=12 | 2/20 (built 10/20) | 0/20 (built 1/20) | budget-censored — discard |
+| nslot8 @turns=30 | 16/20 | 14/20 | tie at k=8 |
 | tchain6 rerun | **20/20** | 4/20 | original 20/0 **replicates** — not a prompt artifact |
 | tchainu | **2/20** | **0/20** | **both lose** — see below |
 
-- **nslot k-sweep: no cliff at k=4–6.** With a fair baseline single holds 75–80%
-  while partition sits at 90–95%. Direction matches the hypothesis (single decays
-  with k, partition flat) but n=20 cannot call 95% vs 75% (two-proportion p≈0.077).
-  The dramatic round-1 separation was the prompt artifact. Worth noting: the few
-  partition nslot failures are all the **plate** agent — the one partition
-  component whose contract still grows with k (embedded-peg volumes again).
-  Natural next point: a fixed-prompt **nslot8 rerun** (~$3).
+- **k-sweep verdict: no breadth divergence through k=8.** With a fair prompt AND
+  a fair turn budget, single tracks partition at every width — diffs of 2/4/2
+  points (pooled 53/60 vs 45/60, p≈0.06: at most a small *flat* partition edge,
+  with no k-dependence). The hypothesis "single's pass-rate decays with k while
+  partition's holds" is **refuted for Haiku at k≤8**: picking k distinct values
+  out of a full-contract prompt doesn't crack by eight pairs. The dramatic
+  separations earlier rounds showed were the two artifacts stacked. At budget 30
+  the residual failures on *both* sides are ordinary wrong-slot geometry slips,
+  and partition's plate agent — the one component whose contract grows with k —
+  is where its few failures concentrate. Breadth alone is not where partition
+  wins; coupled constraints are.
 - **tchain6 replicates.** Partition 20/20 vs single 4/20 — the original 20/0 was
   not a wording fluke. Single's drifts cluster at unreconciled per-segment guesses
   (102–113 mm), as the cold-call mechanism predicts.
@@ -533,10 +557,15 @@ still inside the planned $12–15 envelope).
 
 ### Follow-ups
 
-1. **nslot8 fixed-prompt rerun** — the only remaining tainted datapoint (~$3).
-2. **A true single-conversation condition** — one agent, one growing thread,
+1. **A true single-conversation condition** — one agent, one growing thread,
    k `save_component` calls — to separate *conversation-held* context load from
    *prompt-held* contract size. Today's "single" only measures the latter; it is
    also the condition that could genuinely hold a running total, so it's the right
    baseline for the chain toys.
-3. The k-sweep needs either larger n or larger k to call the nslot6 trend.
+2. The small flat partition edge (~13 points pooled across the sweep, p≈0.06)
+   needs larger n to call — or larger k / a busier contract to find where
+   prompt-held breadth finally cracks. (The original nslot8-rerun follow-up is
+   done: see the budget-30 row.)
+
+Cost accounting for the day: round 1 $9.65 + nslot single fix-rerun $3.15 +
+nslot8 fixed-prompt $3.98 + nslot8 budget-30 $4.06 ≈ **$20.8**.
