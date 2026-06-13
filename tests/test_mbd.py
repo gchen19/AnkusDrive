@@ -76,6 +76,51 @@ def test_collision_through_motion_two_sided():
     assert cols[0]["t_s"] > 0.0, cols[0]
 
 
+def _two_shaft_gear_spec(gears, drive=10.0, driver_force=50.0):
+    """Fixed base + two revolute shafts on Z, coupled by `gears`. The Tier-2 motion
+    oracle: spin the input, measure the output's steady velocity ratio."""
+    def shaft(name, x):
+        return {"name": name, "half_extents_m": [0.005, 0.005, 0.03], "mass_kg": 0.05,
+                "parent": -1, "joint_type": "revolute", "joint_axis": [0, 0, 1],
+                "joint_pos_m": [x, 0, 0], "com_m": [0, 0, 0]}
+    return {"base": {"half_extents_m": [0.01, 0.01, 0.01], "mass_kg": 0.0, "pos_m": [0, 0, 0]},
+            "links": [shaft("in", 0.0), shaft("out", 0.048)],
+            "drivers": [{"link": 0, "target_velocity": drive, "max_force": driver_force}],
+            "gears": gears}
+
+
+def test_gear_coupling_reproduces_ratio():
+    """A single gear coupling drives the output to omega_out/omega_in = -Na/Nb — the
+    closed-form gear ratio the Tier-1 mechanism oracle predicts (12/36 -> -1/3)."""
+    from driftpin.analysis import mbd
+    na, nb = 12, 36
+    r = mbd.run_mbd(_two_shaft_gear_spec(
+        [{"link_a": 0, "link_b": 1, "ratio": nb / na, "axis": [0, 0, 1], "max_force": 2e3}]),
+        duration_s=3.0)
+    wi = r["mean_joint_velocity"]["in"]
+    wo = r["mean_joint_velocity"]["out"]
+    assert abs(wi - 10.0) < 0.5, ("input must hold command", wi)
+    assert abs((wo / wi) - (-na / nb)) < 0.01, (wo / wi, -na / nb)
+
+
+def test_overconstrained_gears_lock_the_train():
+    """Several conflicting gear ratios between the SAME two shafts have no consistent
+    solution — the driven shaft cannot hold its commanded speed (the dynamic image of
+    the closed-form over-constraint). A single pair holds command; the conflicting set
+    departs from it wildly."""
+    from driftpin.analysis import mbd
+    good = mbd.run_mbd(_two_shaft_gear_spec(
+        [{"link_a": 0, "link_b": 1, "ratio": 2.0, "axis": [0, 0, 1], "max_force": 2e3}]),
+        duration_s=3.0)
+    bad = mbd.run_mbd(_two_shaft_gear_spec(
+        [{"link_a": 0, "link_b": 1, "ratio": r, "axis": [0, 0, 1], "max_force": 2e3}
+         for r in (3.0, 2.0, 1.4, 1.0, 0.7143, 0.5)]), duration_s=3.0)
+    good_track = abs(good["mean_joint_velocity"]["in"]) / 10.0
+    bad_track = abs(bad["mean_joint_velocity"]["in"]) / 10.0
+    assert abs(good_track - 1.0) < 0.1, ("single pair holds command", good_track)
+    assert abs(bad_track - 1.0) > 0.3, ("over-constrained cannot hold command", bad_track)
+
+
 def test_runs_through_jobs_facility():
     # the exact async composition mechanism_simulate_submit uses: run_mbd on the
     # jobs.py background thread, polled via status/result, with content-key caching.

@@ -4785,6 +4785,11 @@ def _validate_manifest(man):
             if ref is not None and ref not in inst_names:
                 problems.append(
                     f"check {chk.get('kind')!r} references unknown instance {ref!r}")
+
+    mech = man.get("mechanism")
+    if mech is not None:
+        from driftpin import mechanism as _mech
+        problems += _mech.validate(mech, inst_names, man.get("checks", []))
     return problems
 
 
@@ -5491,6 +5496,27 @@ def _requirements_gate(assembly_handle, req):
     return {"report": report, "violations": violations, "skipped": skipped}
 
 
+def _mobility_gate(man):
+    """Motion gate (RFC §11.9): does the declared mechanism actually MOVE?
+
+    The interference/bore_fit/gear_mesh/mass gates are POSE oracles — they confirm
+    the parts fit in one frozen snapshot. A constant-mesh gearbox with every gear
+    rigidly keyed to its shaft passes them all and is still a dead lock: six pairs
+    demanding six ratios of the same two shafts is over-constrained (mobility DOF
+    < 1). This gate runs the closed-form Grübler + ratio-consistency analysis in
+    driftpin.mechanism over the manifest's `mechanism` block.
+
+    Meshes are taken from the `mechanism.meshes` list, or DERIVED from the already-
+    validated gear_mesh `checks` (same edges, named by instance) so the contract
+    isn't duplicated. Returns the full analysis; `analysis['violations']` (empty on a
+    pass) is what fails the merge."""
+    from driftpin import mechanism as _mech
+    mech = dict(man["mechanism"])
+    if not mech.get("meshes"):
+        mech["meshes"] = _mech.meshes_from_checks(man.get("checks", []))
+    return _mech.analyze(mech)
+
+
 @handler("merge_assembly")
 def _h_merge_assembly(p):
     """Construct-up an assembly from a manifest (the coordinator's one call).
@@ -5651,15 +5677,25 @@ def _h_merge_assembly(p):
     if man.get("requirements"):
         req_result = _requirements_gate(asm_h, man["requirements"])
         gates["requirements"] = req_result["violations"]
+    # §11.9: motion gate — does the mechanism actually move at the intended ratio?
+    # Closed-form (Grübler + ratio consistency), no geometry rebuild; the measured
+    # analysis rides in report["mobility"], only its violations fail the merge.
+    mobility = None
+    if man.get("mechanism"):
+        mobility = _mobility_gate(man)
+        gates["mobility"] = mobility["violations"]
     HANDLERS["save_document"]({"path": root_path})
     ok = (not gates["interference"]) and (not gates["envelope"]) \
         and (not gates.get("interface_align")) and (not gates.get("typed")) \
-        and (not child_fail) and (not gates.get("requirements"))
+        and (not child_fail) and (not gates.get("requirements")) \
+        and (not gates.get("mobility"))
     report = {"assembly": asm_h, "doc": name, "root": root_path,
               "placed": placed, "gates": gates, "ok": ok}
     if req_result is not None:
         report["requirements"] = {"report": req_result["report"],
                                   "skipped": req_result["skipped"]}
+    if mobility is not None:
+        report["mobility"] = mobility
     if children:
         report["children"] = children
     if library:

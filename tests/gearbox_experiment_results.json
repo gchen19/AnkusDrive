@@ -1,0 +1,49 @@
+{
+  "experiment": "gearbox multi-agent (scratch/gearbox_experiment.py)",
+  "date": "2026-06-13",
+  "model": "claude-haiku-4-5-20251001",
+  "note": "Agents build the gears into a real constant-mesh parallel-shaft gearbox (housing plates + 2 shafts + 4 library bearings + bored gears), judged by the full merge gates (gear_mesh + bore_fit + mass). DERIVE = each gear agent computes its tooth count; RESOLVE = handed its literal reconciled count (the RFC 11.1 resolve step). Two regimes: shared-CONSTANT (clean-integer teeth, easy) and GRID shared-RECONCILIATION (half-integer ideal split, must sum to 48). Full write-up: tests/MULTI_AGENT_EVAL.md.",
+  "runs": [
+    {
+      "regime": "shared_constant", "grid": false, "n_speeds": 3, "gears": 6,
+      "trials": 3, "total_cost_usd": 0.89, "seconds": 674,
+      "conditions": {
+        "derive_partition":  {"pass": 3, "built": 3},
+        "derive_single":     {"pass": 3, "built": 3},
+        "resolve_partition": {"pass": 3, "built": 3},
+        "resolve_single":    {"pass": 3, "built": 3}
+      }
+    },
+    {
+      "regime": "shared_constant", "grid": false, "n_speeds": 6, "gears": 12,
+      "trials": 6, "total_cost_usd": 3.56, "seconds": 2527,
+      "conditions": {
+        "derive_partition":  {"pass": 6, "built": 6},
+        "derive_single":     {"pass": 6, "built": 6},
+        "resolve_partition": {"pass": 6, "built": 6},
+        "resolve_single":    {"pass": 6, "built": 6}
+      }
+    },
+    {
+      "regime": "grid_reconciliation", "grid": true, "n_speeds": 3, "gears": 6,
+      "trials": 6, "total_cost_usd": 1.72, "seconds": 1158,
+      "conditions": {
+        "derive_partition":  {"pass": 0, "built": 6},
+        "derive_single":     {"pass": 1, "built": 6},
+        "resolve_partition": {"pass": 6, "built": 6},
+        "resolve_single":    {"pass": 6, "built": 6}
+      }
+    },
+    {
+      "regime": "grid_reconciliation", "grid": true, "n_speeds": 6, "gears": 12,
+      "trials": 6, "total_cost_usd": 3.44, "seconds": 2387,
+      "conditions": {
+        "derive_partition":  {"pass": 0, "built": 6},
+        "derive_single":     {"pass": 0, "built": 6},
+        "resolve_partition": {"pass": 6, "built": 6},
+        "resolve_single":    {"pass": 6, "built": 6}
+      }
+    }
+  ],
+  "finding": "A shared CONSTANT each agent applies locally is easy (all conditions 48/48 across both sizes). A shared RECONCILIATION across agents is hard: DERIVE fails for everyone (partition 0/6 by independent rounding; single's per-gear cold calls also fail to reconcile, 0/6 at 12 gears), and the RESOLVE step fixes all of it (6/6) by handing each agent its literal reconciled tooth count -- tchainu -> tchainu_r on a real mechanism."
+}

@@ -787,3 +787,72 @@ shared **reconciliation** — a value that must be made consistent *across* agen
 does, and is precisely what the resolve step (§11.1) exists to remove. A render of
 the assembled gearbox is in `results/gearbox_real/gearbox{3,6}_render.png`
 (`scratch/render_gearbox.py`, matplotlib from the exported STL).
+
+## The motion oracle — the gearbox passes every static gate and cannot move (2026-06-13, RFC §11.9, free)
+
+The gearbox above is geometrically valid (gears mesh, bores fit, nothing
+interferes, mass is in budget) and **kinematically dead**. Every merge gate we had
+was a *pose* oracle — it confirms parts fit in one frozen snapshot. None asks
+whether the assembly has the freedom to move. With two shafts and every gear rigidly
+keyed, the six pairs demand six different ratios of the same shaft pair: the only
+consistent motion is none.
+
+Quantified by the Grübler/Kutzbach criterion (`driftpin/analysis/kinematics.py`,
+already shipped) the as-built train has mobility **DOF −1 (3-speed) / −4 (6-speed)** —
+redundantly over-constrained. A working mechanism needs DOF +1.
+
+**Tier-1 — closed-form motion gate (`driftpin/mechanism.py`, RFC §11.9).** A
+`mechanism` manifest block + a `mobility` gate in `merge_assembly`. It runs Grübler
+plus a **ratio-consistency** pass that propagates a rate through the mesh graph and
+*names the conflict* (`input_shaft→output_shaft implies −0.500 but it is already
+fixed at −0.333` — the over-constraint), and a **selective-engagement** analysis:
+given a dog-clutch schedule, each speed is checked for a determinate single-DOF power
+path whose realised ratio hits the design ratio. The *same gearbox geometry* declared
+two ways (`scratch/gearbox_motion.py`) separates cleanly — the static gates pass both;
+the motion gate is the only thing that tells them apart:
+
+| declaration | static gates | motion gate | mobility |
+|---|---|---|---|
+| **rigid** (every gear keyed) | PASS | **FAIL — locked** | DOF −1 / −4, conflicting ratios |
+| **selective** (freewheel + one dog-clutch/speed) | PASS | **PASS — functional** | every speed DOF +1, realised ratio = design |
+
+**Tier-2 — dynamic confirmation (`driftpin/analysis/mbd.py` gear couplings, PyBullet).**
+The closed-form prediction, driven in a real solver: spin the input, measure
+ω_out/ω_in. All six speeds reproduce the closed form **exactly** (`−1/3, −1/2, −5/7,
+−1, −7/5, −2`, err 0.0000, input tracking command to 100%). The over-constrained
+build has **no consistent solution** — the driven shaft cannot hold its command (off
+by 900%): the moving image of the lock. `scratch/gearbox_sim.py` →
+`results/gearbox_real/report_sim.json`.
+
+The motion property is the first **emergent, system-level** invariant in the eval: no
+single gear builder can verify it from its own slice — it depends on the whole network
+of shafts, meshes and the engagement scheme. Static gates are necessary but not
+sufficient.
+
+## Experiment-readiness gate — which emergent toys are worth billing (2026-06-13, free)
+
+Emergent properties open a *set* of multi-agent toys, but not all are worth a billed
+run. `driftpin/experiment.py:readiness()` decides GO/NO-GO for free, on the oracle,
+against known-good/known-bad controls. Five criteria: **discriminates**,
+**deterministic**, **margin** (no knife-edge), **emergent** (every local slice passes
+yet the system fails), **agent-determined** (agent choices actually move the verdict).
+The last two are what protect an emergent-property experiment specifically.
+
+Run on two gearbox-derived toys (`scratch/readiness_report.py` →
+`results/gearbox_real/report_readiness.json`):
+
+| toy | emergent | agent-determined | verdict |
+|---|---|---|---|
+| gearbox mobility, **fixed** rigid topology (agents build gears) | yes | **no** — the lock is the design's, invariant to every plausible build | **NO-GO** |
+| compound gear-**train** overall ratio (agents build one stage each) | yes | yes — each stage meshes locally; the product spans all stages | **GO** |
+
+This is the payoff of the project's cost discipline made mechanical: it would have
+caught that the gearbox-mobility framing measures nothing about the agents (the lock
+is fixed by the topology, not produced by the builders) *before* spending a round —
+and points instead at the compound-train, where the agents genuinely determine an
+emergent overall ratio none of them can see alone. The compound-train toy is **GO and
+not yet billed** — the next experiment, pending a go-ahead.
+
+All Tier-1/Tier-2/readiness logic is free-tested: `tests/test_mechanism.py` (11),
+`tests/test_experiment_readiness.py` (7), `tests/test_mbd.py` gear-coupling cases (2),
+all in `run_all.sh`.
