@@ -439,11 +439,13 @@ press fits, FEM-gated brackets — but that knowledge lives in *test code*. Phas
 moves it into the contract and the merge gates, so a team of agents can build a
 gearbox, not just an enclosure. In priority order:
 
-### 11.1 The resolve step — shared parameters become resolved slices
+### 11.1 The resolve step — shared parameters become resolved slices *(shipped)*
 
-Highest-leverage change, directly at the measured #1 failure mode (§10.2). The
-manifest gains a `constraints` section for *global* relations — totals, chains,
-center distances, ratios, grids:
+Highest-leverage change, directly at the measured #1 failure mode (§10.2).
+**Shipped 2026-06-12** (`driftpin/manifest.py:resolve_constraints`, wired into
+`orchestration/coordinator.py`; v0 supports sum-to-target on an optional grid).
+The manifest gains a `constraints` section for *global* relations — totals,
+chains, center distances, ratios, grids:
 
 ```jsonc
 "constraints": {
@@ -461,6 +463,23 @@ must never share a *derivation*, only a *result*. This also answers the old
 "cross-file parametric coupling" open question: no live FreeCAD expression links
 (fragile headless); the manifest stays the only coupling, and the resolve step is
 where parameters propagate.
+
+**Validated against the eval that motivated it (`tchainu`, the unequal grid
+chain).** The toy was added because *no* agent condition could reconcile the
+chain (partition 2/20, single 0/20, §10.2). With the resolve step handing each
+builder its literal length, `tchainu_r` measured **partition 20/20** (was 2/20)
+— a clean, decisive fix. The single condition rose only to **8/20** (was 0/20),
+and the *reason* is the sharpest lesson: single is handed the full list of six
+resolved lengths and must self-select its own slice per cold call, and selecting
+one value out of six is itself error-prone (it still drifts long, 102–107 mm).
+So **resolving the values is necessary but not sufficient — each builder must
+also receive *only its own* resolved slice.** Resolve + partition-slice is the
+fix; resolve dumped into one shared prompt is not. This is the same "bound the
+contract each agent sees" principle the partition design rests on, now measured
+on resolved values too. The resolver is deterministic plain code (`sum`,
+optional `grid_mm`), fails loudly on infeasible contracts before any builder is
+billed, and the eval toy's reference lengths are computed *by* the shipped
+resolver — so the test gates exactly what the contract machinery emits.
 
 ### 11.2 Typed interfaces with type-specific gates
 
@@ -594,9 +613,11 @@ rather than width when the contract grows.
   (`orchestration/coordinator.py`). *Outstanding:* the shipped-skill packaging
   (moved to §11.8).
 - **Phase 3 — advanced assemblies. ← current.** In priority order: the resolve step
-  (11.1); typed interfaces + promoted gates (11.2); `verify_contract` (11.3);
-  hierarchical manifests (11.4); standard parts (11.5); requirements gates (11.6);
-  schema formalization (11.7); shipped, pipelined orchestration (11.8).
+  (11.1) **✅ shipped 2026-06-12** (`driftpin/manifest.py`; validated `tchainu`
+  partition 2/20 → 20/20); typed interfaces + promoted gates (11.2);
+  `verify_contract` (11.3); hierarchical manifests (11.4); standard parts (11.5);
+  requirements gates (11.6); schema formalization (11.7); shipped, pipelined
+  orchestration (11.8).
 - **Phase 4 — deferred.** Shared co-editing, *reframed* as **claimed-region
   editing**: an agent claims a sub-tree/feature region of one document, edits only
   there, and merges back — never free-for-all cursors. Carries the full concurrency
