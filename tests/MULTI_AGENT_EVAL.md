@@ -569,3 +569,41 @@ and per-component agent stats in `run_single`.
 
 Cost accounting for the day: round 1 $9.65 + nslot single fix-rerun $3.15 +
 nslot8 fixed-prompt $3.98 + nslot8 budget-30 $4.06 ≈ **$20.8**.
+
+---
+
+## The resolve step closes the loop — `tchainu_r` (2026-06-12, Haiku, n=20, $1.74)
+
+`tchainu` measured the failure (partition 2/20, single 0/20: no agent reconciles
+a global total against a grid). The RFC §11.1 fix — `resolve_constraints`
+(`driftpin/manifest.py`) evaluates the constraint in plain code and hands each
+builder a literal length — shipped, and `tchainu_r` is the same contract with the
+resolve step in front of it. The toy's resolved lengths are computed *by the
+shipped resolver* at import, so the eval gates exactly what the contract
+machinery emits.
+
+| toy | partition | single | |
+|---|---|---|---|
+| tchainu (reconcile yourself) | 2/20 | 0/20 | the measured failure |
+| **tchainu_r (resolved slices)** | **20/20** | **8/20** | the fix |
+
+- **Partition 2/20 → 20/20: a clean, decisive fix.** Each builder is handed its
+  *one* literal length ("build it at exactly 18 mm") and nails it every time. This
+  is the §11.1 result the whole eval arc was building toward — the first Phase 3
+  feature, validated against the toy that motivated it.
+- **Single 0/20 → 8/20, and the shortfall is the sharper lesson.** The single
+  condition is handed the full list of six resolved lengths and must self-select
+  its own slice per cold call; it still drifts long (102–107 mm), because picking
+  one value out of six is itself error-prone. So **resolving the values is
+  necessary but not sufficient — each builder must also receive *only its own*
+  resolved slice.** Resolve + partition-slice = 20/20; resolve dumped into one
+  shared prompt = 8/20. Same "bound the contract each agent sees" principle the
+  partition design rests on, now measured on resolved values. The gate's
+  `ignores_resolved` negative (a builder that re-rounds its raw nominal instead of
+  using its resolved value, chain 101 mm) is caught, so the 20/20 is real
+  obedience, not a slack gate.
+
+The resolver itself is covered free by `tests/test_manifest_resolve.py` (9 unit
+tests: the exact tchainu reconciliation, deficit direction, no-grid residual
+spread, determinism/purity, and loud failures on infeasible/unknown/bad-ref
+contracts) — in `run_all.sh`, no key.

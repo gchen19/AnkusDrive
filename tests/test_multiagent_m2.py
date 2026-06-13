@@ -43,6 +43,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from driftpin import Worker  # noqa: E402
+from driftpin.manifest import resolve_constraints  # noqa: E402
 
 MODELS = {
     "haiku": "claude-haiku-4-5-20251001",
@@ -915,6 +916,82 @@ def _make_tchain_unequal():
 
 
 TOY7_TCHAINU = _make_tchain_unequal()
+
+
+# =============================================================================
+# toy 7r: tchainu + the RESOLVE STEP (RFC §11.1) — the design's answer to toy 7.
+# Same contract (unequal nominals, whole-mm grid, total exactly 100), but the
+# coordinator runs driftpin.manifest.resolve_constraints on the manifest and
+# every builder receives its LITERAL resolved length — no rounding asked, no
+# global total to reconcile. tchainu measured the failure (partition 2/20,
+# single 0/20); this toy validates the fix. The lengths below are computed BY
+# the shipped resolver at module import, not hand-derived, so the eval gates
+# exactly what the contract machinery hands real builders.
+# =============================================================================
+
+def _tchainu_resolved_lengths():
+    man = {"components": {f"seg{i}": {"file": f"seg{i}.FCStd",
+                                      "parameters": {"len": v}}
+                          for i, v in enumerate(TCHAINU_NOMINALS)},
+           "constraints": {"total": {
+               "sum": [f"seg{i}.len" for i in range(TCHAINU_N)],
+               "equals": TCHAIN_TOTAL, "grid_mm": TCHAINU_GRID}}}
+    out = resolve_constraints(man)
+    return [out["components"][f"seg{i}"]["parameters"]["len"]
+            for i in range(TCHAINU_N)]
+
+
+_TCHAINU_RESOLVED = _tchainu_resolved_lengths()
+assert sum(_TCHAINU_RESOLVED) == TCHAIN_TOTAL  # the resolver's whole point
+
+
+def _tchainu_r_seg_task(i):
+    return (f"You are building ONE segment of a {TCHAINU_N}-segment chain. The "
+            f"design coordinator has already reconciled all lengths to the "
+            f"whole-millimetre stock grid; your segment's finished length is "
+            f"EXACTLY {_TCHAINU_RESOLVED[i]:.0f} mm along X — build it at exactly "
+            f"that value (no rounding or adjustment needed). Width "
+            f"{TCHAIN_SEG_D:.0f} mm, height {TCHAIN_SEG_H:.0f} mm. "
+            f"Then save_component.")
+
+
+def _tchainu_r_single_task():
+    lens = ", ".join(f"seg {i}: {v:.0f} mm"
+                     for i, v in enumerate(_TCHAINU_RESOLVED))
+    return (f"You will build all {TCHAINU_N} segments of a chain, one at a time. "
+            f"The design coordinator has already reconciled the lengths to the "
+            f"whole-mm stock grid so they total exactly {TCHAIN_TOTAL:.0f} mm: "
+            f"{lens}. Build each segment at exactly its listed length, "
+            f"{TCHAIN_SEG_D:.0f} mm wide, {TCHAIN_SEG_H:.0f} mm tall.")
+
+
+def _make_tchain_resolved():
+    rounded = _tchainu_rounded()
+    return Toy(
+        "tchainu_r", f"Tolerance chain UNEQUAL + resolve step (§11.1 fix, n={TCHAINU_N})",
+        components={f"seg{i}": _tchainu_r_seg_task(i) for i in range(TCHAINU_N)},
+        single_task=_tchainu_r_single_task(),
+        gate=_tchain_gate(TCHAINU_N),  # same length-sum oracle as toy 7
+        reference=lambda w, name, path: _ref_box(
+            w, path, name, _TCHAINU_RESOLVED[int(name[3:])],
+            TCHAIN_SEG_D, TCHAIN_SEG_H),
+        negatives=[
+            # A builder that ignores its resolved value and re-rounds the raw
+            # nominal instead — the old tchainu behaviour leaking through the
+            # new contract. seg4: 19 instead of 18 -> chain 101, drift > 0.8.
+            Neg("ignores_resolved", "interference",  # expect informational; gate is length
+                agent={"seg4": (f"Build a block EXACTLY {rounded[4]} mm long "
+                                f"along X, {TCHAIN_SEG_D:.0f} wide, "
+                                f"{TCHAIN_SEG_H:.0f} tall. Use this exact "
+                                f"length. Then save_component.")},
+                ref={"seg4": lambda w, p: _ref_box(
+                    w, p, "seg4", _tchainu_rounded()[4],
+                    TCHAIN_SEG_D, TCHAIN_SEG_H)}),
+        ],
+    )
+
+
+TOY7R_TCHAINU_R = _make_tchain_resolved()
 
 
 # =============================================================================
@@ -2936,7 +3013,7 @@ TOY29_THERMO_STRUCT = Toy(
 TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
                            TOY5_NSLOT4, TOY5_NSLOT6, TOY5_NSLOT8,
                            TOY6_TCHAIN3, TOY6_TCHAIN6,
-                           TOY7_TCHAINU, TOY8_PINSLOT,
+                           TOY7_TCHAINU, TOY7R_TCHAINU_R, TOY8_PINSLOT,
                            TOY9_POSITION, TOY10_CONCENTRIC, TOY11_SYMMETRY,
                            TOY12_ANGULARITY,
                            TOY13_GEARBOX6, TOY14_GEARBOX3, TOY15_PLANETARY,

@@ -22,7 +22,32 @@ import json
 from pathlib import Path
 
 from driftpin import Worker
+from driftpin.manifest import resolve_constraints
 from . import agentkit
+
+
+# --- the resolve step (RFC §11.1) ----------------------------------------------
+#
+# Global constraints (totals, grids) are evaluated in plain code BEFORE fan-out
+# and each builder's task receives literal values — agents must never share a
+# derivation, only a result (the tchainu eval: partition 2/20, single 0/20 when
+# agents were asked to reconcile a global sum themselves). Tasks may reference
+# resolved parameters as str.format placeholders: "a block {len:.0f} mm long".
+
+def resolve_brief(brief, log=print):
+    """If the brief carries constraints, resolve them and substitute each
+    component's resolved parameters into its task text. Raises ValueError on an
+    infeasible contract — by design this fails BEFORE any builder is billed."""
+    if not brief.get("constraints"):
+        return brief
+    brief = resolve_constraints(brief)
+    for cid, spec in brief["components"].items():
+        params = spec.get("parameters")
+        if params and spec.get("task"):
+            spec["task"] = spec["task"].format(**params)
+    log(f"  resolve: {sorted(brief['resolved'])} -> literal values in "
+        f"{len(brief['components'])} slices")
+    return brief
 
 
 # --- decompose: free-text spec -> brief (RFC Appendix A, step 1) ---------------
@@ -283,6 +308,7 @@ def orchestrate(client, model, brief, workdir, max_rounds=3, renegotiate=None,
                  (useful when failures are stochastic agent errors, not contract
                  conflicts).
     """
+    brief = resolve_brief(brief, log=log)  # constraints -> literal slice values
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     comp_files = {cid: workdir / spec["file"]
