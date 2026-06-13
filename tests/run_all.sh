@@ -189,6 +189,10 @@ echo "== Manifest resolve step (RFC 11.1, pure python) =="
 $VENV_PY tests/test_manifest_resolve.py
 
 echo
+echo "== Typed-interface merge gates (RFC 11.2, scripted, no key) =="
+$VENV_PY tests/test_typed_interfaces.py
+
+echo
 echo "== Reliability Layer D — harness validator (free, scripted stub) =="
 # The real Layer D benchmark needs an API key; this runs its grader negative
 # control + scripted-stub plumbing check, which require no API, so the harness

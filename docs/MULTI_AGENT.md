@@ -249,11 +249,14 @@ agent holding the whole design in its head. After merge, run:
 The gates return structured data, not prose — so any host's coordinator can branch on
 them mechanically (re-dispatch the offending component, tighten an envelope, etc.).
 
-**Known blind spot (measured, eval Probe A):** the interference gate reports *zero*
-for exact-touch contact — `Part.common()` of tangent solids has no volume. "Doesn't
-collide" is therefore not "fits as specified": a contract that requires a clearance
-fit must be gated on **minimum clearance** (`min_clearance` exists as a tool), not
-on non-interference alone. Typed interfaces (§11.2) make this systematic.
+**Known blind spot (measured, eval Probe A) — closed by the `bore_fit` typed gate
+(§11.2):** the interference gate reports *zero* for exact-touch contact —
+`Part.common()` of tangent solids has no volume. "Doesn't collide" is therefore
+not "fits as specified": a contract that requires a clearance fit must be gated on
+**minimum clearance**, not on non-interference alone. The `bore_fit` typed
+interface now does exactly this in `merge_assembly` (gap 0 fails its clearance
+band), so a clearance contract is gated systematically rather than relying on the
+coordinator to remember to call `min_clearance` by hand.
 
 ---
 
@@ -406,14 +409,15 @@ baseline on every toy). Five findings change the design:
    20/20). Either way the design conclusion is the same: resolved per-slice values
    beat whole-design context.
 
-4. **The gates are trustworthy, with one sharp edge.** Every reference build passes,
-   every negative control is caught, the interference boundary sits exactly where
-   hand calculation puts it — but exact-touch reports no interference (§6), so
-   clearance-fit contracts need a clearance gate, not a collision gate. A second
+4. **The gates are trustworthy, with two sharp edges — both now closed by §11.2.**
+   Every reference build passes, every negative control is caught, the
+   interference boundary sits exactly where hand calculation puts it — but
+   exact-touch reports no interference (§6), so clearance-fit contracts need a
+   clearance gate, not a collision gate (now the `bore_fit` typed gate). A second
    edge found by code review: `interface_align_check` verifies only that frame
    *origins* coincide — a secondary interface positioned right but **rotated**
-   passes. Typed interfaces (§11.2) should gate orientation (z/x axis alignment)
-   too.
+   passes (now the `frame_orientation` typed gate). Both shipped and
+   gate-validated 2026-06-12.
 
 5. **The baseline is part of the experiment.** *Two* artifacts manufactured the
    entire apparent nslot divergence before harness review found them. (i) The
@@ -481,35 +485,66 @@ optional `grid_mm`), fails loudly on infeasible contracts before any builder is
 billed, and the eval toy's reference lengths are computed *by* the shipped
 resolver — so the test gates exactly what the contract machinery emits.
 
-### 11.2 Typed interfaces with type-specific gates
+### 11.2 Typed interfaces with type-specific gates *(first three kinds shipped)*
 
 Today an interface is an untyped frame. Advanced components need a small taxonomy,
 each kind carrying its contract fields and owning its merge gate — and nearly every
 gate already exists as a tool or as an M2 gate helper waiting to be promoted into
 `merge_assembly`:
 
-| `kind` | contract fields | gate (existing machinery) |
-|---|---|---|
-| `bolt_circle` | count, pitch, thread | frame mate + alignment check (shipped) |
-| `bore_fit` | nominal Ø, fit class / min clearance | `fit_check`, `min_clearance` |
-| `gear_mesh` | module, center distance, ratio | the `kin_gearbox` gate logic in `test_multiagent_m2.py` |
-| `thread` | callout, min engagement | the `thread_engagement` toy gate |
-| `press_fit` | interference band | `press_fit_stress` |
-| `sliding` / `kinematic` | axis, travel, DOF | `_sweep_clear` posed-interference sweep |
+| `kind` | contract fields | gate | status |
+|---|---|---|---|
+| `bore_fit` | min/max clearance band | `min_clearance` (overlap → too tight; gap < min → too tight, **incl. exact-touch**; gap > max → too loose) | ✅ shipped |
+| `gear_mesh` | module, center distance, ratio | pitch-radii-sum + as-placed axis distance + ratio (the `kin_gearbox` oracle, promoted) | ✅ shipped |
+| `frame_orientation` | child/parent frames, max angle | angle between published frame axes — the orientation `interface_align` does *not* check | ✅ shipped |
+| `bolt_circle` | count, pitch, thread | frame mate + alignment check (shipped) | future |
+| `thread` | callout, min engagement | the `thread_engagement` toy gate | future |
+| `press_fit` | interference band | `press_fit_stress` | future |
+| `sliding` / `kinematic` | axis, travel, DOF | `_sweep_clear` posed-interference sweep | future |
+
+**Shipped 2026-06-12** (`driftpin/worker.py`): the manifest gains a `checks` list,
+and `merge_assembly` dispatches each entry to its `kind`'s gate, folding the
+violations into `gates["typed"]` and the merge `ok`. The gates return structured
+violations (empty == pass), same shape as the classic gates, and an *unknown*
+kind is itself a violation — a typed contract that silently does not run is worse
+than one that fails loudly.
 
 ```jsonc
-"interfaces": {
-  "output_mesh": { "kind": "gear_mesh", "frame": { … },
-                   "module_mm": 1.5, "center_distance_mm": 36.0, "ratio": 2.5 }
-}
+"checks": [
+  { "kind": "gear_mesh", "a": "in0", "b": "out0",
+    "module_mm": 2.0, "center_distance_mm": 48.0, "ratio": 2.0, "tol_mm": 0.5 },
+  { "kind": "bore_fit", "pin": "peg", "bore": "plate", "min_clearance_mm": 0.1 },
+  { "kind": "frame_orientation", "child": "lid", "parent": "housing",
+    "child_iface": "seat", "parent_iface": "seat", "max_angle_deg": 1.0 }
+]
 ```
 
-`merge_assembly` dispatches gates by `kind`: a `gear_mesh` mate is checked for
-module equality and measured center distance, a `bore_fit` for minimum clearance
-(closing the exact-touch blind spot, §6), a `sliding` mate by a posed sweep. The
-6-speed gearbox toy is the canonical shared-constraint partition — 12 gears, one
-shared center distance per mesh — and with 11.1 + 11.2 it becomes expressible as a
-manifest instead of a test fixture.
+**`bore_fit` closes the exact-touch blind spot** (§6, finding 4): `interference`
+reads *zero* for tangent solids, so a slip fit gated only on non-interference
+passes an exact-touch part; `bore_fit` requires positive clearance in a band, so
+gap 0 fails. **`frame_orientation` closes the orientation gap** (§10, finding 4's
+second edge): `interface_align` verifies frame *origins* only, so a secondary
+interface positioned right but rotated slips through — `frame_orientation` gates
+the angle.
+
+**The gearbox becomes a manifest** (the canonical shared-constraint partition —
+12 gears, one shared centre distance per mesh): `example/gearbox_manifest.py`
+builds it as 12 components + 6 `gear_mesh` checks and merges + gates it in one
+call. This surfaced a real gate interaction worth recording: **a typed contact
+gate must be authoritative for its pair, because the blunt interference gate
+false-positives on it.** Meshing involute teeth legitimately interpenetrate at
+the pitch line in a static pose (the eval's "posed interference isn't the right
+test for a gear ratio" finding) — so `merge_assembly` excludes a `gear_mesh`
+pair (and any check flagged `"expected_contact": true`) from the interference
+list. The exclusion is *targeted*: only the owned pair is excused, so a genuine
+collision with a third part is still caught (tested). All three gates are
+two-sided gate-validated free in `tests/test_typed_interfaces.py` (reference
+passes; every negative — wrong size, wrong placement, wrong ratio, exact touch,
+tilt — caught), in `run_all.sh`, no key.
+
+Still future for §11.2: `bore_fit` carrying a named ISO fit *class* (resolving to
+a clearance band via `fit_check`) rather than explicit mm; the internal-gear
+mesh (planetary ring); and `thread` / `press_fit` / `sliding` from the table.
 
 ### 11.3 `verify_contract` — shift failure left
 
@@ -614,10 +649,12 @@ rather than width when the contract grows.
   (moved to §11.8).
 - **Phase 3 — advanced assemblies. ← current.** In priority order: the resolve step
   (11.1) **✅ shipped 2026-06-12** (`driftpin/manifest.py`; validated `tchainu`
-  partition 2/20 → 20/20); typed interfaces + promoted gates (11.2);
-  `verify_contract` (11.3); hierarchical manifests (11.4); standard parts (11.5);
-  requirements gates (11.6); schema formalization (11.7); shipped, pipelined
-  orchestration (11.8).
+  partition 2/20 → 20/20); typed interfaces + promoted gates (11.2) **✅ first
+  three kinds shipped 2026-06-12** (`bore_fit`, `gear_mesh`, `frame_orientation`
+  in `merge_assembly`; closes the exact-touch + orientation gate edges; gearbox
+  now a manifest); `verify_contract` (11.3); hierarchical manifests (11.4);
+  standard parts (11.5); requirements gates (11.6); schema formalization (11.7);
+  shipped, pipelined orchestration (11.8).
 - **Phase 4 — deferred.** Shared co-editing, *reframed* as **claimed-region
   editing**: an agent claims a sub-tree/feature region of one document, edits only
   there, and merges back — never free-for-all cursors. Carries the full concurrency
