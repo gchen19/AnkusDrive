@@ -4415,7 +4415,6 @@ def _vc_feature_check(shape, feat):
       bore   {diameter_mm, tol_mm?}                    a cylindrical face of the
              nominal radius is present (the hole was actually cut)
       extent {axis: x|y|z, length_mm, tol_mm?}         bbox span along axis"""
-    import math
     kind = feat.get("kind")
     tol = float(feat.get("tol_mm", 0.5))
     if kind == "gear":
