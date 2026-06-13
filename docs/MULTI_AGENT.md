@@ -621,24 +621,39 @@ clash between a subassembly and a sibling is still caught; two-level nesting
 flattens to all leaves; `assembly_lock_check` flags a changed subassembly and
 leaves an unchanged sibling alone), in `run_all.sh`, no key.
 
-### 11.5 Standard parts — components without owners
+### 11.5 Standard parts — components without owners *(shipped)*
 
 Parallel agents designing a gearbox should not each model their own bearings and
 bolts. The tool surface already generates standard parts deterministically
-(`add_fastener`, `add_bearing`, `add_gear`, `add_spring`, `add_sprocket`); the
-manifest should reference them as ownerless library components:
+(`add_fastener`, `add_bearing`, `add_gear`, `add_spring`, `add_sprocket`,
+`add_pulley`, `add_rack`, `add_thread`); the manifest references them as ownerless
+library components — `spec` is the generator tool's own kwargs verbatim:
 
 ```jsonc
 "components": {
-  "m4_bolt": { "library": { "tool": "add_fastener",
-                            "spec": { "standard": "ISO4762", "size": "M4", "length_mm": 16 } } }
+  "m6_bolt": { "library": { "tool": "add_fastener",
+                            "spec": { "kind": "hex_bolt", "size": "M6", "length": 20 } } }
 }
 ```
 
-Merge generates them on the fly — no builder agent, no file, no lock entry beyond
-the spec hash. This shrinks the fan-out *and* anchors interfaces: a bolt circle
-mating against a generated fastener spec can't drift, because one side of the
-contract is computed, not designed.
+**Shipped 2026-06-12** (`driftpin/worker.py`). `merge_assembly` generates a
+`library` component on the fly from `{tool, spec}` into a deterministic cache
+(`.dp_lib/`, keyed by a spec hash so identical specs share one file), links it,
+and reports it under `library` — **no builder agent, no owner, no file an agent
+has to produce.** The tool is restricted to an allow-list of the deterministic
+standard-part generators; a non-allow-listed tool or a bad spec fails loudly at
+merge. The **lockfile keys a library part by its spec hash, not its bytes** — so
+regenerating it never reads as drift, and only a *spec* change flags it
+`modified`. This shrinks the fan-out *and* anchors interfaces: a bolt circle
+mating against a generated fastener can't drift, because one side of the contract
+is computed (`add_fastener` returns the major diameter a hole is sized to), not
+designed.
+
+Two-sided gate-validated free in `tests/test_standard_parts.py` (generates +
+gates; deterministic/idempotent; the generated geometry matches the spec;
+interference still catches a clashing standard part; the lockfile flags a spec
+change but not a regenerate; a bad/non-allow-listed spec fails loudly), in
+`run_all.sh`, no key.
 
 ### 11.6 Requirements-level gates
 
@@ -701,8 +716,10 @@ rather than width when the contract grows.
   (`driftpin/worker.py`; builder-side envelope/interface/feature/intent
   self-check); hierarchical manifests (11.4) **✅ shipped 2026-06-12**
   (`merge_assembly` recurses into child manifests, gates roll up, lockfile
-  propagates staleness up the tree); standard parts (11.5); requirements gates
-  (11.6); schema formalization (11.7); shipped, pipelined orchestration (11.8).
+  propagates staleness up the tree); standard parts (11.5) **✅ shipped
+  2026-06-12** (`library` components generated from a spec at merge — no owner,
+  lock keyed by spec hash); requirements gates (11.6); schema formalization
+  (11.7); shipped, pipelined orchestration (11.8).
 - **Phase 4 — deferred.** Shared co-editing, *reframed* as **claimed-region
   editing**: an agent claims a sub-tree/feature region of one document, edits only
   there, and merges back — never free-for-all cursors. Carries the full concurrency

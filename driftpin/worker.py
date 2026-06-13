@@ -4652,6 +4652,16 @@ def _lock_state(manifest, base_dir):
             deps[cc].add(pc)
     state = {}
     for cid, spec in comps.items():
+        if "library" in spec:
+            # §11.5: a generated standard part. Its lock identity is the spec hash
+            # (it is computed, not designed), so it never reads as `modified` unless
+            # the SPEC changes — the "one side of the contract can't drift" guarantee.
+            lib = spec["library"]
+            state[cid] = {"library": lib.get("tool"),
+                          "file_hash": _library_spec_hash(lib["tool"],
+                                                           lib.get("spec", {})),
+                          "interfaces_hash": "", "depends_on": sorted(deps[cid])}
+            continue
         if "manifest" in spec:
             # §11.4: a subassembly node. Its "file" is the child's merged root, and
             # its provenance is the child's lockfile — so a change anywhere in the
@@ -5226,6 +5236,57 @@ def _run_typed_checks(checks, by_name, links_by_inst):
     return out
 
 
+# --- standard / library parts (RFC §11.5) ------------------------------------
+#
+# A component can be GENERATED from a spec instead of built by an agent: the tool
+# surface already makes standard parts deterministically (fasteners, bearings,
+# gears, ...). merge_assembly generates these on the fly from the manifest — no
+# builder, no owner, no file an agent has to produce — which shrinks the fan-out
+# and anchors interfaces (one side of the contract is computed, not designed, so
+# it can't drift). The allow-list keeps this to the deterministic generators; an
+# arbitrary tool name is rejected rather than run.
+
+_LIBRARY_TOOLS = {"add_fastener", "add_bearing", "add_gear", "add_spring",
+                  "add_sprocket", "add_pulley", "add_rack", "add_thread"}
+
+
+def _library_spec_hash(tool, spec):
+    """Stable identity of a generated part: a hash of (tool, spec). This — not the
+    saved bytes — is the part's lock identity, since it is computed, not designed."""
+    import hashlib
+    import json as _json
+    blob = _json.dumps({"tool": tool, "spec": spec}, sort_keys=True)
+    return hashlib.blake2b(blob.encode(), digest_size=8).hexdigest()
+
+
+def _library_part_path(base_dir, tool, spec):
+    """Deterministic cache path for a generated part (same spec → same file, so two
+    components referencing the same bolt share one generated file). The filename
+    carries a readable spec slug so the BOM (which keys on the file stem) is legible,
+    plus a short hash so distinct specs never collide."""
+    import os as _os
+    d = _os.path.join(base_dir, ".dp_lib")
+    _os.makedirs(d, exist_ok=True)
+    slug = "-".join(str(v) for v in spec.values()
+                    if isinstance(v, (str, int, float)) and not isinstance(v, bool))
+    h = _library_spec_hash(tool, spec)[:6]
+    stem = f"{tool}_{slug}_{h}" if slug else f"{tool}_{h}"
+    return _os.path.join(d, stem + ".FCStd")
+
+
+def _generate_library_part(tool, spec, path):
+    """Generate a standard part into its own document and save it to `path`.
+    Raises on a non-allow-listed tool or a bad spec — a library contract that
+    can't be generated must fail loudly at merge, not silently vanish."""
+    if tool not in _LIBRARY_TOOLS:
+        raise ValueError(
+            f"library tool {tool!r} is not an allowed standard-part generator "
+            f"(expected one of {sorted(_LIBRARY_TOOLS)})")
+    HANDLERS["new_document"]({"name": "_dp_lib"})
+    HANDLERS[tool](dict(spec))
+    HANDLERS["save_document"]({"path": path})
+
+
 @handler("merge_assembly")
 def _h_merge_assembly(p):
     """Construct-up an assembly from a manifest (the coordinator's one call).
@@ -5236,7 +5297,9 @@ def _h_merge_assembly(p):
         "components": { "<id>": { "file": "rel/part.FCStd",
                                   "object": "<name>",   # optional explicit target
                                   "envelope": {"min":[...],"max":[...]} },  # optional
-                        "<sub>":  { "manifest": "sub/manifest.json" } },  # §11.4 nest
+                        "<sub>":  { "manifest": "sub/manifest.json" },  # §11.4 nest
+                        "<std>":  { "library": { "tool": "add_fastener",  # §11.5
+                                    "spec": {"kind":"hex_bolt","size":"M6","length":20} } } },
         "instances": [ { "component": "<id>",
                          "name": "<instance>",          # optional, defaults to id
                          "placement": [x,y,z] | {position,axis,angle_deg} } ] }
@@ -5246,8 +5309,10 @@ def _h_merge_assembly(p):
     A component with a `manifest` key (instead of `file`) is a SUBASSEMBLY: it is
     merged + gated first (recursively, any depth) and the parent links its merged
     root; a failed child fails the parent, surfaced as gates["children"] and a
-    `children` block in the report. Runs the gates (interference, recursive BOM,
-    envelope, typed) and returns a report. Deterministic and idempotent."""
+    `children` block in the report. A component with a `library` key is a STANDARD
+    PART generated on the fly from {tool, spec} (§11.5) — no builder, no owner —
+    reported under `library`. Runs the gates (interference, recursive BOM, envelope,
+    typed) and returns a report. Deterministic and idempotent."""
     import json as _json
     import os as _os
     manifest_path = p["manifest"]
@@ -5264,6 +5329,7 @@ def _h_merge_assembly(p):
     # or the component's own file) and roll the children's ok up into the parent.
     eff_file = {}
     children = {}
+    library = {}
     for cid, spec in comps.items():
         if "manifest" in spec:
             cm = spec["manifest"]
@@ -5272,6 +5338,16 @@ def _h_merge_assembly(p):
             children[cid] = {"ok": child_rep["ok"], "root": child_rep["root"],
                              "manifest": cm, "gates": child_rep["gates"]}
             eff_file[cid] = child_rep["root"]
+        elif "library" in spec:
+            # §11.5 standard part: generate it from its spec into the cache and
+            # link the generated file like any component — no builder, no owner.
+            lib = spec["library"]
+            tool, tspec = lib["tool"], lib.get("spec", {})
+            lib_path = _library_part_path(base_dir, tool, tspec)
+            _generate_library_part(tool, tspec, lib_path)
+            eff_file[cid] = lib_path
+            library[cid] = {"tool": tool, "file": lib_path,
+                            "spec_hash": _library_spec_hash(tool, tspec)}
         else:
             f = spec["file"]
             eff_file[cid] = f if _os.path.isabs(f) else _os.path.join(base_dir, f)
@@ -5366,6 +5442,8 @@ def _h_merge_assembly(p):
               "placed": placed, "gates": gates, "ok": ok}
     if children:
         report["children"] = children
+    if library:
+        report["library"] = library  # §11.5: generated standard parts (spec hash)
     return report
 
 
