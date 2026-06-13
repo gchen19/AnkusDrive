@@ -5139,6 +5139,20 @@ def _h_envelope_check(p):
 # proved it (gear-mesh pitch sums, min-clearance fits) plus the orientation check
 # that interface_align (origins only) does not cover.
 
+def _shape_com(shape):
+    """Centre of mass robust to compounds (a boolean-cut gear, a bearing) whose
+    .CenterOfMass is not reliably exposed: volume-weighted over the constituent
+    solids, which always provide it."""
+    sols = shape.Solids or [shape]
+    tv = sum(s.Volume for s in sols)
+    if tv <= 0:
+        return shape.BoundBox.Center
+    return App.Vector(
+        sum(s.Volume * s.CenterOfMass.x for s in sols) / tv,
+        sum(s.Volume * s.CenterOfMass.y for s in sols) / tv,
+        sum(s.Volume * s.CenterOfMass.z for s in sols) / tv)
+
+
 def _link_world_shape(link):
     """World-space shape of a top-level assembly link (LinkedObject geometry
     transformed by the link's placement). None if the link carries no shape."""
@@ -5165,7 +5179,7 @@ def _gear_pitch_radius(shape, module, internal=False):
     module (mirrors the M2 gearbox oracle, which reads rp back from geometry so a
     wrong tooth count is caught by the measured radius, not trusted from input)."""
     import math
-    com = shape.CenterOfMass
+    com = _shape_com(shape)
     radii = [math.hypot(v.X - com.x, v.Y - com.y) for v in shape.Vertexes]
     if not radii:
         return None
@@ -5185,7 +5199,7 @@ def _axis_world(link):
 def _parallel_axis_distance(shape_a, dir_a, shape_b):
     """Perpendicular distance between two (near-)parallel part axes, taken
     through their world centroids — the as-placed centre distance of a gear pair."""
-    ca, cb = shape_a.CenterOfMass, shape_b.CenterOfMass
+    ca, cb = _shape_com(shape_a), _shape_com(shape_b)
     dv = cb - ca
     return (dv - dir_a.multiply(dv.dot(dir_a))).Length
 
@@ -5435,12 +5449,18 @@ def _requirements_gate(assembly_handle, req):
     density = req.get("density_kg_mm3")
     if density is not None and total_vol > 0:
         report["mass_g"] = round(total_vol * float(density) * 1000.0, 3)
-    if total_vol > 0:
-        cg = [round(sum(s.Volume * getattr(s.CenterOfMass, ax) for _, s in shapes)
-                    / total_vol, 4) for ax in ("x", "y", "z")]
+    # Volume-weighted centre of mass over the leaves (via _shape_com, which is
+    # robust to compounds — a boolean-cut gear, a bearing).
+    acc, svol = [0.0, 0.0, 0.0], 0.0
+    for _, s in shapes:
+        v, c = s.Volume, _shape_com(s)
+        svol += v
+        acc[0] += v * c.x
+        acc[1] += v * c.y
+        acc[2] += v * c.z
+    cg = [round(acc[i] / svol, 4) for i in range(3)] if svol > 0 else None
+    if cg is not None:
         report["cg_mm"] = cg
-    else:
-        cg = None
 
     if "max_mass_g" in req:
         if density is None:
