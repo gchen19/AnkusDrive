@@ -850,9 +850,50 @@ This is the payoff of the project's cost discipline made mechanical: it would ha
 caught that the gearbox-mobility framing measures nothing about the agents (the lock
 is fixed by the topology, not produced by the builders) *before* spending a round —
 and points instead at the compound-train, where the agents genuinely determine an
-emergent overall ratio none of them can see alone. The compound-train toy is **GO and
-not yet billed** — the next experiment, pending a go-ahead.
+emergent overall ratio none of them can see alone.
 
-All Tier-1/Tier-2/readiness logic is free-tested: `tests/test_mechanism.py` (11),
+All Tier-1/Tier-2/readiness logic is free-tested: `tests/test_mechanism.py` (14),
 `tests/test_experiment_readiness.py` (7), `tests/test_mbd.py` gear-coupling cases (2),
 all in `run_all.sh`.
+
+## The compound-train experiment — the motion gate catches an emergent reconciliation on real agent output (2026-06-13, Haiku, $0.46)
+
+The GO toy, run. Agents build the three stage **driver** gears of a serial reduction
+train; the driven gear of each stage is scripted to 48 − the built driver, so the
+within-stage mesh is automatic and the only thing under test is the **emergent
+overall reduction** — the product of the three stage ratios, which no single stage
+builder can see. The train's `target_ratio` is gated by `merge_assembly`'s motion
+gate. Resolved split `[12,24,32]` → 1/3 · 1 · 2 = 2/3 == target.
+(`scratch/train_experiment.py`, agents build the driver gears; the gate judges the
+product.)
+
+| condition | pass | built | what the agents produced |
+|---|---|---|---|
+| derive · partition | 0/3 | 1/3 | the one that built: `[22,22,22]` (the naive equal split) |
+| derive · single    | 0/3 | 0/3 | agents stalled on the open-ended split |
+| **resolve · partition** | **3/3** | 3/3 | `[12,24,32]` — handed |
+| **resolve · single**    | **3/3** | 3/3 | `[12,24,32]` — handed |
+
+**The gate result is unambiguous on every train that actually built** — and that is
+the question the experiment set out to answer. The full merge reports
+(`results/compound_train/gate_report_agent_{resolve_PASS,derive_FAIL}.json`) show the
+gate checking *all* of it on real agent geometry:
+
+- `[12,24,32]` (resolve): interference `[]`, gear_mesh `[]`, **mobility_dof 1**,
+  realised overall ratio **−0.6667 = target** → `ok: true`.
+- `[22,22,22]` (derive): interference `[]`, gear_mesh `[]` (every stage meshes!),
+  **mobility_dof 1** (a valid, turnable train), rates propagated through every shaft
+  (`shaft0 1.0 → shaft3 −0.606`), realised overall ratio **−0.606 ≠ target** →
+  `ok: false`, violation *"overall ratio off by 0.0608"*. Locally perfect, globally
+  wrong — and only the motion gate sees it.
+
+**The caveat, stated plainly** (the nslot8 lesson): derive's 0/6 is *confounded* —
+only one of six derive trials fully built, the rest had a driver agent stall on the
+open-ended "decide your own tooth count" task. So the derive→resolve pass-rate jump
+here is not a clean reconciliation measurement the way `tchainu→tchainu_r` was; the
+build-rate gap rides along with it. What *is* clean and is the point of the run: the
+**motion gate is a correct, comprehensive oracle on real agent output** — it passes
+all six on-target resolve trains and fails the off-target derive train on the emergent
+invariant, with the static gates blind to the difference. (A cleaner derive
+reconciliation signal would need a higher agent build rate — a more constrained derive
+prompt or a larger turn budget — a queued follow-up, not a gate question.)

@@ -1,0 +1,149 @@
+{
+  "assembly": "assembly_1",
+  "doc": "train",
+  "root": "/tmp/tmp2yz_27_t/agent_derive_FAIL/train.FCStd",
+  "placed": [
+    {
+      "instance": "shaft0",
+      "component": "shaft0",
+      "linked": "Cylinder"
+    },
+    {
+      "instance": "shaft1",
+      "component": "shaft1",
+      "linked": "Cylinder"
+    },
+    {
+      "instance": "shaft2",
+      "component": "shaft2",
+      "linked": "Cylinder"
+    },
+    {
+      "instance": "shaft3",
+      "component": "shaft3",
+      "linked": "Cylinder"
+    },
+    {
+      "instance": "d0",
+      "component": "d0",
+      "linked": "Cut"
+    },
+    {
+      "instance": "e0",
+      "component": "e0",
+      "linked": "Cut"
+    },
+    {
+      "instance": "d1",
+      "component": "d1",
+      "linked": "Cut"
+    },
+    {
+      "instance": "e1",
+      "component": "e1",
+      "linked": "Cut"
+    },
+    {
+      "instance": "d2",
+      "component": "d2",
+      "linked": "Cut"
+    },
+    {
+      "instance": "e2",
+      "component": "e2",
+      "linked": "Cut"
+    }
+  ],
+  "gates": {
+    "interference": [],
+    "bom": [
+      {
+        "part": "shaft0",
+        "count": 1,
+        "total_volume_mm3": 4555.309347705201
+      },
+      {
+        "part": "shaft1",
+        "count": 1,
+        "total_volume_mm3": 4555.309347705201
+      },
+      {
+        "part": "shaft2",
+        "count": 1,
+        "total_volume_mm3": 4555.309347705201
+      },
+      {
+        "part": "shaft3",
+        "count": 1,
+        "total_volume_mm3": 4555.309347705201
+      },
+      {
+        "part": "d0",
+        "count": 1,
+        "total_volume_mm3": 8449.638585370052
+      },
+      {
+        "part": "e0",
+        "count": 1,
+        "total_volume_mm3": 12055.572717455625
+      },
+      {
+        "part": "d1",
+        "count": 1,
+        "total_volume_mm3": 8449.638585370052
+      },
+      {
+        "part": "e1",
+        "count": 1,
+        "total_volume_mm3": 12055.572717455625
+      },
+      {
+        "part": "d2",
+        "count": 1,
+        "total_volume_mm3": 8449.638585370052
+      },
+      {
+        "part": "e2",
+        "count": 1,
+        "total_volume_mm3": 12055.572717455625
+      }
+    ],
+    "envelope": [],
+    "typed": [],
+    "mobility": [
+      {
+        "reason": "overall ratio -0.60583 != target +0.666667 (off by 0.0608)"
+      }
+    ]
+  },
+  "ok": false,
+  "mobility": {
+    "expected_dof": 1,
+    "rigid": {
+      "mobility_dof": 1,
+      "consistent": true,
+      "conflicts": [],
+      "rates": {
+        "shaft0": 1.0,
+        "shaft1": -0.8461538461538461,
+        "shaft2": 0.7159763313609467,
+        "shaft3": -0.6058261265361857
+      }
+    },
+    "states": {},
+    "violations": [
+      {
+        "reason": "overall ratio -0.60583 != target +0.666667 (off by 0.0608)"
+      }
+    ],
+    "target_ratio": {
+      "input": "shaft0",
+      "output": "shaft3",
+      "target": 0.6666666666666666,
+      "realised": -0.605826,
+      "ok": false
+    },
+    "verdict": "functional",
+    "ok": false
+  }
+}
