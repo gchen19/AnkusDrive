@@ -35,12 +35,22 @@ def run_mbd(spec: dict, duration_s: float = 1.0, dt_s: float = 1.0 / 240.0,
     [{name, half_extents_m, mass_kg, parent (−1 = base), joint_type
     ('revolute'|'prismatic'|'fixed'), joint_axis, joint_pos_m (in the parent frame),
     com_m (inertial offset in the link frame)}], drivers: [{link, target_velocity,
-    max_force}], obstacles: [{half_extents_m, pos_m}]}.
+    max_force}], obstacles: [{half_extents_m, pos_m}], gears: [{link_a, link_b,
+    ratio, axis?, max_force?, erp?}]}.
+
+    ``gears`` couple two revolute links by a PyBullet JOINT_GEAR constraint enforcing
+    ω_b = −ω_a / ratio (PyBullet's gearRatio convention — for an external mesh with
+    teeth Na/Nb, ω_b/ω_a = −Na/Nb, so pass ratio = Nb/Na). It transmits motion
+    without modelling tooth contact. Several gears between the same two links is
+    exactly the over-constrained lock (the dynamics fight and the driven shaft stalls
+    far below its commanded speed), the moving counterpart to the closed-form
+    ratio-consistency check.
 
     Returns {engine, steps, duration_s, trajectories {name: [[x,y,z]...]}, max_torques
-    {joint_i: N·m or N}, reachable_envelope {bbox_m, bbox_mm}, collisions_through_motion
-    [{t_s, step, between:[nameA,nameB], max_depth_m}]}. Raises RuntimeError if PyBullet
-    is missing (callers should gate on driftpin.solvers.require_solver first)."""
+    {joint_i: N·m or N}, joint_velocity {name: rad·s⁻¹ final}, mean_joint_velocity
+    {name: rad·s⁻¹ over the last fifth}, reachable_envelope {bbox_m, bbox_mm},
+    collisions_through_motion [{t_s, step, between:[nameA,nameB], max_depth_m}]}. Raises
+    RuntimeError if PyBullet is missing (gate on driftpin.solvers.require_solver)."""
     try:
         p, cid = _connect()
     except Exception as e:                            # ImportError or connect failure
@@ -93,6 +103,28 @@ def run_mbd(spec: dict, duration_s: float = 1.0, dt_s: float = 1.0 / 240.0,
                                       basePosition=ob["pos_m"], physicsClientId=cid)
             obstacles.append(ob_id)
 
+        # --- gear couplings (JOINT_GEAR): ω_b = −ratio·ω_a -------------------
+        # A free movable joint left with no motor still has PyBullet's default
+        # velocity motor active, which would fight a gear constraint; release the
+        # geared links so the constraint alone sets their motion.
+        geared_links = set()
+        for gc in spec.get("gears", []) or []:
+            geared_links.add(gc["link_a"])
+            geared_links.add(gc["link_b"])
+        for li in geared_links:
+            p.setJointMotorControl2(body, li, p.VELOCITY_CONTROL, force=0.0,
+                                    physicsClientId=cid)
+        gear_cids = []
+        for gc in spec.get("gears", []) or []:
+            c = p.createConstraint(body, gc["link_a"], body, gc["link_b"],
+                                   p.JOINT_GEAR, jointAxis=gc.get("axis", [0, 0, 1]),
+                                   parentFramePosition=[0, 0, 0],
+                                   childFramePosition=[0, 0, 0], physicsClientId=cid)
+            p.changeConstraint(c, gearRatio=gc["ratio"],
+                               maxForce=gc.get("max_force", 1e4),
+                               erp=gc.get("erp", 0.8), physicsClientId=cid)
+            gear_cids.append(c)
+
         # --- drivers (velocity control; torque-capped) -----------------------
         # Default: every non-driven movable joint is left free (no motor), so the
         # driven joint's torque reflects the real load it carries.
@@ -106,16 +138,21 @@ def run_mbd(spec: dict, duration_s: float = 1.0, dt_s: float = 1.0 / 240.0,
         n_steps = max(int(round(duration_s / dt_s)), 1)
         trajectories = {name_by_link[i]: [] for i in range(len(links))}
         max_torque = {f"joint_{i}": 0.0 for i in range(len(links))}
+        vel_tail = {i: [] for i in range(len(links))}     # joint velocities, last fifth
+        tail_start = int(n_steps * 0.8)
         collisions = []
         seen_pairs = set()
 
         for step in range(n_steps):
             p.stepSimulation(physicsClientId=cid)
-            # per-joint applied torque (index 3 of joint state)
+            # per-joint applied torque (index 3) + velocity (index 1) of joint state
             for i in range(len(links)):
-                tq = abs(p.getJointState(body, i, physicsClientId=cid)[3])
+                js = p.getJointState(body, i, physicsClientId=cid)
+                tq = abs(js[3])
                 if tq > max_torque[f"joint_{i}"]:
                     max_torque[f"joint_{i}"] = tq
+                if step >= tail_start:
+                    vel_tail[i].append(js[1])
             # sampled link world positions (COM)
             if step % sample_every == 0:
                 states = p.getLinkStates(body, list(range(len(links))),
@@ -150,12 +187,20 @@ def run_mbd(spec: dict, duration_s: float = 1.0, dt_s: float = 1.0 / 240.0,
         else:
             bbox_m = [0.0, 0.0, 0.0]
 
+        final_vel = {name_by_link[i]: round(
+            p.getJointState(body, i, physicsClientId=cid)[1], 6)
+            for i in range(len(links))}
+        mean_vel = {name_by_link[i]: round(sum(v) / len(v), 6) if v else 0.0
+                    for i, v in vel_tail.items()}
+
         return {
             "engine": "pybullet",
             "steps": n_steps,
             "duration_s": duration_s,
             "trajectories": trajectories,
             "max_torques": {k: round(v, 6) for k, v in max_torque.items()},
+            "joint_velocity": final_vel,
+            "mean_joint_velocity": mean_vel,
             "reachable_envelope": {
                 "bbox_m": bbox_m,
                 "bbox_mm": [round(v * 1000.0, 3) for v in bbox_m],

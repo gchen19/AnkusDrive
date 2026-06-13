@@ -1,0 +1,87 @@
+{
+  "experiment": "gearbox_tier2_sim",
+  "engine": "pybullet",
+  "drive_rad_s": 10.0,
+  "functional": [
+    {
+      "speed": 1,
+      "teeth": [
+        12,
+        36
+      ],
+      "measured_ratio": -0.33333,
+      "closed_form": -0.33333,
+      "err": 0.0,
+      "input_track": 1.0,
+      "ok": true
+    },
+    {
+      "speed": 2,
+      "teeth": [
+        16,
+        32
+      ],
+      "measured_ratio": -0.5,
+      "closed_form": -0.5,
+      "err": 0.0,
+      "input_track": 1.0,
+      "ok": true
+    },
+    {
+      "speed": 3,
+      "teeth": [
+        20,
+        28
+      ],
+      "measured_ratio": -0.71429,
+      "closed_form": -0.71429,
+      "err": 0.0,
+      "input_track": 1.0,
+      "ok": true
+    },
+    {
+      "speed": 4,
+      "teeth": [
+        24,
+        24
+      ],
+      "measured_ratio": -1.0,
+      "closed_form": -1.0,
+      "err": 0.0,
+      "input_track": 1.0,
+      "ok": true
+    },
+    {
+      "speed": 5,
+      "teeth": [
+        28,
+        20
+      ],
+      "measured_ratio": -1.4,
+      "closed_form": -1.4,
+      "err": 0.0,
+      "input_track": 1.0,
+      "ok": true
+    },
+    {
+      "speed": 6,
+      "teeth": [
+        32,
+        16
+      ],
+      "measured_ratio": -2.0,
+      "closed_form": -2.0,
+      "err": 0.0,
+      "input_track": 1.0,
+      "ok": true
+    }
+  ],
+  "locked": {
+    "input_reached_frac": 10.0,
+    "off_command": 9.0,
+    "input_w": 100.0,
+    "output_w": -36.4141,
+    "locked": true
+  },
+  "all_functional_match": true
+}
