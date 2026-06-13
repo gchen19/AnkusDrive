@@ -213,6 +213,12 @@ echo "== Manifest schema + validation (RFC 11.7, contract-drift detection, no ke
 $VENV_PY tests/test_manifest_schema.py
 
 echo
+echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="
+$VENV_PY -m orchestration.selftest
+$VENV_PY -m orchestration.dryrun
+$VENV_PY tests/test_coordinator.py
+
+echo
 echo "== Reliability Layer D — harness validator (free, scripted stub) =="
 # The real Layer D benchmark needs an API key; this runs its grader negative
 # control + scripted-stub plumbing check, which require no API, so the harness

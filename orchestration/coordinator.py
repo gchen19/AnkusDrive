@@ -286,46 +286,136 @@ def _implicated(brief, gates, placed):
     return impl
 
 
+# --- round 0 contract review (RFC §8 / §11.8) --------------------------------
+#
+# Before any geometry, each builder reads ONLY its slice and returns accept/amend.
+# Amendments fold back into the brief (grow an envelope, append a clarifying note)
+# so an infeasible contract is fixed for the price of a short completion, not a
+# full build → merge → gate-fail → rebuild cycle. Sub-brief nodes are reviewed by
+# their own round 0 when they orchestrate, so they are skipped here.
+
+def _slice_text(brief, cid):
+    spec = brief["components"][cid]
+    parts = [f"Component '{cid}' of assembly '{brief.get('name', 'assembly')}'.",
+             f"Task: {spec['task']}"]
+    if brief.get("shared_parameters"):
+        parts.append(f"Shared parameters every component must honor: "
+                     f"{brief['shared_parameters']}")
+    if spec.get("envelope"):
+        parts.append(f"Declared keep-out envelope your bbox must fit inside: "
+                     f"{spec['envelope']}")
+    return "\n".join(parts)
+
+
+def round0_review(client, model, brief, log=print):
+    """Run each leaf builder's feasibility review of its slice. Returns
+    (reviews, usage). reviews[cid] = {verdict, reason, patch, ...usage}."""
+    reviews = {}
+    usage = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "cache_write": 0}
+    for cid, spec in brief["components"].items():
+        if "sub_brief" in spec:
+            continue
+        r = agentkit.run_reviewer(client, model, _slice_text(brief, cid))
+        reviews[cid] = r
+        for k in usage:
+            usage[k] += r.get(k, 0)
+        log(f"    review {cid}: {r['verdict']} — {r['reason']}")
+    return reviews, usage
+
+
+def apply_reviews(brief, reviews, log=print):
+    """Fold round-0 amendments into the brief before fan-out. Returns a new brief."""
+    import copy
+    brief = copy.deepcopy(brief)
+    for cid, r in reviews.items():
+        if r.get("verdict") != "amend":
+            continue
+        patch = r.get("patch") or {}
+        if patch.get("envelope"):
+            brief["components"][cid]["envelope"] = patch["envelope"]
+            log(f"    amend {cid}: envelope -> {patch['envelope']}")
+        if patch.get("task_note"):
+            brief["components"][cid]["task"] += "\n" + patch["task_note"]
+            log(f"    amend {cid}: task note appended")
+    return brief
+
+
 # --- the loop -----------------------------------------------------------------
 
 def _build_component(client, model, cid, brief, comp_files, log):
     task = brief["components"][cid]["task"]
+    comp_files[cid].parent.mkdir(parents=True, exist_ok=True)  # §7 per-builder dir
     r = agentkit.run_builder(client, model, task, comp_files[cid])
     log(f"    build {cid}: turns={r['turns']} saved={r['ok_built']}")
     return r
 
 
 def orchestrate(client, model, brief, workdir, max_rounds=3, renegotiate=None,
-                log=print):
-    """Run the full coordinator loop. Returns a structured report.
+                review=True, log=print):
+    """Run the full coordinator loop (RFC Appendix A). Returns a structured report.
 
     client     : anthropic.Anthropic() or agentkit.ScriptedClient
-    brief      : the design brief (see schema above)
+    brief      : the design brief. A component may carry a `sub_brief` (a nested
+                 brief) instead of file/task — a SUBASSEMBLY node, orchestrated
+                 first and linked as the parent's component (§11.4 / §11.8).
     workdir    : dir for component files + the merged root .FCStd
-    renegotiate: optional fn(brief, implicated, gates, round) -> brief'. Lets a
-                 caller adjust the contract (move a frame, grow an envelope) before
-                 re-dispatch. Default: re-dispatch implicated components unchanged
-                 (useful when failures are stochastic agent errors, not contract
-                 conflicts).
-    """
+    renegotiate: optional fn(brief, implicated, gates, round) -> brief'.
+    review     : run the round-0 contract review before building (default True).
+
+    Pipelined fan-in (§8): each sub_brief node is orchestrated independently and
+    gated on its own, so unrelated branches don't block each other and a
+    subassembly failure is isolated to its node. Per-builder isolation (§7): each
+    leaf builds in workdir/build/<cid>/."""
     brief = resolve_brief(brief, log=log)  # constraints -> literal slice values
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    comp_files = {cid: workdir / spec["file"]
-                  for cid, spec in brief["components"].items()}
-    root_path = workdir / (brief.get("root") or (brief.get("name", "assembly") + ".FCStd"))
-
-    agents = {}
     usage = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "cache_write": 0}
-    rounds = []
 
     def _accumulate(r):
         for k in usage:
             usage[k] += r.get(k, 0)
 
-    # round 0: build everything
-    log("round 0: fan out all builders")
-    to_build = list(brief["components"])
+    # round 0: cheap feasibility review, fold amendments before any geometry
+    reviews = {}
+    if review:
+        log("round 0: contract review")
+        reviews, rusage = round0_review(client, model, brief, log=log)
+        _accumulate(rusage)
+        brief = apply_reviews(brief, reviews, log=log)
+
+    root_path = workdir / (brief.get("root") or (brief.get("name", "assembly") + ".FCStd"))
+    rounds = []
+
+    # pipelined fan-in: orchestrate each subassembly node first, independently —
+    # each one builds + merges + gates on its own; siblings don't block each other.
+    nodes = {}
+    comp_files = {}
+    for cid, spec in brief["components"].items():
+        if "sub_brief" in spec:
+            log(f"  node '{cid}': orchestrate subassembly")
+            sub = orchestrate(client, model, spec["sub_brief"], workdir / cid,
+                              max_rounds=max_rounds, renegotiate=renegotiate,
+                              review=review, log=lambda m, c=cid: log(f"  [{c}] {m}"))
+            nodes[cid] = sub
+            for k in usage:
+                usage[k] += sub["usage"].get(k, 0)
+            comp_files[cid] = Path(sub["root"])
+        else:
+            comp_files[cid] = workdir / "build" / cid / spec["file"]  # §7 isolation
+
+    failed_nodes = [cid for cid, s in nodes.items() if not s["ok"]]
+    if failed_nodes:
+        rounds.append({"round": 0, "built": [], "ok": False,
+                       "reason": f"subassembly node(s) failed: {failed_nodes}"})
+        log(f"  fan-in: subassembly node(s) failed: {failed_nodes}")
+        return _report(False, brief, rounds, usage, model, str(root_path),
+                       reviews, nodes)
+
+    leaf_cids = [cid for cid, spec in brief["components"].items()
+                 if "sub_brief" not in spec]
+    agents = {}
+    log("  fan out leaf builders")
+    to_build = list(leaf_cids)
     for r in range(max_rounds):
         for cid in to_build:
             res = _build_component(client, model, cid, brief, comp_files, log)
@@ -333,16 +423,17 @@ def orchestrate(client, model, brief, workdir, max_rounds=3, renegotiate=None,
             _accumulate(res)
 
         built = all(agents[c]["ok_built"] and comp_files[c].exists()
-                    for c in brief["components"])
+                    for c in leaf_cids)
         if not built:
-            missing = [c for c in brief["components"]
+            missing = [c for c in leaf_cids
                        if not (agents.get(c, {}).get("ok_built") and comp_files[c].exists())]
             rounds.append({"round": r, "built": to_build, "ok": False,
                            "reason": f"did not save: {missing}"})
             log(f"  round {r}: FAILED to build {missing}")
-            return _report(False, brief, rounds, usage, model, str(root_path))
+            return _report(False, brief, rounds, usage, model, str(root_path),
+                           reviews, nodes)
 
-        # merge + gates via the DriftPin primitive
+        # merge the parent: leaf component files + the gated subassembly roots
         manifest = _manifest_from_brief(brief, comp_files, root_path)
         mpath = workdir / f"_manifest_round{r}.json"
         mpath.write_text(json.dumps(manifest))
@@ -358,25 +449,33 @@ def orchestrate(client, model, brief, workdir, max_rounds=3, renegotiate=None,
             f"align={len(gates.get('interface_align', []))}")
 
         if ok:
-            return _report(True, brief, rounds, usage, model, str(root_path))
+            return _report(True, brief, rounds, usage, model, str(root_path),
+                           reviews, nodes)
 
         if r + 1 >= max_rounds:
             log("  out of rounds")
             break
 
-        implicated = _implicated(brief, gates, merged["placed"])
+        # re-dispatch only implicated LEAF components (sub-briefs are gated already)
+        implicated = _implicated(brief, gates, merged["placed"]) & set(leaf_cids)
         log(f"  renegotiate: re-dispatch {sorted(implicated)}")
         if renegotiate is not None:
             brief = renegotiate(brief, implicated, gates, r)
         to_build = sorted(implicated)
 
-    return _report(False, brief, rounds, usage, model, str(root_path))
+    return _report(False, brief, rounds, usage, model, str(root_path), reviews, nodes)
 
 
-def _report(ok, brief, rounds, usage, model, root):
-    return {"ok": ok, "name": brief.get("name"), "rounds": len(rounds),
-            "root": root, "trace": rounds, "usage": usage,
-            "cost_usd": round(agentkit.cost_of(usage, model), 4)}
+def _report(ok, brief, rounds, usage, model, root, reviews=None, nodes=None):
+    rep = {"ok": ok, "name": brief.get("name"), "rounds": len(rounds),
+           "root": root, "trace": rounds, "usage": usage,
+           "cost_usd": round(agentkit.cost_of(usage, model), 4)}
+    if reviews:
+        rep["reviews"] = reviews
+    if nodes:
+        rep["nodes"] = {cid: {"ok": s["ok"], "root": s["root"]}
+                        for cid, s in nodes.items()}
+    return rep
 
 
 def design_from_spec(client, model, spec, workdir, max_rounds=3, log=print):

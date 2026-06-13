@@ -164,6 +164,64 @@ def run_builder(client, model, task, save_path, system=BUILDER_SYSTEM):
             "out_tokens": out_tok, "cache_read": cache_read, "cache_write": cache_write}
 
 
+# --- round 0 contract review (RFC §8 / §11.8) --------------------------------
+#
+# A cheap pre-build pass: each prospective builder reads ONLY its slice and returns
+# accept | amend, before a single primitive is built. It catches an infeasible
+# contract ("this envelope can't hold a gear of this module") for the price of one
+# short completion instead of a full build → merge → gate-fail → rebuild cycle. The
+# review is a forced tool call so the verdict is structured, never prose to parse.
+
+REVIEWER_SYSTEM = (
+    "You are a component builder doing a FEASIBILITY review of your build slice "
+    "BEFORE building. You see only your own component's task. Decide whether it is "
+    "buildable as written. Accept if it is self-contained and feasible. Amend if a "
+    "dimension is missing/contradictory or a declared keep-out envelope is too "
+    "small to hold the part the task describes — and propose the minimal fix. Do "
+    "not build anything; call emit_review exactly once."
+)
+
+_REVIEW_TOOL = {
+    "name": "emit_review",
+    "description": "Emit your accept/amend verdict on this build slice.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string", "enum": ["accept", "amend"]},
+            "reason": {"type": "string"},
+            # optional structured fix folded back into the slice before fan-out:
+            "patch": {
+                "type": "object",
+                "properties": {
+                    "envelope": {"type": "object"},   # {min:[...], max:[...]}
+                    "task_note": {"type": "string"},  # clarification appended to task
+                },
+            },
+        },
+        "required": ["verdict", "reason"],
+    },
+}
+
+
+def run_reviewer(client, model, slice_text):
+    """One builder's round-0 review of its slice. Returns
+    {verdict, reason, patch, in_tokens, out_tokens, cache_read, cache_write}."""
+    resp = client.messages.create(
+        model=model, max_tokens=512, system=_cached_system(REVIEWER_SYSTEM),
+        tools=[_REVIEW_TOOL], tool_choice={"type": "tool", "name": "emit_review"},
+        messages=[{"role": "user", "content": slice_text}])
+    usage = {"in_tokens": resp.usage.input_tokens,
+             "out_tokens": resp.usage.output_tokens,
+             "cache_read": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+             "cache_write": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0}
+    calls = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
+    if not calls:
+        return {"verdict": "accept", "reason": "no review emitted", "patch": {}, **usage}
+    inp = dict(calls[0].input)
+    return {"verdict": inp.get("verdict", "accept"), "reason": inp.get("reason", ""),
+            "patch": inp.get("patch") or {}, **usage}
+
+
 # --- scripted stub client (free dry runs) ------------------------------------
 
 class _Usage:
@@ -196,7 +254,9 @@ class ScriptedClient:
         self._script = script
         self.messages = self
 
-    def create(self, model, max_tokens, system, tools, messages):
+    def create(self, model, max_tokens, system, tools, messages, **kwargs):
+        # tolerate forced-tool-choice (tool_choice=) used by decompose / round-0
+        # review — the script decides the response, so the hint is ignored here.
         first = messages[0]["content"]
         task = first if isinstance(first, str) else str(first)
         turn = sum(1 for m in messages if m["role"] == "assistant")
