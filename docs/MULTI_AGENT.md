@@ -574,9 +574,21 @@ The build-time checks deliberately mirror what `merge_assembly` will later verif
 (an interface published in the right place here ⇒ it mates and aligns there; a
 local bbox inside the envelope here ⇒ it clears the envelope gate there), so a
 green `verify_contract` is a strong predictor of a green merge — the point of
-shifting it left. *Outstanding:* add it to the M2 builder tool surface and
-measure the rounds-to-converge drop on the multi-round toys (the metric §10's
-loop rewards); the tool and its oracle are ready for that billed run.
+shifting it left.
+
+**Measured (2026-06-12, Haiku, n=20).** Handing each builder its slice as a
+`verify_contract` contract and telling it to repair before saving (`M2_VERIFY=1`)
+lifted **every** condition to 20/20 on the two toys whose failures are local
+measurable defects: `tchainu_r` single **8/20 → 20/20** (+12), `nslot6` single
+15/20 → 20/20 (+5), `nslot6` partition 19/20 → 20/20 (+1), `tchainu_r` partition
+held at the 20/20 ceiling. The lift lands exactly where headroom and a
+locally-measurable defect coincide — the single conditions that make
+selection/copy errors — and barely moves near-ceiling partition. Builder turns
+rose with the added self-check + repair (the agents genuinely re-verified, not
+luck). This is the per-builder half of the shift-left loop measured as single-shot
+pass-rate; the coordinator fan-in "rounds-to-converge" it would also cut is the
+same mechanism (catch locally, not after merge). See
+[`MULTI_AGENT_EVAL.md`](../tests/MULTI_AGENT_EVAL.md).
 
 ### 11.4 Hierarchical manifests — real nesting
 

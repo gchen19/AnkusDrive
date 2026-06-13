@@ -167,12 +167,74 @@ TOOLS = [
         },
     },
     {
+        "name": "verify_contract",
+        "description": ("Self-check your finished part against a contract slice BEFORE "
+                        "saving. handle = your part's handle; contract = a dict with "
+                        "any of envelope {min,max}, interfaces {name:{origin,...}}, "
+                        "features [{kind:'gear'|'bore'|'extent', ...}], intent. Returns "
+                        "{ok, results:[{check, passed, detail}]}; never raises. Fix any "
+                        "passed=false check and re-verify before save_component."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"handle": {"type": "string"},
+                           "contract": {"type": "object"}},
+            "required": ["handle", "contract"],
+        },
+    },
+    {
         "name": "save_component",
         "description": ("Save the finished component to its file. Call this LAST, once the "
                         "geometry is complete. Takes no path — the harness supplies it."),
         "input_schema": {"type": "object", "properties": {}},
     },
 ]
+
+
+# --- verify_contract self-check mode (RFC §11.3, rounds-to-converge eval) ------
+#
+# M2_VERIFY=1 hands each builder its slice as a verify_contract contract and tells
+# it to self-check + fix BEFORE saving — the shift-left loop. We measure the
+# pass-rate lift vs the no-verify baseline. A toy opts in by returning a contract
+# from _vc_contract; the contract's oracle must match the slice the builder was
+# given (the agent just echoes the JSON to verify_contract, then repairs).
+
+def _vc_contract(toy_key, name):
+    """The verify_contract slice for one component, or None if the toy is not
+    wired for self-check. Each check is a LOCAL, measurable defect the builder
+    could otherwise only discover at merge."""
+    if toy_key.startswith("nslot"):
+        if name == "plate":
+            k = int(toy_key[5:])
+            return {"features": [{"name": f"hole{i}", "kind": "bore",
+                                  "diameter_mm": NSLOT_HOLE_D[i], "tol_mm": 0.5}
+                                 for i in range(k)]}
+        i = int(name[3:])  # pegN
+        return {"features": [{"name": "dia", "kind": "extent", "axis": "x",
+                              "length_mm": NSLOT_HOLE_D[i] - NSLOT_CLEAR,
+                              "tol_mm": 0.3}]}
+    if toy_key == "tchainu_r":
+        i = int(name[3:])  # segN
+        return {"features": [{"name": "len", "kind": "extent", "axis": "x",
+                              "length_mm": _TCHAINU_RESOLVED[i], "tol_mm": 0.4}]}
+    return None
+
+
+def _vc_augment(toy, name):
+    """Append the self-check instruction (+ the literal contract JSON) to a
+    builder's task, when M2_VERIFY is on and the toy is wired."""
+    c = _vc_contract(toy.key, name)
+    if not c:
+        return ""
+    return ("\n\nSELF-CHECK BEFORE SAVING: before save_component, call "
+            "verify_contract with handle = your finished part's handle and "
+            "contract = EXACTLY this JSON:\n" + json.dumps(c) + "\nRead the "
+            "results; if ok is not true, FIX the geometry so every failing check "
+            "passes, then call verify_contract again. Only call save_component "
+            "once verify_contract returns ok=true.")
+
+
+def _verify_on():
+    return bool(os.environ.get("M2_VERIFY"))
 
 
 def _apply_rotation(w, objname, axis, angle_deg, center=None):
@@ -3037,10 +3099,12 @@ def _agg(*results):
 
 def run_partition(client, model, toy, tmp):
     """One independent agent per component."""
+    verify = _verify_on()
     files, agents = {}, {}
     for name in toy.components:
         files[name] = tmp / f"part_{toy.key}_{name}.FCStd"
-        agents[name] = run_agent(client, model, SYSTEM, toy.components[name], files[name])
+        task = toy.components[name] + (_vc_augment(toy, name) if verify else "")
+        agents[name] = run_agent(client, model, SYSTEM, task, files[name])
     built = all(a["ok_built"] for a in agents.values()) and all(p.exists() for p in files.values())
     gate = toy.gate(tmp, files) if built else {"ok": False, "reason": "an agent did not save"}
     return {"condition": "partition", "built": built, "passed": gate["ok"],
@@ -3049,11 +3113,12 @@ def run_partition(client, model, toy, tmp):
 
 def run_single(client, model, toy, tmp):
     """One agent builds every component in a single conversation, file per component."""
+    verify = _verify_on()
     files, agents = {}, {}
     for name in toy.components:
         files[name] = tmp / f"single_{toy.key}_{name}.FCStd"
         task = (toy.single_task + f"\n\nNow build the {name.upper()} component and "
-                f"save_component.")
+                f"save_component." + (_vc_augment(toy, name) if verify else ""))
         agents[name] = run_agent(client, model, SYSTEM, task, files[name])
     built = all(a["ok_built"] for a in agents.values()) and all(p.exists() for p in files.values())
     gate = toy.gate(tmp, files) if built else {"ok": False, "reason": "baseline did not save"}
@@ -3351,10 +3416,13 @@ def main():
                         print(err)
                 continue
 
-            conds = (("partition", run_partition), ("single", run_single))
+            vlabel = "_vc" if _verify_on() else ""  # self-check mode tag (§11.3)
+            conds = ((f"partition{vlabel}", run_partition),
+                     (f"single{vlabel}", run_single))
             sel_cond = os.environ.get("M2_COND")  # e.g. "single" — rerun one condition
             if sel_cond:
-                conds = [(n, f) for n, f in conds if n in sel_cond.split(",")]
+                conds = [(n, f) for n, f in conds
+                         if n in sel_cond.split(",") or n[:-3] in sel_cond.split(",")]
             for cond_name, fn in conds:
                 trial_results = []
                 for i in range(trials):

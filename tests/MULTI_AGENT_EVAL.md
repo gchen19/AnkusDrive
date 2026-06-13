@@ -607,3 +607,51 @@ The resolver itself is covered free by `tests/test_manifest_resolve.py` (9 unit
 tests: the exact tchainu reconciliation, deficit direction, no-grid residual
 spread, determinism/purity, and loud failures on infeasible/unknown/bad-ref
 contracts) — in `run_all.sh`, no key.
+
+---
+
+## verify_contract shifts failure left — measured lift (2026-06-12, Haiku, n=20, $6.8)
+
+`verify_contract` (RFC §11.3) lets a builder self-check its part against its slice
+*before* saving, turning the expensive loop (build → merge → gate-fail → rebuild)
+into a cheap local one (build → self-check → fix). `M2_VERIFY=1` hands each builder
+its slice as a `verify_contract` contract and tells it to repair any failing check
+before `save_component`; the agents got `verify_contract` added to their tool
+surface. Run on the two toys whose failures are *local, measurable* per-part
+defects (so a self-check can catch them): `tchainu_r` (each segment's resolved
+length, an `extent` check) and `nslot6` (each plate hole a `bore` check, each peg
+an `extent` check).
+
+| toy | condition | baseline | + verify_contract | Δ |
+|---|---|---|---|---|
+| tchainu_r | partition | 20/20 | 20/20 | 0 (ceiling) |
+| tchainu_r | **single** | **8/20** | **20/20** | **+12** |
+| nslot6 | partition | 19/20 | 20/20 | +1 |
+| nslot6 | single | 15/20 | 20/20 | +5 |
+
+**Every condition reached 20/20**, and the lift lands exactly where the §11.3
+prediction puts it: where there is headroom *and* a locally-measurable defect.
+The single conditions — which make selection/copy errors picking their slice out
+of a full-contract prompt — lift most (tchainu_r single +12, nslot6 single +5);
+near-ceiling partition barely moves (+0 / +1). The self-check gives a builder an
+oracle for its own slice, so the single builder that was building a 19 mm segment
+when its contract said 18 mm now catches it and fixes it.
+
+**The agents genuinely self-checked** (not luck): mean builder turns rose with
+the added `verify_contract` call + repair — tchainu_r single 2.9 → 4.0, partition
+3.5 → 4.3; nslot6 builders ran to 5+ turns (max 15–16) on the multi-hole plate's
+verify→fix loop. Pre-flight (free) confirmed every `_vc_contract` oracle passes
+its toy's *reference* build, so a self-checking builder converges rather than
+loops against a wrong oracle.
+
+**Honest scope.** This is single-shot *pass-rate* lift from a within-builder
+self-check-and-repair loop — the per-builder half of §11.3. It is not literally
+coordinator "rounds-to-converge" (the M2 toys don't run the fan-in re-dispatch
+loop), but the mechanism is the same one that would cut those rounds: catch and
+fix a contract violation locally instead of after the expensive merge. It also
+confirms Probe E's earlier prediction (verify-before-save helps the condition
+with headroom and *narrows* the partition-vs-single gap) — here that narrowing is
+the success signal, with tchainu_r single closing the entire 8→20 gap to
+partition. Probe E's caution (don't add it when trying to *surface* a divergence)
+and this result (do add it to *converge* faster) are the same finding read two
+ways.
