@@ -155,6 +155,51 @@ def test_size_ratio_form_equivalent_to_teeth():
     assert abs(by_teeth - by_ratio) < 1e-9, (by_teeth, by_ratio)
 
 
+# --- overall train-ratio gate (the emergent product invariant) ---------------
+
+def _train_spec(stage_teeth, target=None, tol=0.004):
+    """Serial K-stage train: shaft0..shaftK each grounded; stage i meshes a driver on
+    shaft i with a driven on shaft i+1. DOF 1, no loops."""
+    K = len(stage_teeth)
+    links, meshes = {}, []
+    for i in range(K + 1):
+        members = [f"shaft{i}"] + ([f"d{i}"] if i < K else []) + ([f"e{i-1}"] if i else [])
+        links[f"shaft{i}"] = {"members": members, "ground": "revolute"}
+    for i, (a, b) in enumerate(stage_teeth):
+        meshes.append({"a": f"d{i}", "b": f"e{i}", "teeth_a": a, "teeth_b": b,
+                       "id": f"stage{i}"})
+    spec = {"expected_dof": 1, "links": links, "meshes": meshes}
+    if target is not None:
+        spec["target_ratio"] = {"input": "shaft0", "output": f"shaft{K}",
+                                "ratio": target, "tol": tol}
+    return spec
+
+
+def test_train_is_one_dof_and_hits_target():
+    """A 3-stage train with each stage meshing -> DOF 1; product of stage ratios
+    (10/30)(22/22)(16/32) = 1/6 hits target."""
+    target = (10 / 30) * (22 / 22) * (16 / 32)
+    r = analyze(_train_spec([(10, 30), (22, 22), (16, 32)], target=target))
+    assert r["ok"], r["violations"]
+    assert r["rigid"]["mobility_dof"] == 1
+    assert abs(abs(r["target_ratio"]["realised"]) - target) < 1e-4, r["target_ratio"]
+
+
+def test_train_off_target_is_caught_though_each_stage_meshes():
+    """Every stage meshes locally (sum to its centre), but the PRODUCT misses target —
+    the emergent failure no single stage builder can see. The gate must catch it."""
+    target = (10 / 30) * (22 / 22) * (16 / 32)            # 1/6
+    bad = analyze(_train_spec([(20, 20), (22, 22), (16, 32)], target=target))  # 1/2
+    assert not bad["ok"]
+    assert bad["target_ratio"]["ok"] is False
+    assert "overall ratio" in bad["violations"][0]["reason"], bad["violations"]
+
+
+def test_train_without_target_only_checks_mobility():
+    r = analyze(_train_spec([(20, 20), (22, 22), (16, 32)]))   # no target_ratio
+    assert r["ok"] and "target_ratio" not in r, r
+
+
 # --- the worker-delegated helpers (front-door derivation + validation) -------
 
 def test_meshes_derived_from_gear_mesh_checks():
