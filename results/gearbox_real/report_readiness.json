@@ -1,0 +1,76 @@
+{
+  "toy1_gearbox_mobility_fixed": {
+    "go": false,
+    "checks": {
+      "discriminates": {
+        "ok": true,
+        "positive_ok": true,
+        "negative_ok": false
+      },
+      "deterministic": {
+        "ok": true,
+        "n_repeats": 5
+      },
+      "margin": {
+        "ok": true,
+        "positive_score": 1.0,
+        "negative_score": -4.0,
+        "gap": 5.0,
+        "min_margin": 1.0
+      },
+      "emergent": {
+        "ok": true,
+        "negative_local_all_pass": true,
+        "negative_system_fails": true,
+        "n_local_slices": 6,
+        "reason": "every local slice passes yet the system fails \u2014 the defect is invisible to any single builder"
+      },
+      "agent_determined": {
+        "ok": false,
+        "n_variants": 5,
+        "n_pass": 0,
+        "n_fail": 5,
+        "reason": "system verdict is invariant to agent choices \u2014 nothing to measure"
+      }
+    },
+    "reasons": [
+      "agent_determined"
+    ]
+  },
+  "toy2_compound_train_ratio": {
+    "go": true,
+    "checks": {
+      "discriminates": {
+        "ok": true,
+        "positive_ok": true,
+        "negative_ok": false
+      },
+      "deterministic": {
+        "ok": true,
+        "n_repeats": 5
+      },
+      "margin": {
+        "ok": true,
+        "positive_score": 1.0,
+        "negative_score": -0.3333,
+        "gap": 1.3333,
+        "min_margin": 1.0
+      },
+      "emergent": {
+        "ok": true,
+        "negative_local_all_pass": true,
+        "negative_system_fails": true,
+        "n_local_slices": 3,
+        "reason": "every local slice passes yet the system fails \u2014 the defect is invisible to any single builder"
+      },
+      "agent_determined": {
+        "ok": true,
+        "n_variants": 5,
+        "n_pass": 1,
+        "n_fail": 4,
+        "reason": "agent choices move the system verdict"
+      }
+    },
+    "reasons": []
+  }
+}
