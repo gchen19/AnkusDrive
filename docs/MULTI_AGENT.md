@@ -8,15 +8,17 @@ the whole back up with the pieces actually fitting.
 Companion to [`ROADMAP.md`](ROADMAP.md). The roadmap is about deepening what *one*
 agent can do; this doc is about *many* agents sharing the work.
 
-**Status (2026-06): Phases 0–2 are shipped and eval-validated.** The original RFC
+**Status (2026-06): Phases 0–3 are shipped and eval-validated.** The original RFC
 ("Phase 0 is runnable today, everything past it is a plan") is history — the
 partition+merge substrate (`publish_interface`, `merge_assembly`, mate-by-frame,
 recursive BOM, the envelope / interference / alignment gates, the lockfile) landed
-2026-05-30, and a 30-toy eval suite has since produced the first empirical results
-on when partitioning helps (§10). The forward-looking part of this doc is now
-**Phase 3 (§11): the contract and gate extensions needed for assemblies of
-*advanced* components** — gear trains, fits, kinematic interfaces, physics
-requirements — driven directly by what the evals found.
+2026-05-30, a 30-toy eval suite produced the first empirical results on when
+partitioning helps (§10), and **Phase 3 (§11) — the contract and gate extensions
+for assemblies of *advanced* components — completed 2026-06-12**: the resolve step,
+typed interfaces, `verify_contract`, hierarchical manifests, standard parts,
+requirements gates, schema formalization, and the shipped pipelined orchestrator.
+Two billed results anchor it: the resolve step took `tchainu` partition 2/20 → 20/20,
+and `verify_contract` lifted every measured condition to 20/20.
 
 **Related docs:**
 
@@ -726,18 +728,42 @@ Two-sided gate-validated free in `tests/test_manifest_schema.py`
 `manifest_changed` with `modified` empty; stamping the schema is not drift), in
 `run_all.sh`, no key.
 
-### 11.8 Orchestration: ship it, pipeline it
+### 11.8 Orchestration: ship it, pipeline it *(shipped)*
 
-Promote `orchestration/coordinator.py` to a shipped skill/workflow template (the
-Phase 2 line item that hasn't landed), upgraded with §8's pipelined fan-in, the
-round 0 contract review, the resolve step, and the per-builder isolation rules
-(§7). The partition rule it should encode, from §10.1–10.2: **partition where
-constraints couple, not merely where parts multiply** — the corrected k-sweep
-found no breadth cliff through eight distinct interface pairs for Haiku-class
-builders (re-baseline per model), but a single *shared derivation* reliably
-breaks whoever holds it (tchain, twopin). So split along coupled constraints,
-resolve them coordinator-side first (§11.1), and lean on hierarchy (§11.4)
-rather than width when the contract grows.
+Promote `orchestration/coordinator.py` to a shipped reference template (the
+Phase 2 line item that hadn't landed), upgraded with §8's pipelined fan-in, the
+round 0 contract review, the resolve step, and the per-builder isolation rules (§7).
+
+**Shipped 2026-06-12** (`orchestration/`). The reference coordinator now implements
+the full Appendix A loop, and its free checks are part of `run_all.sh` (it's a
+maintained artifact now, not example code):
+
+- **Round 0 contract review** — before any geometry, each leaf builder reads ONLY
+  its slice and returns accept/amend via a forced `emit_review` tool call
+  (`agentkit.run_reviewer`); amendments (grow an envelope, append a clarifying
+  note) fold into the brief (`apply_reviews`). Catches an infeasible contract for
+  the price of one short completion instead of a full build→merge→gate-fail→rebuild.
+- **Pipelined hierarchical fan-in** — a brief component may carry a `sub_brief`
+  (a nested brief) instead of file/task. `orchestrate` runs each subassembly node
+  independently — built, merged, and gated on its own — then the parent links the
+  gated subassembly root. Unrelated branches don't block each other, and a
+  subassembly failure is isolated to its node (surfaced in `report["nodes"]`).
+- **Per-builder isolation (§7)** — each leaf builds in `workdir/build/<cid>/`; the
+  shared area holds only the manifest, lockfile, and merged roots.
+- **Resolve step (§11.1)** — `resolve_brief` runs at entry, so builders receive
+  literal values, never a derivation.
+
+Free-validated in `tests/test_coordinator.py` (round-0 amend folds in then builds;
+a sub_brief node orchestrates + gates and the BOM flattens through it; per-builder
+dirs; an isolated subassembly failure with the sibling unblocked) plus the existing
+`orchestration.dryrun` (the renegotiate path) and `orchestration.selftest` (brief
+validation) — all in `run_all.sh`, no key. The partition rule it encodes, from
+§10.1–10.2: **partition where constraints couple, not merely where parts multiply**
+— the corrected k-sweep found no breadth cliff through eight distinct interface
+pairs for Haiku-class builders (re-baseline per model), but a single *shared
+derivation* reliably breaks whoever holds it (tchain, twopin). So split along
+coupled constraints, resolve them coordinator-side first (§11.1), and lean on
+hierarchy (§11.4) rather than width when the contract grows.
 
 ---
 
@@ -754,7 +780,8 @@ rather than width when the contract grows.
   classification and staleness propagation; reference coordinator
   (`orchestration/coordinator.py`). *Outstanding:* the shipped-skill packaging
   (moved to §11.8).
-- **Phase 3 — advanced assemblies. ← current.** In priority order: the resolve step
+- **Phase 3 — advanced assemblies. ✅ COMPLETE (11.1–11.8 shipped 2026-06-12).**
+  In priority order: the resolve step
   (11.1) **✅ shipped 2026-06-12** (`driftpin/manifest.py`; validated `tchainu`
   partition 2/20 → 20/20); typed interfaces + promoted gates (11.2) **✅ first
   three kinds shipped 2026-06-12** (`bore_fit`, `gear_mesh`, `frame_orientation`
@@ -770,7 +797,9 @@ rather than width when the contract grows.
   reported as skipped); schema formalization (11.7) **✅ shipped 2026-06-12**
   (`driftpin.manifest/1` stamp + load-time validation + `validate_manifest` tool +
   lockfile `manifest_hash` for contract-drift detection); shipped, pipelined
-  orchestration (11.8).
+  orchestration (11.8) **✅ shipped 2026-06-12** (`orchestration/` — round-0
+  contract review, pipelined hierarchical fan-in, per-builder isolation; free
+  checks in `run_all.sh`).
 - **Phase 4 — deferred.** Shared co-editing, *reframed* as **claimed-region
   editing**: an agent claims a sub-tree/feature region of one document, edits only
   there, and merges back — never free-for-all cursors. Carries the full concurrency

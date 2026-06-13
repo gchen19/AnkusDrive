@@ -84,8 +84,11 @@ def _make_script():
 def main():
     client = agentkit.ScriptedClient(_make_script())
     with tempfile.TemporaryDirectory() as td:
+        # review=False: this dry run targets the renegotiate path specifically
+        # (round-0 review has its own proof in tests/test_coordinator.py).
         rep = coordinator.orchestrate(
-            client, agentkit.MODELS["haiku"], BRIEF, Path(td), max_rounds=3)
+            client, agentkit.MODELS["haiku"], BRIEF, Path(td), max_rounds=3,
+            review=False)
     print("\n== coordinator dry run ==")
     print(f"  ok={rep['ok']}  rounds={rep['rounds']}  cost=${rep['cost_usd']}")
     for rd in rep["trace"]:
