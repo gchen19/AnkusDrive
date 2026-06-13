@@ -4839,6 +4839,234 @@ def _h_envelope_check(p):
     return out
 
 
+# --- typed-interface gates (RFC §11.2) ---------------------------------------
+#
+# An untyped interface is just a frame; a TYPED check carries its contract fields
+# and a geometric gate dispatched by `kind`. The manifest gains a `checks` list
+# of {kind, ...refs..., ...contract...}; merge_assembly resolves each ref to its
+# placed link and runs the kind's gate against the assembled geometry. Each gate
+# returns a list of VIOLATIONS (empty == pass), the same shape as the existing
+# interference / envelope / interface_align gates, so a coordinator branches on
+# them mechanically. The gate logic is promoted from the M2 eval helpers that
+# proved it (gear-mesh pitch sums, min-clearance fits) plus the orientation check
+# that interface_align (origins only) does not cover.
+
+def _link_world_shape(link):
+    """World-space shape of a top-level assembly link (LinkedObject geometry
+    transformed by the link's placement). None if the link carries no shape."""
+    base = (link.LinkedObject if (link.isDerivedFrom("App::Link")
+                                  and link.LinkedObject is not None) else link)
+    if not (hasattr(base, "Shape") and not base.Shape.isNull()):
+        return None
+    return base.Shape.transformed(link.Placement.Matrix)
+
+
+def _link_local_shape(link):
+    """Local (unplaced) shape of a link's target — for axisymmetric measurements
+    (a gear's pitch radius) that are taken about the part's own axis."""
+    base = (link.LinkedObject if (link.isDerivedFrom("App::Link")
+                                  and link.LinkedObject is not None) else link)
+    if not (hasattr(base, "Shape") and not base.Shape.isNull()):
+        return None
+    return base.Shape
+
+
+def _gear_pitch_radius(shape, module, internal=False):
+    """Pitch radius of an involute gear from its as-built teeth, about its own
+    centroid axis: external rp = tip_radius − module; internal rp = inner_tip +
+    module (mirrors the M2 gearbox oracle, which reads rp back from geometry so a
+    wrong tooth count is caught by the measured radius, not trusted from input)."""
+    import math
+    com = shape.CenterOfMass
+    radii = [math.hypot(v.X - com.x, v.Y - com.y) for v in shape.Vertexes]
+    if not radii:
+        return None
+    return (min(radii) + module) if internal else (max(radii) - module)
+
+
+def _axis_world(link):
+    """(point, unit-direction) of a link's local +Z axis in world space — the
+    rotation axis of a gear/shaft placed into the assembly."""
+    pl = link.Placement
+    base = pl.Base
+    d = pl.Rotation.multVec(App.Vector(0, 0, 1))
+    d.normalize()
+    return base, d
+
+
+def _parallel_axis_distance(shape_a, dir_a, shape_b):
+    """Perpendicular distance between two (near-)parallel part axes, taken
+    through their world centroids — the as-placed centre distance of a gear pair."""
+    ca, cb = shape_a.CenterOfMass, shape_b.CenterOfMass
+    dv = cb - ca
+    return (dv - dir_a.multiply(dv.dot(dir_a))).Length
+
+
+def _gate_bore_fit(by_name, links_by_inst, chk):
+    """Clearance-fit gate: the pin must sit in the bore with clearance inside the
+    contracted band. Closes the exact-touch blind spot (§6) — interference_check
+    reads ZERO for tangent solids, so a slip fit MUST be gated on minimum
+    clearance, not on non-interference. min_clearance_mm required; max optional."""
+    pin = by_name.get(links_by_inst.get(chk["pin"], chk["pin"]))
+    bore = by_name.get(links_by_inst.get(chk["bore"], chk["bore"]))
+    if pin is None or bore is None:
+        return [{**chk, "error": "pin/bore link not found"}]
+    sp, sb = _link_world_shape(pin), _link_world_shape(bore)
+    if sp is None or sb is None:
+        return [{**chk, "error": "pin/bore has no shape"}]
+    lo = float(chk["min_clearance_mm"])
+    hi = chk.get("max_clearance_mm")
+    try:
+        overlap = sp.common(sb).Volume
+    except Exception:
+        overlap = 0.0
+    if overlap > 1e-9:
+        return [{**chk, "status": "interference", "clearance_mm": 0.0,
+                 "overlap_mm3": round(overlap, 4),
+                 "reason": f"{chk['pin']} interferes with {chk['bore']} "
+                           f"(too tight; need ≥{lo} mm clearance)"}]
+    gap = round(sp.distToShape(sb)[0], 6)
+    if gap < lo - 1e-6:
+        return [{**chk, "status": "clear" if gap > 1e-7 else "contact",
+                 "clearance_mm": gap,
+                 "reason": f"{chk['pin']}↔{chk['bore']} clearance {gap:.4f} mm "
+                           f"< min {lo} mm" + (" (exact-touch)" if gap <= 1e-7 else "")}]
+    if hi is not None and gap > float(hi) + 1e-6:
+        return [{**chk, "status": "clear", "clearance_mm": gap,
+                 "reason": f"{chk['pin']}↔{chk['bore']} clearance {gap:.4f} mm "
+                           f"> max {hi} mm (too loose)"}]
+    return []
+
+
+def _gate_gear_mesh(by_name, links_by_inst, chk):
+    """Gear-mesh gate (external pair): the two gears' pitch radii must sum to the
+    contracted centre distance, the as-placed axes must actually sit at that
+    distance, and (if given) the ratio must hit target. The canonical
+    shared-constraint partition — each builder sizes its gear so the pair meshes
+    at one shared C (the M2 gearbox oracle, promoted)."""
+    a = by_name.get(links_by_inst.get(chk["a"], chk["a"]))
+    b = by_name.get(links_by_inst.get(chk["b"], chk["b"]))
+    if a is None or b is None:
+        return [{**chk, "error": "gear link not found"}]
+    if chk.get("a_internal") or chk.get("b_internal"):
+        return [{**chk, "error": "internal-gear mesh not supported in v0 "
+                                 "(external pair only)"}]
+    la, lb = _link_local_shape(a), _link_local_shape(b)
+    if la is None or lb is None:
+        return [{**chk, "error": "gear has no shape"}]
+    m = float(chk["module_mm"])
+    C = float(chk["center_distance_mm"])
+    tol = float(chk.get("tol_mm", 0.5))
+    rpa = _gear_pitch_radius(la, m)
+    rpb = _gear_pitch_radius(lb, m)
+    out = []
+    if abs((rpa + rpb) - C) > tol:
+        out.append({**chk, "rp_a": round(rpa, 4), "rp_b": round(rpb, 4),
+                    "reason": f"pitch radii sum {rpa+rpb:.3f} != centre distance "
+                              f"{C:g} mm (pair will not mesh)"})
+    _, da = _axis_world(a)
+    measured_C = _parallel_axis_distance(_link_world_shape(a), da,
+                                         _link_world_shape(b))
+    if abs(measured_C - C) > tol:
+        out.append({**chk, "measured_center_distance_mm": round(measured_C, 4),
+                    "reason": f"as-placed centre distance {measured_C:.3f} != "
+                              f"{C:g} mm"})
+    if "ratio" in chk and rpa > 1e-9:
+        r = rpb / rpa
+        rt = float(chk["ratio"])
+        if abs(r - rt) > 0.05 * rt + 0.02:
+            out.append({**chk, "measured_ratio": round(r, 4),
+                        "reason": f"ratio {r:.3f} != {rt:g}"})
+    return out
+
+
+def _gate_frame_orientation(by_name, links_by_inst, chk):
+    """Orientation gate for a mated frame pair: the published child/parent frames
+    must be ANGULARLY aligned, not merely coincident in origin. interface_align
+    checks origins only — a frame positioned right but rotated passes it — so a
+    keyed/clocked interface needs this. max_angle_deg (default 1.0)."""
+    import math
+    c = by_name.get(links_by_inst.get(chk["child"], chk["child"]))
+    pa = by_name.get(links_by_inst.get(chk["parent"], chk["parent"]))
+    if c is None or pa is None:
+        return [{**chk, "error": "child/parent link not found"}]
+    cif, pif = _read_interfaces(c), _read_interfaces(pa)
+    ci, pi = chk["child_iface"], chk["parent_iface"]
+    if ci not in cif or pi not in pif:
+        return [{**chk, "error": "interface not published"}]
+    cw = c.LinkPlacement.multiply(_frame_to_placement(cif[ci]))
+    pw = pa.LinkPlacement.multiply(_frame_to_placement(pif[pi]))
+    zc = cw.Rotation.multVec(App.Vector(0, 0, 1))
+    zp = pw.Rotation.multVec(App.Vector(0, 0, 1))
+    cosang = max(-1.0, min(1.0, zc.dot(zp)))
+    ang = math.degrees(math.acos(cosang))
+    lim = float(chk.get("max_angle_deg", 1.0))
+    if ang > lim:
+        return [{**chk, "angle_deg": round(ang, 4),
+                 "reason": f"{chk['child']}.{ci} axis off {chk['parent']}.{pi} "
+                           f"by {ang:.2f}° (> {lim}°)"}]
+    return []
+
+
+_TYPED_GATES = {
+    "bore_fit": _gate_bore_fit,
+    "gear_mesh": _gate_gear_mesh,
+    "frame_orientation": _gate_frame_orientation,
+}
+
+# Typed kinds whose two parts are MEANT to be in contact / interpenetrating in a
+# static pose, so the blunt interference gate must not also flag them: meshing
+# involute teeth overlap at the pitch line (the eval's "posed interference isn't
+# the right test for a gear ratio" finding). The typed gate is authoritative for
+# that pair; any other pair still gets the normal interference check. A check of
+# any kind can opt in with "expected_contact": true (e.g. a press_fit band).
+_CONTACT_KINDS = {"gear_mesh"}
+
+
+def _check_pair(chk):
+    """The two instance refs a typed check relates, by kind ((a,b) / (pin,bore)
+    / (child,parent))."""
+    if "a" in chk and "b" in chk:
+        return chk["a"], chk["b"]
+    if "pin" in chk and "bore" in chk:
+        return chk["pin"], chk["bore"]
+    if "child" in chk and "parent" in chk:
+        return chk["child"], chk["parent"]
+    return None, None
+
+
+def _contact_exclusions(checks, links_by_inst):
+    """Link-name pairs the interference gate should skip because a typed check
+    owns them as expected contact."""
+    excl = set()
+    for chk in checks:
+        if chk.get("kind") in _CONTACT_KINDS or chk.get("expected_contact"):
+            ra, rb = _check_pair(chk)
+            if ra is not None and rb is not None:
+                excl.add(frozenset((links_by_inst.get(ra, ra),
+                                    links_by_inst.get(rb, rb))))
+    return excl
+
+
+def _run_typed_checks(checks, by_name, links_by_inst):
+    """Dispatch each manifest `checks` entry to its kind's gate. Returns the flat
+    list of violations across all checks (empty == every typed contract holds).
+    An unknown kind is itself a violation — a typed contract that silently does
+    not run is worse than one that fails loudly."""
+    out = []
+    for chk in checks:
+        gate = _TYPED_GATES.get(chk.get("kind"))
+        if gate is None:
+            out.append({**chk, "error": f"unknown typed-interface kind "
+                                        f"{chk.get('kind')!r}"})
+            continue
+        try:
+            out.extend(gate(by_name, links_by_inst, chk))
+        except Exception as e:
+            out.append({**chk, "error": f"{type(e).__name__}: {e}"})
+    return out
+
+
 @handler("merge_assembly")
 def _h_merge_assembly(p):
     """Construct-up an assembly from a manifest (the coordinator's one call).
@@ -4931,9 +5159,20 @@ def _h_merge_assembly(p):
                        "parent_iface": m["verify_align"]["parent_iface"]}
                       for m in align_pairs],
         })
+    checks = man.get("checks", [])
+    if checks:
+        gates["typed"] = _run_typed_checks(checks, by_name, links_by_inst)
+        # A typed contact gate (gear mesh) owns its pair; drop it from the blunt
+        # interference list so a valid mesh isn't double-failed for overlapping
+        # teeth. Other pairs still get the normal interference check.
+        excl = _contact_exclusions(checks, links_by_inst)
+        if excl:
+            gates["interference"] = [
+                r for r in gates["interference"]
+                if frozenset((r["a"], r["b"])) not in excl]
     HANDLERS["save_document"]({"path": root_path})
     ok = (not gates["interference"]) and (not gates["envelope"]) \
-        and (not gates.get("interface_align"))
+        and (not gates.get("interface_align")) and (not gates.get("typed"))
     return {"assembly": asm_h, "doc": name, "root": root_path,
             "placed": placed, "gates": gates, "ok": ok}
 
