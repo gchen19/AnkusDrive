@@ -32,9 +32,22 @@ from test_multiagent_m2 import run_agent, SYSTEM, MODELS, cost_of  # noqa: E402
 
 BORE_R = gb.SHAFT_R + gb.BORE_CLEAR / 2   # gear/shaft bore radius (Ø10.4)
 
+# GRID mode: ratios whose ideal tooth split is a HALF-INTEGER, so a pair only sums
+# to the required 48 teeth if the two gear agents round in OPPOSITE directions — a
+# genuine reconciliation a partition agent can't do alone (tchainu-on-gears).
+# r_k = 96/(2k+1) - 1 puts the input ideal at k+0.5 (k=13..23 -> 13.5..23.5T).
+GRID = bool(os.environ.get("GRID"))
+GRID_RATIOS = [96.0 / (2 * k + 1) - 1 for k in (13, 15, 17, 19, 21, 23)]
+if GRID:
+    gb.RATIOS = GRID_RATIOS   # gate + reference use these; gb.teeth() reconciles
 
-def _gear_tag_task(tag, n_teeth, mode):
-    """tag like 'in0'/'out2'. mode in {'resolve','derive'}."""
+
+def _gear_tag_task(tag, n_teeth, mode, reconcile=False):
+    """tag like 'in0'/'out2'. mode in {'resolve','derive'}. reconcile=True (the
+    single agent, which owns the pair) lets the OUTPUT gear be sized as 48 − the
+    input's count, so the pair always sums to 48; reconcile=False (a partition
+    agent) sizes each gear from its OWN ideal independently — which, when the ideal
+    is a half-integer (GRID), rounds out of agreement and the pair fails to mesh."""
     s = int(tag[len("in" if tag.startswith("in") else "out"):])
     is_in = tag.startswith("in")
     ratio = gb.RATIOS[s]
@@ -46,13 +59,21 @@ def _gear_tag_task(tag, n_teeth, mode):
         return (f"Build a spur gear: add_gear(teeth={n_teeth}, module={gb.M:g}, "
                 f"height={gb.GEAR_H:g}). {bore}")
     side = "INPUT" if is_in else "OUTPUT"
-    formula = (f"round(48/(1+{ratio:.4g}))" if is_in
-               else f"48 - round(48/(1+{ratio:.4g}))")
+    independent = GRID and not reconcile and not is_in
+    if is_in:
+        formula = f"round(48/(1+{ratio:.4g}))"
+    elif independent:
+        formula = f"round(48*{ratio:.4g}/(1+{ratio:.4g}))"
+    else:
+        formula = f"48 - round(48/(1+{ratio:.4g}))"
+    note = ("Your ideal tooth count is not a whole number — round it to the nearest "
+            "whole tooth. You build only THIS gear and cannot see the other gear of "
+            "your pair. ") if independent else ""
     return (f"Build the {side} gear of gearbox speed {s+1}. module {gb.M:g} mm, "
             f"height {gb.GEAR_H:g}. Every input+output pair meshes at a shared shaft "
             f"centre distance of {gb.C:g} mm, so each pair's tooth counts SUM to "
             f"2*{gb.C:g}/{gb.M:g} = 48. This speed's ratio (output:input) is "
-            f"{ratio:.4g}. Compute your tooth count = {formula} and "
+            f"{ratio:.4g}. Compute your tooth count = {formula}. {note}"
             f"add_gear(teeth=<that>, module={gb.M:g}, height={gb.GEAR_H:g}). {bore}")
 
 
@@ -84,20 +105,21 @@ def run_trial(client, model, n, mode, condition, tmp):
     tags = _gear_tags(n)
     agents = {}
     if condition == "partition":
-        for tag in tags:
+        for tag in tags:   # one agent per gear, sees only its own slice
             files[tag] = tmp / f"{tag}.FCStd"
-            task = _gear_tag_task(tag, _teeth_of(tag, n), mode)
+            task = _gear_tag_task(tag, _teeth_of(tag, n), mode, reconcile=False)
             agents[tag] = run_agent(client, model, SYSTEM, task, files[tag])
-    else:  # single: one agent builds all gears, one after another
+    else:  # single: one agent owns all pairs and can reconcile each split
         lines = "; ".join(f"{t}: {_teeth_of(t, n)}T" for t in tags) if mode == "resolve" \
-            else f"{2*n} gears (input+output for {n} speeds), tooth pairs summing to 48"
+            else f"{2*n} gears (input+output for {n} speeds); every pair's teeth sum to exactly 48"
         for tag in tags:
             files[tag] = tmp / f"{tag}.FCStd"
             head = (f"You are building all {2*n} gears of a {n}-speed gearbox, one at a "
-                    f"time. module {gb.M:g}; every pair's teeth sum to 48 ({lines}).\n\n")
-            agents[tag] = run_agent(client, model, SYSTEM,
-                                    head + "Now build " + _gear_tag_task(tag, _teeth_of(tag, n), mode),
-                                    files[tag])
+                    f"time. module {gb.M:g}; {lines}.\n\n")
+            agents[tag] = run_agent(
+                client, model, SYSTEM,
+                head + "Now build " + _gear_tag_task(tag, _teeth_of(tag, n), mode, reconcile=True),
+                files[tag])
     built = all(a["ok_built"] for a in agents.values()) and all(p.exists() for p in files.values())
     if built:
         mp = gb.build_manifest(tmp, n, files)

@@ -741,3 +741,49 @@ Cost: 3-speed pilot $0.89 + 6-speed $3.56 ≈ **$4.5**. Bonus: building the real
 gearbox surfaced and fixed a shipped bug — `gear_mesh`/`requirements` crashed on a
 boolean-cut **compound** shape (a bored gear, a bearing) because the gates read
 `shape.CenterOfMass` directly; now via a solids-based `_shape_com` (PR #72).
+
+---
+
+## The grid-teeth gearbox — the shared RECONCILIATION, and resolve earns its keep (2026-06-13, Haiku, ~$5.2)
+
+The companion to the section above. Same real gearbox, but the ratios are chosen
+so each pair's *ideal* tooth split is a **half-integer** (e.g. 19.5/28.5;
+`r_k = 96/(2k+1) − 1`). A pair sums to the required 48 teeth (so its pitch radii
+sum to C and it meshes) **only if the two gear agents round in OPPOSITE
+directions** — a genuine reconciliation. `scratch/gearbox_experiment.py GRID=1`.
+
+| size | condition | derive | resolve |
+|---|---|---|---|
+| 3-speed (6 gears) | partition | **0/6** | **6/6** |
+| 3-speed | single | 1/6 | 6/6 |
+| 6-speed (12 gears) | partition | **0/6** | **6/6** |
+| 6-speed | single | **0/6** | **6/6** |
+
+**The resolve step takes partition from 0/6 → 6/6** — tchainu→tchainu_r, now on a
+real mechanism. The structure is identical to `tchainu`:
+
+- **derive breaks everyone.** Partition is 0/6 by construction: each gear agent
+  rounds its own half-integer ideal independently and the pair lands on 49 or 47
+  teeth, which the `gear_mesh` gate catches (`pitch radii sum 49 != 48`). Single is
+  1/6 → 0/6: "single" is k+1 *cold calls* (one per gear, §the-earlier-sections), so
+  the two cold calls of a pair round the shared half independently and still
+  mismatch — worse at 12 gears, where all six pairs must come out right at once.
+  *Nobody reconciles by deriving.*
+- **resolve fixes all of it (6/6).** Hand each agent its literal reconciled tooth
+  count and the half-integer rounding never happens — exactly §11.1.
+
+**This closes the taxonomy.** The two gearbox experiments are the same 12-gear
+assembly on the same shared centre distance, with opposite difficulty, set purely
+by whether the shared quantity must be *reconciled*:
+
+| shared quantity | example | difficulty | fix |
+|---|---|---|---|
+| **constant** applied locally | clean integer teeth (`48/(1+r)` lands whole) | easy — 48/48 | none needed |
+| **reconciliation** across agents | half-integer split must sum to 48; tchainu grid total | hard — derive 0/6 | the resolve step (0→6/6) |
+
+"A shared derivation breaks agents" (§10.2) resolves cleanly: a shared **constant**
+each agent applies independently does not break them, even at 12 components; a
+shared **reconciliation** — a value that must be made consistent *across* agents —
+does, and is precisely what the resolve step (§11.1) exists to remove. A render of
+the assembled gearbox is in `results/gearbox_real/gearbox{3,6}_render.png`
+(`scratch/render_gearbox.py`, matplotlib from the exported STL).
