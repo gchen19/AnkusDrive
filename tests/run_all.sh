@@ -201,6 +201,10 @@ echo "== Hierarchical manifests (RFC 11.4, nested merge/gate/lock, no key) =="
 $VENV_PY tests/test_hierarchical_manifests.py
 
 echo
+echo "== Standard / library parts (RFC 11.5, generate/gate/lock, no key) =="
+$VENV_PY tests/test_standard_parts.py
+
+echo
 echo "== Reliability Layer D — harness validator (free, scripted stub) =="
 # The real Layer D benchmark needs an API key; this runs its grader negative
 # control + scripted-stub plumbing check, which require no API, so the harness
