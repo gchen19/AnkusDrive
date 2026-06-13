@@ -21,7 +21,8 @@ with behavioral claims also have billed agent evidence. All Haiku 4.5, n=20/cond
 | 11.3 | `verify_contract` (builder-side self-check) | ✅ shipped | `test_verify_contract.py` (17) | **every condition → 20/20**; `tchainu_r` single **8/20 → 20/20** (+12) |
 | 11.4 | Hierarchical manifests (nested merge/gate/lock) | ✅ shipped | `test_hierarchical_manifests.py` (13) | n/a (geometric oracle) |
 | 11.5 | Standard parts (`library` components generated at merge) | ✅ shipped | `test_standard_parts.py` (18) | n/a (geometric oracle) |
-| 11.6–11.8 | requirements gates · schema formalization · pipelined orchestration | ⬜ planned | — | — |
+| 11.6 | Requirements gates — mass + CG (tier-1; physics deferred) | ✅ tier-1 shipped | `test_requirements_gates.py` (16) | n/a (deterministic oracle) |
+| 11.7–11.8 | schema formalization · pipelined orchestration | ⬜ planned | — | — |
 
 **Headline findings (2026-06-12 billed rounds, ~$30 total):**
 

@@ -5287,6 +5287,71 @@ def _generate_library_part(tool, spec, path):
     HANDLERS["save_document"]({"path": path})
 
 
+# --- requirements gates (RFC §11.6) ------------------------------------------
+#
+# "The pieces fit" is not "the product works." The manifest may carry a
+# `requirements` block gated at merge. v0 ships the ALWAYS-ON, cheap tier built on
+# shipped machinery — total mass against a budget and centre-of-mass inside a
+# window (mass_properties + the recursive leaf walk). Returns {report, violations}:
+# `report` is the measured numbers (so a coordinator sees them on a pass too),
+# `violations` is the failing requirements (empty == all met). An unrecognised
+# requirement key is reported as `skipped`, never silently dropped — the
+# expensive physics tier (min_first_mode_hz via FEM, with its bonding / boundary-
+# condition modelling) is deferred, so naming it here surfaces as skipped, not as
+# a silent pass.
+
+_TIER1_REQ_KEYS = {"max_mass_g", "cg_window", "density_kg_mm3"}
+
+
+def _requirements_gate(assembly_handle, req):
+    """Evaluate the manifest `requirements` block over the merged assembly's
+    world-space leaves. Returns {report, violations, skipped}."""
+    asm = _resolve(assembly_handle)
+    shapes = []
+    _leaf_world_shapes(asm.Group, App.Matrix(), shapes)
+    total_vol = sum(s.Volume for _, s in shapes)
+    report = {"total_volume_mm3": round(total_vol, 3), "leaf_count": len(shapes)}
+    violations = []
+
+    density = req.get("density_kg_mm3")
+    if density is not None and total_vol > 0:
+        report["mass_g"] = round(total_vol * float(density) * 1000.0, 3)
+    if total_vol > 0:
+        cg = [round(sum(s.Volume * getattr(s.CenterOfMass, ax) for _, s in shapes)
+                    / total_vol, 4) for ax in ("x", "y", "z")]
+        report["cg_mm"] = cg
+    else:
+        cg = None
+
+    if "max_mass_g" in req:
+        if density is None:
+            violations.append({"requirement": "max_mass_g",
+                               "error": "needs density_kg_mm3 to compute mass"})
+        else:
+            mass_g = total_vol * float(density) * 1000.0
+            if mass_g > float(req["max_mass_g"]) + 1e-6:
+                violations.append({"requirement": "max_mass_g",
+                                   "got_g": round(mass_g, 3),
+                                   "limit_g": req["max_mass_g"],
+                                   "reason": f"mass {mass_g:.1f} g > budget "
+                                             f"{req['max_mass_g']} g"})
+
+    if "cg_window" in req:
+        win = req["cg_window"]
+        if cg is None:
+            violations.append({"requirement": "cg_window", "error": "no volume"})
+        else:
+            bad = [ax for i, ax in enumerate("xyz")
+                   if cg[i] < win["min"][i] - 1e-6 or cg[i] > win["max"][i] + 1e-6]
+            if bad:
+                violations.append({"requirement": "cg_window", "cg_mm": cg,
+                                   "window": win, "axes": bad,
+                                   "reason": f"CG {cg} outside window on {bad}"})
+
+    skipped = sorted(set(req) - _TIER1_REQ_KEYS)
+    return {"report": report, "violations": violations, "skipped": skipped}
+
+
 @handler("merge_assembly")
 def _h_merge_assembly(p):
     """Construct-up an assembly from a manifest (the coordinator's one call).
@@ -5311,8 +5376,11 @@ def _h_merge_assembly(p):
     root; a failed child fails the parent, surfaced as gates["children"] and a
     `children` block in the report. A component with a `library` key is a STANDARD
     PART generated on the fly from {tool, spec} (§11.5) — no builder, no owner —
-    reported under `library`. Runs the gates (interference, recursive BOM, envelope,
-    typed) and returns a report. Deterministic and idempotent."""
+    reported under `library`. An optional top-level `requirements` block
+    {density_kg_mm3?, max_mass_g?, cg_window?} (§11.6) gates mass / CG over the
+    merged tree; the measured numbers ride in report["requirements"]. Runs the gates
+    (interference, recursive BOM, envelope, typed, requirements) and returns a
+    report. Deterministic and idempotent."""
     import json as _json
     import os as _os
     manifest_path = p["manifest"]
@@ -5434,12 +5502,22 @@ def _h_merge_assembly(p):
     child_fail = [cid for cid, c in children.items() if not c["ok"]]
     if children:
         gates["children"] = {cid: c["ok"] for cid, c in children.items()}
+    # §11.6: requirements gates ("the product works", not just "fits") — mass / CG
+    # over the merged tree. The measured numbers ride in report["requirements"]
+    # (visible on a pass); only the violations fail the merge.
+    req_result = None
+    if man.get("requirements"):
+        req_result = _requirements_gate(asm_h, man["requirements"])
+        gates["requirements"] = req_result["violations"]
     HANDLERS["save_document"]({"path": root_path})
     ok = (not gates["interference"]) and (not gates["envelope"]) \
         and (not gates.get("interface_align")) and (not gates.get("typed")) \
-        and (not child_fail)
+        and (not child_fail) and (not gates.get("requirements"))
     report = {"assembly": asm_h, "doc": name, "root": root_path,
               "placed": placed, "gates": gates, "ok": ok}
+    if req_result is not None:
+        report["requirements"] = {"report": req_result["report"],
+                                  "skipped": req_result["skipped"]}
     if children:
         report["children"] = children
     if library:

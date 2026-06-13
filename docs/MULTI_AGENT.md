@@ -655,23 +655,42 @@ interference still catches a clashing standard part; the lockfile flags a spec
 change but not a regenerate; a bad/non-allow-listed spec fails loudly), in
 `run_all.sh`, no key.
 
-### 11.6 Requirements-level gates
+### 11.6 Requirements-level gates *(tier-1 shipped)*
 
 §6's gates predate the simulation tier; "the pieces fit" is not "the product
 works." The manifest gains an optional `requirements` block gated at merge:
 
 ```jsonc
 "requirements": {
+  "density_kg_mm3": 7.9e-6,                          // material for the mass budget
   "max_mass_g": 450,
   "cg_window": { "min": [30,30,0], "max": [50,50,20] },
-  "min_first_mode_hz": 120        // optional, expensive: FEM on the merged tree
+  "min_first_mode_hz": 120        // physics tier — deferred (reported as skipped)
 }
 ```
 
-Mass/CG rollup is shipped (`mass_properties` + recursive BOM). FEM gates are proven
-on agent-built geometry (the `thermo_structural` capstone toy runs thermal +
-structural CalculiX on it) but slow — so requirements gates are tiered: mass/CG
-always, physics on demand or only on the final candidate.
+**Tier-1 shipped 2026-06-12** (`driftpin/worker.py`). The always-on, cheap tier —
+**total mass against a budget** and **centre-of-mass inside a window** — runs over
+the merged tree's world-space leaves at every merge (`mass_properties` math + the
+recursive leaf walk). It's tiered exactly because the doc warned: mass/CG always,
+physics on demand. The measured numbers ride in `report["requirements"]` (visible
+on a pass, so a coordinator sees the mass/CG even when it's within budget); only
+the violations fail the merge. A `max_mass_g` without `density_kg_mm3` fails loudly
+(can't compute mass), and an **unimplemented requirement key surfaces as `skipped`,
+never a silent pass** — the same "don't drop a contract silently" discipline as the
+typed gates.
+
+The **physics tier** (`min_first_mode_hz` via FEM modal on the merged tree) is
+*deferred*: FEM is proven on *single* agent-built parts (the `thermo_structural`
+capstone runs thermal + structural CalculiX on one), but a modal gate on a merged
+*assembly* opens real modelling questions — part bonding/contact and where the
+product is fixed (boundary conditions) — that a clean v0 shouldn't fake. It is
+reserved in the schema and reported as `skipped` so it can't be mistaken for met.
+
+Two-sided gate-validated free in `tests/test_requirements_gates.py` (mass and CG
+measured correctly; an over-budget mass and an off-window CG each caught; mass
+without density loud; the physics tier surfaced as skipped; absent `requirements`
+= back-compat), in `run_all.sh`, no key.
 
 ### 11.7 Manifest formalization
 
@@ -718,8 +737,10 @@ rather than width when the contract grows.
   (`merge_assembly` recurses into child manifests, gates roll up, lockfile
   propagates staleness up the tree); standard parts (11.5) **✅ shipped
   2026-06-12** (`library` components generated from a spec at merge — no owner,
-  lock keyed by spec hash); requirements gates (11.6); schema formalization
-  (11.7); shipped, pipelined orchestration (11.8).
+  lock keyed by spec hash); requirements gates (11.6) **✅ tier-1 shipped
+  2026-06-12** (mass + CG over the merged product; physics/FEM tier deferred,
+  reported as skipped); schema formalization (11.7); shipped, pipelined
+  orchestration (11.8).
 - **Phase 4 — deferred.** Shared co-editing, *reframed* as **claimed-region
   editing**: an agent claims a sub-tree/feature region of one document, edits only
   there, and merges back — never free-for-all cursors. Carries the full concurrency
