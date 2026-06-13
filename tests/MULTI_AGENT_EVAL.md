@@ -692,3 +692,52 @@ the success signal, with tchainu_r single closing the entire 8→20 gap to
 partition. Probe E's caution (don't add it when trying to *surface* a divergence)
 and this result (do add it to *converge* faster) are the same finding read two
 ways.
+
+---
+
+## The gearbox — a shared CONSTANT, not a reconciliation (2026-06-13, Haiku, ~$4.5)
+
+A *real* mechanical gearbox built and run as a multi-agent experiment, not the
+12-bare-gears abstraction. The reference (`scratch/gearbox_real.py`) is a
+constant-mesh parallel-shaft box: bored gears on two shafts at centre distance
+C=48, four library bearings, two housing/bearing plates — mated and gated with the
+typed `gear_mesh` (per pair) + `bore_fit` (shaft↔bearing) interfaces and a mass
+requirement. It assembles clean and exports to STEP/STL (3-speed = 14 solids,
+6-speed = 20). The experiment (`scratch/gearbox_experiment.py`) has **agents build
+the gears** into that gearbox (shafts/plates/bearings are reference infrastructure),
+across 2×2 conditions, judged by the full merge gates.
+
+| size | condition | derive | resolve |
+|---|---|---|---|
+| 3-speed (6 gears) | partition | 3/3 | 3/3 |
+| 3-speed | single | 3/3 | 3/3 |
+| 6-speed (12 gears) | partition | 6/6 | 6/6 |
+| 6-speed | single | 6/6 | 6/6 |
+
+**48/48 — every condition at the ceiling, both sizes, including derive-single with
+12 gears.** That is the finding, not a null result: it sharpens what "shared
+constraint" means.
+
+- The gearbox's shared centre distance (C=48) decomposes into a **shared CONSTANT
+  each agent applies LOCALLY** — every gear agent independently computes its tooth
+  count from its own ratio and the shared sum (`round(2·48/2 / (1+ratio))`), which
+  lands on a clean integer. No agent has to reconcile a global total against
+  anyone else's choice. So it is the *easy* kind of shared constraint — the
+  equal-segment `tchain6` case (partition 20/20), **not** the `tchainu` grid sum
+  that broke every agent (2/20).
+- Because the derivation isn't error-prone, **the resolve step has no headroom to
+  show a lift here** (derive ≈ resolve ≈ ceiling). That is consistent with §11.1,
+  not a counterexample: resolve helps where a shared value must be *reconciled*
+  (a global total/grid), and there is nothing to reconcile when each agent's value
+  is independently determined.
+- **Refines §10.2.** "A shared derivation breaks agents" needs the sharper form:
+  a shared **reconciliation** (a global sum / total / manufacturing grid that must
+  be made consistent across agents) breaks them and is the resolve step's domain;
+  a shared **constant** that each agent applies independently does not — even at 12
+  components on one shared number. "12 gears sharing one centre distance" sounds
+  like the hard case and is actually the easy one.
+
+Cost: 3-speed pilot $0.89 + 6-speed $3.56 ≈ **$4.5**. Bonus: building the real
+gearbox surfaced and fixed a shipped bug — `gear_mesh`/`requirements` crashed on a
+boolean-cut **compound** shape (a bored gear, a bearing) because the gates read
+`shape.CenterOfMass` directly; now via a solids-based `_shape_com` (PR #72).
