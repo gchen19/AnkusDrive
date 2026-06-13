@@ -785,7 +785,7 @@ by whether the shared quantity must be *reconciled*:
 each agent applies independently does not break them, even at 12 components; a
 shared **reconciliation** — a value that must be made consistent *across* agents —
 does, and is precisely what the resolve step (§11.1) exists to remove. A render of
-the assembled gearbox is in `results/gearbox_real/gearbox{3,6}_render.png`
+the assembled gearbox is in `artifacts/gearbox{3,6}_render.png`
 (`scratch/render_gearbox.py`, matplotlib from the exported STL).
 
 ## The motion oracle — the gearbox passes every static gate and cannot move (2026-06-13, RFC §11.9, free)
