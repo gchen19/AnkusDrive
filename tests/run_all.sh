@@ -185,6 +185,10 @@ echo "== Multi-agent partition+merge (Layer M1) =="
 $VENV_PY tests/test_multiagent_m1.py
 
 echo
+echo "== Manifest resolve step (RFC 11.1, pure python) =="
+$VENV_PY tests/test_manifest_resolve.py
+
+echo
 echo "== Reliability Layer D — harness validator (free, scripted stub) =="
 # The real Layer D benchmark needs an API key; this runs its grader negative
 # control + scripted-stub plumbing check, which require no API, so the harness
