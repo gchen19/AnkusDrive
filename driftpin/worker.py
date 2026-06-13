@@ -4395,6 +4395,139 @@ def _h_verify_intent(p):
     return {"handle": handle, "ok": ok, "results": results}
 
 
+# --- verify_contract: build-time self-check against a component's slice (§11.3) -
+#
+# A builder calls this on its OWN part before saving, checking it against its slice
+# of the manifest — so a contract violation is caught locally and cheaply instead
+# of after a fan-in merge (build → merge → gate-fail → rebuild becomes build →
+# self-check → fix). It unifies pieces that exist separately at other altitudes:
+# envelope_check (assembly-level) → a LOCAL bbox check here; the published-frame
+# contract that interface_align checks post-merge → a "did I publish it, in the
+# right place?" check here; plus per-feature self-checks (a gear's module, a bore's
+# diameter, an overall extent) and a verify_intent passthrough. Like verify_intent
+# it NEVER raises on a failing check (a failure is a passed=False row), so a builder
+# can call it in a loop.
+
+def _vc_feature_check(shape, feat):
+    """One self-checkable feature contract -> (passed, detail). Kinds:
+      gear   {module_mm, teeth, [internal], tol_mm?}  measured pitch radius
+             (tip∓module) == module*teeth/2
+      bore   {diameter_mm, tol_mm?}                    a cylindrical face of the
+             nominal radius is present (the hole was actually cut)
+      extent {axis: x|y|z, length_mm, tol_mm?}         bbox span along axis"""
+    import math
+    kind = feat.get("kind")
+    tol = float(feat.get("tol_mm", 0.5))
+    if kind == "gear":
+        m = float(feat["module_mm"])
+        rp = _gear_pitch_radius(shape, m, bool(feat.get("internal")))
+        if rp is None:
+            return False, "no vertices to measure a gear"
+        want = m * float(feat["teeth"]) / 2.0
+        return abs(rp - want) <= tol, (
+            f"pitch radius {rp:.3f} vs module·teeth/2 = {want:.3f} (tol {tol})")
+    if kind == "bore":
+        d = float(feat["diameter_mm"])
+        radii = [f.Surface.Radius for f in shape.Faces
+                 if type(f.Surface).__name__ == "Cylinder"]
+        hit = [r for r in radii if abs(2 * r - d) <= tol]
+        return bool(hit), (
+            f"Ø{d} bore present (cyl radii {[round(r,3) for r in radii]})"
+            if hit else f"no cylindrical face at Ø{d} (found {[round(r,3) for r in radii]})")
+    if kind == "extent":
+        ax = feat.get("axis", "x")
+        bb = shape.BoundBox
+        span = {"x": bb.XLength, "y": bb.YLength, "z": bb.ZLength}[ax]
+        want = float(feat["length_mm"])
+        return abs(span - want) <= tol, (
+            f"{ax}-extent {span:.3f} vs {want:.3f} (tol {tol})")
+    return False, f"unknown feature kind {kind!r}"
+
+
+@handler("verify_contract")
+def _h_verify_contract(p):
+    """Build-time self-check of a component against its manifest slice (§11.3).
+    Returns {handle, ok, results:[{check, passed, detail}]} like verify_intent and
+    never raises on a failing check, so a builder can call it before save and loop.
+
+    handle:   the component's shaped object.
+    contract: the component's slice (all keys optional, give at least one):
+      envelope   {min:[x,y,z], max:[x,y,z]}   LOCAL bbox must fit inside it.
+      interfaces {name: {origin:[...], z_axis?:[...], tol_mm?, angle_tol_deg?}}
+                 each named frame must be PUBLISHED and within tolerance of the
+                 contracted origin (and axis, if z_axis given) — catches "forgot to
+                 publish" and "published in the wrong place", the usual merge/align
+                 failures, locally.
+      features   [ {kind:"gear"|"bore"|"extent", ...} ]  per-feature self-checks.
+      intent     bool                          run verify_intent too.
+    """
+    import math
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    contract = dict(p.get("contract") or {})
+    results = []
+
+    def _add(name, fn):
+        try:
+            passed, detail = fn()
+        except Exception as e:
+            passed, detail = False, f"{type(e).__name__}: {e}"
+        results.append({"check": name, "passed": bool(passed), "detail": detail})
+
+    env = contract.get("envelope")
+    if env:
+        def _env():
+            bb = shape.BoundBox
+            got = {"min": [bb.XMin, bb.YMin, bb.ZMin],
+                   "max": [bb.XMax, bb.YMax, bb.ZMax]}
+            eps = 1e-6
+            bad = []
+            for i, ax in enumerate("xyz"):
+                if got["min"][i] < env["min"][i] - eps or got["max"][i] > env["max"][i] + eps:
+                    bad.append(f"{ax}:[{got['min'][i]:.2f},{got['max'][i]:.2f}]"
+                               f"⊄[{env['min'][i]},{env['max'][i]}]")
+            return (not bad), ("local bbox fits" if not bad else "; ".join(bad))
+        _add("envelope", _env)
+
+    ifaces_contract = contract.get("interfaces") or {}
+    if ifaces_contract:
+        published = _read_interfaces(obj)
+        for name, spec in ifaces_contract.items():
+            def _iface(name=name, spec=spec):
+                if name not in published:
+                    return False, f"interface {name!r} not published"
+                fr = published[name]
+                tol = float(spec.get("tol_mm", 0.5))
+                o_got = App.Vector(*fr.get("origin", [0, 0, 0]))
+                o_want = App.Vector(*spec.get("origin", [0, 0, 0]))
+                gap = (o_got - o_want).Length
+                if gap > tol:
+                    return False, f"{name} origin off by {gap:.3f} mm (tol {tol})"
+                if spec.get("z_axis"):
+                    za = App.Vector(*fr.get("z_axis", [0, 0, 1])); za.normalize()
+                    zw = App.Vector(*spec["z_axis"]); zw.normalize()
+                    ang = math.degrees(math.acos(max(-1.0, min(1.0, za.dot(zw)))))
+                    lim = float(spec.get("angle_tol_deg", 1.0))
+                    if ang > lim:
+                        return False, f"{name} axis off by {ang:.2f}° (tol {lim})"
+                return True, f"{name} published within tolerance"
+            _add(f"interface:{name}", _iface)
+
+    for feat in contract.get("features") or []:
+        _add(f"feature:{feat.get('name', feat.get('kind'))}",
+             lambda feat=feat: _vc_feature_check(shape, feat))
+
+    if contract.get("intent"):
+        def _intent():
+            r = _h_verify_intent({"handle": handle})
+            return r["ok"], f"{sum(x['passed'] for x in r['results'])}/" \
+                            f"{len(r['results'])} invariants passed"
+        _add("intent", _intent)
+
+    ok = all(r["passed"] for r in results) if results else True
+    return {"handle": handle, "ok": ok, "results": results}
+
+
 def _apply_mate(link, parent_link, child_iface, parent_iface):
     """Place `link` so its child_iface frame coincides with parent_link's
     parent_iface frame in world space: LinkPlacement = Pp · Fp · Fc⁻¹."""

@@ -302,9 +302,9 @@ so any host maps them to its own mechanism. The manifest + component files are t
   and re-dispatches *only* the affected components (per the lockfile, §9).
 - **Component-builder** — reads its manifest slice + `shared_parameters`; builds its
   `.FCStd` to contract; `publish_interface` for each mating frame it owns;
-  self-verifies before reporting (`verify_intent`, an envelope self-check, a
-  `render_views` look — to be unified as `verify_contract`, §11.3); saves; reports
-  its file + status.
+  self-verifies before reporting (`verify_contract`, §11.3 — envelope, contracted
+  interfaces, features, and intent in one call, plus a `render_views` look); saves;
+  reports its file + status.
 
 The loop is **fan-out (builders) → fan-in (merge + gates) → re-dispatch on failure**.
 Nothing in it is specific to a vendor. A reference coordinator implementing these
@@ -546,17 +546,37 @@ Still future for §11.2: `bore_fit` carrying a named ISO fit *class* (resolving 
 a clearance band via `fit_check`) rather than explicit mm; the internal-gear
 mesh (planetary ring); and `thread` / `press_fit` / `sliding` from the table.
 
-### 11.3 `verify_contract` — shift failure left
+### 11.3 `verify_contract` — shift failure left *(shipped)*
 
 One tool a builder calls before saving, checking its part against *its own slice*:
 envelope self-check (local bbox vs declared envelope), every contracted interface
-published and matching the contract (frame within tolerance, bolt holes actually
-present at pitch, gear module as specified), declared intent invariants
-(`verify_intent`) green. Returns `{ok, results[]}` like `verify_intent`, never
-raises. The pieces exist separately — `envelope_check` is assembly-level,
+published and matching the contract (frame within tolerance), self-checkable
+features (gear module, bore Ø, overall extent), declared intent invariants
+(`verify_intent`) green. Returns `{handle, ok, results[]}` like `verify_intent`,
+never raises. The pieces exist separately — `envelope_check` is assembly-level,
 `verify_intent` is per-part, `interface_align_check` is post-merge — but unifying
 them per-component turns the expensive loop (build → merge → gate fail → rebuild)
 into a cheap local one, which the rounds-to-converge metric directly rewards.
+
+**Shipped 2026-06-12** (`driftpin/worker.py:verify_contract`, exposed as an MCP
+tool). The contract slice carries any of `envelope`, `interfaces`
+(name → expected frame + tol; flags "forgot to publish" *and* "published in the
+wrong place/orientation"), `features` (`gear` / `bore` / `extent` self-checks,
+each tied to a toy we measured — gear module to the gearbox, bore Ø to
+peg-in-hole, extent to the resolved tchain length), and `intent`. Each check
+becomes a `{check, passed, detail}` row; an unsatisfiable check is a failed row,
+never an exception. Two-sided gate-validated free in
+`tests/test_verify_contract.py` (correct part → ok; every violation — too tall,
+missing/misplaced/rotated frame, wrong teeth, absent bore, wrong length, intent
+undeclared — caught as exactly the right row), in `run_all.sh`, no key.
+
+The build-time checks deliberately mirror what `merge_assembly` will later verify
+(an interface published in the right place here ⇒ it mates and aligns there; a
+local bbox inside the envelope here ⇒ it clears the envelope gate there), so a
+green `verify_contract` is a strong predictor of a green merge — the point of
+shifting it left. *Outstanding:* add it to the M2 builder tool surface and
+measure the rounds-to-converge drop on the multi-round toys (the metric §10's
+loop rewards); the tool and its oracle are ready for that billed run.
 
 ### 11.4 Hierarchical manifests — real nesting
 
@@ -652,9 +672,11 @@ rather than width when the contract grows.
   partition 2/20 → 20/20); typed interfaces + promoted gates (11.2) **✅ first
   three kinds shipped 2026-06-12** (`bore_fit`, `gear_mesh`, `frame_orientation`
   in `merge_assembly`; closes the exact-touch + orientation gate edges; gearbox
-  now a manifest); `verify_contract` (11.3); hierarchical manifests (11.4);
-  standard parts (11.5); requirements gates (11.6); schema formalization (11.7);
-  shipped, pipelined orchestration (11.8).
+  now a manifest); `verify_contract` (11.3) **✅ shipped 2026-06-12**
+  (`driftpin/worker.py`; builder-side envelope/interface/feature/intent
+  self-check); hierarchical manifests (11.4); standard parts (11.5);
+  requirements gates (11.6); schema formalization (11.7); shipped, pipelined
+  orchestration (11.8).
 - **Phase 4 — deferred.** Shared co-editing, *reframed* as **claimed-region
   editing**: an agent claims a sub-tree/feature region of one document, edits only
   there, and merges back — never free-for-all cursors. Carries the full concurrency
@@ -712,9 +734,9 @@ binding. `orchestration/coordinator.py` implements the same loop host-side.
    its own DriftPin MCP server → its own worker → its own file, in its own working
    directory (§7).
 4. **Build & self-verify.** Each component agent builds to contract, calls
-   `publish_interface` for its mating frames, self-checks (`verify_contract` once it
-   exists; today `verify_intent` + envelope self-check + a `render_views` look),
-   saves, and returns its file path + status.
+   `publish_interface` for its mating frames, self-checks with `verify_contract`
+   (§11.3 — envelope, contracted interfaces, features, intent; plus a `render_views`
+   look), saves, and returns its file path + status.
 5. **Fan in per node, pipelined.** Each subassembly merges and gates as soon as its
    own children land (`merge_assembly` on the child manifest, §11.4); the root merges
    last. A leaf failure re-dispatches that leaf while unrelated branches keep going.
