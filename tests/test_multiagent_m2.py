@@ -55,7 +55,12 @@ PRICING = {
     "claude-sonnet-4-5": (3.0, 3.75, 0.30, 15.0),
     "claude-opus-4-8": (15.0, 18.75, 1.50, 75.0),
 }
-MAX_TURNS = 12
+# Per-agent turn budget. The default has a known ceiling: an nslot8 plate is
+# ~19 sequential tool calls (box + 8 cylinders + 8 cuts + save), so at 12 turns
+# only agents that BATCH tool calls per turn can finish — every unsaved k=8
+# plate in the 2026-06-12 round died at exactly turns=12. Raise via M2_MAX_TURNS
+# for big-component toys; leave the default for comparability with prior runs.
+MAX_TURNS = int(os.environ.get("M2_MAX_TURNS", "12"))
 CACHE_DIR = REPO / "tests" / "multiagent_cache"
 
 SYSTEM = (
@@ -669,10 +674,18 @@ def _nslot_peg_task(i):
 
 
 def _nslot_single_task(k):
+    # Must carry the SAME full contract the partition agents get between them
+    # (plate dims + hole positions/diameters + peg diameters) — the original
+    # wording omitted the plate spec entirely, so single's plate put holes where
+    # the gate doesn't look and 0/20 was an artifact, not a context-load result.
+    holes = "; ".join(f"slot {i} at x={15.0 + i*NSLOT_PITCH:.0f} y={NSLOT_Y:.0f} "
+                      f"diameter {NSLOT_HOLE_D[i]:.0f} mm" for i in range(k))
     pegs = "; ".join(f"peg {i}: Ø{NSLOT_HOLE_D[i]-NSLOT_CLEAR:.1f} mm" for i in range(k))
-    return (f"You will build a baseplate and {k} pegs, one at a time. The plate has "
-            f"{k} holes of distinct diameters and each peg fits one specific hole "
-            f"with {NSLOT_CLEAR} mm clearance. Peg diameters: {pegs}. "
+    return (f"You will build a baseplate and {k} pegs, one at a time. The BASEPLATE "
+            f"is {_nslot_plate_w(k):.0f} x {NSLOT_PLATE_D:.0f} x {NSLOT_PLATE_H:.0f} mm "
+            f"with {k} vertical through-holes, each a DIFFERENT diameter: {holes}. "
+            f"Each peg is {NSLOT_PEG_H:.0f} mm long and slip-fits one specific hole "
+            f"with {NSLOT_CLEAR} mm clearance: {pegs}. "
             f"Keep each peg matched to its hole.")
 
 
@@ -721,6 +734,7 @@ def _make_nslot(k):
 
 
 TOY5_NSLOT4 = _make_nslot(4)
+TOY5_NSLOT6 = _make_nslot(6)   # k-sweep midpoint (Probe D validated the k=6 oracle)
 TOY5_NSLOT8 = _make_nslot(8)
 
 
@@ -2920,7 +2934,7 @@ TOY29_THERMO_STRUCT = Toy(
 
 
 TOYS = {t.key: t for t in (TOY1, TOY2, TOY3, TOY4,
-                           TOY5_NSLOT4, TOY5_NSLOT8,
+                           TOY5_NSLOT4, TOY5_NSLOT6, TOY5_NSLOT8,
                            TOY6_TCHAIN3, TOY6_TCHAIN6,
                            TOY7_TCHAINU, TOY8_PINSLOT,
                            TOY9_POSITION, TOY10_CONCENTRIC, TOY11_SYMMETRY,
@@ -2967,7 +2981,7 @@ def run_single(client, model, toy, tmp):
     built = all(a["ok_built"] for a in agents.values()) and all(p.exists() for p in files.values())
     gate = toy.gate(tmp, files) if built else {"ok": False, "reason": "baseline did not save"}
     return {"condition": "single", "built": built, "passed": gate["ok"],
-            "reason": gate["reason"], **_agg(*agents.values())}
+            "reason": gate["reason"], "agents": agents, **_agg(*agents.values())}
 
 
 def run_negative(client, model, toy, neg, tmp):
@@ -3118,6 +3132,51 @@ def dryrun():
     sys.exit(0 if ok else 1)
 
 
+# --- per-trial checkpoint (restart-proof billed runs) --------------------------
+#
+# The report is written only at the END of a run, so a killed session used to
+# lose every completed trial. Each finished trial now appends one fsynced JSON
+# line; on the next invocation, trials whose key matches resume for free. The
+# key embeds a hash of every prompt the toy can send, so a checkpoint written
+# against an old contract can never leak into a run with edited wording (the
+# underspecified-nslot fix is exactly the case this guards). A run that reaches
+# its report deletes the checkpoint — deliberate replication runs start fresh;
+# only crashed runs leave lines behind. M2_FRESH=1 discards any leftovers.
+
+CKPT_PATH = CACHE_DIR / "checkpoint_m2.jsonl"
+
+
+def _toy_contract_hash(toy):
+    import hashlib
+    blob = json.dumps({"components": toy.components, "single": toy.single_task,
+                       "negs": {n.name: n.agent for n in toy.negatives}},
+                      sort_keys=True)
+    return hashlib.blake2b(blob.encode(), digest_size=8).hexdigest()
+
+
+def _ckpt_key(model, toy, condition, trial):
+    return f"{model}|{toy.key}|{_toy_contract_hash(toy)}|{condition}|{trial}"
+
+
+def _ckpt_load():
+    done = {}
+    if CKPT_PATH.exists():
+        for line in CKPT_PATH.read_text().splitlines():
+            try:
+                row = json.loads(line)
+                done[row["key"]] = row["result"]
+            except Exception:
+                continue  # torn final line from a mid-write kill; drop it
+    return done
+
+
+def _ckpt_append(key, result):
+    with CKPT_PATH.open("a") as f:
+        f.write(json.dumps({"key": key, "result": result}) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
 # --- main --------------------------------------------------------------------
 
 def _selected_toys():
@@ -3158,6 +3217,14 @@ def main():
     client = anthropic.Anthropic()
     CACHE_DIR.mkdir(exist_ok=True)
 
+    if os.environ.get("M2_FRESH"):
+        CKPT_PATH.unlink(missing_ok=True)
+    ckpt = _ckpt_load()
+    if ckpt:
+        print(f"  checkpoint: {len(ckpt)} prior trial(s) on disk — "
+              f"matching trials resume without billing")
+    resumed = 0
+
     negatives_only = bool(os.environ.get("M2_NEGATIVES"))
     print(f"== Layer M2 — model={model}  trials={trials}  toys={[t.key for t in toys]}"
           f"{'  [NEGATIVES]' if negatives_only else ''} ==")
@@ -3174,6 +3241,11 @@ def main():
                 for neg in toy.negatives:
                     trial_results = []
                     for i in range(trials):
+                        key = _ckpt_key(model, toy, f"neg/{neg.name}", i)
+                        if key in ckpt:
+                            trial_results.append(ckpt[key])
+                            resumed += 1
+                            continue
                         tmp = root / f"{toy.key}_{neg.name}_{i}"
                         tmp.mkdir(parents=True, exist_ok=True)
                         try:
@@ -3184,6 +3256,7 @@ def main():
                                  "error": traceback.format_exc()}
                         r["cost_usd"] = round(cost_of(r, model), 4)
                         trial_results.append(r)
+                        _ckpt_append(key, r)
                     n = len(trial_results)
                     built = sum(1 for r in trial_results if r.get("built"))
                     caught = sum(1 for r in trial_results if r.get("caught"))
@@ -3201,9 +3274,18 @@ def main():
                         print(err)
                 continue
 
-            for cond_name, fn in (("partition", run_partition), ("single", run_single)):
+            conds = (("partition", run_partition), ("single", run_single))
+            sel_cond = os.environ.get("M2_COND")  # e.g. "single" — rerun one condition
+            if sel_cond:
+                conds = [(n, f) for n, f in conds if n in sel_cond.split(",")]
+            for cond_name, fn in conds:
                 trial_results = []
                 for i in range(trials):
+                    key = _ckpt_key(model, toy, cond_name, i)
+                    if key in ckpt:
+                        trial_results.append(ckpt[key])
+                        resumed += 1
+                        continue
                     tmp = root / f"{toy.key}_{cond_name}_{i}"
                     tmp.mkdir(parents=True, exist_ok=True)
                     try:
@@ -3213,6 +3295,7 @@ def main():
                              "reason": "harness error", "error": traceback.format_exc()}
                     r["cost_usd"] = round(cost_of(r, model), 4)
                     trial_results.append(r)
+                    _ckpt_append(key, r)
                 n = len(trial_results)
                 passed = sum(1 for r in trial_results if r.get("passed"))
                 built = sum(1 for r in trial_results if r.get("built"))
@@ -3232,6 +3315,9 @@ def main():
               "total_cost_usd": round(total_cost, 4),
               "total_seconds": round(time.time() - t0, 1)}
     (CACHE_DIR / "report_m2.json").write_text(json.dumps(report, indent=2))
+    CKPT_PATH.unlink(missing_ok=True)  # run completed; only crashes leave a checkpoint
+    if resumed:
+        print(f"  ({resumed} trial(s) resumed from checkpoint, not re-billed)")
     print(f"\n  total ~${total_cost:.2f}   report -> {CACHE_DIR / 'report_m2.json'}")
 
 

@@ -1,7 +1,7 @@
 """
 Phase 0 multi-agent walkthrough — partition + merge with TODAY's tools.
 
-Companion to docs/MULTI_AGENT.md §10 (Phase 0). Proves the partition+merge model
+Companion to docs/MULTI_AGENT.md §12 (Phase 0). Proves the partition+merge model
 end-to-end with ZERO new DriftPin code: separate "builder" sessions each produce a
 component .FCStd; a "coordinator" session links them by file path into one assembly
 and runs the verification gates.

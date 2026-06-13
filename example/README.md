@@ -3,7 +3,7 @@
 ## Phase 0 multi-agent walkthrough
 
 `phase0_walkthrough.py` is the runnable proof-of-concept for
-[`docs/MULTI_AGENT.md`](../docs/MULTI_AGENT.md) §10 (Phase 0): a team of agents
+[`docs/MULTI_AGENT.md`](../docs/MULTI_AGENT.md) §12 (Phase 0): a team of agents
 **partitions** a design into components, builds them independently, then a
 coordinator **merges** them into one assembly and runs the verification gates —
 all with **today's** DriftPin tools, zero new code.
