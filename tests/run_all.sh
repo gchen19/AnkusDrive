@@ -197,6 +197,10 @@ echo "== verify_contract self-check (RFC 11.3, scripted, no key) =="
 $VENV_PY tests/test_verify_contract.py
 
 echo
+echo "== Hierarchical manifests (RFC 11.4, nested merge/gate/lock, no key) =="
+$VENV_PY tests/test_hierarchical_manifests.py
+
+echo
 echo "== Reliability Layer D — harness validator (free, scripted stub) =="
 # The real Layer D benchmark needs an API key; this runs its grader negative
 # control + scripted-stub plumbing check, which require no API, so the harness
