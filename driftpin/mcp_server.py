@@ -1859,6 +1859,34 @@ def verify_intent(handle: str) -> dict:
 
 
 @mcp.tool()
+def verify_contract(handle: str, contract: dict) -> dict:
+    """Build-time self-check of a component against its manifest slice (RFC §11.3):
+    a builder calls this on its OWN part before save, so a contract violation is
+    caught locally and cheaply instead of after a fan-in merge (build → merge →
+    gate-fail → rebuild becomes build → self-check → fix). Never raises on a
+    failing check (a failure is a passed=False row), so it is safe to call in a
+    loop. Inspection only; mutates nothing.
+
+    handle: the component's shaped object.
+    contract: the component's slice — all keys optional, give at least one:
+      envelope   {min:[x,y,z], max:[x,y,z]}   the part's LOCAL bbox must fit in it.
+      interfaces {name: {origin:[x,y,z], z_axis?:[x,y,z], tol_mm?, angle_tol_deg?}}
+                 each named frame must be PUBLISHED (publish_interface) and within
+                 tolerance of the contracted origin (and axis, if z_axis given) —
+                 catches "forgot to publish" / "published in the wrong place".
+      features   [ {kind, ...} ]  per-feature self-checks:
+                   {kind:"gear",   module_mm, teeth, internal?, tol_mm?}
+                   {kind:"bore",   diameter_mm, tol_mm?}
+                   {kind:"extent", axis:"x"|"y"|"z", length_mm, tol_mm?}
+      intent     bool                          also run verify_intent.
+
+    Returns {handle, ok, results:[{check, passed, detail}]} — ok True iff every
+    check passed; check names are envelope / interface:<name> / feature:<name> /
+    intent."""
+    return _call("verify_contract", handle=handle, contract=contract)
+
+
+@mcp.tool()
 def interface_align_check(assembly: str, pairs: list, tol_mm: float = 1e-3) -> list:
     """Gate: verify declared interface pairs coincide in world space — the
     "do the OTHER interfaces line up?" check for multi-interface mates. After the
