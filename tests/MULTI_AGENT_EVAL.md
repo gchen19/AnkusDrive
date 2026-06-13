@@ -7,6 +7,38 @@ RFC [`docs/MULTI_AGENT.md`](../docs/MULTI_AGENT.md) and the single-agent
 
 ---
 
+## Status & results at a glance — Phase 3 (2026-06-12)
+
+Phases 0–2 (the partition+merge substrate) shipped 2026-05-30. Phase 3 is in
+progress; the sections below are the chronological detail, this table is the
+summary. Every feature ships with a free, two-sided discrimination test; the two
+with behavioral claims also have billed agent evidence. All Haiku 4.5, n=20/cond.
+
+| RFC § | Feature | Status | Free test | Billed result |
+|---|---|---|---|---|
+| 11.1 | Resolve step (global constraints → literal slices) | ✅ shipped | `test_manifest_resolve.py` (9) | `tchainu_r` partition **2/20 → 20/20**; single 0→8 (must also hand each builder only its slice) |
+| 11.2 | Typed interfaces (`bore_fit`, `gear_mesh`, `frame_orientation`) | ✅ shipped | `test_typed_interfaces.py` | gearbox now a manifest; closes exact-touch + orientation gate edges |
+| 11.3 | `verify_contract` (builder-side self-check) | ✅ shipped | `test_verify_contract.py` (17) | **every condition → 20/20**; `tchainu_r` single **8/20 → 20/20** (+12) |
+| 11.4 | Hierarchical manifests (nested merge/gate/lock) | ✅ shipped | `test_hierarchical_manifests.py` (13) | n/a (geometric oracle) |
+| 11.5–11.8 | standard parts · requirements gates · schema · pipelined orchestration | ⬜ planned | — | — |
+
+**Headline findings (2026-06-12 billed rounds, ~$30 total):**
+
+- **Breadth alone doesn't separate partition from single** (k-sweep refuted, k ≤ 8,
+  after fixing two harness artifacts) — but a shared *derivation* reliably breaks
+  whoever holds it (tchain6 partition 20/20 vs single 4/20).
+- **`tchainu` had no winner** (partition 2/20, single 0/20) → the strongest mandate
+  for the resolve step (11.1), which then took partition to **20/20**.
+- **`verify_contract` (11.3) lifted every measured condition to 20/20** — shifting a
+  contract check left, into the builder, before the expensive merge.
+
+**Open PR stack (all against `main`, stacked in order):** #60 design+eval → #62
+resolve step → #63 typed interfaces → #64 verify_contract → #65 verify_contract
+eval → #66 hierarchical manifests. Shipped status per item also tracked in the RFC
+§12 roadmap.
+
+---
+
 ## Why this is different (and easier) than Layer A/B/C
 
 `RELIABILITY.md` grades a hard question — "does this part *look* right?" — with a

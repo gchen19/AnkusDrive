@@ -4652,6 +4652,32 @@ def _lock_state(manifest, base_dir):
             deps[cc].add(pc)
     state = {}
     for cid, spec in comps.items():
+        if "manifest" in spec:
+            # §11.4: a subassembly node. Its "file" is the child's merged root, and
+            # its provenance is the child's lockfile — so a change anywhere in the
+            # child tree (a re-merge updates the root bytes; a child interface move
+            # updates the child lockfile) propagates UP to this parent entry, and
+            # `depends_on` carries it to the parent's neighbors that mate the subasm.
+            cm = spec["manifest"]
+            cm = cm if _os.path.isabs(cm) else _os.path.join(base_dir, cm)
+            try:
+                with open(cm) as cf:
+                    child_man = _json.load(cf)
+            except Exception:
+                child_man = {}
+            child_base = _os.path.dirname(cm)
+            child_root = child_man.get("root") or (child_man.get("name", "merged") + ".FCStd")
+            child_root = child_root if _os.path.isabs(child_root) \
+                else _os.path.join(child_base, child_root)
+            child_lock = _os.path.splitext(cm)[0] + ".lock.json"
+            fh = _hash_file_bytes(child_root) if _os.path.exists(child_root) else ""
+            prov = child_lock if _os.path.exists(child_lock) else cm
+            ih = _hash_file_bytes(prov) if _os.path.exists(prov) else ""
+            state[cid] = {"file": _os.path.relpath(child_root, base_dir),
+                          "file_hash": fh, "interfaces_hash": ih,
+                          "depends_on": sorted(deps[cid]),
+                          "child_manifest": _os.path.basename(cm)}
+            continue
         cfile = spec["file"]
         cfile = cfile if _os.path.isabs(cfile) else _os.path.join(base_dir, cfile)
         ifaces = _interfaces_of_file(cfile)
@@ -5209,15 +5235,19 @@ def _h_merge_assembly(p):
         "root": "gearbox.FCStd",                       # optional output path (rel)
         "components": { "<id>": { "file": "rel/part.FCStd",
                                   "object": "<name>",   # optional explicit target
-                                  "envelope": {"min":[...],"max":[...]} } },  # optional
+                                  "envelope": {"min":[...],"max":[...]} },  # optional
+                        "<sub>":  { "manifest": "sub/manifest.json" } },  # §11.4 nest
         "instances": [ { "component": "<id>",
                          "name": "<instance>",          # optional, defaults to id
                          "placement": [x,y,z] | {position,axis,angle_deg} } ] }
 
     Component files are resolved relative to the manifest's directory. Links
     auto-reload from those files, so re-running picks up updated components.
-    Runs the gates (interference, recursive BOM, envelope) and returns a report.
-    Deterministic and idempotent."""
+    A component with a `manifest` key (instead of `file`) is a SUBASSEMBLY: it is
+    merged + gated first (recursively, any depth) and the parent links its merged
+    root; a failed child fails the parent, surfaced as gates["children"] and a
+    `children` block in the report. Runs the gates (interference, recursive BOM,
+    envelope, typed) and returns a report. Deterministic and idempotent."""
     import json as _json
     import os as _os
     manifest_path = p["manifest"]
@@ -5225,6 +5255,26 @@ def _h_merge_assembly(p):
         man = _json.load(f)
     base_dir = _os.path.dirname(_os.path.abspath(manifest_path))
     comps = man.get("components", {})
+
+    # §11.4 hierarchical manifests: a component referencing a child `manifest`
+    # (instead of a `file`) is a SUBASSEMBLY node — merge and gate it FIRST, then
+    # the parent links its merged root .FCStd like any component file. The recursion
+    # runs before the parent's new_document because each merge switches the active
+    # document. Build an effective file path per component (a child's merged root,
+    # or the component's own file) and roll the children's ok up into the parent.
+    eff_file = {}
+    children = {}
+    for cid, spec in comps.items():
+        if "manifest" in spec:
+            cm = spec["manifest"]
+            cm = cm if _os.path.isabs(cm) else _os.path.join(base_dir, cm)
+            child_rep = _h_merge_assembly({"manifest": cm})
+            children[cid] = {"ok": child_rep["ok"], "root": child_rep["root"],
+                             "manifest": cm, "gates": child_rep["gates"]}
+            eff_file[cid] = child_rep["root"]
+        else:
+            f = spec["file"]
+            eff_file[cid] = f if _os.path.isabs(f) else _os.path.join(base_dir, f)
 
     name = man.get("name", "merged")
     HANDLERS["new_document"]({"name": name})
@@ -5242,8 +5292,7 @@ def _h_merge_assembly(p):
         cid = inst["component"]
         spec = comps[cid]
         iname = inst.get("name", cid)
-        cfile = spec["file"]
-        cfile = cfile if _os.path.isabs(cfile) else _os.path.join(base_dir, cfile)
+        cfile = eff_file[cid]  # a component file, or a child subassembly's merged root
         src = {"path": cfile}
         if spec.get("object"):
             src["object"] = spec["object"]
@@ -5303,11 +5352,21 @@ def _h_merge_assembly(p):
             gates["interference"] = [
                 r for r in gates["interference"]
                 if frozenset((r["a"], r["b"])) not in excl]
+    # §11.4: a subassembly that failed its OWN gates fails the parent too — a
+    # broken child can't be a sound part of the whole. Surfaced as gates["children"]
+    # (id -> ok) so a coordinator can re-dispatch into the offending child manifest.
+    child_fail = [cid for cid, c in children.items() if not c["ok"]]
+    if children:
+        gates["children"] = {cid: c["ok"] for cid, c in children.items()}
     HANDLERS["save_document"]({"path": root_path})
     ok = (not gates["interference"]) and (not gates["envelope"]) \
-        and (not gates.get("interface_align")) and (not gates.get("typed"))
-    return {"assembly": asm_h, "doc": name, "root": root_path,
-            "placed": placed, "gates": gates, "ok": ok}
+        and (not gates.get("interface_align")) and (not gates.get("typed")) \
+        and (not child_fail)
+    report = {"assembly": asm_h, "doc": name, "root": root_path,
+              "placed": placed, "gates": gates, "ok": ok}
+    if children:
+        report["children"] = children
+    return report
 
 
 @handler("make_drawing_page")

@@ -590,7 +590,7 @@ pass-rate; the coordinator fan-in "rounds-to-converge" it would also cut is the
 same mechanism (catch locally, not after merge). See
 [`MULTI_AGENT_EVAL.md`](../tests/MULTI_AGENT_EVAL.md).
 
-### 11.4 Hierarchical manifests — real nesting
+### 11.4 Hierarchical manifests — real nesting *(shipped)*
 
 "Subassemblies nest the same pattern" needs mechanism, not a sentence. A component
 entry may reference a child manifest instead of a file:
@@ -602,11 +602,24 @@ entry may reference a child manifest instead of a file:
 }
 ```
 
-`merge_assembly` recurses: the child manifest is merged (and gated) first, its root
-`.FCStd` is what the parent links; the parent's lockfile records the child's
-lockfile hash, so staleness propagates up the tree. A subassembly coordinator is
-then just an agent whose deliverable is a merged, gate-passing manifest — bounding
-context per *coordinator* the same way partitioning bounds it per *builder*.
+**Shipped 2026-06-12** (`driftpin/worker.py`). `merge_assembly` recurses (any
+depth): a child-manifest component is merged + gated *first*, the parent links its
+merged root `.FCStd`, and BOM/interference/the typed gates flatten through the
+nested `App::Part` to leaves. **A failed child fails the parent** — surfaced as
+`gates["children"]` (`id → ok`) and a `children` block in the report, so a
+coordinator can re-dispatch into the offending child manifest rather than guess.
+The lockfile propagates change up the tree: a subassembly's lock entry hashes the
+child's *merged root* (any geometry change → parent `modified`) and the child's
+*lockfile* (a child interface move → `interface_changed`, carried to the parent's
+neighbors via `depends_on`). A subassembly coordinator is then just an agent whose
+deliverable is a merged, gate-passing manifest — bounding context per *coordinator*
+the same way partitioning bounds it per *builder*.
+
+Two-sided gate-validated free in `tests/test_hierarchical_manifests.py` (nested
+reference passes and BOM flattens; a broken child fails the parent; a parent-level
+clash between a subassembly and a sibling is still caught; two-level nesting
+flattens to all leaves; `assembly_lock_check` flags a changed subassembly and
+leaves an unchanged sibling alone), in `run_all.sh`, no key.
 
 ### 11.5 Standard parts — components without owners
 
@@ -686,9 +699,10 @@ rather than width when the contract grows.
   in `merge_assembly`; closes the exact-touch + orientation gate edges; gearbox
   now a manifest); `verify_contract` (11.3) **✅ shipped 2026-06-12**
   (`driftpin/worker.py`; builder-side envelope/interface/feature/intent
-  self-check); hierarchical manifests (11.4); standard parts (11.5);
-  requirements gates (11.6); schema formalization (11.7); shipped, pipelined
-  orchestration (11.8).
+  self-check); hierarchical manifests (11.4) **✅ shipped 2026-06-12**
+  (`merge_assembly` recurses into child manifests, gates roll up, lockfile
+  propagates staleness up the tree); standard parts (11.5); requirements gates
+  (11.6); schema formalization (11.7); shipped, pipelined orchestration (11.8).
 - **Phase 4 — deferred.** Shared co-editing, *reframed* as **claimed-region
   editing**: an agent claims a sub-tree/feature region of one document, edits only
   there, and merges back — never free-for-all cursors. Carries the full concurrency
