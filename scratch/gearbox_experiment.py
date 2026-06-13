@@ -174,9 +174,21 @@ def main():
                 p = sum(r["passed"] for r in res)
                 b = sum(r["built"] for r in res)
                 c = sum(r["cost"] for r in res)
-                rows.append((mode, condition, p, b, len(res), c))
+                rows.append({"mode": mode, "condition": condition, "passed": p,
+                             "built": b, "trials": len(res), "cost_usd": round(c, 4),
+                             "results": res})
                 print(f"  {mode:8s} {condition:9s}  pass {p}/{len(res)}  built {b}/{len(res)}  ${c:.2f}")
-    print(f"\n  total ${sum(r[5] for r in rows):.2f}   {time.time()-t0:.0f}s")
+    import json
+    report = {"experiment": "gearbox", "n_speeds": n, "grid": GRID, "model": model,
+              "trials": trials, "rows": rows,
+              "total_cost_usd": round(sum(r["cost_usd"] for r in rows), 4),
+              "total_seconds": round(time.time() - t0, 1)}
+    cache = REPO / "tests" / "multiagent_cache"
+    cache.mkdir(exist_ok=True)
+    out = cache / f"report_gearbox_{n}sp{'_grid' if GRID else ''}.json"
+    out.write_text(json.dumps(report, indent=2))
+    print(f"\n  total ${report['total_cost_usd']:.2f}   {report['total_seconds']:.0f}s"
+          f"   report -> {out}")
 
 
 if __name__ == "__main__":
