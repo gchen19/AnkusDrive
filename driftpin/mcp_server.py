@@ -1901,6 +1901,23 @@ def interface_align_check(assembly: str, pairs: list, tol_mm: float = 1e-3) -> l
 
 
 @mcp.tool()
+def validate_manifest(manifest: str) -> dict:
+    """Validate a manifest WITHOUT building it (the cheap front door, RFC §11.7).
+    Structural + cross-reference checks a JSON shape can't enforce: every component
+    has exactly one of file/manifest/library; a library carries a tool; every
+    instance references a known component; every mate/check references a known
+    instance; a present `schema` is the known version ("driftpin.manifest/1").
+
+    manifest: path to the manifest JSON.
+
+    Returns {ok, problems, schema, manifest_hash} — ok is True iff problems is
+    empty; manifest_hash fingerprints the contract content (what the lockfile
+    records so a stale contract is detectable). Run this before merge_assembly to
+    reject a malformed contract before any geometry is built."""
+    return _call("validate_manifest", manifest=manifest)
+
+
+@mcp.tool()
 def merge_assembly(manifest: str) -> dict:
     """Construct-up an assembly from a manifest JSON (the coordinator's one call):
     create the doc, link each component by file path, place it, recompute, and run
