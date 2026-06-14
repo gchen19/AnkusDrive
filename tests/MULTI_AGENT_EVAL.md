@@ -933,6 +933,31 @@ Full gate report: `results/functional_gearbox/gate_report_3sp_functional.json`.
 
 The free `--selftest` proves the verifier isn't a rubber stamp: a gear built 18/30
 (still meshes at 48, wrong ratio) is failed by *both* gear_mesh and the motion gate
-(realised −0.6 ≠ design −0.5). So the gearbox that began this thread as a
-**kinematically dead lock** is now one a multi-agent system **builds and an oracle
-certifies moves** — the loop the original critique opened, closed.
+(realised −0.6 ≠ design −0.5).
+
+**Correction (same day) — "certifies moves" was overstated.** The selective
+engagement lived only in the manifest. The actual CAD is gears loose-bored on plain
+shafts: no keys, no dog clutch, no synchronizer — so *nothing is fixed to a shaft*,
+and the built object cannot select a gear (drive the input and it spins inside loose
+gears; key everything and you are back at the DOF −4 lock). And the Tier-2 "drive"
+imposed a `JOINT_GEAR` constraint *at the ratio* between two abstract boxes and read
+it back — circular, it could not fail. What the run honestly establishes: the agents
+build correct *meshing* gears, and the closed-form oracle correctly tells a valid
+kinematic topology from a locked one — **not** that the exported geometry is a working
+transmission.
+
+The honest follow-up (no imposed constraints anywhere):
+- `scratch/gear_contact_sim.py` — two gears with real teeth (compound collision
+  shapes), one driven; the second turns at ratio **−0.51 vs ideal −0.50** purely from
+  tooth **contact**. Meshing teeth do convert.
+- `scratch/dog_clutch_sim.py` — a dog clutch: **engaged** the collar follows the gear
+  at 99%, **disengaged** it sits at 0%. The selection emerges from dog contact.
+- `scratch/dog_clutch_unit.py` — the geometry that *implements* them: a single-stage
+  unit with the input gear D-keyed to its shaft, the output gear freewheeling (round
+  bore) with dog teeth, and a dog collar D-keyed to the output shaft shown engaged →
+  `artifacts/dog_clutch_unit.{step,stl}` + render.
+
+That single unit is genuinely functional and selectable. Scaling it to the full
+multi-speed box (a countershaft, a sliding collar between speed gears, and a contact
+sim of the real involute+dog geometry rather than simplified boxes) is the open work —
+not claimed done.
