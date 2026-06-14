@@ -973,10 +973,13 @@ one keyed gear per speed; the MAINSHAFT (coaxial with the input) carries the spe
 gears, each FREEWHEELING (round bore) with dog teeth, plus grooved dog collars splined
 to it — each driven by a **shift fork** whose prongs ride the collar's groove and whose
 boss is clamped to a fixed **shift rail** parallel to the shaft (the actuation hardware
-is in the exported CAD, not just the schematic). All pairs mesh at one centre distance
-(tooth-sum 40); the assembly is interference-clean (5 overlaps, all intended: 4 gear
-meshes + 1 engaged dog clutch). Overall ratio for speed k = (Z_in/Z_cm)·(Z_ck/Z_mk) →
-**0.286 / 0.667 / 1.556**.
+is in the exported CAD, not just the schematic). The collar's dog teeth protrude with
+real gaps (the sleeve sits above the dog band) so they INTERLEAVE the gear's teeth at
+half-pitch — a true interlock, not a solid face jammed against teeth; the engaged
+clutch's solid overlap is ~5 mm³ of flank contact, not 250. All pairs mesh at one
+centre distance (tooth-sum 40); the assembly is interference-clean (5 overlaps, all
+intended: 4 gear meshes + 1 engaged dog clutch). Overall ratio for speed k =
+(Z_in/Z_cm)·(Z_ck/Z_mk) → **0.286 / 0.667 / 1.556**.
 
 **Dynamic validation by contact** (`scratch/gearbox_multispeed_sim.py`, NO gear
 constraints): drive the input; the power goes input → constant mesh → countershaft →

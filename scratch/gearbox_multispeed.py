@@ -103,12 +103,16 @@ RAIL_X = -40.0
 
 
 def collar(base_z, h):
-    c = dbore(Part.makeCylinder(SR + 4.0, h, Vector(0, 0, base_z)), SR + 0.1, h + 2, base_z - 1)
-    gz = base_z + 5.0                                        # groove ABOVE the 4 mm dog band
+    # The sleeve sits ABOVE the dog band so the collar's dog teeth protrude into open
+    # space with real GAPS the gear's teeth enter — a solid collar face can't interlock.
+    sleeve = dbore(Part.makeCylinder(SR + 4.0, h - 4.0, Vector(0, 0, base_z + 4.0)),
+                   SR + 0.1, h, base_z + 3.0)
+    gz = base_z + 5.0                                        # groove in the sleeve
     groove = Part.makeCylinder(SR + 14, 3.0, Vector(0, 0, gz)).cut(
         Part.makeCylinder(SR + 1.5, 5.0, Vector(0, 0, gz - 1)))
-    c = c.cut(groove)                                        # the fork rides in this recess
-    c = c.fuse(dogs(SR + 2.5, base_z, 4.0, math.pi / 6))     # dog teeth at base..base+4
+    sleeve = sleeve.cut(groove)                              # the fork rides in this recess
+    # 6 dog teeth (phase π/6 = half-pitch) protrude below, interleaving the gear's 6
+    c = sleeve.fuse(dogs(SR + 2.5, base_z, 4.5, math.pi / 6))
     return c, gz
 
 
