@@ -897,3 +897,42 @@ all six on-target resolve trains and fails the off-target derive train on the em
 invariant, with the static gates blind to the difference. (A cleaner derive
 reconciliation signal would need a higher agent build rate — a more constrained derive
 prompt or a larger turn budget — a queued follow-up, not a gate question.)
+
+## Can the agents build a FUNCTIONAL gearbox? Yes (2026-06-13, Haiku, $0.25)
+
+The question the whole arc was really after — and where the readiness gate's
+"gearbox mobility, fixed topology = NO-GO" verdict was too narrow. That verdict
+tested *mobility only* (the lock is topological, not agent-determined). But
+**functionality is mobility AND the correct ratio at each speed**, and the per-speed
+ratios *are* agent-determined: build a wrong-tooth gear and that speed runs at the
+wrong reduction. So "can the agents build a functional gearbox" is a real experiment,
+which `scratch/functional_gearbox.py` runs end to end:
+
+1. agents build the gearbox gears (derive — each computes its own teeth from the
+   shared centre-distance constant);
+2. the gears are assembled with the **selective-engagement** mechanism block (output
+   gears freewheel, one dog-clutched per speed), using the agents' **measured** teeth;
+3. the merge certifies functionality — `gear_mesh` (geometry matches each design
+   ratio) + the **motion gate** (every speed a determinate single-DOF transmission
+   whose realised ratio = design);
+4. **PyBullet drives each engaged speed** and measures ω_out/ω_in.
+
+**Result: 3/3 trials FUNCTIONAL** (3-speed, $0.25). Every trial the agents
+independently derived the correct gears `[12,36] [16,32] [20,28]`; the assembled
+selective gearbox passed every gate (interference, bom, envelope, gear_mesh,
+requirements, **mobility**); each speed reported `power_path_dof 1` with realised
+ratio = design (−1/3, −1/2, −5/7); and PyBullet spun each speed at exactly that ratio.
+Full gate report: `results/functional_gearbox/gate_report_3sp_functional.json`.
+
+| | speed1 | speed2 | speed3 |
+|---|---|---|---|
+| teeth (agent-built, measured) | 12/36 | 16/32 | 20/28 |
+| power-path DOF | 1 | 1 | 1 |
+| realised ratio (motion gate) | −0.333 | −0.500 | −0.714 |
+| PyBullet ω_out/ω_in | −0.333 | −0.500 | −0.714 |
+
+The free `--selftest` proves the verifier isn't a rubber stamp: a gear built 18/30
+(still meshes at 48, wrong ratio) is failed by *both* gear_mesh and the motion gate
+(realised −0.6 ≠ design −0.5). So the gearbox that began this thread as a
+**kinematically dead lock** is now one a multi-agent system **builds and an oracle
+certifies moves** — the loop the original critique opened, closed.

@@ -1,0 +1,271 @@
+{
+  "experiment": "functional_gearbox",
+  "n_speeds": 3,
+  "model": "claude-haiku-4-5-20251001",
+  "mode": "derive",
+  "trials": 3,
+  "functional": 3,
+  "built": 3,
+  "total_cost_usd": 0.2463,
+  "total_seconds": 166.6,
+  "results": [
+    {
+      "built": true,
+      "functional": true,
+      "measured_teeth": [
+        [
+          12,
+          36
+        ],
+        [
+          16,
+          32
+        ],
+        [
+          20,
+          28
+        ]
+      ],
+      "speeds": {
+        "speed1": {
+          "teeth": [
+            12,
+            36
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.33333,
+          "ratio_design": 0.3333333333333333,
+          "ok": true
+        },
+        "speed2": {
+          "teeth": [
+            16,
+            32
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.5,
+          "ratio_design": 0.5,
+          "ok": true
+        },
+        "speed3": {
+          "teeth": [
+            20,
+            28
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.71429,
+          "ratio_design": 0.7142857142857143,
+          "ok": true
+        }
+      },
+      "motion_violations": [],
+      "gear_mesh_violations": 0,
+      "sim": [
+        {
+          "speed": 1,
+          "teeth": [
+            12,
+            36
+          ],
+          "sim_ratio": -0.3333,
+          "design_ratio": -0.3333,
+          "ok": true
+        },
+        {
+          "speed": 2,
+          "teeth": [
+            16,
+            32
+          ],
+          "sim_ratio": -0.5,
+          "design_ratio": -0.5,
+          "ok": true
+        },
+        {
+          "speed": 3,
+          "teeth": [
+            20,
+            28
+          ],
+          "sim_ratio": -0.7143,
+          "design_ratio": -0.7143,
+          "ok": true
+        }
+      ],
+      "sim_all_ok": true,
+      "cost": 0.08954
+    },
+    {
+      "built": true,
+      "functional": true,
+      "measured_teeth": [
+        [
+          12,
+          36
+        ],
+        [
+          16,
+          32
+        ],
+        [
+          20,
+          28
+        ]
+      ],
+      "speeds": {
+        "speed1": {
+          "teeth": [
+            12,
+            36
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.33333,
+          "ratio_design": 0.3333333333333333,
+          "ok": true
+        },
+        "speed2": {
+          "teeth": [
+            16,
+            32
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.5,
+          "ratio_design": 0.5,
+          "ok": true
+        },
+        "speed3": {
+          "teeth": [
+            20,
+            28
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.71429,
+          "ratio_design": 0.7142857142857143,
+          "ok": true
+        }
+      },
+      "motion_violations": [],
+      "gear_mesh_violations": 0,
+      "sim": [
+        {
+          "speed": 1,
+          "teeth": [
+            12,
+            36
+          ],
+          "sim_ratio": -0.3333,
+          "design_ratio": -0.3333,
+          "ok": true
+        },
+        {
+          "speed": 2,
+          "teeth": [
+            16,
+            32
+          ],
+          "sim_ratio": -0.5,
+          "design_ratio": -0.5,
+          "ok": true
+        },
+        {
+          "speed": 3,
+          "teeth": [
+            20,
+            28
+          ],
+          "sim_ratio": -0.7143,
+          "design_ratio": -0.7143,
+          "ok": true
+        }
+      ],
+      "sim_all_ok": true,
+      "cost": 0.077514
+    },
+    {
+      "built": true,
+      "functional": true,
+      "measured_teeth": [
+        [
+          12,
+          36
+        ],
+        [
+          16,
+          32
+        ],
+        [
+          20,
+          28
+        ]
+      ],
+      "speeds": {
+        "speed1": {
+          "teeth": [
+            12,
+            36
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.33333,
+          "ratio_design": 0.3333333333333333,
+          "ok": true
+        },
+        "speed2": {
+          "teeth": [
+            16,
+            32
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.5,
+          "ratio_design": 0.5,
+          "ok": true
+        },
+        "speed3": {
+          "teeth": [
+            20,
+            28
+          ],
+          "power_path_dof": 1,
+          "ratio_realised": -0.71429,
+          "ratio_design": 0.7142857142857143,
+          "ok": true
+        }
+      },
+      "motion_violations": [],
+      "gear_mesh_violations": 0,
+      "sim": [
+        {
+          "speed": 1,
+          "teeth": [
+            12,
+            36
+          ],
+          "sim_ratio": -0.3333,
+          "design_ratio": -0.3333,
+          "ok": true
+        },
+        {
+          "speed": 2,
+          "teeth": [
+            16,
+            32
+          ],
+          "sim_ratio": -0.5,
+          "design_ratio": -0.5,
+          "ok": true
+        },
+        {
+          "speed": 3,
+          "teeth": [
+            20,
+            28
+          ],
+          "sim_ratio": -0.7143,
+          "design_ratio": -0.7143,
+          "ok": true
+        }
+      ],
+      "sim_all_ok": true,
+      "cost": 0.079285
+    }
+  ]
+}
