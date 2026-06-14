@@ -72,15 +72,32 @@ This satisfies the definition of done: a merge that fails if the collar is solid
 again, dog-clutch and gear validations that assert against the **exported** geometry,
 and this writeup.
 
-## A finding from the calibration itself
+## A finding from the calibration itself — and its fix
 
 The first calibration pass copied its "good" collar from `scratch/dog_clutch_unit.py`
 and measured **identical** overlap (339 mm³) for good and bad. That was the oracle
-working before it was even finished: `dog_clutch_unit.py`'s collar sleeve is *solid over
-the whole dog band*, so the gear teeth jam into it regardless of the dog phase — the same
-class of bug. The fixed geometry is in `scratch/gearbox_multispeed.py`, whose sleeve is
-raised *above* the dog band so the teeth protrude into open space. Measuring the real
-artifact caught a second instance of the bug that reading the declaration never would.
+working before it was even finished: `dog_clutch_unit.py`'s collar sleeve was *solid over
+the whole dog band*, so the gear teeth jammed into it regardless of the dog phase — the
+same class of bug. The reference fix already lived in `scratch/gearbox_multispeed.py`,
+whose sleeve is raised *above* the dog band so the teeth protrude into open space.
+Measuring the real artifact caught a second instance of the bug that reading the
+declaration never would.
+
+**That second instance is now fixed.** `dog_clutch_unit.py`'s collar sleeve is raised to
+`GH+DOG_H` (above the dog band), mirroring `gearbox_multispeed.collar`, so only
+interleaving teeth occupy the band. The fix is verified *on the artifact*, not the source:
+`scratch/verify_dog_clutch_unit.py` builds the old and new collars through the §11.10
+oracle (`realize`) and then reads the **exported `artifacts/dog_clutch_unit.step`** back
+and re-checks the as-shipped collar:
+
+```
+BUG   collar (solid face)   : dog_band fill=1.000  sectors=1  overlap=339.3 mm³  -> FAIL
+FIXED collar (raised sleeve): dog_band fill=0.456  sectors=6  overlap=  4.6 mm³  -> PASS
+EXPORTED dog_clutch_unit.step: fill=0.456  sectors=6  overlap=4.6 mm³  -> PASS (metal realizes the declaration)
+```
+
+The 339 mm³ jam collapses to a 4.6 mm³ in-family interleave — the same signature the
+headline regression reproduces, now closed in the demo geometry too.
 
 ## Scope and deferrals (honest accounting)
 
@@ -104,4 +121,6 @@ artifact caught a second instance of the bug that reading the declaration never 
 - Oracle: `driftpin/realize.py`; gates in `driftpin/worker.py` (`_gate_contact_band`,
   `_gate_dog_ring`, `_gate_bore_keying`, `_TYPED_GATES`, `_CONTACT_KINDS`).
 - Regression: `tests/test_realize.py`. Calibration: `scratch/calibrate_realize.py`.
+- Demo-artifact fix + as-exported check: `scratch/verify_dog_clutch_unit.py` (reads
+  `artifacts/dog_clutch_unit.step` back); fixed geometry in `scratch/dog_clutch_unit.py`.
 - Lineage: §11.9 motion oracle (`driftpin/mechanism.py`, `tests/test_mechanism.py`).
