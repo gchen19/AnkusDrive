@@ -223,6 +223,10 @@ echo "== Motion oracle (RFC 11.9 — mobility/ratio gate; rigid lock vs selectiv
 $VENV_PY tests/test_mechanism.py
 
 echo
+echo "== Geometry-realizes-declaration (RFC 11.10 — does the metal back the claim?, needs FreeCAD) =="
+$VENV_PY tests/test_realize.py
+
+echo
 echo "== Experiment-readiness gate (free GO/NO-GO for a billed emergent-property run) =="
 $VENV_PY tests/test_experiment_readiness.py
 
