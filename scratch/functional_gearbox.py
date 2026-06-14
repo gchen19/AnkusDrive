@@ -66,6 +66,27 @@ def assemble_and_gate(tmp, n, files):
     return rep, meas
 
 
+ART = REPO / "artifacts"
+
+
+def export_assembly(root_path, stem):
+    """Export the merged gearbox's STEP + STL into artifacts/ (exports the assembly's
+    own Shape directly — Part.export drops linked-child geometry)."""
+    ART.mkdir(parents=True, exist_ok=True)
+    step, stl = ART / f"{stem}.step", ART / f"{stem}.stl"
+    with Worker() as w:
+        w.call("open_document", path=str(root_path))
+        size = w.call("run_script", code="""
+App.ActiveDocument.recompute()
+o=[x for x in App.ActiveDocument.Objects if hasattr(x,'Shape') and not x.Shape.isNull()
+   and not x.InList][0]
+o.Shape.exportStep(%r)
+import os; __result__=os.path.getsize(%r)
+""" % (str(step), str(step)))["result"]
+        w.call("export_shape", object=None, path=str(stl))
+    return step, stl, size
+
+
 def _functional_summary(rep, meas, n):
     g = rep["gates"]
     mob = rep.get("mobility", {})
@@ -189,9 +210,38 @@ def run_trial(client, model, n, mode, tmp):
             "sim_all_ok": all(d["ok"] for d in sim), "cost": cost, "report": rep}
 
 
+def export_agent_gearbox(n=3):
+    """Rebuild the gearbox from the AGENTS' derived teeth (measured in the billed run)
+    and export its STEP/STL + render to artifacts/. The agents derived the standard
+    constant-mesh teeth, so the scripted rebuild is geometrically identical to what
+    they produced; this regenerates the CAD without re-billing."""
+    pairs = [gb.teeth(gb.RATIOS[s]) for s in range(n)]   # = the agents' measured teeth
+    print(f"== exporting the agent-built {n}-speed functional gearbox "
+          f"(teeth {[list(p) for p in pairs]}) ==")
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        files = _script_gears(tmp, n, pairs)
+        rep, meas = assemble_and_gate(tmp, n, files)
+        assert rep["ok"], "rebuilt gearbox must be functional"
+        stem = f"functional_gearbox_{n}sp"
+        step, stl, size = export_assembly(rep["root"], stem)
+        print(f"  STEP -> {step}  ({size:,} bytes)")
+        print(f"  STL  -> {stl}  ({stl.stat().st_size:,} bytes)")
+        try:
+            from render_gearbox import render
+            png = ART / f"{stem}_render.png"
+            tris, _ = render(stl, png, f"{n}-speed functional gearbox (agent-built)")
+            print(f"  PNG  -> {png}  ({tris:,} facets)")
+        except Exception as e:
+            print(f"  (render skipped: {e})")
+
+
 def main():
     if "--selftest" in sys.argv:
         return selftest()
+    if "--export" in sys.argv:
+        nn = next((int(a) for a in sys.argv[1:] if a.isdigit()), 3)
+        return export_agent_gearbox(nn)
     n = next((int(a) for a in sys.argv[1:] if a.isdigit()), 3)
     if not os.environ.get("RUN_RELIABILITY"):
         print("gated behind RUN_RELIABILITY=1 (+ ANTHROPIC_API_KEY); or --selftest")
@@ -220,6 +270,14 @@ def main():
                   f"sim_ok={r.get('sim_all_ok')}  ${r.get('cost',0):.2f}")
             for v in r.get("motion_violations", []):
                 print(f"     motion: {v}")
+        # export the CAD of the first functional, agent-built gearbox (inside `td`,
+        # before the tempdir is cleaned up)
+        for r in results:
+            if r.get("functional") and r.get("report"):
+                step, stl, size = export_assembly(r["report"]["root"],
+                                                  f"functional_gearbox_{n}sp")
+                print(f"  exported agent-built CAD -> {step.name} ({size:,} B) + {stl.name}")
+                break
     nf = sum(r["functional"] for r in results)
     nb = sum(r.get("built") for r in results)
     out = REPO / "results" / "functional_gearbox"
