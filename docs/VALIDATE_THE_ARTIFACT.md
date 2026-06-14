@@ -136,10 +136,16 @@ headline regression reproduces, now closed in the demo geometry too.
 - **Shift animation redone (kickoff #5):** `scratch/gearbox_shift_animate.py` now draws
   the dog teeth as half-pitch combs that mesh into each other's gaps when engaged (and
   show clear daylight in neutral), instead of same-phase solid blocks.
-- **Still deferred (kickoff #3/#4):** sim-from-CAD via `p.vhacd` and the slide-and-catch
-  contact sim. Item #3's own note says item #2 is an acceptable substitute when mesh
-  contact is finicky — and the geometry checks *are* the artifact-consuming validation
-  those sims were meant to provide.
+- **Slide-and-catch, now done (kickoff #4):** `scratch/dog_clutch_slide_sim.py` drives
+  the REAL exported collar axially into the gear and records it as a GIF for human
+  review, with the §11.10 oracle overlaid on each frame — a clean CATCH (overlap 0 → 4.6
+  mm³, both-occupied 0.0) vs an in-phase JAM (254 mm³, 0.46). Done with kinematics + the
+  geometry oracle rather than finicky rigid-body mesh contact (which item #3's note
+  accepts as a substitute). Part of the simulation-video-capture kickoff
+  (`docs/KICKOFF_simulation_video_capture.md`).
+- **Still deferred (kickoff #3):** full sim-from-CAD via `p.vhacd` rigid-body mesh
+  contact. The geometry checks + the kinematic slide-and-catch *are* the artifact-
+  consuming validation it was meant to provide, so this is gravy, not a gap.
 
 ## Pointers
 

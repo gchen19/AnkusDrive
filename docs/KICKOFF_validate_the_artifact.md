@@ -9,8 +9,11 @@ Scope of work for the next session, written 2026-06-14 at the end of the gearbox
 > **`interleave`** gate (relative half-pitch phase — catches teeth-on-teeth that pass the
 > per-part gap check), the whole **`gearbox_multispeed`** box validated on the artifact
 > (`scratch/verify_gearbox_box.py`), and the **shift animation redone** (#5) to show the
-> real interleave. Items **#3/#4** (sim-from-CAD via `p.vhacd`, slide-and-catch contact
-> sim) remain open — and item #3's own note accepts item #2 as a substitute.
+> real interleave. **#4 (slide-and-catch)** is also done — `scratch/dog_clutch_slide_sim.py`
+> records the collar sliding into the gear on the real CAD with the oracle overlaid
+> (catch 4.6 mm³ vs jam 254 mm³); see `docs/KICKOFF_simulation_video_capture.md`. Only
+> **#3** (full rigid-body sim-from-CAD via `p.vhacd`) remains open — and item #3's own
+> note accepts the geometry check (item #2, done) as a substitute.
 
 ## Why this exists
 
