@@ -8,10 +8,12 @@ declared ENGAGED had a SOLID FACE where the dog gaps belonged; it could not inte
 yet every gate passed. This test builds that exact bug and proves the gate now FAILS
 it — while the interleaved collar PASSES — by consuming the exported shapes.
 
-Three things are asserted against the as-built geometry:
+Four things are asserted against the as-built geometry:
   * dog_ring     — the collar must have GAPS (interleaving teeth), not a solid face.
   * bore_keying  — a freewheel gear must be ROUND-bored; a keyed part D-flatted.
   * contact_band — the engaged overlap must sit in-family (small), not jam (250 mm³).
+  * interleave   — the engaged collar/gear teeth must be HALF-PITCH offset (fall in each
+                   other's gaps), not teeth-on-teeth — a gap a per-part check is blind to.
 
 Run: .venv/bin/python3 tests/test_realize.py   (needs FreeCAD via the worker)
 """
@@ -77,6 +79,15 @@ c = c.fuse(Part.makeCylinder(SR+4.0, 4.5, Vector(0,0,GH)))       # SOLID FACE wh
 emit(c)
 """
 
+# Real gaps (passes dog_ring) but teeth IN PHASE with the gear (phase 0, not half-pitch)
+# -> teeth-on-teeth, jams. The per-part gap check can't see it; interleave (relative
+# phase, common frame) does.
+COLLAR_INPHASE = _HELPERS + r"""
+c = dbore(Part.makeCylinder(SR+4.0, 6.0, Vector(0,0,GH+4.0)), SR+0.1, 8.0, GH+3.0)  # same raised sleeve
+c = c.fuse(dogs(RDOG, GH, 4.5, 0.0))                             # teeth present but NOT offset (in phase)
+emit(c)
+"""
+
 
 def _build_part(w, code, path):
     """Build one part into a fresh document and save it to `path` (one object)."""
@@ -106,6 +117,9 @@ def _checks(collar_inst="collar", gear_inst="gear"):
          "keyed": False, "bore_radius_mm": SR + 0.3},
         {"kind": "contact_band", "a": collar_inst, "b": gear_inst,
          "interface": "engaged dog clutch", "max_overlap_mm3": 60.0},
+        {"kind": "interleave", "a": collar_inst, "b": gear_inst, "role_a": "collar",
+         "role_b": "gear", "dog_radius_mm": RDOG, "z_lo_mm": GH + 0.5,
+         "z_hi_mm": GH + 3.5},
     ]
 
 
@@ -163,6 +177,29 @@ def test_solid_face_collar_fails_interleaved_passes():
     assert any(v.get("kind") == "contact_band" for v in typed), typed
     print(f"    GOOD ok={good['ok']}   BAD ok={bad['ok']}  ({len(typed)} typed viol)")
     print(f"    BAD reasons: {reasons[:160]}")
+
+
+def test_inphase_collar_fails_interleave():
+    """A collar with real GAPS (passes dog_ring) but teeth IN PHASE with the gear — no
+    half-pitch offset — jams teeth-on-teeth. The per-part gap check cannot see it; the
+    interleave gate (relative phase, in the engaged frame) does. This is the failure
+    mode dog_ring is blind to."""
+    with tempfile.TemporaryDirectory() as d:
+        with Worker() as w:
+            _build_gear(w, os.path.join(d, "gear.FCStd"))
+            _build_part(w, COLLAR_INPHASE % (SR, GH, ND, RDOG),
+                        os.path.join(d, "collar_inphase.FCStd"))
+            rep = _merge(w, d, "collar_inphase.FCStd")
+    assert not rep["ok"], "in-phase collar must FAIL the merge (teeth-on-teeth jam)"
+    typed = rep["gates"]["typed"]
+    # the collar HAS gaps, so the per-part dog_ring gate must NOT fire ...
+    assert not any(v.get("kind") == "dog_ring" for v in typed), \
+        f"in-phase collar has real gaps; dog_ring should pass: {typed}"
+    # ... but the relative-phase interleave gate MUST catch the teeth-on-teeth jam
+    assert any(v.get("kind") == "interleave" for v in typed), typed
+    reasons = " | ".join(v.get("reason", "") for v in typed)
+    assert "IN PHASE" in reasons, reasons
+    print(f"    in-phase collar ok={rep['ok']}  (dog_ring passes, interleave fails)")
 
 
 def test_freewheel_gear_is_round_bored():

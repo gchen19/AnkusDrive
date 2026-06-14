@@ -5,8 +5,12 @@ Scope of work for the next session, written 2026-06-14 at the end of the gearbox
 > **Status (2026-06-14):** items #1 (anomaly gate) and #2 (geometry-realizes-declaration)
 > are DONE and shipped as **RFC §11.10** — see `docs/VALIDATE_THE_ARTIFACT.md` for the
 > writeup, `driftpin/realize.py` for the oracle, and `tests/test_realize.py` for the
-> regression (a merge that FAILS the solid-face collar at 249.5 mm³). Items #3–#5
-> (sim-from-CAD, slide-and-catch, shift-animation redo) remain open.
+> regression (a merge that FAILS the solid-face collar at 249.5 mm³). Since extended: a
+> **`interleave`** gate (relative half-pitch phase — catches teeth-on-teeth that pass the
+> per-part gap check), the whole **`gearbox_multispeed`** box validated on the artifact
+> (`scratch/verify_gearbox_box.py`), and the **shift animation redone** (#5) to show the
+> real interleave. Items **#3/#4** (sim-from-CAD via `p.vhacd`, slide-and-catch contact
+> sim) remain open — and item #3's own note accepts item #2 as a substitute.
 
 ## Why this exists
 

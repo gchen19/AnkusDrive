@@ -43,6 +43,11 @@ _SOLID_FACE_FILL = 0.80     # fill >= this at the dog radius == a solid face, no
 _RING_MIN_FILL = 0.15       # below this there is essentially no material -> not a ring
 _RADIAL_NORMAL_TOL = 0.20   # |n . axis| below this == a radial (D-flat) face normal
 _NEAR_AXIS_MARGIN = 1.5     # mm a bore feature may sit beyond its nominal radius
+# Relative-phase (interleave) of two engaged rings: half-pitch teeth fall in each
+# other's gaps so the co-occupied fraction is ~0; teeth IN PHASE co-occupy ~the tooth
+# fill (~0.45). 0.12 is a wide moat between them (calibrated in calibrate_realize.py).
+_INTERLEAVE_MAX_BOTH = 0.12  # both-occupied fraction >= this == teeth in phase (jam)
+_INTERLEAVE_MIN_FILL = 0.10  # each ring must actually carry teeth in the shared band
 
 
 def _perp_basis(d: App.Vector):
@@ -119,6 +124,42 @@ def dog_ring_profile(shape, radius, z_lo, z_hi, *, axis_pt=None, axis_dir=None,
         flags.append(bool(shape.isInside(pt, 1e-6, True)))
     fill = sum(flags) / float(n_samples)
     return {"fill": round(fill, 4), "sectors": _circular_runs(flags),
+            "n_samples": n_samples}
+
+
+def interleave_profile(shape_a, shape_b, radius, z_lo, z_hi, *, axis_pt=None,
+                       axis_dir=None, n_samples=360):
+    """Angular CO-OCCUPANCY of two parts sharing a frame (the engaged pose), at the dog
+    ``radius``, sampled midway up the shared band [z_lo, z_hi]. Where dog_ring_profile
+    asks of ONE part "are there gaps?", this asks of the PAIR "do a's teeth fall in b's
+    gaps?" — it reads RELATIVE phase. Returns {a_fill, b_fill, both_fraction,
+    union_fraction, n_samples}:
+
+      a_fill / b_fill   each part's own angular fill here (both must be >0 to be engaged)
+      both_fraction     angles where BOTH have material — ≈0 when teeth INTERLEAVE (a's
+                        teeth sit in b's gaps), ≈the tooth fill when the rings are IN
+                        PHASE (teeth-on-teeth: each ring still has gaps, but they jam).
+      union_fraction    angles with either — ≈2× a single ring interleaved, ≈1× in phase.
+
+    The axis defaults to ``shape_a``'s (an engaged clutch is coaxial); pass it for a
+    pair whose centroid is not on the axis."""
+    if axis_pt is None or axis_dir is None:
+        axis_pt, axis_dir = part_axis(shape_a)
+    u, v = _perp_basis(axis_dir)
+    z_mid = 0.5 * (z_lo + z_hi)
+    centre = axis_pt + axis_dir * z_mid
+    a_n = b_n = both = union = 0
+    for k in range(n_samples):
+        th = 2.0 * math.pi * k / n_samples
+        pt = centre + u * (radius * math.cos(th)) + v * (radius * math.sin(th))
+        ai = bool(shape_a.isInside(pt, 1e-6, True))
+        bi = bool(shape_b.isInside(pt, 1e-6, True))
+        a_n += ai; b_n += bi
+        both += ai and bi
+        union += ai or bi
+    f = float(n_samples)
+    return {"a_fill": round(a_n / f, 4), "b_fill": round(b_n / f, 4),
+            "both_fraction": round(both / f, 4), "union_fraction": round(union / f, 4),
             "n_samples": n_samples}
 
 
@@ -219,6 +260,33 @@ def check_dog_ring(shape, decl):
         out.append({"role": role, **prof,
                     "reason": f"{role} has {prof['sectors']} dog teeth, declared "
                               f"{n_exp}"})
+    return out
+
+
+def check_interleave(shape_a, shape_b, decl):
+    """Validate that two ENGAGED dog rings interleave. ``decl`` = {role_a, role_b,
+    dog_radius_mm, z_lo_mm, z_hi_mm, axis_pt?, axis_dir?}. A real engaged dog clutch
+    has each ring's teeth in the OTHER's gaps (half-pitch offset), so few angles carry
+    both. Two rings IN PHASE (teeth-on-teeth) jam — and each can still pass its own
+    ``check_dog_ring`` (it has gaps), so this is the relative-phase layer that gap
+    check cannot see. Both parts must be given in a common (engaged) frame."""
+    ra, rb = decl.get("role_a", "a"), decl.get("role_b", "b")
+    prof = interleave_profile(
+        shape_a, shape_b, float(decl["dog_radius_mm"]), float(decl["z_lo_mm"]),
+        float(decl["z_hi_mm"]), axis_pt=decl.get("axis_pt"),
+        axis_dir=decl.get("axis_dir"), n_samples=int(decl.get("n_samples", 360)))
+    out = []
+    if prof["a_fill"] < _INTERLEAVE_MIN_FILL or prof["b_fill"] < _INTERLEAVE_MIN_FILL:
+        out.append({**prof, "reason":
+                    f"{ra}/{rb} are not both toothed at r={decl['dog_radius_mm']} mm "
+                    f"(a_fill={prof['a_fill']}, b_fill={prof['b_fill']}) — the dog "
+                    f"bands do not engage in this band"})
+    elif prof["both_fraction"] >= _INTERLEAVE_MAX_BOTH:
+        out.append({**prof, "reason":
+                    f"{ra} and {rb} dog teeth are IN PHASE ({prof['both_fraction']*100:.0f}% "
+                    f"of angles carry both) at r={decl['dog_radius_mm']} mm — teeth-on-"
+                    f"teeth, they jam instead of interleaving (each ring has gaps, but "
+                    f"they are not half-pitch offset)"})
     return out
 
 

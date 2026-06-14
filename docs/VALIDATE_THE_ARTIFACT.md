@@ -29,7 +29,7 @@ the eye was needed because a gate was missing.
 
 `driftpin/realize.py` — a FreeCAD-bound oracle that consumes the **real `Part.Shape`**
 (never a separate idealised model) and asserts the geometry implements the declared
-topology. Two primitives, both read about the part's own axis so they are
+topology. The two per-part primitives read about the part's own axis so they are
 placement-independent (a property of the part, not of one assembled pose):
 
 - **`bore_keying`** — a `keyed` bore has a radial flat (the D-key chord sits *inside*
@@ -39,16 +39,30 @@ placement-independent (a property of the part, not of one assembled pose):
   fraction** (≈0.47 for an interleaved N-tooth ring, **1.0 for a solid face**) and a
   **sector count** (N teeth vs a single 360° arc). Gaps present ⇒ it can interlock.
 
-Wired into `merge_assembly` as three typed-interface gates (`driftpin/worker.py`):
+A third primitive reads the **relative phase** of two parts in a common (engaged) frame:
+
+- **`interleave`** — sampling co-occupancy at the dog radius gives the **both-occupied
+  fraction**: ≈0 when the collar's teeth fall in the gear's gaps (half-pitch offset),
+  ≈the tooth fill (≈0.46) when the two rings are **in phase** (teeth-on-teeth). This is
+  the layer `dog_ring` can't see — each ring can have gaps yet still jam if they are not
+  offset. `dog_ring` asks "does this part have gaps?"; `interleave` asks "do a's teeth
+  fall in b's gaps?".
+
+Wired into `merge_assembly` as four typed-interface gates (`driftpin/worker.py`):
 
 - **`contact_band`** (kickoff item #1, the cheap anomaly gate) — an *expected* contact
   (engaged dog clutch, press band) has a characteristic overlap volume; one far outside
   its band is the red flag that was waved through. It **owns its pair** (excluded from
   the blunt interference list) and bounds the overlap instead of forbidding it.
 - **`dog_ring`** and **`bore_keying`** (item #2, the core) — per-part geometry checks.
+- **`interleave`** — the relative-phase check on an engaged pair; like `contact_band` it
+  owns its pair (the meshing teeth) in `_CONTACT_KINDS`.
 
 Thresholds are not guessed: `scratch/calibrate_realize.py` measures them on real CAD
-(interleaved fill 0.47 vs solid 1.0; the gate's 0.80 is a wide moat between them).
+(interleaved fill 0.47 vs solid 1.0, the gate's 0.80 a wide moat; half-pitch
+both-occupied 0.0 vs in-phase 0.47, the gate's 0.12 the moat). It builds GOOD / solid /
+in-phase collars against a freewheeling gear and prints all four signals — overlap
+(4.6 vs 250 mm³), fill, both-occupied, and bore flat — so every threshold is grounded.
 
 ## Regression evidence
 
@@ -60,13 +74,17 @@ runs each through `merge_assembly`:
 GOOD interleaved collar :  ok=True   (no typed violations)
 BAD  solid-face collar  :  ok=False  dog_ring: "SOLID FACE where the dog gaps belong"
                                      contact_band: overlap 249.5 mm³ exceeds 60 mm³ band
+IN-PHASE collar (gaps!) :  ok=False  dog_ring PASSES (it has gaps) but interleave fails:
+                                     "teeth IN PHASE (46% carry both) — they jam"
 ```
 
 The solid-face overlap measures **249.5 mm³** — essentially the *250 mm³* the kickoff
 cited as the historical jam, against a few-mm³ interleaved clutch. The rig faithfully
 reproduces the original bug's signature, and the merge now **FAILS** it. A second test
 flips a round-bored gear's declaration to `keyed` and confirms `bore_keying` catches the
-"loose gear keyed to nothing" case.
+"loose gear keyed to nothing" case. A third builds a collar that *has* real gaps but
+whose teeth are **in phase** with the gear — it sails through `dog_ring` yet `interleave`
+catches the teeth-on-teeth jam, the failure mode the per-part gap check is blind to.
 
 This satisfies the definition of done: a merge that fails if the collar is solid-faced
 again, dog-clutch and gear validations that assert against the **exported** geometry,
@@ -103,24 +121,35 @@ headline regression reproduces, now closed in the demo geometry too.
 
 - **Done:** §11.10 gates + `realize.py`, calibrated thresholds, end-to-end regression
   through `merge_assembly`, registered in `tests/run_all.sh`.
-- **Deliberately minimal:** the regression rig is a 2-part dog clutch, not the full
-  `gearbox_multispeed`. It reproduces the exact bug signature (≈250 mm³) and is the
-  faithful regression; converting the monolithic `gearbox_multispeed.py` (one
-  `run_script` compound) into a component-file manifest so these gates run on the whole
-  box is a mechanical follow-up, not a new idea.
-- **Not attempted (kickoff items #3–#5):** sim-from-CAD via `p.vhacd`, the slide-and-
-  catch contact sim, and re-doing the shift-animation dog teeth. Item #3's own note says
-  item #2 is an acceptable substitute when mesh contact is finicky — and the geometry
-  check *is* the artifact-consuming validation those sims were meant to provide. The
-  half-pitch *interleave* between collar and gear (vs each part merely having gaps) is the
-  natural next increment for `realize.py`: a relative-phase check needs both parts in a
-  common frame, where the per-part "gaps present" check is placement-independent.
+- **Relative phase, now done:** the half-pitch `interleave` check closed the one real
+  hole in the per-part checks — two rings can each have gaps yet still jam if they are in
+  phase. It needs both parts in a common frame; calibrated 0.0 (meshed) vs 0.47 (in
+  phase) and regression-tested (in-phase collar passes `dog_ring`, fails `interleave`).
+- **Whole box now validated on the artifact:** `scratch/verify_gearbox_box.py` runs all
+  four checks over every collar and gear of the 3-speed `gearbox_multispeed` — the
+  headline assembly that was previously only eyeballed. All 10 parts pass: keyed gears
+  carry D-flats, freewheel gears are round-bored 6-tooth rings (fill 0.45), both collars
+  are real dog rings, the engaged pair overlaps 4.6 mm³ and interleaves (both-occupied
+  0.0), the neutral collar is clear (0 mm³). A full component-file manifest through
+  `merge_assembly` would exercise the gate plumbing too, but the 2-part rig already covers
+  that; this validates the *geometry* of the real box, which was the point.
+- **Shift animation redone (kickoff #5):** `scratch/gearbox_shift_animate.py` now draws
+  the dog teeth as half-pitch combs that mesh into each other's gaps when engaged (and
+  show clear daylight in neutral), instead of same-phase solid blocks.
+- **Still deferred (kickoff #3/#4):** sim-from-CAD via `p.vhacd` and the slide-and-catch
+  contact sim. Item #3's own note says item #2 is an acceptable substitute when mesh
+  contact is finicky — and the geometry checks *are* the artifact-consuming validation
+  those sims were meant to provide.
 
 ## Pointers
 
-- Oracle: `driftpin/realize.py`; gates in `driftpin/worker.py` (`_gate_contact_band`,
-  `_gate_dog_ring`, `_gate_bore_keying`, `_TYPED_GATES`, `_CONTACT_KINDS`).
-- Regression: `tests/test_realize.py`. Calibration: `scratch/calibrate_realize.py`.
+- Oracle: `driftpin/realize.py` (`bore_keying`, `dog_ring`, `interleave`); gates in
+  `driftpin/worker.py` (`_gate_contact_band`, `_gate_dog_ring`, `_gate_bore_keying`,
+  `_gate_interleave`, `_TYPED_GATES`, `_CONTACT_KINDS`).
+- Regression: `tests/test_realize.py` (solid-face, keyed-to-nothing, in-phase jam).
+  Calibration: `scratch/calibrate_realize.py` (all four signals on real CAD).
 - Demo-artifact fix + as-exported check: `scratch/verify_dog_clutch_unit.py` (reads
   `artifacts/dog_clutch_unit.step` back); fixed geometry in `scratch/dog_clutch_unit.py`.
+- Whole-box artifact check: `scratch/verify_gearbox_box.py` (every collar/gear of
+  `gearbox_multispeed`). Shift animation: `scratch/gearbox_shift_animate.py`.
 - Lineage: §11.9 motion oracle (`driftpin/mechanism.py`, `tests/test_mechanism.py`).
