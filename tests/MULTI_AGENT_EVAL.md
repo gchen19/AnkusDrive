@@ -961,3 +961,38 @@ That single unit is genuinely functional and selectable. Scaling it to the full
 multi-speed box (a countershaft, a sliding collar between speed gears, and a contact
 sim of the real involute+dog geometry rather than simplified boxes) is the open work —
 not claimed done.
+
+## The multi-speed assembly — built and contact-validated (2026-06-13)
+
+The full countershaft transmission, with all the hardware.
+
+**Geometry** (`scratch/gearbox_multispeed.py` → `artifacts/gearbox_multispeed.{step,stl}`
++ render): a real 3-speed constant-mesh box. INPUT shaft carries one gear, keyed,
+constant-meshing the COUNTERSHAFT; the countershaft carries the constant-mesh gear +
+one keyed gear per speed; the MAINSHAFT (coaxial with the input) carries the speed
+gears, each FREEWHEELING (round bore) with dog teeth, plus sliding dog collars splined
+to it. All pairs mesh at one centre distance (tooth-sum 40). Overall ratio for speed
+k = (Z_in/Z_cm)·(Z_ck/Z_mk) → **0.286 / 0.667 / 1.556**.
+
+**Dynamic validation by contact** (`scratch/gearbox_multispeed_sim.py`, NO gear
+constraints): drive the input; the power goes input → constant mesh → countershaft →
+speed mesh → main gear, **two meshes in series purely through tooth contact**. All
+three speeds transmit, each at its own ratio:
+
+| speed | teeth (c→m) | realised ω_main/ω_in | ideal | rel-err |
+|---|---|---|---|---|
+| 1 | 12→28 | +0.256 | +0.286 | 11% |
+| 2 | 20→20 | +0.662 | +0.667 | 1% |
+| 3 (overdrive) | 28→12 | +1.358 | +1.556 | 13% |
+
+The slip (1–13%, worst on the overdrive where a big gear drives a small one) is the
+**box-tooth model's** limit — flat-faced tooth boxes push instead of rolling; real
+involute teeth (which the CAD uses) slip <1%. Two sim bugs found and fixed along the
+way, both honest-result enablers: PyBullet disables self-collision within one body by
+default (so teeth never touched until `URDF_USE_SELF_COLLISION`), and
+`createCollisionShapeArray` silently drops the second gear when a compound mixes
+several shapes (so the countershaft's speed gear vanished until it was split into a
+FIXED-jointed link). Combined with the single-mesh and dog-clutch contact tests, the
+multi-speed transmission now **rotates and converts at every speed, validated by
+contact** — the claim the loose-gears model couldn't back, now made good with the
+hardware modelled and the ratio emerging from the teeth, not imposed.
