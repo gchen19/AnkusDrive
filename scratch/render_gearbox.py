@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt                       # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-OUT = REPO / "results" / "gearbox_real"
+OUT = REPO / "results" / "gearbox_real"   # generated STL input (gitignored)
+ART = REPO / "artifacts"                  # committed PNG renders
 
 
 def read_binary_stl(path):
@@ -66,7 +67,8 @@ def main():
         if not stl.exists():
             print(f"  (no {stl} — run scratch/gearbox_real.py {n} first)")
             continue
-        png = OUT / f"gearbox{n}_render.png"
+        ART.mkdir(parents=True, exist_ok=True)
+        png = ART / f"gearbox{n}_render.png"
         tris, size = render(stl, png, f"{n}-speed constant-mesh gearbox "
                                        f"({'14' if n == 3 else '20'} parts)")
         print(f"  rendered {stl.name}: {tris:,} facets -> {png}  ({size:,} bytes)")

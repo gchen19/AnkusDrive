@@ -1,0 +1,208 @@
+{
+  "experiment": "compound_train",
+  "model": "claude-haiku-4-5-20251001",
+  "trials": 3,
+  "target": 0.6666666666666666,
+  "resolved_drivers": [
+    12,
+    24,
+    32
+  ],
+  "rows": [
+    {
+      "mode": "derive",
+      "condition": "partition",
+      "passed": 0,
+      "built": 1,
+      "trials": 3,
+      "cost_usd": 0.1358,
+      "results": [
+        {
+          "built": true,
+          "passed": false,
+          "teeth": [
+            22,
+            22,
+            22
+          ],
+          "overall_realised": -0.605826,
+          "target": 0.66667,
+          "mobility_ok": false,
+          "reason": "overall ratio -0.60583 != target +0.666667 (off by 0.0608)",
+          "cost": 0.055784
+        },
+        {
+          "built": false,
+          "passed": false,
+          "teeth": [
+            22,
+            null,
+            null
+          ],
+          "reason": "a driver agent did not build",
+          "cost": 0.03198
+        },
+        {
+          "built": false,
+          "passed": false,
+          "teeth": [
+            20,
+            null,
+            22
+          ],
+          "reason": "a driver agent did not build",
+          "cost": 0.048031
+        }
+      ]
+    },
+    {
+      "mode": "derive",
+      "condition": "single",
+      "passed": 0,
+      "built": 0,
+      "trials": 3,
+      "cost_usd": 0.0738,
+      "results": [
+        {
+          "built": false,
+          "passed": false,
+          "teeth": [
+            null,
+            23,
+            null
+          ],
+          "reason": "a driver agent did not build",
+          "cost": 0.031816
+        },
+        {
+          "built": false,
+          "passed": false,
+          "teeth": [
+            null,
+            null,
+            null
+          ],
+          "reason": "a driver agent did not build",
+          "cost": 0.020988
+        },
+        {
+          "built": false,
+          "passed": false,
+          "teeth": [
+            null,
+            null,
+            null
+          ],
+          "reason": "a driver agent did not build",
+          "cost": 0.020988
+        }
+      ]
+    },
+    {
+      "mode": "resolve",
+      "condition": "partition",
+      "passed": 3,
+      "built": 3,
+      "trials": 3,
+      "cost_usd": 0.0914,
+      "results": [
+        {
+          "built": true,
+          "passed": true,
+          "teeth": [
+            12,
+            24,
+            32
+          ],
+          "overall_realised": -0.666667,
+          "target": 0.66667,
+          "mobility_ok": true,
+          "reason": "ok",
+          "cost": 0.030407
+        },
+        {
+          "built": true,
+          "passed": true,
+          "teeth": [
+            12,
+            24,
+            32
+          ],
+          "overall_realised": -0.666667,
+          "target": 0.66667,
+          "mobility_ok": true,
+          "reason": "ok",
+          "cost": 0.030533
+        },
+        {
+          "built": true,
+          "passed": true,
+          "teeth": [
+            12,
+            24,
+            32
+          ],
+          "overall_realised": -0.666667,
+          "target": 0.66667,
+          "mobility_ok": true,
+          "reason": "ok",
+          "cost": 0.030419
+        }
+      ]
+    },
+    {
+      "mode": "resolve",
+      "condition": "single",
+      "passed": 3,
+      "built": 3,
+      "trials": 3,
+      "cost_usd": 0.1552,
+      "results": [
+        {
+          "built": true,
+          "passed": true,
+          "teeth": [
+            12,
+            24,
+            32
+          ],
+          "overall_realised": -0.666667,
+          "target": 0.66667,
+          "mobility_ok": true,
+          "reason": "ok",
+          "cost": 0.046735
+        },
+        {
+          "built": true,
+          "passed": true,
+          "teeth": [
+            12,
+            24,
+            32
+          ],
+          "overall_realised": -0.666667,
+          "target": 0.66667,
+          "mobility_ok": true,
+          "reason": "ok",
+          "cost": 0.054497
+        },
+        {
+          "built": true,
+          "passed": true,
+          "teeth": [
+            12,
+            24,
+            32
+          ],
+          "overall_realised": -0.666667,
+          "target": 0.66667,
+          "mobility_ok": true,
+          "reason": "ok",
+          "cost": 0.053922
+        }
+      ]
+    }
+  ],
+  "total_cost_usd": 0.4562,
+  "total_seconds": 385.7
+}

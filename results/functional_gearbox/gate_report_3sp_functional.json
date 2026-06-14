@@ -1,0 +1,221 @@
+{
+  "assembly": "assembly_1",
+  "doc": "gearbox3",
+  "root": "/tmp/tmpoe4g8fpi/trial_0/gearbox3.FCStd",
+  "placed": [
+    {
+      "instance": "input_shaft",
+      "component": "input_shaft",
+      "linked": "Cylinder"
+    },
+    {
+      "instance": "output_shaft",
+      "component": "output_shaft",
+      "linked": "Cylinder"
+    },
+    {
+      "instance": "bottom_plate",
+      "component": "bottom_plate",
+      "linked": "Cut001"
+    },
+    {
+      "instance": "top_plate",
+      "component": "top_plate",
+      "linked": "Cut001"
+    },
+    {
+      "instance": "bearing_in_0",
+      "component": "bearing_in_0",
+      "linked": "Bearing"
+    },
+    {
+      "instance": "bearing_in_1",
+      "component": "bearing_in_1",
+      "linked": "Bearing"
+    },
+    {
+      "instance": "bearing_out_0",
+      "component": "bearing_out_0",
+      "linked": "Bearing"
+    },
+    {
+      "instance": "bearing_out_1",
+      "component": "bearing_out_1",
+      "linked": "Bearing"
+    },
+    {
+      "instance": "in0",
+      "component": "in0",
+      "linked": "Cut"
+    },
+    {
+      "instance": "out0",
+      "component": "out0",
+      "linked": "Cut"
+    },
+    {
+      "instance": "in1",
+      "component": "in1",
+      "linked": "Cut"
+    },
+    {
+      "instance": "out1",
+      "component": "out1",
+      "linked": "Cut"
+    },
+    {
+      "instance": "in2",
+      "component": "in2",
+      "linked": "Cut"
+    },
+    {
+      "instance": "out2",
+      "component": "out2",
+      "linked": "Cut"
+    }
+  ],
+  "gates": {
+    "interference": [],
+    "bom": [
+      {
+        "part": "add_bearing_10.4-26.0-8.0_f95e45",
+        "count": 4,
+        "total_volume_mm3": 14271.375779315425
+      },
+      {
+        "part": "input_shaft",
+        "count": 1,
+        "total_volume_mm3": 4555.309347705201
+      },
+      {
+        "part": "output_shaft",
+        "count": 1,
+        "total_volume_mm3": 4555.309347705201
+      },
+      {
+        "part": "bottom_plate",
+        "count": 1,
+        "total_volume_mm3": 12126.088960385143
+      },
+      {
+        "part": "top_plate",
+        "count": 1,
+        "total_volume_mm3": 12126.088960385143
+      },
+      {
+        "part": "in0",
+        "count": 1,
+        "total_volume_mm3": 2101.451630433222
+      },
+      {
+        "part": "out0",
+        "count": 1,
+        "total_volume_mm3": 23713.370538576313
+      },
+      {
+        "part": "in1",
+        "count": 1,
+        "total_volume_mm3": 4182.497037639632
+      },
+      {
+        "part": "out1",
+        "count": 1,
+        "total_volume_mm3": 18599.501478806982
+      },
+      {
+        "part": "in2",
+        "count": 1,
+        "total_volume_mm3": 6874.809169047727
+      },
+      {
+        "part": "out2",
+        "count": 1,
+        "total_volume_mm3": 14086.255071324726
+      }
+    ],
+    "envelope": [],
+    "typed": [],
+    "requirements": [],
+    "mobility": []
+  },
+  "ok": true,
+  "requirements": {
+    "report": {
+      "total_volume_mm3": 117192.057,
+      "leaf_count": 14,
+      "mass_g": 925.817,
+      "cg_mm": [
+        32.8553,
+        0.0,
+        28.4202
+      ]
+    },
+    "skipped": []
+  },
+  "mobility": {
+    "expected_dof": 1,
+    "rigid": {
+      "mobility_dof": 2,
+      "consistent": true,
+      "conflicts": [],
+      "rates": {
+        "input_shaft": 1.0,
+        "output_shaft": 1.0
+      }
+    },
+    "states": {
+      "speed1": {
+        "mobility_dof": 1,
+        "power_path_dof": 1,
+        "ratio_realised": -0.33333,
+        "conflicts": [],
+        "ratio_design": 0.3333333333333333,
+        "ratio_ok": true,
+        "ok": true
+      },
+      "speed2": {
+        "mobility_dof": 1,
+        "power_path_dof": 1,
+        "ratio_realised": -0.5,
+        "conflicts": [],
+        "ratio_design": 0.5,
+        "ratio_ok": true,
+        "ok": true
+      },
+      "speed3": {
+        "mobility_dof": 1,
+        "power_path_dof": 1,
+        "ratio_realised": -0.71429,
+        "conflicts": [],
+        "ratio_design": 0.7142857142857143,
+        "ratio_ok": true,
+        "ok": true
+      }
+    },
+    "violations": [],
+    "verdict": "functional",
+    "ok": true
+  },
+  "library": {
+    "bearing_in_0": {
+      "tool": "add_bearing",
+      "file": "/tmp/tmpoe4g8fpi/trial_0/.dp_lib/add_bearing_10.4-26.0-8.0_f95e45.FCStd",
+      "spec_hash": "f95e450c7213e82a"
+    },
+    "bearing_in_1": {
+      "tool": "add_bearing",
+      "file": "/tmp/tmpoe4g8fpi/trial_0/.dp_lib/add_bearing_10.4-26.0-8.0_f95e45.FCStd",
+      "spec_hash": "f95e450c7213e82a"
+    },
+    "bearing_out_0": {
+      "tool": "add_bearing",
+      "file": "/tmp/tmpoe4g8fpi/trial_0/.dp_lib/add_bearing_10.4-26.0-8.0_f95e45.FCStd",
+      "spec_hash": "f95e450c7213e82a"
+    },
+    "bearing_out_1": {
+      "tool": "add_bearing",
+      "file": "/tmp/tmpoe4g8fpi/trial_0/.dp_lib/add_bearing_10.4-26.0-8.0_f95e45.FCStd",
+      "spec_hash": "f95e450c7213e82a"
+    }
+  }
+}

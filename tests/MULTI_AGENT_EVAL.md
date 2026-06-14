@@ -785,7 +785,7 @@ by whether the shared quantity must be *reconciled*:
 each agent applies independently does not break them, even at 12 components; a
 shared **reconciliation** — a value that must be made consistent *across* agents —
 does, and is precisely what the resolve step (§11.1) exists to remove. A render of
-the assembled gearbox is in `results/gearbox_real/gearbox{3,6}_render.png`
+the assembled gearbox is in `artifacts/gearbox{3,6}_render.png`
 (`scratch/render_gearbox.py`, matplotlib from the exported STL).
 
 ## The motion oracle — the gearbox passes every static gate and cannot move (2026-06-13, RFC §11.9, free)
@@ -850,9 +850,156 @@ This is the payoff of the project's cost discipline made mechanical: it would ha
 caught that the gearbox-mobility framing measures nothing about the agents (the lock
 is fixed by the topology, not produced by the builders) *before* spending a round —
 and points instead at the compound-train, where the agents genuinely determine an
-emergent overall ratio none of them can see alone. The compound-train toy is **GO and
-not yet billed** — the next experiment, pending a go-ahead.
+emergent overall ratio none of them can see alone.
 
-All Tier-1/Tier-2/readiness logic is free-tested: `tests/test_mechanism.py` (11),
+All Tier-1/Tier-2/readiness logic is free-tested: `tests/test_mechanism.py` (14),
 `tests/test_experiment_readiness.py` (7), `tests/test_mbd.py` gear-coupling cases (2),
 all in `run_all.sh`.
+
+## The compound-train experiment — the motion gate catches an emergent reconciliation on real agent output (2026-06-13, Haiku, $0.46)
+
+The GO toy, run. Agents build the three stage **driver** gears of a serial reduction
+train; the driven gear of each stage is scripted to 48 − the built driver, so the
+within-stage mesh is automatic and the only thing under test is the **emergent
+overall reduction** — the product of the three stage ratios, which no single stage
+builder can see. The train's `target_ratio` is gated by `merge_assembly`'s motion
+gate. Resolved split `[12,24,32]` → 1/3 · 1 · 2 = 2/3 == target.
+(`scratch/train_experiment.py`, agents build the driver gears; the gate judges the
+product.)
+
+| condition | pass | built | what the agents produced |
+|---|---|---|---|
+| derive · partition | 0/3 | 1/3 | the one that built: `[22,22,22]` (the naive equal split) |
+| derive · single    | 0/3 | 0/3 | agents stalled on the open-ended split |
+| **resolve · partition** | **3/3** | 3/3 | `[12,24,32]` — handed |
+| **resolve · single**    | **3/3** | 3/3 | `[12,24,32]` — handed |
+
+**The gate result is unambiguous on every train that actually built** — and that is
+the question the experiment set out to answer. The full merge reports
+(`results/compound_train/gate_report_agent_{resolve_PASS,derive_FAIL}.json`) show the
+gate checking *all* of it on real agent geometry:
+
+- `[12,24,32]` (resolve): interference `[]`, gear_mesh `[]`, **mobility_dof 1**,
+  realised overall ratio **−0.6667 = target** → `ok: true`.
+- `[22,22,22]` (derive): interference `[]`, gear_mesh `[]` (every stage meshes!),
+  **mobility_dof 1** (a valid, turnable train), rates propagated through every shaft
+  (`shaft0 1.0 → shaft3 −0.606`), realised overall ratio **−0.606 ≠ target** →
+  `ok: false`, violation *"overall ratio off by 0.0608"*. Locally perfect, globally
+  wrong — and only the motion gate sees it.
+
+**The caveat, stated plainly** (the nslot8 lesson): derive's 0/6 is *confounded* —
+only one of six derive trials fully built, the rest had a driver agent stall on the
+open-ended "decide your own tooth count" task. So the derive→resolve pass-rate jump
+here is not a clean reconciliation measurement the way `tchainu→tchainu_r` was; the
+build-rate gap rides along with it. What *is* clean and is the point of the run: the
+**motion gate is a correct, comprehensive oracle on real agent output** — it passes
+all six on-target resolve trains and fails the off-target derive train on the emergent
+invariant, with the static gates blind to the difference. (A cleaner derive
+reconciliation signal would need a higher agent build rate — a more constrained derive
+prompt or a larger turn budget — a queued follow-up, not a gate question.)
+
+## Can the agents build a FUNCTIONAL gearbox? Yes (2026-06-13, Haiku, $0.25)
+
+The question the whole arc was really after — and where the readiness gate's
+"gearbox mobility, fixed topology = NO-GO" verdict was too narrow. That verdict
+tested *mobility only* (the lock is topological, not agent-determined). But
+**functionality is mobility AND the correct ratio at each speed**, and the per-speed
+ratios *are* agent-determined: build a wrong-tooth gear and that speed runs at the
+wrong reduction. So "can the agents build a functional gearbox" is a real experiment,
+which `scratch/functional_gearbox.py` runs end to end:
+
+1. agents build the gearbox gears (derive — each computes its own teeth from the
+   shared centre-distance constant);
+2. the gears are assembled with the **selective-engagement** mechanism block (output
+   gears freewheel, one dog-clutched per speed), using the agents' **measured** teeth;
+3. the merge certifies functionality — `gear_mesh` (geometry matches each design
+   ratio) + the **motion gate** (every speed a determinate single-DOF transmission
+   whose realised ratio = design);
+4. **PyBullet drives each engaged speed** and measures ω_out/ω_in.
+
+**Result: 3/3 trials FUNCTIONAL** (3-speed, $0.25). Every trial the agents
+independently derived the correct gears `[12,36] [16,32] [20,28]`; the assembled
+selective gearbox passed every gate (interference, bom, envelope, gear_mesh,
+requirements, **mobility**); each speed reported `power_path_dof 1` with realised
+ratio = design (−1/3, −1/2, −5/7); and PyBullet spun each speed at exactly that ratio.
+Full gate report: `results/functional_gearbox/gate_report_3sp_functional.json`.
+
+| | speed1 | speed2 | speed3 |
+|---|---|---|---|
+| teeth (agent-built, measured) | 12/36 | 16/32 | 20/28 |
+| power-path DOF | 1 | 1 | 1 |
+| realised ratio (motion gate) | −0.333 | −0.500 | −0.714 |
+| PyBullet ω_out/ω_in | −0.333 | −0.500 | −0.714 |
+
+The free `--selftest` proves the verifier isn't a rubber stamp: a gear built 18/30
+(still meshes at 48, wrong ratio) is failed by *both* gear_mesh and the motion gate
+(realised −0.6 ≠ design −0.5).
+
+**Correction (same day) — "certifies moves" was overstated.** The selective
+engagement lived only in the manifest. The actual CAD is gears loose-bored on plain
+shafts: no keys, no dog clutch, no synchronizer — so *nothing is fixed to a shaft*,
+and the built object cannot select a gear (drive the input and it spins inside loose
+gears; key everything and you are back at the DOF −4 lock). And the Tier-2 "drive"
+imposed a `JOINT_GEAR` constraint *at the ratio* between two abstract boxes and read
+it back — circular, it could not fail. What the run honestly establishes: the agents
+build correct *meshing* gears, and the closed-form oracle correctly tells a valid
+kinematic topology from a locked one — **not** that the exported geometry is a working
+transmission.
+
+The honest follow-up (no imposed constraints anywhere):
+- `scratch/gear_contact_sim.py` — two gears with real teeth (compound collision
+  shapes), one driven; the second turns at ratio **−0.51 vs ideal −0.50** purely from
+  tooth **contact**. Meshing teeth do convert.
+- `scratch/dog_clutch_sim.py` — a dog clutch: **engaged** the collar follows the gear
+  at 99%, **disengaged** it sits at 0%. The selection emerges from dog contact.
+- `scratch/dog_clutch_unit.py` — the geometry that *implements* them: a single-stage
+  unit with the input gear D-keyed to its shaft, the output gear freewheeling (round
+  bore) with dog teeth, and a dog collar D-keyed to the output shaft shown engaged →
+  `artifacts/dog_clutch_unit.{step,stl}` + render.
+
+That single unit is genuinely functional and selectable. Scaling it to the full
+multi-speed box (a countershaft, a sliding collar between speed gears, and a contact
+sim of the real involute+dog geometry rather than simplified boxes) is the open work —
+not claimed done.
+
+## The multi-speed assembly — built and contact-validated (2026-06-13)
+
+The full countershaft transmission, with all the hardware.
+
+**Geometry** (`scratch/gearbox_multispeed.py` → `artifacts/gearbox_multispeed.{step,stl}`
++ render): a real 3-speed constant-mesh box. INPUT shaft carries one gear, keyed,
+constant-meshing the COUNTERSHAFT; the countershaft carries the constant-mesh gear +
+one keyed gear per speed; the MAINSHAFT (coaxial with the input) carries the speed
+gears, each FREEWHEELING (round bore) with dog teeth, plus grooved dog collars splined
+to it — each driven by a **shift fork** whose prongs ride the collar's groove and whose
+boss is clamped to a fixed **shift rail** parallel to the shaft (the actuation hardware
+is in the exported CAD, not just the schematic). The collar's dog teeth protrude with
+real gaps (the sleeve sits above the dog band) so they INTERLEAVE the gear's teeth at
+half-pitch — a true interlock, not a solid face jammed against teeth; the engaged
+clutch's solid overlap is ~5 mm³ of flank contact, not 250. All pairs mesh at one
+centre distance (tooth-sum 40); the assembly is interference-clean (5 overlaps, all
+intended: 4 gear meshes + 1 engaged dog clutch). Overall ratio for speed k =
+(Z_in/Z_cm)·(Z_ck/Z_mk) → **0.286 / 0.667 / 1.556**.
+
+**Dynamic validation by contact** (`scratch/gearbox_multispeed_sim.py`, NO gear
+constraints): drive the input; the power goes input → constant mesh → countershaft →
+speed mesh → main gear, **two meshes in series purely through tooth contact**. All
+three speeds transmit, each at its own ratio:
+
+| speed | teeth (c→m) | realised ω_main/ω_in | ideal | rel-err |
+|---|---|---|---|---|
+| 1 | 12→28 | +0.256 | +0.286 | 11% |
+| 2 | 20→20 | +0.662 | +0.667 | 1% |
+| 3 (overdrive) | 28→12 | +1.358 | +1.556 | 13% |
+
+The slip (1–13%, worst on the overdrive where a big gear drives a small one) is the
+**box-tooth model's** limit — flat-faced tooth boxes push instead of rolling; real
+involute teeth (which the CAD uses) slip <1%. Two sim bugs found and fixed along the
+way, both honest-result enablers: PyBullet disables self-collision within one body by
+default (so teeth never touched until `URDF_USE_SELF_COLLISION`), and
+`createCollisionShapeArray` silently drops the second gear when a compound mixes
+several shapes (so the countershaft's speed gear vanished until it was split into a
+FIXED-jointed link). Combined with the single-mesh and dog-clutch contact tests, the
+multi-speed transmission now **rotates and converts at every speed, validated by
+contact** — the claim the loose-gears model couldn't back, now made good with the
+hardware modelled and the ratio emerging from the teeth, not imposed.

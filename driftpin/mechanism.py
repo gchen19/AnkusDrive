@@ -103,6 +103,13 @@ def validate(mech: dict, inst_names, checks) -> list:
         for g in eng.get("freewheel", []):
             if g not in inst_names:
                 problems.append(f"engagement freewheel {g!r} is not an instance")
+    tr = mech.get("target_ratio")
+    if isinstance(tr, dict):
+        for role in ("input", "output"):
+            if tr.get(role) not in links:
+                problems.append(f"target_ratio {role} {tr.get(role)!r} is not a link")
+        if "ratio" not in tr:
+            problems.append("target_ratio needs a 'ratio'")
     return problems
 
 
@@ -150,6 +157,13 @@ def _propagate_rates(link_nodes, edges):
     return rates, conflicts
 
 
+def _overall_ratio(rates: dict, in_link: str, out_link: str):
+    """Realised ω_out/ω_in over the propagated mesh-graph rates (None if no path)."""
+    if in_link in rates and out_link in rates and abs(rates[in_link]) > 1e-12:
+        return rates[out_link] / rates[in_link]
+    return None
+
+
 def _rigid_dof(links: dict, meshes: list, m2l: dict) -> dict:
     """Grübler DOF and ratio consistency with EVERY member welded into its link."""
     n_links = len(links) + 1                              # + ground
@@ -167,8 +181,9 @@ def _rigid_dof(links: dict, meshes: list, m2l: dict) -> dict:
         if la != lb:
             edges.append((la, lb, _speed_ratio(mesh)))
     dof = gruebler_dof(n_links, joints)
-    _, conflicts = _propagate_rates(list(links), edges)
-    return {"mobility_dof": dof, "consistent": not conflicts, "conflicts": conflicts}
+    rates, conflicts = _propagate_rates(list(links), edges)
+    return {"mobility_dof": dof, "consistent": not conflicts, "conflicts": conflicts,
+            "rates": rates}
 
 
 def _state_dof(links, meshes, m2l, engagement, engaged_ids):
@@ -237,7 +252,12 @@ def analyze(spec: dict) -> dict:
     ``spec`` = {expected_dof, input, output, links: {name: {members:[inst...],
     ground:'revolute'|'prismatic'|None}}, meshes: [{a, b, teeth_a, teeth_b | ratio,
     external?, id}], engagement?: {freewheel:[gear...], rides_on:{gear: shaft},
-    states:{name:[mesh_id...]}, design_ratios:{name: ω_out/ω_in}, input, output}}.
+    states:{name:[mesh_id...]}, design_ratios:{name: ω_out/ω_in}, input, output},
+    target_ratio?: {input: link, output: link, ratio, tol?}}.
+
+    ``target_ratio`` gates the realised ω_out/ω_in over the whole (rigid) train — the
+    emergent invariant of a gear train (the product of stage ratios), which no single
+    stage builder can verify from its own slice.
 
     With no ``engagement`` the whole thing is rigid: it passes iff the mobility DOF
     equals ``expected_dof`` (default 1) AND the mesh ratios are consistent — the
@@ -272,6 +292,24 @@ def analyze(spec: dict) -> dict:
             viol.append({"reason": rigid["conflicts"][0]["reason"]})
         else:
             verdict = "functional"
+        # overall input->output ratio gate (the emergent invariant of a gear TRAIN:
+        # the product of the stage ratios, which no single stage builder can see).
+        tr = spec.get("target_ratio")
+        if tr is not None:
+            realised = _overall_ratio(rigid["rates"], tr["input"], tr["output"])
+            out["target_ratio"] = {"input": tr["input"], "output": tr["output"],
+                                   "target": tr["ratio"],
+                                   "realised": None if realised is None else round(realised, 6)}
+            tol = float(tr.get("tol", _RATIO_TOL))
+            if realised is None:
+                viol.append({"reason": f"no kinematic path {tr['input']}->{tr['output']}"})
+            elif abs(abs(realised) - abs(tr["ratio"])) > tol * max(1.0, abs(tr["ratio"])):
+                out["target_ratio"]["ok"] = False
+                viol.append({"reason": f"overall ratio {realised:+.5f} != target "
+                                       f"{tr['ratio']:+g} (off by "
+                                       f"{abs(abs(realised)-abs(tr['ratio'])):.4f})"})
+            else:
+                out["target_ratio"]["ok"] = True
         out["verdict"], out["violations"], out["ok"] = verdict, viol, not viol
         return out
 
