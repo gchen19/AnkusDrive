@@ -29,7 +29,7 @@ ART = REPO / "artifacts"
 M = 2.0
 AX_A, AX_B = 0.0, 40.0          # mainshaft/input axis, countershaft axis; C = 40
 GH = 6.0                        # gear face width
-Z_CM, Z0, Z1, Z2 = 60.0, 44.0, 28.0, 12.0   # axial planes (constant-mesh, speeds 1-3)
+Z_CM, Z0, Z1, Z2 = 90.0, 64.0, 38.0, 12.0   # axial planes — spaced to fit shift collars
 SR = 5.0
 
 # teeth (every pair sums to 40 -> meshes at C=40): constant-mesh + 3 speeds
@@ -89,20 +89,48 @@ for i, nm in enumerate((names[2], names[4], names[6])):
     parts.append((f"g_c{i}", dbore(g[nm], SR + 0.1, GH + 2, -1), AX_B, zsp[i]))
 
 # --- mainshaft (coaxial, rear) + freewheeling speed gears with dog teeth ------
-parts.append(("mainshaft", dflat(Part.makeCylinder(SR, Z0 + 4, Vector(0, 0, Z2 - 6))), AX_A, 0))
+parts.append(("mainshaft", dflat(Part.makeCylinder(SR, 74, Vector(0, 0, Z2 - 6))), AX_A, 0))
 for i, nm in enumerate((names[3], names[5], names[7])):
     gear = rbore(g[nm], SR + 0.3, GH + 2, -1)                 # round bore -> FREE
     gear = gear.fuse(dogs(SR + 2.5, GH, 4.0, 0.0))            # dog teeth on top face
     parts.append((f"g_m{i}", gear, AX_A, zsp[i]))
 
-# --- two sliding dog collars splined to the mainshaft ------------------------
-# low collar ENGAGED with speed-1 gear (dogs interlock just above g_m0);
-# high collar in NEUTRAL (slid clear above g_m2).
-def collar(engaged_z, dog_z):
-    c = dbore(Part.makeCylinder(SR + 4.0, 6.0, Vector(0, 0, engaged_z)), SR + 0.1, 8.0, engaged_z - 1)
-    return c.fuse(dogs(SR + 2.5, dog_z, 4.0, math.pi / 6))
-parts.append(("collar_low", collar(Z0 + 6, Z0 + GH), AX_A, 0))      # engaged: dogs meet g_m0's
-parts.append(("collar_high", collar(Z2 - 12, Z2 - 12), AX_A, 0))    # neutral: slid clear
+# --- two grooved dog collars (splined to the mainshaft) + shift forks + a rail -
+# Each collar has a circumferential GROOVE; a shift FORK's prongs ride in it and the
+# fork is clamped to a fixed shift RAIL parallel to the shaft. Sliding the rail/fork
+# drags the collar along the splines until its dog teeth lock the chosen gear.
+RAIL_X = -40.0
+
+
+def collar(base_z, h):
+    c = dbore(Part.makeCylinder(SR + 4.0, h, Vector(0, 0, base_z)), SR + 0.1, h + 2, base_z - 1)
+    gz = base_z + 5.0                                        # groove ABOVE the 4 mm dog band
+    groove = Part.makeCylinder(SR + 14, 3.0, Vector(0, 0, gz)).cut(
+        Part.makeCylinder(SR + 1.5, 5.0, Vector(0, 0, gz - 1)))
+    c = c.cut(groove)                                        # the fork rides in this recess
+    c = c.fuse(dogs(SR + 2.5, base_z, 4.0, math.pi / 6))     # dog teeth at base..base+4
+    return c, gz
+
+
+def fork(gz):
+    h = 3.0
+    ring = Part.makeCylinder(SR + 5.5, h, Vector(0, 0, gz)).cut(
+        Part.makeCylinder(SR + 2.5, h + 2, Vector(0, 0, gz - 1)))     # C-yoke, 1 mm clear in groove
+    ring = ring.cut(Part.makeBox(SR + 40, 7.0, h + 2, Vector(0, -3.5, gz - 1)))   # mouth opens +x
+    arm = Part.makeBox(-(SR + 4) - (RAIL_X + 4), 4.0, h,
+                       Vector(RAIL_X + 4, -2.0, gz))                  # boss -> ring (stops at ring)
+    boss = Part.makeCylinder(6.0, h, Vector(RAIL_X, 0, gz)).cut(
+        Part.makeCylinder(3.4, h + 2, Vector(RAIL_X, 0, gz - 1)))                 # clamp sliding on rail
+    return ring.fuse(arm).fuse(boss)
+
+
+c_low, gz_low = collar(Z0 + 6, 10.0)       # ENGAGED with speed-1 gear (dogs interlock g_m0)
+c_high, gz_high = collar(Z1 + 14, 10.0)    # NEUTRAL, parked between speeds 2 and 1
+parts.append(("collar_low", c_low, AX_A, 0))
+parts.append(("collar_high", c_high, AX_A, 0))
+parts.append(("fork_low", fork(gz_low), AX_A, 0))
+parts.append(("fork_high", fork(gz_high), AX_A, 0))
+parts.append(("shift_rail", Part.makeCylinder(3.0, 44.0, Vector(RAIL_X, 0, Z1 + 8)), AX_A, 0))
 
 solids = []
 for label, shp, x, z in parts:
