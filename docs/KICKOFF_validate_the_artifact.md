@@ -2,18 +2,24 @@
 
 Scope of work for the next session, written 2026-06-14 at the end of the gearbox arc.
 
-> **Status (2026-06-14):** items #1 (anomaly gate) and #2 (geometry-realizes-declaration)
-> are DONE and shipped as **RFC §11.10** — see `docs/VALIDATE_THE_ARTIFACT.md` for the
-> writeup, `driftpin/realize.py` for the oracle, and `tests/test_realize.py` for the
-> regression (a merge that FAILS the solid-face collar at 249.5 mm³). Since extended: a
-> **`interleave`** gate (relative half-pitch phase — catches teeth-on-teeth that pass the
-> per-part gap check), the whole **`gearbox_multispeed`** box validated on the artifact
-> (`scratch/verify_gearbox_box.py`), and the **shift animation redone** (#5) to show the
-> real interleave. **#4 (slide-and-catch)** is also done — `scratch/dog_clutch_slide_sim.py`
-> records the collar sliding into the gear on the real CAD with the oracle overlaid
-> (catch 4.6 mm³ vs jam 254 mm³); see `docs/KICKOFF_simulation_video_capture.md`. Only
-> **#3** (full rigid-body sim-from-CAD via `p.vhacd`) remains open — and item #3's own
-> note accepts the geometry check (item #2, done) as a substitute.
+> **Status (2026-06-14):** ALL FIVE items are now done. Items #1 (anomaly gate) and #2
+> (geometry-realizes-declaration) shipped as **RFC §11.10** — see
+> `docs/VALIDATE_THE_ARTIFACT.md` for the writeup, `driftpin/realize.py` for the oracle,
+> and `tests/test_realize.py` for the regression (a merge that FAILS the solid-face collar
+> at 249.5 mm³). Since extended: a **`interleave`** gate (relative half-pitch phase —
+> catches teeth-on-teeth that pass the per-part gap check), the whole **`gearbox_multispeed`**
+> box validated on the artifact (`scratch/verify_gearbox_box.py`), and the **shift animation
+> redone** (#5) to show the real interleave. **#4 (slide-and-catch)** —
+> `scratch/dog_clutch_slide_sim.py` records the collar sliding into the gear on the real
+> CAD with the oracle overlaid (catch 4.6 mm³ vs jam 254 mm³); see
+> `docs/KICKOFF_simulation_video_capture.md`. **#3 (sim-from-CAD via `p.vhacd`), now done
+> as a spike** — `scratch/dog_clutch_cad_sim.py` drives the REAL exported dog clutch in
+> PyBullet as a vhacd convex decomposition (compound of per-hull pieces, which preserves
+> the dog gaps the kickoff feared a hull would bridge — faithfulness gate confirms it),
+> and the selector emerges from contact with no constraint imposing it: engaged transmits
+> (~96%), disengaged freewheels (0%). It also surfaced a lesson the static checks can't —
+> the idealised CAD has zero running clearance, so a real dog clutch needs a slip fit
+> (`artifacts/dog_clutch_cad_sim.gif`).
 
 ## Why this exists
 
@@ -95,6 +101,9 @@ feasible. Candidate RFC slot: **§11.10 — geometry-realizes-declaration**.
   clutch), `scratch/gearbox_real.py`, `scratch/dog_clutch_unit.py`.
 - Sims (abstract / not CAD-coupled): `scratch/gear_contact_sim.py`,
   `scratch/dog_clutch_sim.py`, `scratch/gearbox_multispeed_sim.py`.
+- Sim-from-CAD (#3, CAD-coupled rigid body): `scratch/dog_clutch_cad_sim.py` — vhacd
+  decomposition of the real exported parts driven in PyBullet; faithfulness gate +
+  emergent selector; `artifacts/dog_clutch_cad_sim.gif`.
 - Renders: `scratch/render_dogclutch.py` (the two-colour interleave),
   `artifacts/dogclutch_engaged.png`, `artifacts/gearbox_multispeed.{step,stl}`.
 - Motion oracle: `driftpin/mechanism.py` + the `merge_assembly` mobility/typed gates
