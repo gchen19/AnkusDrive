@@ -34,6 +34,32 @@ def read_binary_stl(path):
     return f[:, 3:12].reshape(n, 3, 3), f[:, 0:3]
 
 
+def quat_to_matrix(quat):
+    """3x3 rotation matrix from a PyBullet quaternion (x, y, z, w)."""
+    x, y, z, w = quat
+    n = (x * x + y * y + z * z + w * w) ** 0.5 or 1.0
+    x, y, z, w = x / n, y / n, z / n, w / n
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w)],
+        [2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y)],
+    ])
+
+
+def place(verts, normals, *, pos_m=(0, 0, 0), quat=(0, 0, 0, 1), mesh_scale=1.0):
+    """Apply an MBD link placement to a real mesh, returning (verts, normals) in the
+    SAME mm units the camera box expects. ``verts``/``normals`` are the exported mesh
+    (mm) about the link's own spin axis/COM; ``pos_m``/``quat`` are one sample from
+    run_mbd's trajectories/orientations (SI metres + world quaternion). This is the
+    generic bridge that lets any mechanism_simulate_submit trajectory drive frame():
+    rotate the mesh by the link's world orientation, then translate to its world COM."""
+    R = quat_to_matrix(quat)
+    v = verts.reshape(-1, 3) * mesh_scale
+    v = v @ R.T + np.array(pos_m, float) * 1000.0          # m -> mm
+    n = normals @ R.T                                       # rotate face normals too
+    return v.reshape(verts.shape), n
+
+
 def _shade(normals, color, light=(0.35, -0.5, 0.78)):
     nrm = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-9)
     lt = np.array(light, float); lt /= np.linalg.norm(lt)

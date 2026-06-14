@@ -7987,7 +7987,7 @@ def _h_mechanism_kinematics(p):
         f"unknown mechanism {mech!r}; use 'fourbar', 'slider_crank', or 'gruebler'")
 
 
-def _mbd_to_si_spec(links, drivers, obstacles=None, base=None):
+def _mbd_to_si_spec(links, drivers, obstacles=None, base=None, gears=None):
     """Convert a physical-unit (mm / g / deg·s⁻¹) link/driver/obstacle description to
     the SI spec driftpin.analysis.mbd.run_mbd expects. Pure unit math, FreeCAD-free —
     runs on the main thread to build the background job's payload."""
@@ -8029,6 +8029,14 @@ def _mbd_to_si_spec(links, drivers, obstacles=None, base=None):
         spec["base"] = {"half_extents_m": hx(base.get("box_mm", [10, 10, 10])),
                         "mass_kg": float(base.get("mass_g", 0.0)) / 1000.0,
                         "pos_m": mm2m(base.get("at_mm", [0, 0, 0]))}
+    # gears couple two revolute links by ratio (dimensionless) — link indices, ratio,
+    # axis and forces are already unit-free/SI, so they pass straight through.
+    if gears:
+        spec["gears"] = [{
+            "link_a": int(g["link_a"]), "link_b": int(g["link_b"]),
+            "ratio": float(g["ratio"]), "axis": g.get("axis", [0, 0, 1]),
+            "max_force": float(g.get("max_force", 1e4)), "erp": float(g.get("erp", 0.8)),
+        } for g in gears]
     return spec
 
 
@@ -8039,14 +8047,19 @@ def _h_mechanism_simulate_submit(p):
     `links` is a tree of {name, box_mm, mass_g, parent (index, −1 = fixed base),
     joint_type ('revolute'|'prismatic'|'fixed'), joint_axis, joint_at_mm (in the
     parent frame), com_mm}; `drivers` drive a link's joint (rate_dps for revolute,
-    rate_mm_s for prismatic); optional `obstacles` and `base`. The closed-form
+    rate_mm_s for prismatic); optional `obstacles`, `base`, and `gears`
+    ([{link_a, link_b, ratio, axis?, max_force?}], coupling two revolute links by
+    ω_b = −ω_a/ratio — pass ratio = Nb/Na for an Na/Nb external mesh). The closed-form
     `mobility_dof` (Grübler) is computed on the main thread and always returned.
 
     Degrades when PyBullet is absent: returns {ok:false, reason, install, mobility_dof,
     n_links} instead of submitting. Otherwise exports the SI spec on the main thread
     and runs the solve in a background job (FreeCAD-free), returning {job_id, status,
-    cache_hit, mobility_dof}; poll job_result for {trajectories, max_torques,
-    collisions_through_motion, reachable_envelope, mobility_dof}."""
+    cache_hit, mobility_dof}; poll job_result for {trajectories, orientations,
+    max_torques, collisions_through_motion, reachable_envelope, mobility_dof}.
+    `orientations` is each link's world quaternion sampled in lockstep with
+    `trajectories` — what a review video needs to place the real mesh of a link
+    whose COM sits on its own spin axis (see KICKOFF_simulation_video_capture)."""
     from driftpin import jobs
     from driftpin.analysis import kinematics as kin
     from driftpin.analysis import mbd
@@ -8068,7 +8081,8 @@ def _h_mechanism_simulate_submit(p):
     if not info["ok"]:                                # graceful degradation
         return {**info, "mobility_dof": mobility, "n_links": n_links}
 
-    spec = _mbd_to_si_spec(links, drivers, p.get("obstacles"), p.get("base"))
+    spec = _mbd_to_si_spec(links, drivers, p.get("obstacles"), p.get("base"),
+                           p.get("gears"))
     key = jobs.content_key("mechanism_simulate",
                            {"spec": spec, "duration_s": duration_s,
                             "dt_s": dt_s, "gravity": gravity})

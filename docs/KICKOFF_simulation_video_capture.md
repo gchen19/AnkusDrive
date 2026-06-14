@@ -4,13 +4,22 @@ Written 2026-06-14, at the end of the validate-the-artifact arc. A *potential ne
 kickoff*: make the simulations DriftPin already runs produce **video** a human can
 watch, not just scalar tables and one-off scratch GIFs.
 
-> **Status (2026-06-14):** item **A** (motion → video on the real geometry) is largely
-> DONE — `scratch/sim_video.py` (reusable frames→GIF pipeline, GIF via Pillow) +
+> **Status (2026-06-14):** item **A** (motion → video on the real geometry) is **DONE**,
+> both halves. (1) `scratch/sim_video.py` (reusable frames→GIF pipeline, GIF via Pillow) +
 > `scratch/dog_clutch_slide_sim.py` record the dog-clutch slide-and-catch on the exported
 > CAD with the §11.10 oracle overlaid: the collar slides home, turns green at the catch
 > (overlap 0 → 4.6 mm³, both-occupied 0.0), while an in-phase collar jams (254 mm³,
-> 0.46). This also closes validate-kickoff #4. Still open under A: feeding a real
-> `mechanism_simulate_submit` trajectory through the same pipeline. Items B–D open.
+> 0.46) — this also closes validate-kickoff #4. (2) The MBD half:
+> `scratch/meshing_gears_video.py` drives a real 12T→24T involute-gear pair through the
+> actual MBD executor (`mbd.run_mbd`, what `mechanism_simulate_submit` delegates to) and
+> renders the real exported metal turning at each per-link world placement — measured
+> ω_out/ω_in = −0.500 realises the declared −Na/Nb, overlaid on every frame
+> (`artifacts/meshing_gears_spin.gif`). This required two solver changes: `run_mbd` now
+> also returns per-link **`orientations`** (a revolute link's COM sits on its spin axis,
+> so `trajectories` alone show no rotation — position-only data renders frozen gears), and
+> `mechanism_simulate_submit` now forwards a **`gears`** coupling (it never did, though
+> `run_mbd` and the §11.9 oracle already supported it). `sim_video.place()` is the generic
+> bridge: apply any (pos, quat) sample to a real mesh. Items B–D open.
 
 ## Why this exists
 
@@ -42,7 +51,7 @@ verdict on the frame, so the reviewer sees the metal move *and* the gate agreein
 
 | Family | Computes | Visual today | Gap to video |
 |---|---|---|---|
-| **MBD** (`driftpin/analysis/mbd.py`, `mechanism_simulate_submit`) | trajectories, max torques, collisions-through-motion | none (headless DIRECT; scratch GIFs are 2-D) | render the real geometry along the trajectory, encode |
+| **MBD** (`driftpin/analysis/mbd.py`, `mechanism_simulate_submit`) | trajectories, **orientations**, max torques, collisions-through-motion | **DONE** — `meshing_gears_video.py` renders real gears at each placement | ✓ real geometry along the trajectory → GIF |
 | **FEM modal** (`fem_modal_results`) | eigenfreqs + displacement vectors | none | scale eigenvector by sin(phase), deform mesh, sweep |
 | **FEM transient thermal** (`driftpin/analysis/elmer.py`) | centre/surface temp vs time | none | colour the part / a profile by T(t) |
 | **FEM harmonic/buckling** | peak stress, freqs (no time domain) | none | single annotated still, not a video |
@@ -68,8 +77,13 @@ not a sketch. First consumers:
      vs a jam (an in-phase collar spikes the overlap). This is the artifact-consuming
      "slide-and-catch" the validate arc deferred, done robustly with kinematics + the
      geometry oracle rather than finicky rigid-body mesh contact.
-   - the **MBD trajectory** from `mechanism_simulate_submit`: post-process the returned
-     trajectory into per-part placements and feed the same pipeline.
+   - the **MBD trajectory** from `mechanism_simulate_submit` (**done**,
+     `scratch/meshing_gears_video.py`): a real 12T→24T gear pair, driven through
+     `mbd.run_mbd`, rendered as the real exported metal at each per-link world placement
+     (position + the new `orientations` quaternion) with the gear-ratio oracle overlaid —
+     measured ω_out/ω_in = −0.500 realises declared −Na/Nb. Enabled by recording
+     orientations (a gear's COM is on its spin axis, so positions alone show no rotation)
+     and by the handler forwarding a `gears` coupling.
 
 **B. FEM modal shape animation.** `fem_modal_results` returns displacement vectors per
 mode. Scale by `sin(2π·phase)` over N frames, deform the real result mesh, render with a
@@ -106,6 +120,10 @@ video is a first-class job result (like `render_photoreal_submit`), not a scratc
   `driftpin/render.py`, `mechanism_simulate_submit`/`fem_modal_results` in
   `driftpin/worker.py`; existing 2-D animators `scratch/gearbox_animate.py`,
   `scratch/gearbox_shift_animate.py`; still renderer `scratch/render_gearbox.py`.
-- Item A in progress: `scratch/sim_video.py`, `scratch/dog_clutch_slide_sim.py`.
+- Item A (done): `scratch/sim_video.py` (now with `place()` — apply an MBD (pos, quat)
+  to a real mesh), `scratch/dog_clutch_slide_sim.py`, `scratch/meshing_gears_video.py`
+  (MBD-driven). Solver changes: `orientations` in `mbd.run_mbd`; `gears` forwarded by the
+  `mechanism_simulate_submit` handler. Tests: `tests/test_mbd.py`
+  (`test_orientations_track_driven_revolution`).
 - Lineage: validate-the-artifact arc (`docs/VALIDATE_THE_ARTIFACT.md`, RFC §11.10) — the
   geometry oracle whose verdicts these videos overlay.
