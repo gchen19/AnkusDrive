@@ -71,9 +71,14 @@ out_shaft = dflat(Part.makeCylinder(SR, GH+DOG_H+40, Vector(0,0,-20)), 1.0)  # f
 out_gear = og.cut(Part.makeCylinder(SR+0.3, GH+2, Vector(0,0,-1)))           # round bore -> FREE
 out_gear = out_gear.fuse(dogs(SR+3.0, GH, DOG_H, 0.0))                       # dog teeth up
 # --- dog collar: D-keyed to the output shaft, ENGAGED (dogs interlock) --------
-collar = Part.makeCylinder(SR+5.0, 6.0, Vector(0,0,GH))
-collar = dhole(collar, SR+0.1, 1.0, 8.0, GH-1)                               # D-bore -> drives shaft
-collar = collar.fuse(dogs(SR+3.0, GH, DOG_H, math.pi/ND))                    # mating dogs, half-pitch
+# CRUCIAL: the sleeve sits ABOVE the dog band [GH, GH+DOG_H] so the collar's dog teeth
+# protrude DOWN into open space, leaving real GAPS the output gear's teeth enter
+# (half-pitch offset). A solid collar body across the band — the original bug here,
+# caught by measuring the artifact — jams the gear teeth regardless of phase and
+# cannot interlock (RFC §11.10; check it with scratch/verify_dog_clutch_unit.py).
+collar = Part.makeCylinder(SR+5.0, 6.0, Vector(0,0,GH+DOG_H))                # sleeve raised above the dogs
+collar = dhole(collar, SR+0.1, 1.0, 8.0, GH+DOG_H-1)                         # D-bore -> drives shaft
+collar = collar.fuse(dogs(SR+3.0, GH, DOG_H+0.5, math.pi/ND))               # mating dogs, half-pitch
 parts += [("output_shaft", out_shaft, (C,0,0)), ("output_gear", out_gear, (C,0,0)),
           ("dog_collar", collar, (C,0,0))]
 

@@ -5315,10 +5315,117 @@ def _gate_frame_orientation(by_name, links_by_inst, chk):
     return []
 
 
+# --- geometry-realizes-declaration gates (RFC §11.10) ------------------------
+#
+# The gates above are POSE oracles (do the parts fit?) and the mobility gate is a
+# TOPOLOGY oracle (does the declared mechanism move?). Both can pass while the
+# exported metal does not back the declaration: a gear declared `keyed` bored ROUND,
+# a dog collar declared ENGAGED with a SOLID FACE where the gaps belong. These gates
+# consume the REAL Part.Shape (never a separate idealised model) and assert the
+# geometry implements the claim. See driftpin/realize.py and
+# docs/KICKOFF_validate_the_artifact.md.
+
+
+def _gate_contact_band(by_name, links_by_inst, chk):
+    """Anomaly gate on an EXPECTED-contact overlap (RFC §11.10 item #1). Two parts
+    meant to interpenetrate in a static pose (engaged dog clutch, press band) have a
+    *characteristic* overlap volume; one far outside that band is the signal that was
+    waved through on the gearbox (250 mm³ jammed vs ~5 mm³ interleaved). The pair is
+    owned here (excluded from the blunt interference list); its overlap must sit in
+    [min_overlap_mm3, max_overlap_mm3]. An overlap ABOVE the max is the hard FAIL the
+    solid-face collar should have produced; below the min means the contact isn't made."""
+    a = by_name.get(links_by_inst.get(chk["a"], chk["a"]))
+    b = by_name.get(links_by_inst.get(chk["b"], chk["b"]))
+    if a is None or b is None:
+        return [{**chk, "error": "contact_band part link not found"}]
+    sa, sb = _link_world_shape(a), _link_world_shape(b)
+    if sa is None or sb is None:
+        return [{**chk, "error": "contact_band part has no shape"}]
+    try:
+        overlap = sa.common(sb).Volume
+    except Exception:
+        overlap = 0.0
+    lo = float(chk.get("min_overlap_mm3", 0.0))
+    hi = chk.get("max_overlap_mm3")
+    if hi is not None and overlap > float(hi) + 1e-6:
+        return [{**chk, "overlap_mm3": round(overlap, 4),
+                 "reason": f"{chk['a']}↔{chk['b']} overlap {overlap:.1f} mm³ exceeds "
+                           f"the {hi} mm³ band for an engaged {chk.get('interface','contact')}"
+                           f" — out-of-family (a solid face / jam, not interleaving teeth)"}]
+    if overlap < lo - 1e-6:
+        return [{**chk, "overlap_mm3": round(overlap, 4),
+                 "reason": f"{chk['a']}↔{chk['b']} overlap {overlap:.3f} mm³ below the "
+                           f"{lo} mm³ band — the expected contact is not made (disengaged?)"}]
+    return []
+
+
+def _gate_dog_ring(by_name, links_by_inst, chk):
+    """Dog-ring gate (RFC §11.10 item #2): the part declared to carry dog teeth must
+    actually have GAPS — interleaving teeth, not a solid face. Reads the part's own
+    local shape about its axis (placement-independent). chk = {kind:'dog_ring', part,
+    dog_radius_mm, z_lo_mm, z_hi_mm, n_dogs?, role?}."""
+    from driftpin import realize
+    part = by_name.get(links_by_inst.get(chk["part"], chk["part"]))
+    if part is None:
+        return [{**chk, "error": "dog_ring part link not found"}]
+    s = _link_local_shape(part)
+    if s is None:
+        return [{**chk, "error": "dog_ring part has no shape"}]
+    decl = {"role": chk.get("role", chk["part"]), "dog_radius_mm": chk["dog_radius_mm"],
+            "z_lo_mm": chk["z_lo_mm"], "z_hi_mm": chk["z_hi_mm"]}
+    if "n_dogs" in chk:
+        decl["n_dogs"] = chk["n_dogs"]
+    return [{**chk, **v} for v in realize.check_dog_ring(s, decl)]
+
+
+def _gate_bore_keying(by_name, links_by_inst, chk):
+    """Bore-keying gate (RFC §11.10 item #2): a part declared `keyed` must have a
+    radial flat (D-key / keyway) in its bore; one declared `freewheel` must be ROUND.
+    Closes the "loose gear keyed to nothing" gap. chk = {kind:'bore_keying', part,
+    keyed, bore_radius_mm, role?}."""
+    from driftpin import realize
+    part = by_name.get(links_by_inst.get(chk["part"], chk["part"]))
+    if part is None:
+        return [{**chk, "error": "bore_keying part link not found"}]
+    s = _link_local_shape(part)
+    if s is None:
+        return [{**chk, "error": "bore_keying part has no shape"}]
+    decl = {"role": chk.get("role", chk["part"]), "keyed": chk["keyed"],
+            "bore_radius_mm": chk["bore_radius_mm"]}
+    return [{**chk, **v} for v in realize.check_bore_keying(s, decl)]
+
+
+def _gate_interleave(by_name, links_by_inst, chk):
+    """Interleave gate (RFC §11.10): two parts declared an ENGAGED dog clutch must have
+    teeth that fall in each other's gaps (half-pitch offset), not teeth-on-teeth. This
+    is the relative-phase layer dog_ring can't see — each ring can have gaps yet still
+    jam if the two are in phase. Reads both parts' WORLD shapes (relative phase needs a
+    common frame). chk = {kind:'interleave', a, b, dog_radius_mm, z_lo_mm, z_hi_mm,
+    role_a?, role_b?}."""
+    from driftpin import realize
+    a = by_name.get(links_by_inst.get(chk["a"], chk["a"]))
+    b = by_name.get(links_by_inst.get(chk["b"], chk["b"]))
+    if a is None or b is None:
+        return [{**chk, "error": "interleave part link not found"}]
+    sa, sb = _link_world_shape(a), _link_world_shape(b)
+    if sa is None or sb is None:
+        return [{**chk, "error": "interleave part has no shape"}]
+    decl = {"role_a": chk.get("role_a", chk["a"]), "role_b": chk.get("role_b", chk["b"]),
+            "dog_radius_mm": chk["dog_radius_mm"], "z_lo_mm": chk["z_lo_mm"],
+            "z_hi_mm": chk["z_hi_mm"]}
+    if "n_samples" in chk:
+        decl["n_samples"] = chk["n_samples"]
+    return [{**chk, **v} for v in realize.check_interleave(sa, sb, decl)]
+
+
 _TYPED_GATES = {
     "bore_fit": _gate_bore_fit,
     "gear_mesh": _gate_gear_mesh,
     "frame_orientation": _gate_frame_orientation,
+    "contact_band": _gate_contact_band,
+    "dog_ring": _gate_dog_ring,
+    "bore_keying": _gate_bore_keying,
+    "interleave": _gate_interleave,
 }
 
 # Typed kinds whose two parts are MEANT to be in contact / interpenetrating in a
@@ -5327,18 +5434,24 @@ _TYPED_GATES = {
 # the right test for a gear ratio" finding). The typed gate is authoritative for
 # that pair; any other pair still gets the normal interference check. A check of
 # any kind can opt in with "expected_contact": true (e.g. a press_fit band).
-_CONTACT_KINDS = {"gear_mesh"}
+# contact_band (§11.10) is authoritative for an engaged dog clutch / press band: it
+# bounds the overlap rather than forbidding it, so it owns its pair here. interleave
+# (§11.10) likewise relates an engaged dog-clutch pair that meets at the meshing teeth.
+_CONTACT_KINDS = {"gear_mesh", "contact_band", "interleave"}
 
 
 def _check_pair(chk):
-    """The two instance refs a typed check relates, by kind ((a,b) / (pin,bore)
-    / (child,parent))."""
+    """The instance refs a typed check relates, by kind ((a,b) / (pin,bore) /
+    (child,parent)), or a single-part check's (part, None). None entries are skipped
+    by the front-door validator and the contact-exclusion set."""
     if "a" in chk and "b" in chk:
         return chk["a"], chk["b"]
     if "pin" in chk and "bore" in chk:
         return chk["pin"], chk["bore"]
     if "child" in chk and "parent" in chk:
         return chk["child"], chk["parent"]
+    if "part" in chk:                          # single-part check (dog_ring, bore_keying)
+        return chk["part"], None
     return None, None
 
 

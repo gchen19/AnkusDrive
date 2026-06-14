@@ -2,6 +2,19 @@
 
 Scope of work for the next session, written 2026-06-14 at the end of the gearbox arc.
 
+> **Status (2026-06-14):** items #1 (anomaly gate) and #2 (geometry-realizes-declaration)
+> are DONE and shipped as **RFC §11.10** — see `docs/VALIDATE_THE_ARTIFACT.md` for the
+> writeup, `driftpin/realize.py` for the oracle, and `tests/test_realize.py` for the
+> regression (a merge that FAILS the solid-face collar at 249.5 mm³). Since extended: a
+> **`interleave`** gate (relative half-pitch phase — catches teeth-on-teeth that pass the
+> per-part gap check), the whole **`gearbox_multispeed`** box validated on the artifact
+> (`scratch/verify_gearbox_box.py`), and the **shift animation redone** (#5) to show the
+> real interleave. **#4 (slide-and-catch)** is also done — `scratch/dog_clutch_slide_sim.py`
+> records the collar sliding into the gear on the real CAD with the oracle overlaid
+> (catch 4.6 mm³ vs jam 254 mm³); see `docs/KICKOFF_simulation_video_capture.md`. Only
+> **#3** (full rigid-body sim-from-CAD via `p.vhacd`) remains open — and item #3's own
+> note accepts the geometry check (item #2, done) as a substitute.
+
 ## Why this exists
 
 Three times in the gearbox work a **green validation passed while the exported
