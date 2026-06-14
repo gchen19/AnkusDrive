@@ -18,7 +18,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                       # noqa: E402
-from matplotlib.patches import Rectangle, FancyBboxPatch  # noqa: E402
+from matplotlib.patches import Rectangle  # noqa: E402
 import io  # noqa: E402
 from PIL import Image  # noqa: E402
 
@@ -87,19 +87,38 @@ def draw(ax, axd, colA, colB, engaged, label, out_angle, frame):
                 [g["r"] - 0.4, g["r"] - 0.4 + 0.35 * math.sin(spin)], color="white", lw=1.5, zorder=3)
         ax.text(g["x"], -g["r"] - 0.35, g["name"], ha="center", fontsize=8,
                 color="#1a7" if lit else "#555")
-        dog_band(ax, g["x"] + 0.45, 0, 0.5, 0.7, "#444")     # dog teeth on the gear face
-    # collars (splined to the shaft; slide axially)
-    for cx, tag in ((colA, "collar-A"), (colB, "collar-B")):
-        ax.add_patch(FancyBboxPatch((cx - 0.5, -0.85), 1.0, 1.7,
-                     boxstyle="round,pad=0.02", fc="#d98b3a", ec="#7a4a10", zorder=4))
-        ax.text(cx, 1.05, tag, ha="center", fontsize=7, color="#7a4a10")
-        dog_band(ax, cx - 0.5, 0, 0.5, 0.7, "#5a3000")       # dog teeth facing left
-        dog_band(ax, cx + 0.5, 0, 0.5, 0.7, "#5a3000")       # and right
-    # shift fork arrow
+        dog_band(ax, g["x"] - 0.45, 0, 0.5, 0.7, "#444")     # dog teeth on both faces
+        dog_band(ax, g["x"] + 0.45, 0, 0.5, 0.7, "#444")
+    # fixed shift rails (the rods the forks slide along) — drawn first, behind
+    for x0, x1 in ((2.0, 5.6), (6.4, 10.3)):
+        ax.add_patch(Rectangle((x0, 2.55), x1 - x0, 0.14, color="#999", zorder=2))
+    ax.text(0.3, 2.75, "shift rails", fontsize=8, color="#555")
+
+    def draw_collar(cx, tag, active):
+        edge, body = "#7a4a10", ("#d98b3a" if active else "#ecd0a6")
+        # grooved sleeve: hub + two raised flanges with a groove between them
+        ax.add_patch(Rectangle((cx - 0.5, -0.85), 1.0, 1.35, fc=body, ec=edge, zorder=4))
+        ax.add_patch(Rectangle((cx - 0.5, -0.85), 0.22, 1.85, fc=body, ec=edge, zorder=4))  # L flange
+        ax.add_patch(Rectangle((cx + 0.28, -0.85), 0.22, 1.85, fc=body, ec=edge, zorder=4))  # R flange
+        dog_band(ax, cx - 0.5, 0, 0.5, 0.7, "#5a3000")       # dog teeth on both ends
+        dog_band(ax, cx + 0.5, 0, 0.5, 0.7, "#5a3000")
+        ax.text(cx, -1.15, tag, ha="center", fontsize=7, color=edge)
+        # shift fork: two prongs riding in the groove + yoke + stem up to the rail
+        fc = "#333" if active else "#b0b0b0"
+        ax.add_patch(Rectangle((cx - 0.30, 0.50), 0.07, 1.05, color=fc, zorder=6))   # L prong
+        ax.add_patch(Rectangle((cx + 0.23, 0.50), 0.07, 1.05, color=fc, zorder=6))   # R prong
+        ax.add_patch(Rectangle((cx - 0.30, 1.48), 0.60, 0.12, color=fc, zorder=6))   # yoke
+        ax.add_patch(Rectangle((cx - 0.06, 1.55), 0.12, 1.1, color=fc, zorder=6))    # stem to rail
+        ax.add_patch(plt.Circle((cx, 2.62), 0.13, color=fc, zorder=7))               # rail clamp
+
+    draw_collar(colA, "collar-A", engaged in (0, 1))
+    draw_collar(colB, "collar-B", engaged == 2)
+    # which fork is being pushed
     fork_x = colA if engaged != 2 else colB
-    ax.annotate("", xy=(fork_x, 2.4), xytext=(fork_x, 3.2),
-                arrowprops=dict(arrowstyle="-|>", color="#333", lw=2))
-    ax.text(fork_x, 3.35, "shift fork", ha="center", fontsize=7)
+    if engaged is not None:
+        ax.annotate("", xy=(fork_x, 3.05), xytext=(fork_x + (0.9 if engaged == 1 else -0.9), 3.05),
+                    arrowprops=dict(arrowstyle="-|>", color="#1a7", lw=2.5))
+        ax.text(fork_x, 3.3, "fork pushes the collar", ha="center", fontsize=8, color="#1a7")
     ax.set_title(label, fontsize=11, color="#1a7" if engaged is not None else "#555")
     # output dial
     axd.clear(); axd.set_xlim(-1.3, 1.3); axd.set_ylim(-1.3, 1.4); axd.set_aspect("equal"); axd.axis("off")
