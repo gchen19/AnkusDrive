@@ -6621,13 +6621,14 @@ def _h_add_dimension(p):
         xdir = App.Vector(view.XDirection)
         # lay the dimension across the circle (diameter) or to its rim (radius),
         # along the view's local X so it reads true-size in the face-on view
+        rad = _vscale(xdir, r)  # NOT xdir.multiply(r): that mutates xdir in place
         if kind == "diameter":
-            a = _project_centred(view, centre - xdir.multiply(r))
-            b = _project_centred(view, centre + xdir.multiply(r))
+            a = _project_centred(view, centre - rad)
+            b = _project_centred(view, centre + rad)
             value, prefix = 2.0 * r, "Ø"
         else:
             a = _project_centred(view, centre)
-            b = _project_centred(view, centre + xdir.multiply(r))
+            b = _project_centred(view, centre + rad)
             value, prefix = r, "R"
         dim = TechDraw.makeDistanceDim(view, "DistanceX", a, b)
         if dim is not None:
@@ -6725,17 +6726,24 @@ def _v3(v):
     return [float(v.x), float(v.y), float(v.z)]
 
 
+def _vscale(v, k):
+    """v * k as a NEW vector. FreeCAD's Vector.multiply scales IN PLACE and returns
+    self, so `axis.multiply(t)` silently corrupts `axis` for any later use — this
+    avoids that trap."""
+    return App.Vector(v.x * k, v.y * k, v.z * k)
+
+
 def _axis_canon(axis):
     """Sign-normalise an axis direction so collinear-but-opposite axes share a key
-    (the dominant component is made positive)."""
+    (the dominant component is made positive). Returns a fresh unit vector and never
+    mutates the input (FreeCAD's Vector.normalize/multiply scale in place)."""
     a = App.Vector(axis)
-    try:
-        a.normalize()
-    except Exception:
-        pass
+    n = a.Length
+    if n > 1e-12:
+        a = _vscale(a, 1.0 / n)
     i = max(range(3), key=lambda k: abs((a.x, a.y, a.z)[k]))
     if (a.x, a.y, a.z)[i] < 0:
-        a = a.multiply(-1.0)
+        a = _vscale(a, -1.0)
     return a
 
 
@@ -6749,7 +6757,7 @@ def _cyl_is_hole(face, surf):
         n = face.normalAt(um, vm)
         axis = _axis_canon(surf.Axis)
         rel = pt - surf.Center
-        radial = rel - axis.multiply(rel.dot(axis))
+        radial = rel - _vscale(axis, rel.dot(axis))
         if radial.Length < 1e-9:
             return False
         radial.normalize()
@@ -6812,10 +6820,16 @@ def _enumerate_features(shape, process):
         if not hole:
             continue
         axis = _axis_canon(s.Axis)
-        foot = s.Center - axis.multiply(s.Center.dot(axis))
+        foot = s.Center - _vscale(axis, s.Center.dot(axis))
         key = (round(axis.x, 3), round(axis.y, 3), round(axis.z, 3),
                round(foot.x, 2), round(foot.y, 2), round(foot.z, 2))
         groups.setdefault(key, []).append((f, s))
+    def _axis_min(bbx, k):
+        return (bbx.XMin, bbx.YMin, bbx.ZMin)[k]
+
+    def _axis_max(bbx, k):
+        return (bbx.XMax, bbx.YMax, bbx.ZMax)[k]
+
     n = 0
     for key, members in groups.items():
         n += 1
@@ -6824,16 +6838,25 @@ def _enumerate_features(shape, process):
         c = s0.Center
         axis = _axis_canon(s0.Axis)
         ai = max(range(3), key=lambda k: abs((axis.x, axis.y, axis.z)[k]))
-        depth = (f0.BoundBox.XLength, f0.BoundBox.YLength, f0.BoundBox.ZLength)[ai]
-        through = abs(depth - (bb.XLength, bb.YLength, bb.ZLength)[ai]) < 0.05
+        # through-ness from the UNION of the coaxial members' axial spans, so a
+        # counterbored through-hole (a narrow bore for part of the depth, a wider
+        # recess for the rest) reads through — the bore face alone spans only its
+        # own segment and would look blind.
+        gmin = min(_axis_min(fc.BoundBox, ai) for (fc, _s) in members)
+        gmax = max(_axis_max(fc.BoundBox, ai) for (fc, _s) in members)
+        span = gmax - gmin
+        through = abs(span - (bb.XLength, bb.YLength, bb.ZLength)[ai]) < 0.05
+        # blind-bore depth is the bore face's own axial length (not the wider recess)
+        bore_depth = (f0.BoundBox.XLength, f0.BoundBox.YLength,
+                      f0.BoundBox.ZLength)[ai]
         hid = f"H{n}"
         feats.append({"id": hid, "kind": "hole", "dia": 2.0 * float(s0.Radius),
-                      "through": bool(through), "depth": None if through else float(depth),
+                      "through": bool(through),
+                      "depth": None if through else float(bore_depth),
                       "center": _v3(c), "axis": _v3(axis)})
         for (fc, sc) in members[1:]:
-            cb_ai = ai
             cbdepth = (fc.BoundBox.XLength, fc.BoundBox.YLength,
-                       fc.BoundBox.ZLength)[cb_ai]
+                       fc.BoundBox.ZLength)[ai]
             feats.append({"id": f"{hid}.cb", "kind": "counterbore", "parent": hid,
                           "dia": 2.0 * float(sc.Radius), "depth": float(cbdepth)})
     return feats

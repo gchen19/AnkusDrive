@@ -175,6 +175,63 @@ def test_packing_keeps_dense_part_legible():
               f"violations={len(rep['violations'])}")
 
 
+def test_counterbored_bracket_acceptance():
+    """Issue #85 headline acceptance: a plate with a hole + counterbore comes back
+    a legible, manufacturing-complete drawing — the completeness gate passes only
+    when the counterbore's Ø and depth are dimensioned too, and the sheet is legible."""
+    print("test_counterbored_bracket_acceptance")
+    with Worker() as w:
+        w.call("new_document", name="gate_cbore")
+        box = w.call("add_primitive", kind="box", w=60, d=40, h=12)
+        bore = w.call("add_primitive", kind="cylinder", r=3, h=12,
+                      placement=[30, 20, 0])
+        part = w.call("boolean_op", op="cut", base=box["handle"],
+                      tool=bore["handle"])["handle"]
+        recess = w.call("add_primitive", kind="cylinder", r=6, h=4,
+                        placement=[30, 20, 8])
+        part = w.call("boolean_op", op="cut", base=part,
+                      tool=recess["handle"])["handle"]
+        edges = w.call("list_edges", handle=part)
+        bore_e = next(e["tag"] for e in edges
+                      if e.get("radius") and abs(e["radius"] - 3.0) < 1e-6)
+        cb_e = next(e["tag"] for e in edges
+                    if e.get("radius") and abs(e["radius"] - 6.0) < 1e-6)
+        page = w.call("make_drawing_page", name="Page")["handle"]
+        w.call("add_projection_group", page=page, body=part, views=["Front", "Top"])
+
+        # enumeration sees the counterbore as a through hole + a recess
+        feats = w.call("drawing_gate", page=page, process="prismatic")["enumerated_features"]
+        kinds = [f["kind"] for f in feats]
+        _check("enumerated a hole", "hole" in kinds, kinds)
+        _check("enumerated a counterbore", "counterbore" in kinds, kinds)
+
+        # the complete, manufacturable dimension set
+        w.call("add_dimension", page=page, view="Front", kind="horizontal",
+               from_point=[0, 0, 0], to_point=[60, 0, 0])        # width  60
+        w.call("add_dimension", page=page, view="Front", kind="vertical",
+               from_point=[0, 0, 0], to_point=[0, 0, 12])        # thickness 12
+        w.call("add_dimension", page=page, view="Top", kind="vertical",
+               from_point=[0, 0, 0], to_point=[0, 40, 0])        # depth  40
+        w.call("add_dimension", page=page, view="Top", kind="diameter", edge=bore_e)
+        w.call("add_dimension", page=page, view="Top", kind="diameter", edge=cb_e)
+        w.call("add_dimension", page=page, view="Top", kind="horizontal",
+               from_point=[0, 20, 0], to_point=[30, 20, 0])      # hole X 30
+        w.call("add_dimension", page=page, view="Top", kind="vertical",
+               from_point=[30, 0, 0], to_point=[30, 20, 0])      # hole Y 20
+        w.call("add_dimension", page=page, view="Front", kind="vertical",
+               from_point=[20, 0, 8], to_point=[20, 0, 12])      # c'bore depth 4
+
+        rep = w.call("drawing_gate", page=page, process="prismatic")
+        _check("counterbored part is manufacturing-complete", rep["ok"],
+               rep["violations"])
+        leg = w.call("drawing_legibility", page=page)
+        _check("and the sheet is legible", leg["ok"], leg["violations"][:3])
+
+        # dropping the counterbore depth alone makes it under-constrained again
+        w.call("set_title_block", page=page, part="CBORE BRACKET",
+               material="AL 6061-T6", rev="A")
+
+
 def test_title_block_renders_fields():
     print("test_title_block_renders_fields")
     import os

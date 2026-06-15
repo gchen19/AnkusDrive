@@ -77,7 +77,19 @@ placed graphics.
 * **Enumeration is conservative.** An unrecognised face yields *no* slot rather than
   a wrong one (no false `under`). Chamfers/fillets/threads/tolerances are not yet
   enumerated; `gdt_check` / `tolerance_stackup` / `fit_class` are the hooks for the
-  GD&T layer.
+  GD&T layer. Counterbore through-ness is read from the UNION of a hole's coaxial
+  cylinder spans, so a counterbored through-hole isn't mistaken for a blind bore.
+
+## Acceptance — the issue's headline
+
+`test_counterbored_bracket_acceptance`: a plate with a Ø6 through hole + Ø12×4
+counterbore is enumerated (hole + counterbore), the fully-dimensioned drawing
+(W/T/D, hole Ø + X/Y, counterbore Ø + depth) passes `drawing_gate` (ok) AND
+`drawing_legibility` (ok) — a machinist could cut it from the sheet. This shook out
+a latent FreeCAD trap: `Vector.multiply(k)` scales IN PLACE and returns self, so
+`axis.multiply(t)` was corrupting the grouping axis (counterbore split into two
+holes) and the Ø-dimension's `xdir` (its dim line rendered mis-scaled). Fixed with a
+non-mutating `_vscale`; the Ø dimension line is now the correct length.
 
 ## Legibility — Part A progress
 
