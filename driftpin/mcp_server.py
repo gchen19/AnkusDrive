@@ -2121,6 +2121,18 @@ def drawing_gate(page: str, process: str = "auto",
 
 
 @mcp.tool()
+def fit_page(page: str, margin: float = 8.0) -> dict:
+    """Auto-fit a drawing to its sheet: recentre the views so the part AND its
+    placed dimensions sit inside the printable border (clear of the title block).
+    The projection group's Automatic scale already sizes the part; its dimensions
+    extend a fixed margin beyond it which can run off an edge — call this after
+    placing dimensions to slide everything inside. `margin` mm is the border inset.
+    Returns {scale, fits, envelope, border}; fits=False means the part + dims are too
+    large even when centred (use a larger sheet)."""
+    return _call("fit_page", page=page, margin=margin)
+
+
+@mcp.tool()
 def drawing_legibility(page: str, min_gap: float = 0.5) -> dict:
     """Legibility gate for a drawing page: on the ACTUAL placed graphics, flag the
     ways the layout becomes unreadable — overlapping dimension labels, a dimension

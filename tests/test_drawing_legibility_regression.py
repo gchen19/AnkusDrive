@@ -101,12 +101,11 @@ def test_hole_grid():
         _check("hole grid legible", rep["ok"], rep["violations"][:3])
 
 
-def test_oversize_part_flags_overflow():
-    """A large part dimensioned at the default 1:1 layout pushes its Top-view dims
-    off the top of the A4 sheet — and the legibility gate CATCHES it (out_of_border).
-    This is the motivating case for A3+ auto sheet/scale selection; until that lands,
-    the gate at least refuses to call an overflowing sheet legible."""
-    print("test_oversize_part_flags_overflow")
+def test_oversize_part_fit_page():
+    """A large part dimensioned at 1:1 pushes its Top-view dims off the top of the A4
+    sheet — the gate flags out_of_border. fit_page (A3+) then scales + recentres so
+    everything fits, and the gate goes clean."""
+    print("test_oversize_part_fit_page")
     with Worker() as w:
         w.call("new_document", name="reg_oversize")
         plate = w.call("add_primitive", kind="box", w=120, d=80, h=6)["handle"]
@@ -114,10 +113,15 @@ def test_oversize_part_flags_overflow():
                           [(x, y) for x in (20, 60, 100) for y in (25, 55)])
         page = _page_for(w, part)
         w.call("add_dimension", page=page, auto=True)
-        rep = _report(w, page, "oversize")
-        codes = [v["code"] for v in rep["violations"]]
-        _check("oversize overflow is flagged, not silently shipped",
-               not rep["ok"] and "out_of_border" in codes, codes)
+        before = _report(w, page, "oversize-before")
+        codes = [v["code"] for v in before["violations"]]
+        _check("overflow flagged before fit", "out_of_border" in codes, codes)
+
+        fit = w.call("fit_page", page=page)
+        print(f"    fit -> scale={fit['scale']:.3f} fits={fit['fits']}")
+        after = _report(w, page, "oversize-after")
+        _check("fit_page reports it fits", fit["fits"], fit)
+        _check("legible after fit_page", after["ok"], after["violations"][:3])
 
 
 def test_tight_cluster_chain():
@@ -138,6 +142,24 @@ def test_tight_cluster_chain():
             prev = x
         rep = _report(w, page, "tight-cluster")
         _check("tight cluster chain legible", rep["ok"], rep["violations"][:3])
+
+
+def test_giant_part_auto_scaled_and_fit():
+    """A part far wider than the A4 printable area: the projection group's Automatic
+    scale shrinks it below 1:1, the scale-aware dim placement keeps the dimensions
+    on the (shrunk) geometry, and fit_page recentres so the whole thing is legible."""
+    print("test_giant_part_auto_scaled_and_fit")
+    with Worker() as w:
+        w.call("new_document", name="reg_giant")
+        slab = w.call("add_primitive", kind="box", w=340, d=180, h=10)["handle"]
+        page = _page_for(w, slab)
+        w.call("add_dimension", page=page, auto=True)
+        fit = w.call("fit_page", page=page)
+        print(f"    fit -> scale={fit['scale']:.3f} fits={fit['fits']}")
+        _check("auto-scaled below 1:1", fit["scale"] < 0.95, fit["scale"])
+        _check("fits after recentre", fit["fits"], fit)
+        rep = _report(w, page, "giant-after")
+        _check("legible once scaled + centred", rep["ok"], rep["violations"][:3])
 
 
 def main():

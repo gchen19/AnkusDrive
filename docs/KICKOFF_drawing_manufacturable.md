@@ -141,10 +141,15 @@ Still open, in cost order:
   pinned the motivating case for A3+: a 120×80 plate at 1:1 pushes its Top-view dims
   ~3 mm off the A4 sheet, and the gate flags `out_of_border` rather than shipping it
   (`test_oversize_part_flags_overflow`).
-* **A3+ — auto sheet/scale selection.** Pick A4/A3 and a view scale so the part +
-  its dim envelope fit the border (the title block already reports whatever scale
-  the projection chose). The regression set's oversize case is the acceptance: flip
-  it from "overflow flagged" to "clean".
+* **A3+ — auto-fit (DONE 2026-06-15).** `fit_page` recentres the views so the part +
+  its dimension envelope sit inside the printable border (clear of the title block);
+  the oversize and giant regression cases now go clean after it. The projection
+  group's Automatic scale sizes the part; `fit_page` deliberately does NOT rescale
+  (a dimension's points are baked at creation, so changing Scale afterwards would
+  misalign them). This slice also fixed a latent bug: `viewPartAsSvg` emits geometry
+  PRE-SCALED by `view.Scale`, but `_project_centred` returned unscaled coords —
+  invisible at the usual Scale=1, but it misplaced every dimension once a view was
+  auto-reduced to fit. `_project_centred` now scales to match.
 
 ## Anchors
 

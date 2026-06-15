@@ -6619,12 +6619,19 @@ def _resolve_tolerance(tol, basic):
 
 def _project_centred(view, vec):
     """Project a 3D model point into the view's centred local 2D frame — the
-    same frame viewPartAsSvg and getLinearPoints use."""
+    same frame viewPartAsSvg and getLinearPoints use. viewPartAsSvg emits geometry
+    PRE-SCALED by the view's Scale, so we scale the projected point to match; at the
+    usual Scale=1 this is a no-op, but it keeps dimensions aligned with the geometry
+    when a view is reduced to fit the sheet."""
     src = view.Source[0]
     centre = src.Shape.BoundBox.Center
     p = view.projectPoint(App.Vector(vec.x, vec.y, vec.z))
     c = view.projectPoint(centre)
-    return App.Vector(p.x - c.x, p.y - c.y, 0.0)
+    try:
+        s = float(view.Scale) or 1.0
+    except Exception:
+        s = 1.0
+    return App.Vector((p.x - c.x) * s, (p.y - c.y) * s, 0.0)
 
 
 @handler("add_dimension")
@@ -7137,6 +7144,86 @@ def _h_drawing_legibility(p):
     border = [0.0, 0.0, pw, ph]
     return drawing_gate.legibility_report(
         labels, segments, view_boxes, border, min_gap=float(p.get("min_gap", 0.5)))
+
+
+def _page_dim_envelope(page):
+    """The bounding box [x0,y0,x1,y1] in page mm of everything DriftPin draws —
+    view outlines, dimension lines, and dimension labels — i.e. the real footprint
+    the sheet must contain. None if nothing is placed yet."""
+    labels, segments, view_boxes = _page_dim_graphics(page)
+    xs, ys = [], []
+    for b in view_boxes:
+        xs += [b["box"][0], b["box"][2]]
+        ys += [b["box"][1], b["box"][3]]
+    for lab in labels:
+        xs += [lab["box"][0], lab["box"][2]]
+        ys += [lab["box"][1], lab["box"][3]]
+    for seg in segments:
+        xs += [seg["p1"][0], seg["p2"][0]]
+        ys += [seg["p1"][1], seg["p2"][1]]
+    if not xs:
+        return None
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _page_top_views(page):
+    return [o for o in page.Views
+            if o.TypeId == "TechDraw::DrawProjGroup" or _is_partview(o)]
+
+
+@handler("fit_page")
+def _h_fit_page(p):
+    """Auto-fit the drawing to its sheet (issue #85 Part A3+): recentre the views so
+    the part AND its placed dimensions sit inside the printable border (default 8 mm
+    margins, clear of the title block). The projection group's Automatic scale
+    already sizes the part to the sheet; the dimensions extend a fixed margin beyond
+    it, which at the default placement can run off an edge — this slides the drawing
+    into the printable area. Returns {scale, fits, envelope, border}; fits=False
+    means the part + dims are too large even centred (use a larger sheet). Call it
+    after the dimensions are placed. (Rescaling is intentionally NOT done here: a
+    dimension's points are baked at creation, so changing Scale afterwards would
+    misalign them — size the view before dimensioning instead.)"""
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    doc.recompute()
+    pw, ph = _page_size_mm(page)
+    margin = float(p.get("margin", 8.0))
+    border = [margin, margin, pw - margin, ph - margin]
+    # keep clear of the title block (bottom-right): trim the printable height
+    if _page_title_fields(page) is not None:
+        tb = _title_block_box(pw, ph)
+        border[3] = min(border[3], tb[1] - margin)
+    views = _page_top_views(page)
+    if not views:
+        raise ValueError("page has no views to fit")
+
+    def _fits(e):
+        return (e is not None and e[0] >= border[0] - 0.1 and e[1] >= border[1] - 0.1
+                and e[2] <= border[2] + 0.1 and e[3] <= border[3] + 0.1)
+
+    env = _page_dim_envelope(page)
+    for _ in range(4):
+        if env is None or _fits(env):
+            break
+        # recentre into the printable area (SVG +Y down; FreeCAD view Y is +up)
+        dx = (border[0] - env[0] if env[0] < border[0]
+              else border[2] - env[2] if env[2] > border[2] else 0.0)
+        dy = (border[1] - env[1] if env[1] < border[1]
+              else border[3] - env[3] if env[3] > border[3] else 0.0)
+        if abs(dx) < 0.05 and abs(dy) < 0.05:
+            break   # already aligned on both axes, or genuinely too big to fit
+        for o in views:
+            try:
+                o.X = float(o.X) + dx
+                o.Y = float(o.Y) - dy   # SVG-down shift == FreeCAD-Y-up decrease
+            except Exception:
+                pass
+        doc.recompute()
+        env = _page_dim_envelope(page)
+
+    scale = float(views[0].Scale) if hasattr(views[0], "Scale") else 1.0
+    return {"scale": scale, "fits": bool(_fits(env)),
+            "envelope": env, "border": border}
 
 
 # --- tessellation -------------------------------------------------------------
