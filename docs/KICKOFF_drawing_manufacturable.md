@@ -134,11 +134,17 @@ Still open, in cost order:
 * **A2+ — leaders.** When even its own lane can't fit a label at its feature, emit
   `makeLeader` into open space. (Packing handles the common dense case; leaders are
   the overflow valve for pathological clusters.)
+* **Regression set.** DONE 2026-06-15 (`tests/test_drawing_legibility_regression.py`):
+  a high-aspect bar, a hole grid, a small part, and a tight chain-dimensioned cluster
+  are each driven through the real pipeline and asserted clean by the legibility gate
+  — so a packing change that starts overlapping or overflowing trips here. It also
+  pinned the motivating case for A3+: a 120×80 plate at 1:1 pushes its Top-view dims
+  ~3 mm off the A4 sheet, and the gate flags `out_of_border` rather than shipping it
+  (`test_oversize_part_flags_overflow`).
 * **A3+ — auto sheet/scale selection.** Pick A4/A3 and a view scale so the part +
   its dim envelope fit the border (the title block already reports whatever scale
-  the projection chose).
-* **Regression set** — golden artifacts spanning the stress cases (many holes, high
-  aspect ratio, tight clusters, tiny features), each asserted clean by A1.
+  the projection chose). The regression set's oversize case is the acceptance: flip
+  it from "overflow flagged" to "clean".
 
 ## Anchors
 
