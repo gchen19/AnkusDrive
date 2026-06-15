@@ -5933,6 +5933,16 @@ def _is_partview(obj):
     return obj.TypeId in _PARTVIEW_TIDS
 
 
+def _is_thumbnail(view):
+    """True for the isometric pictorial added by add_thumbnail — it is rendered but
+    never dimensioned, gated, or treated as the part the title block names."""
+    return bool(getattr(view, "DP_Thumbnail", False))
+
+
+def _is_section(view):
+    return getattr(view, "TypeId", "") == "TechDraw::DrawViewSection"
+
+
 def _page_part_views(page):
     """Every renderable part-view on the page as (view_obj, cx, cy), where
     (cx, cy) is the view centre in SVG page coords (mm, origin top-left, +Y
@@ -6308,20 +6318,33 @@ def _stamp_title_block(page, fields):
         pass
 
 
-def _page_part_name(page):
+def _page_main_view(page):
+    """The primary part-view a drawing is about — the first part-view that is
+    neither the isometric pictorial nor a section. The title block, the page scale,
+    and the manufacturability gate all read the real part through this, so an added
+    thumbnail or section never displaces it."""
+    for (v, _cx, _cy) in _page_part_views(page):
+        if _is_thumbnail(v) or _is_section(v):
+            continue
+        return v
     views = _page_part_views(page)
-    if views:
-        src = getattr(views[0][0], "Source", None)
+    return views[0][0] if views else None
+
+
+def _page_part_name(page):
+    main = _page_main_view(page)
+    if main is not None:
+        src = getattr(main, "Source", None)
         if src:
             return getattr(src[0], "Label", None) or src[0].Name
     return getattr(page, "Label", None) or page.Name
 
 
 def _page_scale(page):
-    views = _page_part_views(page)
-    if views:
+    main = _page_main_view(page)
+    if main is not None:
         try:
-            return float(views[0][0].Scale)
+            return float(main.Scale)
         except Exception:
             pass
     return 1.0
@@ -7193,10 +7216,10 @@ def _h_drawing_gate(p):
     page = _resolve(p["page"])
     doc = _active_doc()
     doc.recompute()
-    views = _page_part_views(page)
-    if not views:
+    main = _page_main_view(page)
+    if main is None:
         raise ValueError("page has no part-views to gate")
-    src = views[0][0].Source[0]
+    src = main.Source[0]
     shape = src.Shape
     process = p.get("process", "auto")
     if process == "auto":
@@ -7210,6 +7233,8 @@ def _h_drawing_gate(p):
         feats, dims, process, datums_declared=datums_declared)
     rep["enumerated_features"] = [{"id": f["id"], "kind": f["kind"]} for f in feats]
     rep["datum_faces"] = len(datum_faces)
+    # advisory: does this part need a cross-section to read unambiguously?
+    rep["section_recommended"] = drawing_gate.needs_section(feats)
     return rep
 
 
@@ -7306,8 +7331,11 @@ def _page_dim_envelope(page):
 
 
 def _page_top_views(page):
+    # the iso thumbnail is pinned to its corner (like the title block), so fit_page
+    # recentres everything else around it rather than dragging it off the corner.
     return [o for o in page.Views
-            if o.TypeId == "TechDraw::DrawProjGroup" or _is_partview(o)]
+            if (o.TypeId == "TechDraw::DrawProjGroup" or _is_partview(o))
+            and not _is_thumbnail(o)]
 
 
 @handler("fit_page")
@@ -7363,6 +7391,293 @@ def _h_fit_page(p):
     scale = float(views[0].Scale) if hasattr(views[0], "Scale") else 1.0
     return {"scale": scale, "fits": bool(_fits(env)),
             "envelope": env, "border": border}
+
+
+# --- top-right pictorial thumbnail + auto cross-section (drawings-next) -------
+# Two readability touches a machinist expects, built on the same primitives the
+# rest of the drawing path uses: an isometric DrawViewPart (rendered through the
+# very same viewPartAsSvg the orthographic views use, so it stays a vector line
+# drawing, not an embedded raster) pinned top-right, and a DrawViewSection cut
+# through a part's internal features when the outline views can't show them. Both
+# decide for themselves whether they apply: the thumbnail skips if its corner is
+# busy, the section adds only when drawing_gate.needs_section flags hidden geometry.
+
+_THUMB_MARGIN = 5.0      # gap from the sheet edges (matches the title block)
+_THUMB_W = 70.0          # reserved top-right pictorial box width, mm
+_THUMB_H = 55.0          # reserved top-right pictorial box height, mm
+_THUMB_PAD = 4.0         # inset so the iso outline never touches the box edge
+_THUMB_MAX_SCALE = 1.0   # never blow a small part up larger than life
+
+
+def _thumbnail_box(page_w, page_h):
+    """The reserved top-right pictorial box [x0,y0,x1,y1] in page mm (origin
+    top-left, +Y down) — the top-right mirror of the bottom-right title block."""
+    x1 = page_w - _THUMB_MARGIN
+    y0 = _THUMB_MARGIN
+    return [x1 - _THUMB_W, y0, x1, y0 + _THUMB_H]
+
+
+def _stamp_thumbnail(view):
+    if not hasattr(view, "DP_Thumbnail"):
+        try:
+            view.addProperty("App::PropertyBool", "DP_Thumbnail", "DriftPin",
+                             "isometric pictorial reference (not dimensioned/gated)")
+        except Exception:
+            return
+    try:
+        view.DP_Thumbnail = True
+    except Exception:
+        pass
+
+
+def _region_is_clear(page, box, gap=2.0, exclude=None):
+    """True if `box` (page mm) touches none of the drawn elements — view outlines,
+    dimension labels, dimension lines, or the title block. Element-wise, not against
+    the union bounding box, so an empty corner reads as empty even when far-flung
+    elements stretch the overall footprint across it. `exclude` skips a view by name
+    (used when placing a view against everything but itself)."""
+    from driftpin import drawing_gate
+    labels, segments, view_boxes = _page_dim_graphics(page)
+    for b in view_boxes:
+        if b["id"] == exclude:
+            continue
+        if drawing_gate._boxes_overlap(b["box"], box, gap=gap):
+            return False
+    for lab in labels:
+        if drawing_gate._boxes_overlap(lab["box"], box, gap=gap):
+            return False
+    for seg in segments:
+        if drawing_gate._seg_intersects_box(seg["p1"], seg["p2"], box):
+            return False
+    return True
+
+
+def _view_page_center(page, view):
+    for (v, cx, cy) in _page_part_views(page):
+        if v.Name == view.Name:
+            return cx, cy
+    pw, ph = _page_size_mm(page)
+    return pw / 2.0, ph / 2.0
+
+
+def _place_view_outline_at(page, view, target_cx, target_cy):
+    """Set view.X/Y so its projected OUTLINE midpoint lands at page (target_cx,
+    target_cy) — the iso/section outline is not symmetric about the source-centre
+    projection, so we offset by its bbox midpoint. (cx,cy) is the view's centre in
+    page coords; an outline point maps to (cx+ux, cy+_VIEW_Y_SIGN*uy)."""
+    _, ph = _page_size_mm(page)
+    bb = _view_local_bbox(view)
+    if not bb:
+        return
+    midx = (bb[0] + bb[1]) / 2.0
+    midy = (bb[2] + bb[3]) / 2.0
+    cx = target_cx - midx
+    cy = target_cy - _VIEW_Y_SIGN * midy
+    try:
+        view.X = float(cx)
+        view.Y = float(ph - cy)
+    except Exception:
+        pass
+
+
+@handler("add_thumbnail")
+def _h_add_thumbnail(p):
+    """Place a small isometric pictorial of the part in the top-right corner of the
+    sheet — the "glance" reference a machinist uses to grok the 3-D shape before
+    reading the orthographic views — IF it fits there without crowding the existing
+    views and dimensions.
+
+    It is a real TechDraw isometric projection rendered through the same path as the
+    other views (a vector line drawing, not a raster), scaled to fit a reserved
+    top-right box and pinned to that corner (fit_page leaves it put). Best-effort:
+    when the top-right corner is already occupied it returns {placed: False, reason}
+    rather than overlapping content. Call it AFTER placing the views and dimensions
+    (and after fit_page) so "fits" is judged against the final layout.
+
+    Returns {placed, box, scale?, view?, reason?}."""
+    from driftpin import drawing_gate
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    doc.recompute()
+    main = _page_main_view(page)
+    if main is None:
+        raise ValueError("page has no part-view to depict")
+    body = main.Source[0]
+    pw, ph = _page_size_mm(page)
+    box = _thumbnail_box(pw, ph)
+    # skip rather than crowd: test the corner box against each drawn element
+    # individually (a loose bounding box of the whole sheet would falsely read the
+    # empty corner as occupied — the bottom-right title block alone stretches it to
+    # the right edge). View outlines, dimension labels, dimension lines, and the
+    # title block are all keep-outs.
+    if not _region_is_clear(page, box, gap=2.0):
+        return {"placed": False, "box": [round(v, 2) for v in box],
+                "reason": "top-right corner is occupied by views/dimensions; "
+                          "pictorial skipped to avoid crowding"}
+
+    iso = doc.addObject("TechDraw::DrawViewPart", p.get("name", "IsoThumb"))
+    page.addView(iso)
+    iso.Source = [body]
+    iso.Direction = App.Vector(1.0, 1.0, 1.0)
+    try:
+        iso.XDirection = App.Vector(1.0, -1.0, 0.0)
+    except Exception:
+        pass
+    _stamp_thumbnail(iso)
+    iso.ScaleType = "Custom"
+    iso.Scale = 1.0
+    doc.recompute()
+    bb = _view_local_bbox(iso)
+    if not bb:
+        doc.removeObject(iso.Name)
+        doc.recompute()
+        return {"placed": False, "box": [round(v, 2) for v in box],
+                "reason": "could not project an isometric outline of the part"}
+    w1 = max(bb[1] - bb[0], 1e-6)
+    h1 = max(bb[3] - bb[2], 1e-6)
+    avail_w = (box[2] - box[0]) - 2.0 * _THUMB_PAD
+    avail_h = (box[3] - box[1]) - 2.0 * _THUMB_PAD
+    scale = min(avail_w / w1, avail_h / h1, _THUMB_MAX_SCALE)
+    iso.Scale = float(scale)
+    doc.recompute()
+    bcx = (box[0] + box[2]) / 2.0
+    bcy = (box[1] + box[3]) / 2.0
+    _place_view_outline_at(page, iso, bcx, bcy)
+    doc.recompute()
+    return {"placed": True, "scale": round(float(scale), 4),
+            "box": [round(v, 2) for v in box], "view": iso.Name}
+
+
+def _section_cut(shape, feats, rec):
+    """Pick the cutting plane (origin, normal) that best reveals the flagged
+    internal feature: the plane runs lengthwise THROUGH the feature (so its normal
+    is perpendicular to the feature axis) and passes through the feature centre. For
+    a typical Z-drilled hole that gives a vertical front-looking cut showing the bore
+    profile. Falls back to the part centre with a front-looking normal."""
+    bb = shape.BoundBox
+    origin = [bb.Center.x, bb.Center.y, bb.Center.z]
+    fmap = {f["id"]: f for f in feats}
+    feat = None
+    for fid in rec.get("feature_ids", []):
+        f = fmap.get(fid)
+        if f is None:
+            continue
+        if f.get("kind") == "counterbore":
+            f = fmap.get(f.get("parent"), f)
+        feat = f
+        break
+    axis = [0.0, 0.0, 1.0]   # default: holes drilled down the top (+Z) face
+    if feat is not None and feat.get("axis") and feat.get("center"):
+        axis = list(feat["axis"])
+        origin = list(feat["center"])
+    ai = max(range(3), key=lambda i: abs(axis[i]))
+    # normal perpendicular to the feature axis; prefer Y (front-looking), then X, Z
+    normal = [0.0, 1.0, 0.0]
+    for cand in ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]):
+        if max(range(3), key=lambda i: abs(cand[i])) != ai:
+            normal = cand
+            break
+    return origin, normal
+
+
+def _place_section(page, sec, base):
+    """Position the section in genuinely clear space: scan the printable area for a
+    spot where the section's box touches nothing already drawn, and pick the clear
+    spot nearest its base view (so the section reads as belonging to it). The union
+    envelope cannot be used to find free space — the bottom-right title block alone
+    stretches it across the whole sheet — so this tests candidate boxes element-wise
+    via _region_is_clear. Best-effort: if nothing is clear (a tight sheet), it falls
+    back beside the base view, on-page, and the legibility gate will flag the
+    overlap so the agent knows to use a larger sheet."""
+    pw, ph = _page_size_mm(page)
+    margin = 8.0
+    bb = _view_local_bbox(sec)
+    if not bb:
+        return
+    half_w = (bb[1] - bb[0]) / 2.0 + 1.0
+    half_h = (bb[3] - bb[2]) / 2.0 + 1.0
+    bottom_limit = ph - margin
+    if _page_title_fields(page) is not None:
+        bottom_limit = min(bottom_limit, _title_block_box(pw, ph)[1] - margin)
+    base_cx, base_cy = _view_page_center(page, base)
+    xlo, xhi = margin + half_w, pw - margin - half_w
+    ylo, yhi = margin + half_h, bottom_limit - half_h
+    best = None
+    if xhi >= xlo and yhi >= ylo:
+        nx = max(1, int((xhi - xlo) / half_w) + 1)
+        ny = max(1, int((yhi - ylo) / half_h) + 1)
+        for ix in range(nx):
+            tx = xlo + (xhi - xlo) * (ix / (nx - 1) if nx > 1 else 0.5)
+            for iy in range(ny):
+                ty = ylo + (yhi - ylo) * (iy / (ny - 1) if ny > 1 else 0.5)
+                cbox = [tx - half_w, ty - half_h, tx + half_w, ty + half_h]
+                if not _region_is_clear(page, cbox, gap=3.0, exclude=sec.Name):
+                    continue
+                d = (tx - base_cx) ** 2 + (ty - base_cy) ** 2
+                if best is None or d < best[0]:
+                    best = (d, tx, ty)
+    if best is not None:
+        _place_view_outline_at(page, sec, best[1], best[2])
+    else:
+        # tight sheet: keep it on-page beside the base view (overlap reported by gate)
+        tx = min(max(base_cx, xlo), xhi) if xhi >= xlo else base_cx
+        ty = min(max(base_cy, ylo), yhi) if yhi >= ylo else base_cy
+        _place_view_outline_at(page, sec, tx, ty)
+
+
+@handler("add_section_view")
+def _h_add_section_view(p):
+    """Add a cross-section view when the part has internal features the outline /
+    hidden-line views convey ambiguously — a counterbore, a blind hole/bore, or a
+    pocket (the judgement is drawing_gate.needs_section). The cut runs lengthwise
+    through such a feature so its bore profile and depth read directly.
+
+    auto (default True): add the section ONLY if needs_section flags hidden geometry,
+        else return {added: False, recommended: False}. Set auto=False to force one.
+    process: 'auto' (default) | 'prismatic' | 'turned' — how features are enumerated.
+    Returns {added, recommended, reasons, feature_ids, view?, normal?, origin?}."""
+    from driftpin import drawing_gate
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    doc.recompute()
+    main = _page_main_view(page)
+    if main is None:
+        raise ValueError("page has no part-view to section")
+    body = main.Source[0]
+    shape = body.Shape
+    process = p.get("process", "auto")
+    if process == "auto":
+        process = _infer_process(shape)
+    feats = _enumerate_features(shape, process)
+    rec = drawing_gate.needs_section(feats)
+    if bool(p.get("auto", True)) and not rec["recommended"]:
+        return {"added": False, "recommended": False,
+                "reasons": [], "feature_ids": []}
+
+    origin, normal = _section_cut(shape, feats, rec)
+    sec = doc.addObject("TechDraw::DrawViewSection", p.get("name", "Section"))
+    page.addView(sec)
+    sec.Source = [body]
+    sec.BaseView = main
+    sec.SectionNormal = App.Vector(*normal)
+    sec.SectionOrigin = App.Vector(*origin)
+    try:
+        sec.ScaleType = "Custom"
+        sec.Scale = float(main.Scale)
+    except Exception:
+        pass
+    if hasattr(sec, "SectionSymbol"):
+        try:
+            sec.SectionSymbol = str(p.get("symbol", "A"))
+        except Exception:
+            pass
+    doc.recompute()
+    _place_section(page, sec, main)
+    doc.recompute()
+    return {"added": True, "recommended": rec["recommended"],
+            "reasons": rec["reasons"], "feature_ids": rec["feature_ids"],
+            "view": sec.Name, "normal": [round(n, 4) for n in normal],
+            "origin": [round(o, 3) for o in origin]}
 
 
 # --- tessellation -------------------------------------------------------------

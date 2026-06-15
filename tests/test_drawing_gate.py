@@ -212,6 +212,50 @@ _BORDER = [0.0, 0.0, 297.0, 210.0]   # A4 landscape
 
 
 # --------------------------------------------------------------------------- #
+# needs_section — does the part need a cross-section to read unambiguously?
+# --------------------------------------------------------------------------- #
+def test_section_through_hole_not_recommended():
+    print("test_section_through_hole_not_recommended")
+    feats = [{"id": "BBOX", "kind": "bbox", "size": [60, 40, 8]},
+             {"id": "H1", "kind": "hole", "dia": 12, "through": True, "depth": None}]
+    rec = dg.needs_section(feats)
+    _check("plain through hole needs no section", rec["recommended"], False)
+    _check("no feature ids", rec["feature_ids"], [])
+
+
+def test_section_counterbore_recommended():
+    print("test_section_counterbore_recommended")
+    feats = [{"id": "BBOX", "kind": "bbox", "size": [60, 40, 20]},
+             {"id": "H1", "kind": "hole", "dia": 10, "through": True, "depth": None},
+             {"id": "H1.cb", "kind": "counterbore", "parent": "H1",
+              "dia": 20, "depth": 6}]
+    rec = dg.needs_section(feats)
+    _check("counterbore recommends a section", rec["recommended"], True)
+    _check("names the counterbore", rec["feature_ids"], ["H1.cb"])
+
+
+def test_section_blind_hole_recommended():
+    print("test_section_blind_hole_recommended")
+    feats = [{"id": "BBOX", "kind": "bbox", "size": [60, 40, 20]},
+             {"id": "H1", "kind": "hole", "dia": 8, "through": False, "depth": 10}]
+    rec = dg.needs_section(feats)
+    _check("blind hole recommends a section", rec["recommended"], True)
+    _check("names the blind hole", rec["feature_ids"], ["H1"])
+
+
+def test_section_blind_turned_bore_recommended():
+    print("test_section_blind_turned_bore_recommended")
+    feats = [{"id": "BBOX", "kind": "bbox", "size": [30, 30, 50]},
+             {"id": "B1", "kind": "bore", "dia": 12, "depth": 20}]   # finite depth
+    rec = dg.needs_section(feats)
+    _check("blind turned bore recommends a section", rec["recommended"], True)
+    # a through turned bore (depth=None) does not
+    feats[1]["depth"] = None
+    _check("through turned bore needs no section",
+           dg.needs_section(feats)["recommended"], False)
+
+
+# --------------------------------------------------------------------------- #
 # Lane packing (A2 placement)
 # --------------------------------------------------------------------------- #
 def test_pack_lanes_shares_when_disjoint():

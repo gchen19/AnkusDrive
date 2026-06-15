@@ -335,6 +335,47 @@ def completeness_report(features, dims, process, *, datums_declared=False):
 
 
 # --------------------------------------------------------------------------- #
+# drawings-next — does this part need a cross-section to be understood?
+# --------------------------------------------------------------------------- #
+def needs_section(features):
+    """Decide whether a drawing needs a cross-section view, from the same feature
+    descriptors the completeness gate enumerates.
+
+    A part needs a section when it has INTERNAL geometry the outline / hidden-line
+    views convey ambiguously: a **counterbore** (a stepped bore — two diameters on
+    one axis, whose step depth reads as a tangle of hidden lines), a **blind**
+    hole/bore (it terminates inside the metal, so its depth is a hidden-line guess),
+    or a **pocket**. A plain *through*-hole does NOT trigger one — it reads
+    unambiguously as a circle plus two hidden edge lines, the case every machinist
+    expects.
+
+    Advisory, not a hard gate: a drawing without a recommended section is "could be
+    clearer," not "wrong" — so this returns a recommendation, never a violation list.
+    Returns ``{recommended: bool, reasons: [str], feature_ids: [str]}`` (same
+    show-your-work shape as the other reports)."""
+    reasons, ids = [], []
+    for f in features:
+        kind = f.get("kind")
+        fid = f.get("id")
+        if kind == "counterbore":
+            reasons.append(f"counterbore {fid}: a stepped bore — the recess depth "
+                           f"and shoulder read ambiguously as hidden lines")
+            ids.append(fid)
+        elif kind in ("hole", "bore"):
+            # blind iff it does not pass through: prismatic holes carry through=False,
+            # turned bores carry a finite depth (both leave a non-None `depth`).
+            blind = (f.get("through") is False) or (f.get("depth") is not None)
+            if blind:
+                reasons.append(f"blind {kind} {fid}: terminates inside the metal — "
+                               f"its depth is a hidden-line guess in the outline views")
+                ids.append(fid)
+        elif kind == "pocket":
+            reasons.append(f"pocket {fid}: an internal cavity the outline cannot show")
+            ids.append(fid)
+    return {"recommended": bool(reasons), "reasons": reasons, "feature_ids": ids}
+
+
+# --------------------------------------------------------------------------- #
 # Part A2 — placement: collision-driven lane packing
 # --------------------------------------------------------------------------- #
 def pack_lanes(intervals, *, gap=1.0):

@@ -160,10 +160,41 @@ Still open, in cost order:
   invisible at the usual Scale=1, but it misplaced every dimension once a view was
   auto-reduced to fit. `_project_centred` now scales to match.
 
+## Drawings-next — pictorial + auto cross-section (DONE 2026-06-15)
+
+Two readability touches a machinist expects, built on the same TechDraw primitives
+the rest of the path uses (so both stay vector line drawings, decided automatically):
+
+* **Top-right isometric pictorial (`add_thumbnail`).** A real isometric
+  `DrawViewPart` (Direction (1,1,1), XDirection (1,−1,0)) rendered through the very
+  same `viewPartAsSvg` the orthographic views use — a vector line drawing, not an
+  embedded raster — scaled to a reserved top-right box (the mirror of the bottom-right
+  title block) and pinned there (`DP_Thumbnail`; `_page_main_view` keeps it out of the
+  title block / scale / gate, `_page_top_views` keeps `fit_page` from dragging it off
+  its corner). Best-effort: skips with `placed: False` when the corner is occupied.
+  Crucial fix: occupancy is tested **element-wise** (`_region_is_clear`), not against
+  the union bounding box — the bottom-right title block alone stretches that bbox
+  across the whole sheet and would read the empty corner as full.
+* **Auto cross-section (`add_section_view`).** `drawing_gate.needs_section` decides
+  from the enumerated features whether internal geometry the outline views convey
+  ambiguously is present — a counterbore (stepped bore), a blind hole/bore, or a
+  pocket; a plain through-hole does NOT trigger one. When recommended (and surfaced
+  advisory-only as `section_recommended` on the gate report), a `DrawViewSection` is
+  cut lengthwise through the feature (normal ⊥ the feature axis, origin at its
+  centre) and placed in genuinely clear space (grid scan via `_region_is_clear`,
+  nearest the base view). `auto=False` forces one. Golden: `artifacts/cbblock_demo.*`
+  (Front + Top + auto Section showing the bore profile + iso thumbnail). Tests:
+  `tests/test_drawing_thumbnail_section.py` (e2e) + `needs_section` cases in
+  `tests/test_drawing_gate.py`.
+
 ## Anchors
 
-- Pure core: `driftpin/drawing_gate.py`. Tests: `tests/test_drawing_gate.py`,
-  `tests/test_drawing_gate_worker.py`.
+- Pure core: `driftpin/drawing_gate.py` (incl. `needs_section`). Tests:
+  `tests/test_drawing_gate.py`, `tests/test_drawing_gate_worker.py`,
+  `tests/test_drawing_thumbnail_section.py`.
+- Worker thumbnail/section: `_h_add_thumbnail`, `_h_add_section_view`,
+  `_thumbnail_box`, `_region_is_clear`, `_place_view_outline_at`, `_section_cut`,
+  `_place_section`, `_page_main_view`, `_is_thumbnail`/`_is_section`.
 - Worker: `_dim_layout`, `_h_drawing_gate`, `_h_drawing_legibility`,
   `_enumerate_features`, `_infer_process`, `_dim_descriptors`, `_page_dim_graphics`,
   `_stamp_model_ref` in `driftpin/worker.py`.
