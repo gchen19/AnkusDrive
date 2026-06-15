@@ -6926,19 +6926,79 @@ def _cyl_is_hole(face, surf):
         return False
 
 
+def _cyl_uextent(face):
+    """Angular (U) span of a cylindrical face in radians. A full bore/boss is ~2π;
+    a fillet edge-round is a partial cylinder (~π/2)."""
+    try:
+        u0, u1, _v0, _v1 = face.ParameterRange
+        return abs(u1 - u0)
+    except Exception:
+        return 2.0 * math.pi
+
+
+_FULL_CYL = 1.5 * math.pi  # U-extent above this == a full bore/boss, not a fillet
+
+
+def _is_axis_aligned(n, tol=0.05):
+    """True if a unit normal points along a principal axis (±X/±Y/±Z)."""
+    comps = sorted(abs(c) for c in (n.x, n.y, n.z))
+    return comps[0] < tol and comps[1] < tol and comps[2] > 1.0 - tol
+
+
+def _enumerate_fillets_chamfers(shape, bb):
+    """Fillet (partial-cylinder edge round) and chamfer (off-axis narrow bevel)
+    features, deduped to DISTINCT sizes — a drawing calls out "R3" or "2×45°" once,
+    not per edge. A fillet is matched by an R dimension, a chamfer by a linear one."""
+    out = []
+    diag = bb.DiagonalLength or 1.0
+    min_dim = min(bb.XLength, bb.YLength, bb.ZLength) or diag
+    radii = set()
+    for f in shape.Faces:
+        if _surf_kind(f) != "Cylinder" or _cyl_uextent(f) >= _FULL_CYL:
+            continue
+        r = round(float(f.Surface.Radius), 2)
+        if 1e-3 < r < 0.3 * diag:            # an edge round, not a large arc
+            radii.add(r)
+    for i, r in enumerate(sorted(radii), 1):
+        out.append({"id": f"FIL{i}", "kind": "fillet", "radius": r})
+    sizes = set()
+    for f in shape.Faces:
+        if _surf_kind(f) != "Plane":
+            continue
+        try:
+            u0, u1, v0, v1 = f.ParameterRange
+            n = f.normalAt((u0 + u1) / 2.0, (v0 + v1) / 2.0)
+        except Exception:
+            continue
+        if _is_axis_aligned(n):
+            continue
+        mid = sorted((f.BoundBox.XLength, f.BoundBox.YLength, f.BoundBox.ZLength))[1]
+        if 1e-3 < mid < 0.5 * min_dim:        # a narrow bevel, not a main angled face
+            sizes.add(round(mid, 2))
+    for i, sz in enumerate(sorted(sizes), 1):
+        out.append({"id": f"CHM{i}", "kind": "chamfer", "size": sz})
+    return out
+
+
 def _enumerate_features(shape, process):
     """Build drawing_gate feature descriptors off the real solid: the overall
     bounding box, plus holes (inward cylinders, grouped coaxially so a counterbore
     is recognised) for a prismatic part, or outer cylindrical steps for a turned
-    one. Deliberately conservative — an unrecognised face simply yields no slot
+    one, plus fillet (partial-cylinder edge-round) and chamfer (off-axis bevel)
+    features. Deliberately conservative — an unrecognised face simply yields no slot
     rather than a wrong one."""
     bb = shape.BoundBox
     feats = [{"id": "BBOX", "kind": "bbox",
               "size": [bb.XLength, bb.YLength, bb.ZLength]}]
 
+    # Only FULL cylinders are holes/bores/steps; partial cylinders are edge fillets
+    # (handled in _enumerate_fillets_chamfers), so a fillet is never mistaken for a
+    # tiny blind hole.
     cyls = []
     for f in shape.Faces:
         if _surf_kind(f) != "Cylinder":
+            continue
+        if _cyl_uextent(f) < _FULL_CYL:
             continue
         surf = f.Surface
         cyls.append((f, surf, _cyl_is_hole(f, surf)))
@@ -6970,6 +7030,7 @@ def _enumerate_features(shape, process):
             feats.append({"id": f"B{nb}", "kind": "bore",
                           "dia": 2.0 * float(s.Radius),
                           "depth": None if through else float(depth)})
+        feats += _enumerate_fillets_chamfers(shape, bb)
         return feats
 
     # prismatic: group inward cylinders coaxially (a counterbore = two radii on one
@@ -7018,6 +7079,7 @@ def _enumerate_features(shape, process):
                        fc.BoundBox.ZLength)[ai]
             feats.append({"id": f"{hid}.cb", "kind": "counterbore", "parent": hid,
                           "dia": 2.0 * float(sc.Radius), "depth": float(cbdepth)})
+    feats += _enumerate_fillets_chamfers(shape, bb)
     return feats
 
 

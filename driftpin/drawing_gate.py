@@ -138,9 +138,13 @@ def required_slots(features, process):
             add(fid, "size", "dia", f["dia"], f"{fid} bore diameter")
             if f.get("depth"):
                 add(fid, "size", "depth", f["depth"], f"{fid} bore depth")
-        elif k == "fillet" or k == "chamfer":
-            add(fid, "size", "size", f.get("radius", f.get("size", 0.0)),
-                f"{fid} {k}")
+        elif k == "fillet":
+            # a fillet is called out by its radius — matched by an R dimension
+            add(fid, "size", "radius", f.get("radius", 0.0), f"{fid} fillet radius")
+        elif k == "chamfer":
+            # a chamfer leg — matched by a linear dimension (the "L×45°" convention
+            # is future work; v1 dimensions the leg)
+            add(fid, "size", "size", f.get("size", 0.0), f"{fid} chamfer size")
     return slots
 
 
@@ -175,7 +179,16 @@ def _covers_size(slot, dim, features_by_id):
                 dot = sum(d[i] * axis[i] for i in range(3))
                 d = [d[i] - dot * axis[i] for i in range(3)]
             return math.sqrt(sum(c * c for c in d)) <= _POS_TOL
-        return True
+        # no circle to localise it: a Ø dimension sizes a hole/bore, but a bare R
+        # dimension is a fillet callout (R3 == Ø6 numerically) — don't credit it to
+        # a hole diameter, or a fillet would satisfy a hole's size slot.
+        return dt == "Diameter"
+    if axis == "radius":
+        # a fillet radius: an R dimension whose value is the radius (or a linear
+        # callout of the same value)
+        if dt == "Diameter":
+            return False
+        return abs(abs(float(dim.get("value", 0.0))) - slot["nominal"]) <= _SIZE_TOL
     # linear sizes: overall extents, lengths, depths — match value to nominal
     if dt in ("Diameter", "Radius"):
         return False

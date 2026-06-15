@@ -79,9 +79,14 @@ placed graphics.
   faces declared, locating the hole from them is clean; locating it from the far edge
   flags `no_datum`. (GD&T position/tolerance frames remain future work.)
 * **Enumeration is conservative.** An unrecognised face yields *no* slot rather than
-  a wrong one (no false `under`). Chamfers/fillets/threads are not yet enumerated.
-  Counterbore through-ness is read from the UNION of a hole's coaxial cylinder spans,
-  so a counterbored through-hole isn't mistaken for a blind bore.
+  a wrong one (no false `under`). Counterbore through-ness is read from the UNION of a
+  hole's coaxial cylinder spans, so a counterbored through-hole isn't mistaken for a
+  blind bore. **Fillets** (partial cylinders, U-extent < 1.5π — distinct from a full
+  2π bore) and **chamfers** (off-axis narrow planar bevels) are enumerated to DISTINCT
+  sizes (a drawing calls out "R3" once, not per edge); a fillet is matched by an R
+  dimension (a bare R is never credited to a hole Ø), a chamfer by a linear size.
+  Threads are still future. Example: `artifacts/fc_bracket_demo.*`
+  (`scratch/drawing_demo.py:fillet_chamfer`).
 * **Tolerances (DONE 2026-06-15).** `add_dimension` takes a `tolerance`:
   `{"sym": 0.1}` (±0.1), `{"plus": .., "minus": ..}` (asymmetric), or
   `{"fit": "H7"}` / `{"fit": "H7/g6"}` — ISO 286 hole-side limits looked up at the

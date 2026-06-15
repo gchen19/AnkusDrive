@@ -70,12 +70,49 @@ def plate(w):
     _export_all(w, page, "plate_demo")
 
 
+def fillet_chamfer(w):
+    """Bracket with a filleted edge (R6) and a chamfered edge (4x45) — the fillet
+    reads as an R leader callout, the chamfer as a linear size."""
+    w.call("new_document", name="fc_bracket")
+    box = w.call("add_primitive", kind="box", w=70, d=45, h=12)
+    vert = [e for e in w.call("list_edges", handle=box["handle"])
+            if abs(e.get("length", 0) - 12) < 1e-6]   # vertical edges
+
+    def near(e, x, y):
+        c = e["centroid"]
+        return abs(c[0] - x) < 1 and abs(c[1] - y) < 1
+
+    fe = next(e["tag"] for e in vert if near(e, 0, 0))     # fillet the (0,0) corner
+    ce = next(e["tag"] for e in vert if near(e, 70, 45))   # chamfer the (70,45) corner
+    fil = w.call("fillet_edges", handle=box["handle"], edges=[fe], radius=6)
+    part = w.call("chamfer_edges", handle=fil["handle"], edges=[ce], size=4)["handle"]
+    page = w.call("make_drawing_page", name="Page")["handle"]
+    w.call("add_projection_group", page=page, body=part, views=["Front", "Top"])
+    w.call("add_dimension", page=page, view="Front", kind="horizontal",
+           from_point=[0, 0, 0], to_point=[70, 0, 0])       # width
+    w.call("add_dimension", page=page, view="Front", kind="vertical",
+           from_point=[0, 0, 0], to_point=[0, 0, 12])       # thickness
+    w.call("add_dimension", page=page, view="Top", kind="vertical",
+           from_point=[0, 0, 0], to_point=[0, 45, 0])       # depth
+    fre = next(e["tag"] for e in w.call("list_edges", handle=part)
+               if e.get("radius") and abs(e["radius"] - 6) < 1e-6)
+    w.call("add_dimension", page=page, view="Top", kind="radius", edge=fre)  # R6 fillet
+    w.call("add_dimension", page=page, view="Top", kind="horizontal",
+           from_point=[66, 45, 0], to_point=[70, 45, 0])    # chamfer leg = 4
+    w.call("set_title_block", page=page, part="FC BRACKET", material="STEEL 1018",
+           rev="A", drawn_by="DriftPin", date="2026-06-15", project="DEMO")
+    w.call("fit_page", page=page)
+    _export_all(w, page, "fc_bracket_demo")
+
+
 def main():
     with Worker() as w:
         print("L-bracket:")
         lbracket(w)
         print("Mount plate:")
         plate(w)
+        print("Fillet + chamfer bracket:")
+        fillet_chamfer(w)
     print(f"\nWrote drawings to {ART}")
 
 

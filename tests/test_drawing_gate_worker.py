@@ -283,6 +283,51 @@ def test_datum_origin_discipline():
                "no_datum" in codes, codes)
 
 
+def test_fillet_chamfer_enumeration_and_completeness():
+    """A plate with a filleted edge and a chamfered edge: the gate enumerates the
+    fillet (partial cylinder) and chamfer (off-axis bevel), and the drawing is
+    complete only once the fillet R and the chamfer size are dimensioned."""
+    print("test_fillet_chamfer_enumeration_and_completeness")
+    with Worker() as w:
+        w.call("new_document", name="gate_fc")
+        box = w.call("add_primitive", kind="box", w=60, d=40, h=10)
+        verts = [e for e in w.call("list_edges", handle=box["handle"])
+                 if abs(e.get("length", 0) - 10) < 1e-6]   # vertical edges
+        fil = w.call("fillet_edges", handle=box["handle"],
+                     edges=[verts[0]["tag"]], radius=3)
+        part = w.call("chamfer_edges", handle=fil["handle"],
+                      edges=[verts[1]["tag"]], size=2)["handle"]
+        page = w.call("make_drawing_page", name="Page")["handle"]
+        w.call("add_projection_group", page=page, body=part, views=["Front", "Top"])
+
+        feats = w.call("drawing_gate", page=page, process="prismatic")["enumerated_features"]
+        kinds = [f["kind"] for f in feats]
+        _check("enumerated a fillet", "fillet" in kinds, kinds)
+        _check("enumerated a chamfer", "chamfer" in kinds, kinds)
+
+        # overall sizes
+        w.call("add_dimension", page=page, view="Front", kind="horizontal",
+               from_point=[0, 0, 0], to_point=[60, 0, 0])
+        w.call("add_dimension", page=page, view="Front", kind="vertical",
+               from_point=[0, 0, 0], to_point=[0, 0, 10])
+        w.call("add_dimension", page=page, view="Top", kind="vertical",
+               from_point=[0, 0, 0], to_point=[0, 40, 0])
+        rep = w.call("drawing_gate", page=page, process="prismatic")
+        codes = [v["code"] for v in rep["violations"]]
+        _check("fillet + chamfer flagged under before they're dimensioned",
+               codes.count("under") == 2, codes)
+
+        # R callout for the fillet + a linear size for the chamfer
+        fil_edge = next(e["tag"] for e in w.call("list_edges", handle=part)
+                        if e.get("radius") and abs(e["radius"] - 3) < 1e-6)
+        w.call("add_dimension", page=page, view="Top", kind="radius", edge=fil_edge)
+        w.call("add_dimension", page=page, view="Top", kind="horizontal",
+               from_point=[0, 0, 0], to_point=[2, 0, 0])    # chamfer leg = 2
+        rep = w.call("drawing_gate", page=page, process="prismatic")
+        _check("complete once fillet R + chamfer size are dimensioned",
+               rep["ok"], rep["violations"])
+
+
 def test_title_block_renders_fields():
     print("test_title_block_renders_fields")
     import os

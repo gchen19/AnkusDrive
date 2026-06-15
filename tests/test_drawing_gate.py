@@ -246,6 +246,42 @@ def test_pack_lanes_beats_blind_stack():
     _check("packing uses 1 lane", max(lanes), 0)
 
 
+# --------------------------------------------------------------------------- #
+# Fillet / chamfer enumeration (completeness)
+# --------------------------------------------------------------------------- #
+def _filleted_features():
+    f = _prismatic_features()
+    f.append({"id": "FIL1", "kind": "fillet", "radius": 3.0})
+    f.append({"id": "CHM1", "kind": "chamfer", "size": 2.0})
+    return f
+
+
+def test_fillet_radius_covered_by_R_dim():
+    print("test_fillet_radius_covered_by_R_dim")
+    feats = _filleted_features()
+    dims = _prismatic_complete_dims()
+    dims.append({"name": "Rf", "type": "Radius", "value": 3.0, "circle": None})
+    dims.append({"name": "Cf", "type": "DistanceX", "value": 2.0,
+                 "span": {"p1": [0, 0, 0], "p2": [2, 0, 0]}})
+    v = dg.check_completeness(feats, dims, dg.PRISMATIC)
+    _check("filleted+chamfered part complete", v, [])
+
+
+def test_missing_fillet_radius_under():
+    print("test_missing_fillet_radius_under")
+    feats = _filleted_features()
+    dims = _prismatic_complete_dims()
+    # chamfer dimensioned, fillet radius missing
+    dims.append({"name": "Cf", "type": "DistanceX", "value": 2.0,
+                 "span": {"p1": [0, 0, 0], "p2": [2, 0, 0]}})
+    v = dg.check_completeness(feats, dims, dg.PRISMATIC)
+    _check("missing fillet radius is under", _codes(v), ["under"])
+    _check("names the fillet", v[0]["feature"], "FIL1")
+    _check("a Diameter dim does NOT cover a fillet radius",
+           dg._covers_size({"axis": "radius", "feature": "FIL1", "nominal": 3.0},
+                           {"type": "Diameter", "value": 3.0}, {}), False)
+
+
 def test_legibility_clean():
     print("test_legibility_clean")
     labels = [
