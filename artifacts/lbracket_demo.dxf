@@ -227,19 +227,19 @@ TABLE
   2
 LAYER
   5
-A6D
+A6C
 330
 0
 100
 AcDbSymbolTable
  70
-13
+12
   0
 LAYER
   5
-A6E
-330
 A6D
+330
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -255,9 +255,9 @@ CONTINUOUS
   0
 LAYER
   5
-A6F
+A6E
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -273,9 +273,9 @@ CONTINUOUS
   0
 LAYER
   5
-A70
+A6F
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -291,9 +291,9 @@ CONTINUOUS
   0
 LAYER
   5
-A71
+A70
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -309,9 +309,9 @@ CONTINUOUS
   0
 LAYER
   5
-A72
+A71
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -327,9 +327,9 @@ CONTINUOUS
   0
 LAYER
   5
-A73
+A72
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -345,9 +345,9 @@ CONTINUOUS
   0
 LAYER
   5
-A74
+A73
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -363,9 +363,9 @@ CONTINUOUS
   0
 LAYER
   5
-A75
+A74
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -381,9 +381,9 @@ CONTINUOUS
   0
 LAYER
   5
-A76
+A75
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -399,9 +399,9 @@ CONTINUOUS
   0
 LAYER
   5
-A77
+A76
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -417,9 +417,9 @@ CONTINUOUS
   0
 LAYER
   5
-A78
+A77
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
@@ -435,33 +435,15 @@ CONTINUOUS
   0
 LAYER
   5
-A79
+A78
 330
-A6D
+A6C
 100
 AcDbSymbolTableRecord
 100
 AcDbLayerTableRecord
   2
 Dimension001
- 70
-    0
- 62
-    7
-  6
-CONTINUOUS
-  0
-LAYER
-  5
-A7A
-330
-A6D
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-Note
  70
     0
  62
@@ -3606,40 +3588,6 @@ AcDbAlignedDimension
 90
 100
 AcDbRotatedDimension
-  0
-TEXT
-  5
-A6C
-330
-A02
-100
-AcDbEntity
-  8
-Note
-100
-AcDbText
- 10
-12.000000000
- 20
-16.000000000
- 30
-0.000000000
- 40
-5.000000000
-  1
-L-BRACKET  rev A  (mm)
-  7
-STANDARD
- 72
-1
- 11
-12.000000000
- 21
-16.000000000
- 31
-0.000000000
-100
-AcDbText
   0
 ENDSEC
   0

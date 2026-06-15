@@ -227,19 +227,19 @@ TABLE
   2
 LAYER
   5
-A58
+A57
 330
 0
 100
 AcDbSymbolTable
  70
-11
+10
   0
 LAYER
   5
-A59
-330
 A58
+330
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -255,9 +255,9 @@ CONTINUOUS
   0
 LAYER
   5
-A5A
+A59
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -273,9 +273,9 @@ CONTINUOUS
   0
 LAYER
   5
-A5B
+A5A
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -291,9 +291,9 @@ CONTINUOUS
   0
 LAYER
   5
-A5C
+A5B
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -309,9 +309,9 @@ CONTINUOUS
   0
 LAYER
   5
-A5D
+A5C
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -327,9 +327,9 @@ CONTINUOUS
   0
 LAYER
   5
-A5E
+A5D
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -345,9 +345,9 @@ CONTINUOUS
   0
 LAYER
   5
-A5F
+A5E
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -363,9 +363,9 @@ CONTINUOUS
   0
 LAYER
   5
-A60
+A5F
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -381,9 +381,9 @@ CONTINUOUS
   0
 LAYER
   5
-A61
+A60
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
@@ -399,33 +399,15 @@ CONTINUOUS
   0
 LAYER
   5
-A62
+A61
 330
-A58
+A57
 100
 AcDbSymbolTableRecord
 100
 AcDbLayerTableRecord
   2
 Dimension002
- 70
-    0
- 62
-    7
-  6
-CONTINUOUS
-  0
-LAYER
-  5
-A63
-330
-A58
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-Note
  70
     0
  62
@@ -1839,13 +1821,13 @@ Dimension
 100
 AcDbLine
  10
-184.5
+154.5
  20
 144
  30
 0
  11
-184.5
+154.5
  21
 139
  31
@@ -1893,7 +1875,7 @@ AcDbLine
  30
 0
  11
-184.5
+154.5
  21
 139
  31
@@ -1919,7 +1901,7 @@ AcDbText
  40
 3.5
   1
-42
+12
   7
 STANDARD
  72
@@ -1985,25 +1967,25 @@ AcDbEntity
 100
 AcDbTrace
  10
-189.5
+159.5
  20
 138.583
  30
 0
  11
-189.5
+159.5
  21
 139.417
  31
 0
  12
-184.5
+154.5
  22
 139
  32
 0
  13
-184.5
+154.5
  23
 139
  33
@@ -2903,7 +2885,7 @@ AcDbDimension
  70
 32
   1
-42
+12
   3
 STANDARD
 100
@@ -2915,7 +2897,7 @@ AcDbAlignedDimension
  33
 0.000000000
  14
-184.500000000
+154.500000000
  24
 144.000000000
  34
@@ -3020,40 +3002,6 @@ AcDbAlignedDimension
 90
 100
 AcDbRotatedDimension
-  0
-TEXT
-  5
-A57
-330
-A02
-100
-AcDbEntity
-  8
-Note
-100
-AcDbText
- 10
-14.000000000
- 20
-16.000000000
- 30
-0.000000000
- 40
-5.000000000
-  1
-MOUNT PLATE  rev A  (mm)
-  7
-STANDARD
- 72
-1
- 11
-14.000000000
- 21
-16.000000000
- 31
-0.000000000
-100
-AcDbText
   0
 ENDSEC
   0
