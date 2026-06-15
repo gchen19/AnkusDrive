@@ -70,10 +70,14 @@ placed graphics.
   solid, two dims on one DOF normally *agree* → `redundant`. `conflict` exists for
   manually-overridden values; it binds by reference (the worker's resolved refs /
   DP_ModelRef), not by value, so a wrong number still lands on its slot.
-* **Datums default off.** `datums_declared=False` until the `DP_FaceRoles`
-  (`annotate_face`) datum hookup lands; the `no_datum` logic is wired and unit-tested
-  but won't false-positive in the meantime. Next: read the datum face, set each
-  location dim's `from_datum` by whether an endpoint sits on it.
+* **Datums (DONE 2026-06-15).** `annotate_face` gained a `datum` role; the gate reads
+  the source body's datum faces (`_datum_faces`) and sets each location dim's
+  `from_datum` by whether an endpoint actually sits on a datum face
+  (`_point_on_any_face`). The `no_datum` check turns on automatically when any datum
+  face is declared. A 2-D hole location needs a reference *frame* (a primary + a
+  secondary datum), as `test_datum_origin_discipline` shows: with the x=0 and y=0
+  faces declared, locating the hole from them is clean; locating it from the far edge
+  flags `no_datum`. (GD&T position/tolerance frames remain future work.)
 * **Enumeration is conservative.** An unrecognised face yields *no* slot rather than
   a wrong one (no false `under`). Chamfers/fillets/threads/tolerances are not yet
   enumerated; `gdt_check` / `tolerance_stackup` / `fit_class` are the hooks for the

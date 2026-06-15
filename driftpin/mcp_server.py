@@ -2099,12 +2099,16 @@ def drawing_gate(page: str, process: str = "auto",
     needs only Ø + axial length. process='auto' infers it from the geometry.
 
     Returns {ok, violations, slots_total, slots_covered, process, features,
-    dimensions, enumerated_features}. Each violation has a `code`
+    dimensions, enumerated_features, datum_faces}. Each violation has a `code`
     (under = a feature size/location is missing; redundant = a DOF dimensioned more
     than once; conflict = dimensioned twice with disagreeing values; extra = a dim
     that pins nothing; no_datum = a location not taken from a datum) and a human
     `reason`. ok=True (empty violations) means the drawing is manufacturing-complete.
-    Set datums_declared=True to also enforce datum-origin discipline on locations."""
+
+    Datum-origin discipline turns on automatically when the part has faces annotated
+    role='datum' (annotate_face): a location dimension not measured from a datum face
+    is then flagged no_datum. Set datums_declared=True to force the check on even
+    without annotated datums."""
     return _call("drawing_gate", page=page, process=process,
                  datums_declared=datums_declared)
 

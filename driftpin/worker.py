@@ -4155,7 +4155,9 @@ def _h_publish_interface(p):
 # string back to the current face through the stored tag.
 
 _FACEROLE_PROP = "DP_FaceRoles"
-_FACE_ROLES = ("inlet", "outlet", "sealing", "wetted", "ambient", "mating")
+# 'datum' marks a functional reference face a drawing should dimension FROM
+# (issue #85); the drawing completeness gate reads it via _datum_faces.
+_FACE_ROLES = ("inlet", "outlet", "sealing", "wetted", "ambient", "mating", "datum")
 
 
 def _read_face_roles(obj):
@@ -6888,12 +6890,43 @@ def _infer_process(shape):
     return "prismatic"
 
 
-def _dim_descriptors(page):
+def _datum_faces(obj, shape):
+    """The faces annotated role='datum' on the source body (issue #85 datum hook),
+    re-resolved against the current geometry. A location dimension is expected to be
+    measured FROM one of these functional references."""
+    roles = _read_face_roles(obj)
+    if not roles:
+        return []
+    current = {f"f_{_hash_sig(_face_signature(f))}": f for f in shape.Faces}
+    out = []
+    for _name, e in roles.items():
+        if e.get("role") == "datum":
+            f = current.get(e.get("tag"))
+            if f is not None:
+                out.append(f)
+    return out
+
+
+def _point_on_any_face(faces, pt, tol=0.1):
+    v = Part.Vertex(App.Vector(float(pt[0]), float(pt[1]), float(pt[2])))
+    for f in faces:
+        try:
+            if f.distToShape(v)[0] <= tol:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _dim_descriptors(page, datum_faces=None):
     """Read each placed DrawViewDimension into a drawing_gate dim descriptor:
     its kind (Ø/R via DP_Prefix, else linear Type), its true value (DP_TrueValue,
     so it reads the real geometry), and the model-space geometry it references
-    (DP_ModelRef → circle/span). Dims without a model ref still size-match by value."""
+    (DP_ModelRef → circle/span). Dims without a model ref still size-match by value.
+    When datum faces are declared, a span dim's `from_datum` reflects whether an
+    endpoint actually sits on a datum face (else it is left True, unenforced)."""
     out = []
+    datum_faces = datum_faces or []
     centres = {v.Name for (v, _cx, _cy) in _page_part_views(page)}
     for dim in _page_dimensions(page):
         pv = _dim_parent_view(dim)
@@ -6921,6 +6954,9 @@ def _dim_descriptors(page):
                 d["span"] = ref.get("span")
             except Exception:
                 pass
+        if datum_faces and d["span"]:
+            d["from_datum"] = (_point_on_any_face(datum_faces, d["span"]["p1"])
+                               or _point_on_any_face(datum_faces, d["span"]["p2"]))
         out.append(d)
     return out
 
@@ -6941,15 +6977,20 @@ def _h_drawing_gate(p):
     views = _page_part_views(page)
     if not views:
         raise ValueError("page has no part-views to gate")
-    shape = views[0][0].Source[0].Shape
+    src = views[0][0].Source[0]
+    shape = src.Shape
     process = p.get("process", "auto")
     if process == "auto":
         process = _infer_process(shape)
     feats = _enumerate_features(shape, process)
-    dims = _dim_descriptors(page)
+    datum_faces = _datum_faces(src, shape)
+    dims = _dim_descriptors(page, datum_faces)
+    # enforce datum-origin discipline when datum faces are declared (or forced on)
+    datums_declared = bool(datum_faces) or bool(p.get("datums_declared", False))
     rep = drawing_gate.completeness_report(
-        feats, dims, process, datums_declared=bool(p.get("datums_declared", False)))
+        feats, dims, process, datums_declared=datums_declared)
     rep["enumerated_features"] = [{"id": f["id"], "kind": f["kind"]} for f in feats]
+    rep["datum_faces"] = len(datum_faces)
     return rep
 
 

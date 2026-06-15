@@ -45,13 +45,13 @@ def _plate(w, name):
     page = w.call("make_drawing_page", name="Page")["handle"]
     w.call("add_projection_group", page=page, body=part["handle"],
            views=["Front", "Top"])
-    return page, hole
+    return page, hole, part["handle"]
 
 
 def test_complete_plate_passes():
     print("test_complete_plate_passes")
     with Worker() as w:
-        page, hole = _plate(w, "gate_ok")
+        page, hole, _part = _plate(w, "gate_ok")
         # a minimal complete set: W on Front-h, T on Front-v, D on Top-v,
         # Ø + hole X + hole Y — no axis dimensioned twice.
         w.call("add_dimension", page=page, view="Front", kind="horizontal",
@@ -77,7 +77,7 @@ def test_complete_plate_passes():
 def test_missing_hole_location_under():
     print("test_missing_hole_location_under")
     with Worker() as w:
-        page, hole = _plate(w, "gate_under")
+        page, hole, _part = _plate(w, "gate_under")
         w.call("add_dimension", page=page, view="Front", kind="horizontal",
                from_point=[0, 0, 0], to_point=[60, 0, 0])
         w.call("add_dimension", page=page, view="Front", kind="vertical",
@@ -100,7 +100,7 @@ def test_missing_hole_location_under():
 def test_auto_overdimensions_width():
     print("test_auto_overdimensions_width")
     with Worker() as w:
-        page, hole = _plate(w, "gate_auto")
+        page, hole, _part = _plate(w, "gate_auto")
         # auto extents on BOTH views call out the overall width twice -> redundant
         w.call("add_dimension", page=page, auto=True)
         rep = w.call("drawing_gate", page=page, process="prismatic")
@@ -132,7 +132,7 @@ def test_turned_shaft_enumeration():
 def test_legibility_runs():
     print("test_legibility_runs")
     with Worker() as w:
-        page, hole = _plate(w, "gate_leg")
+        page, hole, _part = _plate(w, "gate_leg")
         w.call("add_dimension", page=page, auto=True)
         w.call("add_dimension", page=page, view="Top", kind="diameter", edge=hole)
         rep = w.call("drawing_legibility", page=page)
@@ -232,12 +232,63 @@ def test_counterbored_bracket_acceptance():
                material="AL 6061-T6", rev="A")
 
 
+def _dimension_plate(w, page, hole, hole_x_from):
+    """A complete prismatic dimension set for the demo plate, with the hole's X
+    location measured from `hole_x_from` (so a test can vary the origin)."""
+    w.call("add_dimension", page=page, view="Front", kind="horizontal",
+           from_point=[0, 0, 0], to_point=[60, 0, 0])
+    w.call("add_dimension", page=page, view="Front", kind="vertical",
+           from_point=[0, 0, 0], to_point=[0, 0, 8])
+    w.call("add_dimension", page=page, view="Top", kind="vertical",
+           from_point=[0, 0, 0], to_point=[0, 40, 0])
+    w.call("add_dimension", page=page, view="Top", kind="diameter", edge=hole)
+    w.call("add_dimension", page=page, view="Top", kind="horizontal",
+           from_point=hole_x_from, to_point=[30, 20, 0])
+    w.call("add_dimension", page=page, view="Top", kind="vertical",
+           from_point=[30, 0, 0], to_point=[30, 20, 0])
+
+
+def test_datum_origin_discipline():
+    """With a datum face declared (annotate_face role='datum'), a hole located FROM
+    the datum is clean, but locating it from the opposite edge raises 'no_datum' —
+    the issue's 'dimension from functional references, not arbitrary corners'."""
+    print("test_datum_origin_discipline")
+    def _annotate_datums(w, part):
+        # a 2-D location needs a reference frame: the x=0 face (normal -X) and the
+        # y=0 face (normal -Y), each planar at centroid ≈ 0 on its axis.
+        faces = w.call("list_faces", handle=part)
+        for ax in (0, 1):
+            tag = next(f["tag"] for f in faces
+                       if f.get("normal") and abs(f["normal"][ax] + 1) < 1e-3
+                       and abs(f["centroid"][ax]) < 1e-3)
+            w.call("annotate_face", handle=part, face=tag, role="datum")
+
+    with Worker() as w:
+        page, hole, part = _plate(w, "gate_datum_ok")
+        _annotate_datums(w, part)
+        _dimension_plate(w, page, hole, hole_x_from=[0, 20, 0])   # from the datum
+        rep = w.call("drawing_gate", page=page, process="prismatic")
+        codes = [v["code"] for v in rep["violations"]]
+        _check("datum faces detected", rep["datum_faces"] == 2, rep["datum_faces"])
+        _check("located-from-datum is clean", rep["ok"], rep["violations"])
+        _check("no no_datum flag", "no_datum" not in codes, codes)
+
+    with Worker() as w:
+        page, hole, part = _plate(w, "gate_datum_bad")
+        _annotate_datums(w, part)
+        _dimension_plate(w, page, hole, hole_x_from=[60, 20, 0])  # from the far edge
+        rep = w.call("drawing_gate", page=page, process="prismatic")
+        codes = [v["code"] for v in rep["violations"]]
+        _check("located from a non-datum edge flags no_datum",
+               "no_datum" in codes, codes)
+
+
 def test_title_block_renders_fields():
     print("test_title_block_renders_fields")
     import os
     import tempfile
     with Worker() as w, tempfile.TemporaryDirectory() as tmp:
-        page, hole = _plate(w, "gate_tb")
+        page, hole, _part = _plate(w, "gate_tb")
         w.call("add_dimension", page=page, auto=True)
         w.call("set_title_block", page=page, part="MOUNT PLATE",
                material="AL 6061-T6", rev="B", drawn_by="GC", date="2026-06-15")
@@ -251,7 +302,7 @@ def test_title_block_renders_fields():
         _check("auto sheet size present", "A4" in svg)
         _check("title-block group emitted", "driftpin-titleblock" in svg)
         # no title block when never set
-        page2, _ = _plate(w, "gate_no_tb")
+        page2, _h2, _p2 = _plate(w, "gate_no_tb")
         w.call("add_dimension", page=page2, auto=True)
         out2 = os.path.join(tmp, "notb.svg")
         w.call("export_drawing", page=page2, path=out2)
