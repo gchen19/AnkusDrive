@@ -79,15 +79,29 @@ placed graphics.
   enumerated; `gdt_check` / `tolerance_stackup` / `fit_class` are the hooks for the
   GD&T layer.
 
-## Legibility — the rest of Part A (not yet built)
+## Legibility — Part A progress
 
-The gate (A1) is the prerequisite; it makes "legible" a regression assertion. Still
-open, in cost order:
+The gate (A1) is the prerequisite; it makes "legible" a regression assertion.
 
-* **A2 — real placement.** Replace the fixed `_DIM_OFFSET_MM + idx*_DIM_STACK_MM`
-  stack with collision-driven lane packing (true text boxes, bump-on-overlap using
-  the A1 overlap test as the reject predicate); emit `makeLeader` when a label can't
-  fit at its feature.
+* **A1 — legibility gate.** DONE (above).
+* **A2 — collision-driven lane packing.** DONE 2026-06-15. The fixed
+  `_DIM_OFFSET_MM + idx*_DIM_STACK_MM` stack (one lane per dim, blind) is replaced
+  by `drawing_gate.pack_lanes`: dims are ordered smallest-span-first and each takes
+  the lowest lane whose occupants its footprint (lines + label box) does not
+  overlap. Disjoint dims SHARE a lane (compact — fewer lanes pushed off-sheet or
+  across views); an overall extent that spans nested feature dims overlaps them all
+  and is pushed outward, so the smallest-inside / overall-outside nesting falls out
+  for free. Placement now flows through one `_iter_placed_dims` consumed by both the
+  renderer and the legibility gate, so the gate scores exactly what is drawn. A
+  four-hole chain-dimensioned bar stays legible on one lane where the blind stack
+  would sprawl four lanes out (`test_packing_keeps_dense_part_legible`). Pure tests:
+  `test_pack_lanes_*`.
+
+Still open, in cost order:
+
+* **A2+ — leaders.** When even its own lane can't fit a label at its feature, emit
+  `makeLeader` into open space. (Packing handles the common dense case; leaders are
+  the overflow valve for pathological clusters.)
 * **A3 — auto sheet/scale + title block.** Pick A4/A3 and a scale so the part + its
   dim envelope fit the border; fill title-block fields from
   `mass_properties`/`material_get`/`bom_extract`.

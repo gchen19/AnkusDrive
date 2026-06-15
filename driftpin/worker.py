@@ -6187,6 +6187,57 @@ def _annotation_to_svg(ann, page_h):
     return _svg_text(x, y, body, anchor="start")
 
 
+def _dim_axis_interval(dim, cx, cy, h_side, v_side, bbox):
+    """A dimension's extent along its own dimension-line axis (x for a horizontal
+    dim, y for a vertical one), covering both the lines and the label box — the
+    footprint lane packing must keep clear. Offset-invariant on that axis, so it is
+    computed once at the base offset. Returns (lo, hi) or None for a degenerate dim."""
+    lay = _dim_layout(dim, cx, cy, _DIM_OFFSET_MM, h_side, v_side, bbox)
+    if not lay:
+        return None
+    tx, ty, anchor, text = lay["text"]
+    box = _text_box(tx, ty, anchor, text)
+    if lay["orient"] == "h":
+        vals = [c for ln in lay["lines"] for c in (ln[0], ln[2])] + [box[0], box[2]]
+    else:
+        vals = [c for ln in lay["lines"] for c in (ln[1], ln[3])] + [box[1], box[3]]
+    return (min(vals), max(vals))
+
+
+def _iter_placed_dims(page):
+    """Yield every page dimension with its final placement — the single source of
+    truth shared by the renderer (_compose_page_svg) and the legibility gate
+    (_page_dim_graphics), so the gate checks exactly what is drawn. Dims are grouped
+    by (view, orientation), ordered smallest-span-first, then lane-packed
+    (drawing_gate.pack_lanes) so non-overlapping dims share an offset instead of
+    each blindly claiming its own. Yields dicts {dim, cx, cy, offset, h_side,
+    v_side, bbox}."""
+    from collections import defaultdict
+    from driftpin import drawing_gate
+    views = _page_part_views(page)
+    centres = {v.Name: (cx, cy) for (v, cx, cy) in views}
+    view_by_name = {v.Name: v for (v, cx, cy) in views}
+    groups = defaultdict(list)
+    for dim in _page_dimensions(page):
+        pv = _dim_parent_view(dim)
+        if pv is None or pv.Name not in centres:
+            continue
+        groups[(pv.Name, _dim_is_vertical(dim))].append(dim)
+    for (vname, _vert), dims in groups.items():
+        cx, cy = centres[vname]
+        view = view_by_name[vname]
+        h_side, v_side = _view_dim_sides(view)
+        bbox = _view_local_bbox(view)
+        ordered = sorted(dims, key=_dim_span)
+        intervals = [(_dim_axis_interval(d, cx, cy, h_side, v_side, bbox) or (0.0, 0.0))
+                     for d in ordered]
+        lanes = drawing_gate.pack_lanes(intervals)
+        for dim, lane in zip(ordered, lanes):
+            yield {"dim": dim, "cx": cx, "cy": cy,
+                   "offset": _DIM_OFFSET_MM + lane * _DIM_STACK_MM,
+                   "h_side": h_side, "v_side": v_side, "bbox": bbox}
+
+
 def _compose_page_svg(page):
     """Build a complete page SVG headless: the template (frame + title block)
     with each view's geometry fragment placed at its page position, plus
@@ -6199,8 +6250,6 @@ def _compose_page_svg(page):
         base = f.read()
     _, page_h = _page_size_mm(page)
     views = _page_part_views(page)
-    centres = {v.Name: (cx, cy) for (v, cx, cy) in views}
-    view_by_name = {v.Name: v for (v, cx, cy) in views}
     parts = []
     for (v, cx, cy) in views:
         frag = TechDraw.viewPartAsSvg(v)
@@ -6208,26 +6257,13 @@ def _compose_page_svg(page):
             f'<g transform="translate({cx:.4f},{cy:.4f}) scale(1,{_VIEW_Y_SIGN:g})">\n'
             f'{frag}\n</g>'
         )
-    # Group dims by (view, orientation) and stack them outward — smallest span
-    # innermost — so feature dims sit between the part and the overall extents,
-    # the way a manufacturer reads a drawing.
-    from collections import defaultdict
-    groups = defaultdict(list)
-    for dim in _page_dimensions(page):
-        pv = _dim_parent_view(dim)
-        if pv is None or pv.Name not in centres:
-            continue
-        groups[(pv.Name, _dim_is_vertical(dim))].append(dim)
-    for (vname, _vert), dims in groups.items():
-        cx, cy = centres[vname]
-        view = view_by_name[vname]
-        h_side, v_side = _view_dim_sides(view)
-        bbox = _view_local_bbox(view)
-        for idx, dim in enumerate(sorted(dims, key=_dim_span)):
-            svg = _dim_to_svg(dim, cx, cy, _DIM_OFFSET_MM + idx * _DIM_STACK_MM,
-                              h_side, v_side, bbox)
-            if svg:
-                parts.append(svg)
+    # Dimensions: grouped, smallest-span-innermost, then lane-packed so disjoint
+    # dims share an offset instead of each claiming a lane (see _iter_placed_dims).
+    for pl in _iter_placed_dims(page):
+        svg = _dim_to_svg(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
+                          pl["h_side"], pl["v_side"], pl["bbox"])
+        if svg:
+            parts.append(svg)
     for ann in _page_annotations(page):
         svg = _annotation_to_svg(ann, page_h)
         if svg:
@@ -6750,12 +6786,10 @@ def _text_box(tx, ty, anchor, text):
 
 def _page_dim_graphics(page):
     """Extract the placed dimension graphics (label boxes, line segments) and the
-    view-outline boxes in page mm, replaying the SAME stacking the composer uses
-    (via _dim_layout) so the legibility gate checks the actual rendered layout."""
-    from collections import defaultdict
+    view-outline boxes in page mm. Consumes the SAME placement iterator the composer
+    renders from (_iter_placed_dims), so the legibility gate checks exactly what is
+    drawn — including the lane packing."""
     views = _page_part_views(page)
-    centres = {v.Name: (cx, cy) for (v, cx, cy) in views}
-    view_by_name = {v.Name: v for (v, cx, cy) in views}
     view_boxes = []
     for (v, cx, cy) in views:
         bbox = _view_local_bbox(v)
@@ -6766,30 +6800,19 @@ def _page_dim_graphics(page):
         ys = sorted((cy + _VIEW_Y_SIGN * bymax, cy + _VIEW_Y_SIGN * bymin))
         view_boxes.append({"id": v.Name, "box": [xs[0], ys[0], xs[1], ys[1]]})
 
-    groups = defaultdict(list)
-    for dim in _page_dimensions(page):
-        pv = _dim_parent_view(dim)
-        if pv is None or pv.Name not in centres:
-            continue
-        groups[(pv.Name, _dim_is_vertical(dim))].append(dim)
-
     labels, segments = [], []
-    for (vname, _vert), dims in groups.items():
-        cx, cy = centres[vname]
-        view = view_by_name[vname]
-        h_side, v_side = _view_dim_sides(view)
-        bbox = _view_local_bbox(view)
-        for idx, dim in enumerate(sorted(dims, key=_dim_span)):
-            lay = _dim_layout(dim, cx, cy, _DIM_OFFSET_MM + idx * _DIM_STACK_MM,
-                              h_side, v_side, bbox)
-            if not lay:
-                continue
-            for ln in lay["lines"]:
-                segments.append({"id": dim.Name, "p1": [ln[0], ln[1]],
-                                 "p2": [ln[2], ln[3]], "refs": [vname]})
-            tx, ty, anchor, text = lay["text"]
-            labels.append({"id": dim.Name, "text": text,
-                           "box": _text_box(tx, ty, anchor, text)})
+    for pl in _iter_placed_dims(page):
+        lay = _dim_layout(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
+                          pl["h_side"], pl["v_side"], pl["bbox"])
+        if not lay:
+            continue
+        vname = _dim_parent_view(pl["dim"]).Name
+        for ln in lay["lines"]:
+            segments.append({"id": pl["dim"].Name, "p1": [ln[0], ln[1]],
+                             "p2": [ln[2], ln[3]], "refs": [vname]})
+        tx, ty, anchor, text = lay["text"]
+        labels.append({"id": pl["dim"].Name, "text": text,
+                       "box": _text_box(tx, ty, anchor, text)})
     return labels, segments, view_boxes
 
 

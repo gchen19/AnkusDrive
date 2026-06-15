@@ -322,6 +322,38 @@ def completeness_report(features, dims, process, *, datums_declared=False):
 
 
 # --------------------------------------------------------------------------- #
+# Part A2 — placement: collision-driven lane packing
+# --------------------------------------------------------------------------- #
+def pack_lanes(intervals, *, gap=1.0):
+    """Assign each outward-stacked dimension a lane (0 = innermost) by greedy
+    interval packing, replacing a blind one-lane-per-dimension stack.
+
+    ``intervals`` is a list of (lo, hi) extents along the dimension-line axis, in
+    DRAW ORDER — smallest span first, so feature dims are considered before the
+    overall extents that nest them. Each interval takes the lowest lane whose
+    current occupants it does not overlap (within ``gap`` mm). Two dimensions whose
+    labels/lines don't overlap along the axis therefore SHARE a lane (compact, fewer
+    lanes pushed off the sheet or across other views), while an overall extent that
+    spans several nested feature dims overlaps them all and is pushed outward — so
+    the familiar smallest-inside / overall-outside nesting falls out for free.
+    Returns one lane index per interval."""
+    lanes = []   # lane -> list of occupied (lo, hi)
+    out = []
+    for (lo, hi) in intervals:
+        placed = None
+        for li, occ in enumerate(lanes):
+            if all(hi + gap <= o_lo or o_hi + gap <= lo for (o_lo, o_hi) in occ):
+                occ.append((lo, hi))
+                placed = li
+                break
+        if placed is None:
+            lanes.append([(lo, hi)])
+            placed = len(lanes) - 1
+        out.append(placed)
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Part A1 — legibility (2-D geometry on the placed graphics)
 # --------------------------------------------------------------------------- #
 #

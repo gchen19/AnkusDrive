@@ -143,6 +143,38 @@ def test_legibility_runs():
               f"segments={rep['segments']} violations={len(rep['violations'])}")
 
 
+def test_packing_keeps_dense_part_legible():
+    print("test_packing_keeps_dense_part_legible")
+    # a bar with four holes in a row, chain-dimensioned (each from the previous).
+    # The chain segments are DISJOINT along X, so lane packing shares one offset and
+    # keeps the sheet legible — where a blind one-lane-per-dim stack would sprawl
+    # four lanes outward.
+    with Worker() as w:
+        w.call("new_document", name="gate_dense")
+        bar = w.call("add_primitive", kind="box", w=120, d=24, h=10)
+        part = bar["handle"]
+        xs = [15, 45, 75, 105]
+        for x in xs:
+            drill = w.call("add_primitive", kind="cylinder", r=4, h=10,
+                           placement=[x, 12, 0])
+            part = w.call("boolean_op", op="cut", base=part,
+                          tool=drill["handle"])["handle"]
+        page = w.call("make_drawing_page", name="Page")["handle"]
+        w.call("add_projection_group", page=page, body=part, views=["Front", "Top"])
+        w.call("add_dimension", page=page, view="Front", kind="horizontal",
+               from_point=[0, 0, 0], to_point=[120, 0, 0])
+        prev = 0
+        for x in xs:                                              # chain along X
+            w.call("add_dimension", page=page, view="Top", kind="horizontal",
+                   from_point=[prev, 12, 0], to_point=[x, 12, 0])
+            prev = x
+        rep = w.call("drawing_legibility", page=page)
+        _check("dense part stays legible after packing", rep["ok"],
+               rep["violations"][:2])
+        print(f"    labels={rep['labels']} segments={rep['segments']} "
+              f"violations={len(rep['violations'])}")
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

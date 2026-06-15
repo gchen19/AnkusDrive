@@ -211,6 +211,41 @@ def test_turned_scheme_has_no_xy_location():
 _BORDER = [0.0, 0.0, 297.0, 210.0]   # A4 landscape
 
 
+# --------------------------------------------------------------------------- #
+# Lane packing (A2 placement)
+# --------------------------------------------------------------------------- #
+def test_pack_lanes_shares_when_disjoint():
+    print("test_pack_lanes_shares_when_disjoint")
+    # two dims that don't overlap along the axis -> same lane (compact)
+    _check("disjoint intervals share lane 0",
+           dg.pack_lanes([(0, 10), (20, 30)], gap=1.0), [0, 0])
+
+
+def test_pack_lanes_bumps_when_overlapping():
+    print("test_pack_lanes_bumps_when_overlapping")
+    _check("overlapping intervals take separate lanes",
+           dg.pack_lanes([(0, 15), (10, 25)], gap=1.0), [0, 1])
+
+
+def test_pack_lanes_nesting():
+    print("test_pack_lanes_nesting")
+    # draw order is smallest-span-first: two feature dims then the overall extent
+    # that spans both -> features share lane 0, overall pushed to lane 1.
+    lanes = dg.pack_lanes([(10, 20), (30, 40), (0, 50)], gap=1.0)
+    _check("features share inner lane", lanes[:2], [0, 0])
+    _check("overall pushed outward", lanes[2], 1)
+
+
+def test_pack_lanes_beats_blind_stack():
+    print("test_pack_lanes_beats_blind_stack")
+    # four disjoint feature dims that a blind stack would put on lanes 0..3;
+    # packing keeps them all on lane 0 -> far less outward sprawl.
+    ivs = [(0, 8), (12, 20), (24, 32), (36, 44)]
+    lanes = dg.pack_lanes(ivs, gap=1.0)
+    _check("blind stack would use 4 lanes", max(range(len(ivs))), 3)
+    _check("packing uses 1 lane", max(lanes), 0)
+
+
 def test_legibility_clean():
     print("test_legibility_clean")
     labels = [
