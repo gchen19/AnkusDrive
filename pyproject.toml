@@ -43,6 +43,10 @@ dependencies = [
     "mcp>=1.0",
     "Pillow>=10.0",
     "numpy>=1.24",
+    # headless TechDraw PDF/SVG export (export_drawing). Pure-Python, no native
+    # deps — svglib's optional rlPyCairo (gradients) is unused for line art.
+    "reportlab>=4.0",
+    "svglib>=1.5",
 ]
 
 [project.optional-dependencies]

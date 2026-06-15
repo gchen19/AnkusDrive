@@ -5885,21 +5885,579 @@ def _h_add_projection_group(p):
     }
 
 
+# --- TechDraw headless export (DXF / SVG / PDF) -------------------------------
+# FreeCAD's GUI exporter (TechDrawGui) can't load under freecadcmd, but the
+# console `TechDraw` module exposes everything we need: writeDXFPage for DXF,
+# viewPartAsSvg for per-view geometry, and DrawViewDimension's point/value
+# accessors for dimensions (which viewPartAsSvg does NOT include). We compose
+# the page SVG ourselves — template + placed view fragments + dimension
+# graphics — and rasterise to PDF via svglib+reportlab (pure-Python, no native
+# deps). See docs/KICKOFF_techdraw_export.md.
+
+_DIM_COLOR = "#0048a0"
+_DIM_FONT_MM = 3.2
+_DIM_LINE_MM = 0.18
+_ARROW_MM = 2.6
+_DIM_OFFSET_MM = 9.0   # how far the first dimension line sits off the measured edge
+_DIM_STACK_MM = 7.0    # extra offset per additional parallel dimension
+# viewPartAsSvg emits geometry in the view's local frame with +Y up; the SVG
+# page is +Y down. We flip the fragment with scale(1,-1) and map dimension
+# points the same way. Single sign keeps the two in lockstep.
+_VIEW_Y_SIGN = -1.0
+
+
+def _page_template_path(page):
+    t = getattr(page, "Template", None)
+    if t is not None and getattr(t, "Template", None):
+        return t.Template
+    return None
+
+
+def _page_size_mm(page):
+    t = getattr(page, "Template", None)
+    if t is not None and hasattr(t, "Width"):
+        try:
+            return float(t.Width), float(t.Height)
+        except Exception:
+            pass
+    return 297.0, 210.0  # A4 landscape fallback
+
+
+_PARTVIEW_TIDS = ("TechDraw::DrawViewPart", "TechDraw::DrawViewSection")
+
+
+def _is_partview(obj):
+    return obj.TypeId in _PARTVIEW_TIDS
+
+
+def _page_part_views(page):
+    """Every renderable part-view on the page as (view_obj, cx, cy), where
+    (cx, cy) is the view centre in SVG page coords (mm, origin top-left, +Y
+    down). Handles standalone DrawViewPart and DrawProjGroupItem members."""
+    _, page_h = _page_size_mm(page)
+    out = []
+    for obj in page.Views:
+        if obj.TypeId == "TechDraw::DrawProjGroup":
+            gx, gy = float(obj.X), float(obj.Y)
+            for it in obj.Views:
+                out.append((it, gx + float(it.X), page_h - (gy + float(it.Y))))
+        elif _is_partview(obj):
+            out.append((obj, float(obj.X), page_h - float(obj.Y)))
+    return out
+
+
+def _page_dimensions(page):
+    # makeExtentDim/makeDistanceDim parent the dimension under its view, so it
+    # does not show up in page.Views — scan the whole document instead. The
+    # composer keeps only dims whose parent view lives on this page.
+    # makeDistanceDim -> DrawViewDimension; makeExtentDim -> DrawViewDimExtent;
+    # both share the DrawViewDim* prefix and the getLinearPoints/Type API.
+    doc = page.Document
+    return [o for o in doc.Objects if o.TypeId.startswith("TechDraw::DrawViewDim")]
+
+
+def _page_annotations(page):
+    doc = page.Document
+    out = []
+    for o in doc.Objects:
+        if o.TypeId == "TechDraw::DrawViewAnnotation" and page in o.InList:
+            out.append(o)
+    return out
+
+
+def _dim_parent_view(dim):
+    name = str(getattr(dim, "DP_ParentView", "") or "")
+    if name:
+        v = dim.Document.getObject(name)
+        if v is not None:
+            return v
+    refs = getattr(dim, "References2D", None) or getattr(dim, "References3D", None)
+    if refs:
+        try:
+            return refs[0][0]
+        except Exception:
+            return None
+    return None
+
+
+def _prefer_self_site_packages():
+    """The worker runs under FreeCAD's bundled Python (3.11) but the host
+    venv's site-packages (a different Python minor) sits earlier on sys.path,
+    so `import PIL` can resolve to an ABI-incompatible build. Move this
+    interpreter's own site-packages to the front and pre-import PIL so
+    reportlab (which imports PIL at module load) binds the matching build."""
+    import sys
+    import sysconfig
+    for key in ("platlib", "purelib"):
+        sp = sysconfig.get_paths().get(key)
+        if sp and sp in sys.path:
+            sys.path.remove(sp)
+            sys.path.insert(0, sp)
+    try:
+        import PIL.Image  # noqa: F401  (cache the matching-ABI build)
+    except Exception:
+        pass
+
+
+def _xml_escape(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _svg_line(x1, y1, x2, y2):
+    return (f'<line x1="{x1:.3f}" y1="{y1:.3f}" x2="{x2:.3f}" y2="{y2:.3f}" '
+            f'stroke="{_DIM_COLOR}" stroke-width="{_DIM_LINE_MM}" fill="none"/>')
+
+
+def _svg_arrow(x, y, dx, dy):
+    """Filled arrowhead with its tip at (x, y) pointing along (dx, dy)."""
+    a = _ARROW_MM
+    w = a * 0.33
+    bx, by = x - dx * a, y - dy * a
+    px, py = -dy, dx  # perpendicular
+    return (f'<path d="M {x:.3f} {y:.3f} L {bx + px * w:.3f} {by + py * w:.3f} '
+            f'L {bx - px * w:.3f} {by - py * w:.3f} Z" '
+            f'fill="{_DIM_COLOR}" stroke="none"/>')
+
+
+def _svg_text(x, y, s, anchor="middle"):
+    return (f'<text x="{x:.3f}" y="{y:.3f}" font-size="{_DIM_FONT_MM}" '
+            f'font-family="sans-serif" text-anchor="{anchor}" '
+            f'fill="{_DIM_COLOR}" stroke="none">{_xml_escape(s)}</text>')
+
+
+def _dim_text(dim):
+    """The number to print. Prefer the worker-stamped true 3D measurement
+    (DP_TrueValue) over TechDraw's projected raw value, so a dimension always
+    reads the real geometry (validate-the-artifact)."""
+    val = None
+    if hasattr(dim, "DP_TrueValue"):
+        try:
+            val = float(dim.DP_TrueValue)
+        except Exception:
+            val = None
+    if val is None:
+        try:
+            val = float(dim.getRawValue())
+        except Exception:
+            return ""
+    prefix = str(getattr(dim, "DP_Prefix", "") or "")
+    if not prefix:
+        prefix = {"Diameter": "Ø", "Radius": "R"}.get(str(getattr(dim, "Type", "")), "")
+    return f"{prefix}{val:.2f}"
+
+
+def _dim_is_vertical(dim):
+    return str(getattr(dim, "Type", "")) == "DistanceY"
+
+
+def _dim_span(dim):
+    try:
+        return abs(float(dim.getRawValue()))
+    except Exception:
+        return 0.0
+
+
+def _view_dim_sides(view):
+    """Which way each view's dimensions point, so they land in open space
+    around a third-angle layout (Top above, Front centre, Right to the side)
+    instead of colliding in the gaps between views. Returns (h_side, v_side)."""
+    t = str(getattr(view, "Type", "") or "")
+    return {
+        "Top": ("above", "left"),
+        "Bottom": ("below", "left"),
+        "Right": ("above", "right"),
+        "Left": ("above", "left"),
+        "Rear": ("below", "right"),
+    }.get(t, ("below", "left"))  # Front and standalone views
+
+
+def _view_local_bbox(view):
+    """The view's outline bounding box in centred local mm (the frame the
+    fragment and getLinearPoints live in), by projecting the source solid's
+    corners. Dimension lines are offset from this, not from the measured
+    points, so they sit outside the part outline even for interior features."""
+    try:
+        bb = view.Source[0].Shape.BoundBox
+    except Exception:
+        return None
+    xs, ys = [], []
+    for x in (bb.XMin, bb.XMax):
+        for y in (bb.YMin, bb.YMax):
+            for z in (bb.ZMin, bb.ZMax):
+                q = _project_centred(view, App.Vector(x, y, z))
+                xs.append(q.x)
+                ys.append(q.y)
+    return (min(xs), max(xs), min(ys), max(ys))
+
+
+def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
+    """Render a dimension as extension lines + dimension line + arrows + text,
+    in SVG page coords. (cx, cy) is the parent view's page centre; `offset` is
+    how far the dimension line sits beyond the view outline (stacked by the
+    caller); h_side/v_side place it on the view's outward side; bbox is the
+    view's local outline box so dim lines clear the part even for interior
+    features."""
+    try:
+        pts = list(dim.getLinearPoints())
+    except Exception:
+        pts = []
+    if len(pts) < 2:
+        return ""
+    p1, p2 = pts[0], pts[1]
+
+    def L(p):  # local view mm (+Y up, centred) -> SVG page mm
+        return (cx + p.x, cy + _VIEW_Y_SIGN * p.y)
+
+    x1, y1 = L(p1)
+    x2, y2 = L(p2)
+    # outline edges in SVG page coords (fall back to the measured points)
+    if bbox is not None:
+        bxmin, bxmax, bymin, bymax = bbox
+        out_left = cx + bxmin
+        out_right = cx + bxmax
+        out_top = cy + _VIEW_Y_SIGN * bymax     # smaller SVG y
+        out_bottom = cy + _VIEW_Y_SIGN * bymin  # larger SVG y
+    else:
+        out_left, out_right = min(x1, x2), max(x1, x2)
+        out_top, out_bottom = min(y1, y2), max(y1, y2)
+    text = _dim_text(dim)
+    dtype = str(getattr(dim, "Type", "Distance"))
+    seg = []
+    if dtype == "DistanceY" or (dtype == "Distance" and abs(x2 - x1) < abs(y2 - y1)):
+        # vertical measurement: dimension line left or right of the outline
+        if v_side == "right":
+            dl = out_right + offset
+            stub, tx, anchor = dl + 1.0, dl + 1.5, "start"
+        else:
+            dl = out_left - offset
+            stub, tx, anchor = dl - 1.0, dl - 1.5, "end"
+        seg.append(_svg_line(x1, y1, stub, y1))
+        seg.append(_svg_line(x2, y2, stub, y2))
+        seg.append(_svg_line(dl, y1, dl, y2))
+        seg.append(_svg_arrow(dl, y1, 0, 1 if y1 < y2 else -1))
+        seg.append(_svg_arrow(dl, y2, 0, 1 if y2 < y1 else -1))
+        seg.append(_svg_text(tx, (y1 + y2) / 2 + _DIM_FONT_MM * 0.35, text, anchor=anchor))
+    else:
+        # horizontal measurement: dimension line above or below the outline
+        if h_side == "below":
+            dl = out_bottom + offset
+            stub, ty = dl + 1.0, dl + _DIM_FONT_MM
+        else:
+            dl = out_top - offset
+            stub, ty = dl - 1.0, dl - 1.4
+        seg.append(_svg_line(x1, y1, x1, stub))
+        seg.append(_svg_line(x2, y2, x2, stub))
+        seg.append(_svg_line(x1, dl, x2, dl))
+        seg.append(_svg_arrow(x1, dl, 1 if x1 < x2 else -1, 0))
+        seg.append(_svg_arrow(x2, dl, 1 if x2 < x1 else -1, 0))
+        seg.append(_svg_text((x1 + x2) / 2, ty, text, anchor="middle"))
+    return "<g>\n" + "\n".join(seg) + "\n</g>"
+
+
+def _annotation_to_svg(ann, page_h):
+    text = getattr(ann, "Text", None)
+    if not text:
+        return ""
+    body = text[0] if isinstance(text, (list, tuple)) and text else str(text)
+    x = float(getattr(ann, "X", 0.0))
+    y = page_h - float(getattr(ann, "Y", 0.0))
+    return _svg_text(x, y, body, anchor="start")
+
+
+def _compose_page_svg(page):
+    """Build a complete page SVG headless: the template (frame + title block)
+    with each view's geometry fragment placed at its page position, plus
+    dimension and annotation graphics layered on top."""
+    import TechDraw
+    tpl = _page_template_path(page)
+    if not tpl:
+        raise RuntimeError("page has no SVG template to compose onto")
+    with open(tpl, encoding="utf-8", errors="replace") as f:
+        base = f.read()
+    _, page_h = _page_size_mm(page)
+    views = _page_part_views(page)
+    centres = {v.Name: (cx, cy) for (v, cx, cy) in views}
+    view_by_name = {v.Name: v for (v, cx, cy) in views}
+    parts = []
+    for (v, cx, cy) in views:
+        frag = TechDraw.viewPartAsSvg(v)
+        parts.append(
+            f'<g transform="translate({cx:.4f},{cy:.4f}) scale(1,{_VIEW_Y_SIGN:g})">\n'
+            f'{frag}\n</g>'
+        )
+    # Group dims by (view, orientation) and stack them outward — smallest span
+    # innermost — so feature dims sit between the part and the overall extents,
+    # the way a manufacturer reads a drawing.
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for dim in _page_dimensions(page):
+        pv = _dim_parent_view(dim)
+        if pv is None or pv.Name not in centres:
+            continue
+        groups[(pv.Name, _dim_is_vertical(dim))].append(dim)
+    for (vname, _vert), dims in groups.items():
+        cx, cy = centres[vname]
+        view = view_by_name[vname]
+        h_side, v_side = _view_dim_sides(view)
+        bbox = _view_local_bbox(view)
+        for idx, dim in enumerate(sorted(dims, key=_dim_span)):
+            svg = _dim_to_svg(dim, cx, cy, _DIM_OFFSET_MM + idx * _DIM_STACK_MM,
+                              h_side, v_side, bbox)
+            if svg:
+                parts.append(svg)
+    for ann in _page_annotations(page):
+        svg = _annotation_to_svg(ann, page_h)
+        if svg:
+            parts.append(svg)
+    overlay = '<g id="driftpin-overlay">\n' + "\n".join(parts) + "\n</g>\n"
+    idx = base.rfind("</svg>")
+    if idx == -1:
+        raise RuntimeError("template SVG has no </svg> to inject before")
+    return base[:idx] + overlay + base[idx:]
+
+
 @handler("export_drawing")
 def _h_export_drawing(p):
-    """Export a TechDraw page to PDF/SVG.
+    """Export a TechDraw page to PDF, SVG, or DXF (format from path extension),
+    headless. DXF goes through FreeCAD's own writeDXFPage; SVG/PDF are composed
+    from the template + per-view geometry + dimension graphics."""
+    page = _resolve(p["page"])
+    path = p["path"]
+    ext = os.path.splitext(path)[1].lower()
+    doc = _active_doc()
+    doc.recompute()
 
-    NOTE: FreeCAD 1.1's TechDraw export functions live in `TechDrawGui`, which
-    is not available under `freecadcmd`. So PDF/SVG export from a headless
-    DriftPin worker is currently impossible. Workaround: save the .FCStd
-    (Slice 0 `save_document`) and open it in FreeCAD's GUI to export. The
-    drawing page itself — projection groups, views, dimensions — is fully
-    constructed by the worker and persists in the saved document.
+    if ext == ".dxf":
+        import TechDraw
+        TechDraw.writeDXFPage(page, path)
+    elif ext == ".svg":
+        svg = _compose_page_svg(page)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(svg)
+    elif ext == ".pdf":
+        svg = _compose_page_svg(page)
+        import tempfile
+        _prefer_self_site_packages()
+        from svglib.svglib import svg2rlg
+        from reportlab.graphics import renderPDF
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", suffix=".svg", delete=False, encoding="utf-8") as tf:
+                tf.write(svg)
+                tmp = tf.name
+            drawing = svg2rlg(tmp)
+            if drawing is None:
+                raise RuntimeError("svg2rlg could not parse the composed page SVG")
+            renderPDF.drawToFile(drawing, path)
+        finally:
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+    else:
+        raise ValueError(
+            f"unsupported drawing export extension: {ext!r} (use .pdf/.svg/.dxf)")
+
+    return {
+        "path": path,
+        "size": os.path.getsize(path),
+        "format": ext.lstrip("."),
+        "views": len(_page_part_views(page)),
+        "dimensions": len(_page_dimensions(page)),
+    }
+
+
+# --- dimensions & annotations -------------------------------------------------
+
+def _find_view_on_page(page, ref):
+    """Resolve a view reference to a DrawViewPart on the page. `ref` may be a
+    handle, an object Name, or a projection code ('Front', 'Top', ...)."""
+    if ref in _handles:
+        obj = _handles[ref]
+        if _is_partview(obj):
+            return obj
+        if obj.TypeId == "TechDraw::DrawProjGroup" and obj.Views:
+            return obj.Views[0]
+    for (v, _cx, _cy) in _page_part_views(page):
+        if v.Name == ref or str(getattr(v, "Type", "")) == ref:
+            return v
+    raise KeyError(f"no view {ref!r} found on page {page.Name!r}")
+
+
+def _stamp_true_value(dim, value):
+    if not hasattr(dim, "DP_TrueValue"):
+        try:
+            dim.addProperty("App::PropertyFloat", "DP_TrueValue",
+                            "DriftPin", "true 3D measurement, mm")
+        except Exception:
+            return
+    try:
+        dim.DP_TrueValue = float(value)
+    except Exception:
+        pass
+
+
+def _stamp_prefix(dim, prefix):
+    if not hasattr(dim, "DP_Prefix"):
+        try:
+            dim.addProperty("App::PropertyString", "DP_Prefix",
+                            "DriftPin", "symbol prefixed to the dimension text")
+        except Exception:
+            return
+    try:
+        dim.DP_Prefix = prefix
+    except Exception:
+        pass
+
+
+def _stamp_parent_view(dim, view):
+    if not hasattr(dim, "DP_ParentView"):
+        try:
+            dim.addProperty("App::PropertyString", "DP_ParentView",
+                            "DriftPin", "name of the view this dimension annotates")
+        except Exception:
+            return
+    try:
+        dim.DP_ParentView = view.Name
+    except Exception:
+        pass
+
+
+def _project_centred(view, vec):
+    """Project a 3D model point into the view's centred local 2D frame — the
+    same frame viewPartAsSvg and getLinearPoints use."""
+    src = view.Source[0]
+    centre = src.Shape.BoundBox.Center
+    p = view.projectPoint(App.Vector(vec.x, vec.y, vec.z))
+    c = view.projectPoint(centre)
+    return App.Vector(p.x - c.x, p.y - c.y, 0.0)
+
+
+@handler("add_dimension")
+def _h_add_dimension(p):
+    """Add dimension(s) to a drawing page.
+
+    Modes (pick one):
+      * auto=True            -> overall horizontal + vertical extent dimensions
+                                for every part-view (or those named in `views`).
+      * view + edge=<tag>    -> dimension the true length of a model edge,
+                                projected into that view; text shows the real
+                                measured length (DP_TrueValue).
+      * view + kind=diameter|radius + edge=<circular tag>
+                             -> ⌀/R dimension of a hole or arc.
+      * view + from_point/to_point -> dimension between two 3D model points.
+    kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'.
+    Returns {dimensions:[{handle,name,type,value}...]}.
     """
-    raise NotImplementedError(
-        "TechDraw PDF/SVG export requires TechDrawGui, unavailable headless. "
-        "Save the .FCStd via save_document and export from FreeCAD GUI."
-    )
+    import TechDraw
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    created = []
+
+    def _record(dim, view, true_value=None):
+        if dim is None:
+            return
+        _stamp_parent_view(dim, view)
+        if true_value is not None:
+            _stamp_true_value(dim, true_value)
+        h = _register("dim", dim)
+        try:
+            shown = float(dim.DP_TrueValue) if hasattr(dim, "DP_TrueValue") \
+                else float(dim.getRawValue())
+        except Exception:
+            shown = None
+        created.append({"handle": h, "name": dim.Name,
+                        "type": str(dim.Type), "value": shown})
+
+    if p.get("auto"):
+        want = p.get("views")
+        for (v, _cx, _cy) in _page_part_views(page):
+            if want and v.Name not in want and str(getattr(v, "Type", "")) not in want:
+                continue
+            _record(TechDraw.makeExtentDim(v, [], 0), v)  # horizontal
+            _record(TechDraw.makeExtentDim(v, [], 1), v)  # vertical
+        doc.recompute()
+        return {"dimensions": created}
+
+    view = _find_view_on_page(page, p["view"])
+    kind = p.get("kind", "aligned")
+    dim_type = {"horizontal": "DistanceX", "vertical": "DistanceY",
+                "aligned": "Distance"}.get(kind, "Distance")
+
+    if kind in ("diameter", "radius"):
+        if "edge" not in p:
+            raise ValueError(f"{kind} dimension needs a circular edge=<tag>")
+        edge = _edge_by_tag(view.Source[0].Shape, p["edge"])
+        curve = getattr(edge, "Curve", None)
+        r = getattr(curve, "Radius", None)
+        if r is None:
+            raise ValueError(f"edge {p['edge']!r} is not circular")
+        centre = curve.Center
+        xdir = App.Vector(view.XDirection)
+        # lay the dimension across the circle (diameter) or to its rim (radius),
+        # along the view's local X so it reads true-size in the face-on view
+        if kind == "diameter":
+            a = _project_centred(view, centre - xdir.multiply(r))
+            b = _project_centred(view, centre + xdir.multiply(r))
+            value, prefix = 2.0 * r, "Ø"
+        else:
+            a = _project_centred(view, centre)
+            b = _project_centred(view, centre + xdir.multiply(r))
+            value, prefix = r, "R"
+        dim = TechDraw.makeDistanceDim(view, "DistanceX", a, b)
+        if dim is not None:
+            _stamp_prefix(dim, prefix)
+        _record(dim, view, true_value=value)
+    elif "edge" in p:
+        src = view.Source[0]
+        edge = _edge_by_tag(src.Shape, p["edge"])
+        vs = edge.Vertexes
+        if len(vs) < 2:
+            raise ValueError(f"edge {p['edge']!r} is closed/degenerate; "
+                             "use from/to points or an extent dimension")
+        a = _project_centred(view, vs[0].Point)
+        b = _project_centred(view, vs[-1].Point)
+        dim = TechDraw.makeDistanceDim(view, dim_type, a, b)
+        _record(dim, view, true_value=edge.Length)
+    elif p.get("from_point") and p.get("to_point"):
+        fa = App.Vector(*p["from_point"])
+        tb = App.Vector(*p["to_point"])
+        a = _project_centred(view, fa)
+        b = _project_centred(view, tb)
+        dim = TechDraw.makeDistanceDim(view, dim_type, a, b)
+        _record(dim, view, true_value=fa.distanceToPoint(tb))
+    else:
+        raise ValueError(
+            "add_dimension needs auto=True, edge=<tag>, or from_point/to_point")
+
+    doc.recompute()
+    return {"dimensions": created}
+
+
+def _edge_by_tag(shape, tag):
+    for edge in shape.Edges:
+        if f"e_{_hash_sig(_edge_signature(edge))}" == tag:
+            return edge
+    raise KeyError(f"edge tag {tag!r} not found on shape")
+
+
+@handler("add_annotation")
+def _h_add_annotation(p):
+    """Add a free text annotation to a drawing page at page position (x, y) mm
+    (origin bottom-left, +Y up, matching TechDraw view placement)."""
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    ann = doc.addObject("TechDraw::DrawViewAnnotation", p.get("name", "Note"))
+    page.addView(ann)
+    ann.Text = [p["text"]]
+    ann.X = float(p.get("x", 20.0))
+    ann.Y = float(p.get("y", 20.0))
+    doc.recompute()
+    h = _register("note", ann)
+    return {"handle": h, "name": ann.Name, "text": p["text"]}
 
 
 # --- tessellation -------------------------------------------------------------

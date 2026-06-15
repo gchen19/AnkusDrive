@@ -850,10 +850,8 @@ def test_assembly_no_interference_when_separate():
 
 def test_drawing_page_constructed_and_persisted():
     """Drawing page with a projection group is constructed correctly and survives
-    saving to .FCStd. PDF/SVG export requires TechDrawGui (not available
-    headless) — that's a known gap; here we verify what DOES work: page exists,
-    has the expected projection group with N child views, and a saved-and-
-    reopened document still has the page intact."""
+    saving to .FCStd: page exists, has the expected projection group with N
+    child views, and a saved-and-reopened document still has the page intact."""
     import tempfile
     with Worker() as w, tempfile.TemporaryDirectory() as tmp:
         w.call("new_document", name="draw")
@@ -879,15 +877,80 @@ def test_drawing_page_constructed_and_persisted():
             f"projection group missing after reopen: {types}"
         )
 
-        # Confirm export still raises NotImplementedError (the gap is documented,
-        # not silently swallowed).
+
+def test_export_drawing_three_formats():
+    """export_drawing produces a non-empty, well-formed PDF, SVG, and DXF
+    headless (no TechDrawGui), each carrying the multi-view geometry."""
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        w.call("new_document", name="exp")
+        box = w.call("add_primitive", kind="box", w=30, d=20, h=10)
+        page = w.call("make_drawing_page")["handle"]
+        w.call("add_projection_group", page=page, body=box["handle"],
+               views=["Front", "Top", "Right"])
+
+        pdf = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.pdf"))
+        svg = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.svg"))
+        dxf = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.dxf"))
+
+        for r in (pdf, svg, dxf):
+            assert r["size"] > 0 and r["views"] == 3, r
+
+        assert open(os.path.join(tmp, "d.pdf"), "rb").read(5) == b"%PDF-"
+        assert "<svg" in open(os.path.join(tmp, "d.svg"), encoding="utf-8").read(400)
+        assert "SECTION" in open(os.path.join(tmp, "d.dxf"), encoding="utf-8",
+                                 errors="replace").read()
+
+
+def test_auto_and_manual_dimensions():
+    """Auto extents read the overall size; manual edge/point/diameter dims read
+    the true geometry; all of them land in the exported drawing."""
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        w.call("new_document", name="dim")
+        plate = w.call("add_primitive", kind="box", w=60, d=40, h=8)
+        drill = w.call("add_primitive", kind="cylinder", r=6, h=8,
+                       placement=[30, 20, 0])
+        part = w.call("boolean_op", op="cut", base=plate["handle"],
+                      tool=drill["handle"])
+        hole = next(e["tag"] for e in w.call("list_edges", handle=part["handle"])
+                    if e.get("radius") and abs(e["radius"] - 6.0) < 1e-6)
+        page = w.call("make_drawing_page")["handle"]
+        w.call("add_projection_group", page=page, body=part["handle"],
+               views=["Front", "Top"])
+
+        auto = w.call("add_dimension", page=page, auto=True)["dimensions"]
+        # 2 views x (horizontal + vertical) overall extents
+        assert len(auto) == 4, auto
+        vals = sorted(round(d["value"], 1) for d in auto)
+        assert vals == [8.0, 40.0, 60.0, 60.0], vals  # W=60 in both views, D=40, H=8
+
+        # diameter of the hole — true value 12.0, not a foreshortened projection
+        dia = w.call("add_dimension", page=page, view="Top", kind="diameter",
+                     edge=hole)["dimensions"][0]
+        assert abs(dia["value"] - 12.0) < 1e-6, dia
+
+        # an interior position dimension from two model points
+        pos = w.call("add_dimension", page=page, view="Top", kind="horizontal",
+                     from_point=[0, 20, 0], to_point=[30, 20, 0])["dimensions"][0]
+        assert abs(pos["value"] - 30.0) < 1e-6, pos
+
+        out = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.svg"))
+        assert out["dimensions"] == 6, out
+        svg = open(os.path.join(tmp, "d.svg"), encoding="utf-8").read()
+        assert "Ø12.00" in svg and "30.00" in svg  # diameter symbol + position
+
+
+def test_export_unsupported_extension_raises():
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        w.call("new_document", name="bad")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        page = w.call("make_drawing_page")["handle"]
+        w.call("add_projection_group", page=page, body=box["handle"])
         try:
-            w.call("export_drawing", page=page["handle"],
-                   path=os.path.join(tmp, "x.pdf"))
+            w.call("export_drawing", page=page, path=os.path.join(tmp, "d.png"))
         except WorkerError as e:
-            assert "TechDrawGui" in e.remote_message, e.remote_message
+            assert "extension" in e.remote_message.lower(), e.remote_message
         else:
-            raise AssertionError("export_drawing should raise NotImplementedError")
+            raise AssertionError("expected an error for an unsupported extension")
 
 
 def test_fem_cantilever():
@@ -3289,6 +3352,8 @@ _ADD_NOT_SOLID = {
     "add_sketch_constraint",
     "add_sketch_external",
     "add_projection_group",  # a TechDraw view
+    "add_dimension",         # a TechDraw dimension annotation
+    "add_annotation",        # a TechDraw text annotation
 }
 
 

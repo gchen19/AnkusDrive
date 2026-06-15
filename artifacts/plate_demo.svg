@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="svg2" width="297mm" height="210mm" version="1.1" viewBox="0 0 297 210" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <metadata id="metadata8">
+  <rdf:RDF>
+   <cc:Work rdf:about="">
+    <dc:format>image/svg+xml</dc:format>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+<g id="driftpin-overlay">
+<g transform="translate(148.5000,105.0000) scale(1,-1)">
+<g fill="none" stroke="#000000" stroke-opacity="1" stroke-width="0.7" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
+<path id= "1" d=" M -30 4 L -30 -4 " />
+<path id= "2" d=" M -30 4 L 30 4 " />
+<path id= "3" d=" M 30 4 L 30 -4 " />
+<path id= "4" d=" M -30 -4 L 30 -4 " />
+</g>
+
+</g>
+<g transform="translate(148.5000,66.0000) scale(1,-1)">
+<g fill="none" stroke="#000000" stroke-opacity="1" stroke-width="0.7" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
+<path id= "1" d=" M -30 20 L -30 -20 " />
+<path id= "2" d=" M -30 20 L 30 20 " />
+<path id= "3" d=" M -30 -20 L 30 -20 " />
+<path id= "4" d=" M 30 20 L 30 -20 " />
+<circle cx ="0" cy ="0" r ="6" /></g>
+
+</g>
+<g>
+<line x1="118.500" y1="101.000" x2="118.500" y2="119.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="178.500" y1="101.000" x2="178.500" y2="119.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="118.500" y1="118.000" x2="178.500" y2="118.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 118.500 118.000 L 115.900 118.858 L 115.900 117.142 Z" fill="#0048a0" stroke="none"/>
+<path d="M 178.500 118.000 L 181.100 117.142 L 181.100 118.858 Z" fill="#0048a0" stroke="none"/>
+<text x="148.500" y="121.200" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">60.00</text>
+</g>
+<g>
+<line x1="118.500" y1="109.000" x2="108.500" y2="109.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="118.500" y1="101.000" x2="108.500" y2="101.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="109.500" y1="109.000" x2="109.500" y2="101.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 109.500 109.000 L 110.358 111.600 L 108.642 111.600 Z" fill="#0048a0" stroke="none"/>
+<path d="M 109.500 101.000 L 108.642 98.400 L 110.358 98.400 Z" fill="#0048a0" stroke="none"/>
+<text x="108.000" y="106.120" font-size="3.2" font-family="sans-serif" text-anchor="end" fill="#0048a0" stroke="none">8.00</text>
+</g>
+<g>
+<line x1="118.500" y1="66.000" x2="118.500" y2="36.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="148.500" y1="66.000" x2="148.500" y2="36.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="118.500" y1="37.000" x2="148.500" y2="37.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 118.500 37.000 L 115.900 37.858 L 115.900 36.142 Z" fill="#0048a0" stroke="none"/>
+<path d="M 148.500 37.000 L 151.100 36.142 L 151.100 37.858 Z" fill="#0048a0" stroke="none"/>
+<text x="133.500" y="35.600" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">30.00</text>
+</g>
+<g>
+<line x1="142.500" y1="66.000" x2="142.500" y2="29.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="184.500" y1="66.000" x2="184.500" y2="29.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="142.500" y1="30.000" x2="184.500" y2="30.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 142.500 30.000 L 139.900 30.858 L 139.900 29.142 Z" fill="#0048a0" stroke="none"/>
+<path d="M 184.500 30.000 L 187.100 29.142 L 187.100 30.858 Z" fill="#0048a0" stroke="none"/>
+<text x="163.500" y="28.600" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">Ø12.00</text>
+</g>
+<g>
+<line x1="118.500" y1="46.000" x2="118.500" y2="22.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="178.500" y1="46.000" x2="178.500" y2="22.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="118.500" y1="23.000" x2="178.500" y2="23.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 118.500 23.000 L 115.900 23.858 L 115.900 22.142 Z" fill="#0048a0" stroke="none"/>
+<path d="M 178.500 23.000 L 181.100 22.142 L 181.100 23.858 Z" fill="#0048a0" stroke="none"/>
+<text x="148.500" y="21.600" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">60.00</text>
+</g>
+<g>
+<line x1="148.500" y1="46.000" x2="108.500" y2="46.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="148.500" y1="66.000" x2="108.500" y2="66.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="109.500" y1="46.000" x2="109.500" y2="66.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 109.500 46.000 L 108.642 43.400 L 110.358 43.400 Z" fill="#0048a0" stroke="none"/>
+<path d="M 109.500 66.000 L 110.358 68.600 L 108.642 68.600 Z" fill="#0048a0" stroke="none"/>
+<text x="108.000" y="57.120" font-size="3.2" font-family="sans-serif" text-anchor="end" fill="#0048a0" stroke="none">20.00</text>
+</g>
+<g>
+<line x1="118.500" y1="86.000" x2="101.500" y2="86.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="118.500" y1="46.000" x2="101.500" y2="46.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="102.500" y1="86.000" x2="102.500" y2="46.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 102.500 86.000 L 103.358 88.600 L 101.642 88.600 Z" fill="#0048a0" stroke="none"/>
+<path d="M 102.500 46.000 L 101.642 43.400 L 103.358 43.400 Z" fill="#0048a0" stroke="none"/>
+<text x="101.000" y="67.120" font-size="3.2" font-family="sans-serif" text-anchor="end" fill="#0048a0" stroke="none">40.00</text>
+</g>
+<text x="14.000" y="194.000" font-size="3.2" font-family="sans-serif" text-anchor="start" fill="#0048a0" stroke="none">MOUNT PLATE  rev A  (mm)</text>
+</g>
+</svg>

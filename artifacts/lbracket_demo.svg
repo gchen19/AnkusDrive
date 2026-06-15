@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="svg2" width="297mm" height="210mm" version="1.1" viewBox="0 0 297 210" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <metadata id="metadata8">
+  <rdf:RDF>
+   <cc:Work rdf:about="">
+    <dc:format>image/svg+xml</dc:format>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+<g id="driftpin-overlay">
+<g transform="translate(148.5000,105.0000) scale(1,-1)">
+<g fill="none" stroke="#000000" stroke-opacity="1" stroke-width="0.7" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
+<path id= "1" d=" M -20 7.5 L -20 -7.5 " />
+<path id= "2" d=" M 20 7.5 L 20 0.5 " />
+<path id= "3" d=" M 5 0.5 L 20 0.5 " />
+<path id= "4" d=" M 5 0.5 L 5 -7.5 " />
+<path id= "5" d=" M -20 -7.5 L 5 -7.5 " />
+<path id= "6" d=" M -20 7.5 L 20 7.5 " />
+</g>
+
+</g>
+<g transform="translate(148.5000,70.0000) scale(1,-1)">
+<g fill="none" stroke="#000000" stroke-opacity="1" stroke-width="0.7" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
+<path id= "1" d=" M -20 12.5 L -20 -12.5 " />
+<path id= "2" d=" M 5 12.5 L 20 12.5 " />
+<path id= "3" d=" M -20 12.5 L 5 12.5 " />
+<path id= "4" d=" M -20 -12.5 L 5 -12.5 " />
+<path id= "5" d=" M 5 12.5 L 5 -12.5 " />
+<path id= "6" d=" M 5 -12.5 L 20 -12.5 " />
+<path id= "7" d=" M 20 12.5 L 20 -12.5 " />
+</g>
+
+</g>
+<g transform="translate(196.0000,105.0000) scale(1,-1)">
+<g fill="none" stroke="#000000" stroke-opacity="1" stroke-width="0.7" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
+<path id= "1" d=" M -12.5 7.5 L -12.5 0.5 " />
+<path id= "2" d=" M -12.5 0.5 L -12.5 -7.5 " />
+<path id= "3" d=" M -12.5 -7.5 L 12.5 -7.5 " />
+<path id= "4" d=" M 12.5 7.5 L 12.5 0.5 " />
+<path id= "5" d=" M 12.5 0.5 L 12.5 -7.5 " />
+<path id= "6" d=" M -12.5 7.5 L 12.5 7.5 " />
+<path id= "7" d=" M -12.5 0.5 L 12.5 0.5 " />
+</g>
+
+</g>
+<g>
+<line x1="128.500" y1="104.500" x2="128.500" y2="122.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="153.500" y1="104.500" x2="153.500" y2="122.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="128.500" y1="121.500" x2="153.500" y2="121.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 128.500 121.500 L 125.900 122.358 L 125.900 120.642 Z" fill="#0048a0" stroke="none"/>
+<path d="M 153.500 121.500 L 156.100 120.642 L 156.100 122.358 Z" fill="#0048a0" stroke="none"/>
+<text x="141.000" y="124.700" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">25.00</text>
+</g>
+<g>
+<line x1="128.500" y1="97.500" x2="128.500" y2="129.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="168.500" y1="97.500" x2="168.500" y2="129.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="128.500" y1="128.500" x2="168.500" y2="128.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 128.500 128.500 L 125.900 129.358 L 125.900 127.642 Z" fill="#0048a0" stroke="none"/>
+<path d="M 168.500 128.500 L 171.100 127.642 L 171.100 129.358 Z" fill="#0048a0" stroke="none"/>
+<text x="148.500" y="131.700" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">40.00</text>
+</g>
+<g>
+<line x1="128.500" y1="97.500" x2="118.500" y2="97.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="128.500" y1="104.500" x2="118.500" y2="104.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="119.500" y1="97.500" x2="119.500" y2="104.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 119.500 97.500 L 118.642 94.900 L 120.358 94.900 Z" fill="#0048a0" stroke="none"/>
+<path d="M 119.500 104.500 L 120.358 107.100 L 118.642 107.100 Z" fill="#0048a0" stroke="none"/>
+<text x="118.000" y="102.120" font-size="3.2" font-family="sans-serif" text-anchor="end" fill="#0048a0" stroke="none">7.00</text>
+</g>
+<g>
+<line x1="128.500" y1="112.500" x2="111.500" y2="112.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="128.500" y1="97.500" x2="111.500" y2="97.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="112.500" y1="112.500" x2="112.500" y2="97.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 112.500 112.500 L 113.358 115.100 L 111.642 115.100 Z" fill="#0048a0" stroke="none"/>
+<path d="M 112.500 97.500 L 111.642 94.900 L 113.358 94.900 Z" fill="#0048a0" stroke="none"/>
+<text x="111.000" y="106.120" font-size="3.2" font-family="sans-serif" text-anchor="end" fill="#0048a0" stroke="none">15.00</text>
+</g>
+<g>
+<line x1="128.500" y1="57.500" x2="128.500" y2="47.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="168.500" y1="57.500" x2="168.500" y2="47.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="128.500" y1="48.500" x2="168.500" y2="48.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 128.500 48.500 L 125.900 49.358 L 125.900 47.642 Z" fill="#0048a0" stroke="none"/>
+<path d="M 168.500 48.500 L 171.100 47.642 L 171.100 49.358 Z" fill="#0048a0" stroke="none"/>
+<text x="148.500" y="47.100" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">40.00</text>
+</g>
+<g>
+<line x1="128.500" y1="82.500" x2="118.500" y2="82.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="128.500" y1="57.500" x2="118.500" y2="57.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="119.500" y1="82.500" x2="119.500" y2="57.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 119.500 82.500 L 120.358 85.100 L 118.642 85.100 Z" fill="#0048a0" stroke="none"/>
+<path d="M 119.500 57.500 L 118.642 54.900 L 120.358 54.900 Z" fill="#0048a0" stroke="none"/>
+<text x="118.000" y="71.120" font-size="3.2" font-family="sans-serif" text-anchor="end" fill="#0048a0" stroke="none">25.00</text>
+</g>
+<g>
+<line x1="183.500" y1="104.500" x2="183.500" y2="87.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="208.500" y1="97.500" x2="208.500" y2="87.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="183.500" y1="88.500" x2="208.500" y2="88.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 183.500 88.500 L 180.900 89.358 L 180.900 87.642 Z" fill="#0048a0" stroke="none"/>
+<path d="M 208.500 88.500 L 211.100 87.642 L 211.100 89.358 Z" fill="#0048a0" stroke="none"/>
+<text x="196.000" y="87.100" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">25.00</text>
+</g>
+<g>
+<line x1="183.500" y1="112.500" x2="218.500" y2="112.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="183.500" y1="97.500" x2="218.500" y2="97.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="217.500" y1="112.500" x2="217.500" y2="97.500" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 217.500 112.500 L 218.358 115.100 L 216.642 115.100 Z" fill="#0048a0" stroke="none"/>
+<path d="M 217.500 97.500 L 216.642 94.900 L 218.358 94.900 Z" fill="#0048a0" stroke="none"/>
+<text x="219.000" y="106.120" font-size="3.2" font-family="sans-serif" text-anchor="start" fill="#0048a0" stroke="none">15.00</text>
+</g>
+<text x="12.000" y="194.000" font-size="3.2" font-family="sans-serif" text-anchor="start" fill="#0048a0" stroke="none">L-BRACKET  rev A  (mm)</text>
+</g>
+</svg>
