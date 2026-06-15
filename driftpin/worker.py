@@ -14,6 +14,7 @@ Wire format: newline-delimited JSON, one object per line.
 The very first response line is `{"ready": true, "freecad": [...]}`, emitted
 before entering the dispatch loop so the host can confirm the worker booted.
 """
+import contextlib
 import json
 import math
 import os
@@ -37,6 +38,27 @@ import Sketcher  # noqa: E402
 
 def _respond(obj):
     os.write(_RESPONSE_FD, (json.dumps(obj) + "\n").encode())
+
+
+@contextlib.contextmanager
+def _gmsh_serial_meshing():
+    """Pin Gmsh to a single thread for the duration of a mesh, then restore.
+
+    FreeCAD's GmshTools writes `General.NumThreads` from the FEM/Gmsh preference
+    `NumOfThreads` (defaulting to the host core count). Parallel 3-D Delaunay is
+    non-deterministic and, under CPU contention, can silently produce a degenerate
+    mesh that ignores the requested size cap. Serial meshing is reproducible across
+    hosts and load, at a negligible cost for the modest meshes the bridges build."""
+    param = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh")
+    had = param.GetInt("NumOfThreads", 0)  # 0 ⇒ unset (GmshTools falls back to cores)
+    param.SetInt("NumOfThreads", 1)
+    try:
+        yield
+    finally:
+        if had:
+            param.SetInt("NumOfThreads", had)
+        else:
+            param.RemInt("NumOfThreads")
 
 
 _handles = {}
@@ -10142,15 +10164,35 @@ def _thermal_body_submit(p, info):
         mesh.ElementOrder = element_order
     doc.recompute()
     case_dir = tempfile.mkdtemp(prefix="elmer_body_")
-    try:
-        err = GmshTools(mesh).create_mesh()
-        nodes, tets = mesh.FemMesh.NodeCount, mesh.FemMesh.TetraCount
-        if not tets:
-            raise RuntimeError(f"Gmsh produced no volume mesh ({err or 'no detail'})")
-        mesh.FemMesh.write(os.path.join(case_dir, "body.unv"))
-    finally:
-        doc.removeObject(mesh.Name)
-        doc.recompute()
+    # Mesh SERIALLY: Gmsh's parallel 3-D Delaunay (General.NumThreads, which
+    # FreeCAD defaults to the host core count) is non-deterministic and, under CPU
+    # contention, can silently fall back to a near-degenerate mesh that ignores the
+    # size cap entirely — the solve still returns ok:true but the coarse wall
+    # under-cools and over-reports the centre temperature (the env-flaky Heisler gate).
+    # Serial meshing is reproducible and host-load independent. Restore the pref after.
+    with _gmsh_serial_meshing():
+        try:
+            err = GmshTools(mesh).create_mesh()
+            nodes, tets = mesh.FemMesh.NodeCount, mesh.FemMesh.TetraCount
+            if not tets:
+                raise RuntimeError(f"Gmsh produced no volume mesh ({err or 'no detail'})")
+            # Adequacy guard: if the size cap was silently ignored the mesh comes out
+            # far coarser than requested and the physics is untrustworthy. Compare the
+            # achieved mean element edge (from the regular-tet volume relation) to the
+            # cap and fail loudly rather than handing back a wrong-but-ok solve.
+            if char_length > 0:
+                mean_tet_vol = obj.Shape.Volume / tets
+                achieved_h = (8.485 * mean_tet_vol) ** (1.0 / 3.0)  # ℓ for V=ℓ³/(6√2)
+                if achieved_h > 4.0 * char_length:
+                    raise RuntimeError(
+                        f"Gmsh ignored the {char_length:.3g} mm size cap — achieved "
+                        f"~{achieved_h:.3g} mm elements ({tets} tets) on a "
+                        f"{obj.Shape.Volume:.0f} mm³ body. The mesh is too coarse to "
+                        f"trust the solve; re-run (serial meshing is deterministic).")
+            mesh.FemMesh.write(os.path.join(case_dir, "body.unv"))
+        finally:
+            doc.removeObject(mesh.Name)
+            doc.recompute()
 
     built = _mb.write_body_transient_case(
         case_dir, k=k, rho=rho, cp=cp, h_conv=h_conv, duration_s=duration_s,
