@@ -19,7 +19,15 @@ watch, not just scalar tables and one-off scratch GIFs.
 > so `trajectories` alone show no rotation — position-only data renders frozen gears), and
 > `mechanism_simulate_submit` now forwards a **`gears`** coupling (it never did, though
 > `run_mbd` and the §11.9 oracle already supported it). `sim_video.place()` is the generic
-> bridge: apply any (pos, quat) sample to a real mesh. Items B–D open.
+> bridge: apply any (pos, quat) sample to a real mesh. **Item B (FEM modal-shape
+> animation) is also DONE** — `scratch/modal_shape_video.py` solves a real steel cantilever
+> in CalculiX, extracts the tet-mesh SURFACE (tet faces on exactly one element) + each
+> eigenvector at the surface nodes, and animates one GIF per mode
+> (`artifacts/modal_mode{1,2,3}.gif`) as `node + amp·sin(2π·phase)·eigenvector`, coloured
+> by modal amplitude, with the closed-form `beam_modal` oracle overlaid per frame:
+> CalculiX 93 / 276 / 580 Hz match Euler-Bernoulli at **ratio 1.00** (1st out-of-plane
+> bend, 1st in-plane bend, 2nd out-of-plane). Items **C** (transient thermal) and **D**
+> (CFD) open.
 
 ## Why this exists
 
@@ -85,10 +93,17 @@ not a sketch. First consumers:
      orientations (a gear's COM is on its spin axis, so positions alone show no rotation)
      and by the handler forwarding a `gears` coupling.
 
-**B. FEM modal shape animation.** `fem_modal_results` returns displacement vectors per
-mode. Scale by `sin(2π·phase)` over N frames, deform the real result mesh, render with a
-stress/displacement colour map, loop. One short GIF per mode — the single most legible
-way to review a modal result. Reuses the pipeline from A.
+**B. FEM modal shape animation — DONE** (`scratch/modal_shape_video.py`). The eigenvector
+per mode is scaled by `sin(2π·phase)` over N frames, the real result mesh is deformed, and
+each mode loops as its own GIF coloured by modal amplitude. Two things the kickoff sketch
+glossed: (1) `fem_modal_results` only exposes the *scalar* max-displacement, so the script
+reads each mode's `DisplacementVectors` + `NodeNumbers` off the result objects directly in
+the worker. (2) A box tessellates to 12 flat triangles, so deforming its corners shows
+nothing — the script instead extracts the *tet-mesh surface* (the tet corner-faces that
+belong to exactly one element) as the deformable skin. Self-checking per the §11.10
+principle: the `beam_modal` Euler-Bernoulli oracle rides on each frame, and CalculiX
+93/276/580 Hz match it at ratio 1.00 (the dominant-axis classifier labels each mode and
+matches it to its bending plane). `artifacts/modal_mode{1,2,3}.gif`.
 
 **C. Transient thermal animation.** `elmer.py` returns T(t) at centre/surface. Colour
 the real part (or a section) by interpolated temperature over the time steps; overlay the
@@ -125,5 +140,9 @@ video is a first-class job result (like `render_photoreal_submit`), not a scratc
   (MBD-driven). Solver changes: `orientations` in `mbd.run_mbd`; `gears` forwarded by the
   `mechanism_simulate_submit` handler. Tests: `tests/test_mbd.py`
   (`test_orientations_track_driven_revolution`).
+- Item B (done): `scratch/modal_shape_video.py` — real CalculiX cantilever modal solve,
+  tet-mesh surface extraction + eigenvector animation, `beam_modal` oracle overlaid
+  (`artifacts/modal_mode{1,2,3}.gif`). Modal pipeline: `fem_modal`/`fem_modal_results` +
+  `_build_cantilever_fem` in `tests/test_worker.py` (`test_fem_modal_cantilever`).
 - Lineage: validate-the-artifact arc (`docs/VALIDATE_THE_ARTIFACT.md`, RFC §11.10) — the
   geometry oracle whose verdicts these videos overlay.
