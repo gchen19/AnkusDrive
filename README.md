@@ -14,7 +14,8 @@ FreeCAD exposes almost everything it does through a Python API — create docume
 
 - FreeCAD 1.1.x (default tested path: `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`; override via `$DRIFTPIN_FREECADCMD` or rely on PATH).
 - Bundled Python, `ccx` (CalculiX), and `gmsh` already ship inside the `.app` — no extra install needed for basic FEM.
-- Host-side rendering needs `Pillow` and `numpy`; both are installed by DriftPin as regular pip deps. FreeCAD's bundled Python is left untouched.
+- Host-side rendering needs `Pillow` and `numpy`; both are installed by DriftPin as regular pip deps.
+- **One optional exception:** drawing **PDF/SVG** export (`export_drawing`) renders inside FreeCAD's *bundled* Python, so it needs `reportlab` + `svglib` installed **there** — see [Drawing export (PDF/SVG)](#drawing-export-pdfsvg). DXF export and everything else leave FreeCAD's Python untouched.
 
 ## Setup
 
@@ -51,6 +52,35 @@ non-default installs, set:
 ```bash
 export DRIFTPIN_FREECADCMD=/path/to/freecadcmd
 ```
+
+### Drawing export (PDF/SVG)
+
+`export_drawing` builds 2-D mechanical drawings (multi-view PDF/SVG/DXF with
+dimensions) entirely headless. **DXF** uses FreeCAD's own writer and needs
+nothing extra. **PDF and SVG** are composed and rasterised with `reportlab` +
+`svglib`, and because that runs inside the *worker* — FreeCAD's bundled Python,
+not the host venv — the two packages must be installed into **FreeCAD's Python**:
+
+```bash
+# Resolve FreeCAD's bundled Python from freecadcmd itself (portable across the
+# macOS .app, a Linux distro package, and an extracted AppImage). freecadcmd
+# prints a startup banner after the script output, so match a marker line
+# rather than taking the last line:
+printf 'import sys; print("DPREFIX="+sys.prefix)\n' > /tmp/_fcprefix.py
+FREECAD_PREFIX="$(freecadcmd /tmp/_fcprefix.py 2>/dev/null | sed -n 's/^DPREFIX=//p')"
+FREECAD_PY="$FREECAD_PREFIX/bin/python"      # some builds: $FREECAD_PREFIX/bin/python3
+
+# Pin svglib<1.6 — newer svglib pulls rlPyCairo -> pycairo, a native build we
+# don't use (our drawings are line art, no gradients).
+"$FREECAD_PY" -m pip install reportlab "svglib<1.6"
+
+# Verify:
+"$FREECAD_PY" -c "import reportlab, svglib; print('drawing export ready')"
+```
+
+Without this, `export_drawing` still produces `.dxf`; `.pdf`/`.svg` raise a clear
+`ModuleNotFoundError`. FreeCAD already bundles `Pillow` (reportlab needs it), so
+no separate install is required.
 
 ### Wiring it into an MCP host
 
