@@ -105,6 +105,36 @@ def fillet_chamfer(w):
     _export_all(w, page, "fc_bracket_demo")
 
 
+def cbblock(w):
+    """Counterbored block — exercises the drawings-next pair: the internal step is
+    detected (drawing_gate.section_recommended) and an auto cross-section is added to
+    show the bore profile, and a top-right isometric pictorial is dropped in if the
+    sheet has room. A machinist gets the outline views, the section that explains the
+    hidden geometry, and the glance-reference iso."""
+    w.call("new_document", name="cbblock")
+    box = w.call("add_primitive", kind="box", w=60, d=40, h=20)
+    cb = w.call("add_primitive", kind="cylinder", r=10, h=6, placement=[30, 20, 14])
+    bore = w.call("add_primitive", kind="cylinder", r=5, h=20, placement=[30, 20, 0])
+    p1 = w.call("boolean_op", op="cut", base=box["handle"], tool=cb["handle"])
+    part = w.call("boolean_op", op="cut", base=p1["handle"], tool=bore["handle"])["handle"]
+    page = w.call("make_drawing_page", name="Page")["handle"]
+    pg = w.call("add_projection_group", page=page, body=part, views=["Front", "Top"])
+    w.call("set_property", handle=pg["handle"], name="ScaleType", value="Custom")
+    w.call("set_property", handle=pg["handle"], name="Scale", value=1.5)
+    w.call("add_dimension", page=page, auto=True)                        # overall
+    w.call("set_title_block", page=page, part="CB BLOCK", material="STEEL 1045",
+           rev="A", drawn_by="DriftPin", date="2026-06-15", project="DEMO")
+    rec = w.call("drawing_gate", page=page)["section_recommended"]
+    print(f"  section recommended: {rec['recommended']} ({'; '.join(rec['reasons'])})")
+    sec = w.call("add_section_view", page=page)                          # auto section
+    print(f"  section added: {sec['added']} as {sec.get('view')}")
+    thumb = w.call("add_thumbnail", page=page)                           # iso pictorial
+    print(f"  thumbnail placed: {thumb['placed']}"
+          + (f" (scale {thumb['scale']})" if thumb["placed"]
+             else f" ({thumb.get('reason')})"))
+    _export_all(w, page, "cbblock_demo")
+
+
 def main():
     with Worker() as w:
         print("L-bracket:")
@@ -113,6 +143,8 @@ def main():
         plate(w)
         print("Fillet + chamfer bracket:")
         fillet_chamfer(w)
+        print("Counterbore block (auto section + iso thumbnail):")
+        cbblock(w)
     print(f"\nWrote drawings to {ART}")
 
 

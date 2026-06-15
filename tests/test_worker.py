@@ -3354,6 +3354,8 @@ _ADD_NOT_SOLID = {
     "add_projection_group",  # a TechDraw view
     "add_dimension",         # a TechDraw dimension annotation
     "add_annotation",        # a TechDraw text annotation
+    "add_thumbnail",         # a TechDraw isometric pictorial view
+    "add_section_view",      # a TechDraw cross-section view
 }
 
 
@@ -4067,11 +4069,14 @@ def test_geometry_bridge_box_end_to_end_matches_heisler():
         box = w.call("add_primitive", kind="box", w=20, d=20, h=20)
         # box faces 1 and 2 are x=0 / x=20 (verified mapping): a plane wall of
         # half-thickness 10 mm cooled on both faces, lateral faces adiabatic.
-        # element_order="2nd": quadratic tets resolve this Bi=0.5 transient accurately
-        # regardless of mesh density — linear C3D4 under-resolve a too-coarse box and
-        # over-report the centre temperature (Gmsh's size cap is not always honored, so
-        # the linear result was host-flaky: ~13% high on a coarse mesh). 2nd-order lands
-        # the excursion within ~0.05% of Heisler even on a coarse mesh, reproducibly.
+        # element_order="2nd": quadratic tets resolve this Bi=0.5 transient accurately.
+        # The bridge meshes SERIALLY (worker pins Gmsh NumThreads=1): parallel 3-D
+        # Delaunay is non-deterministic and, under the CI suite's CPU contention, used
+        # to silently fall back to a near-degenerate mesh that ignored the 2 mm size cap
+        # — the solve still returned ok:true but over-reported the centre temperature
+        # (~12 % high, the env-flaky failure). Serial meshing is reproducible across
+        # hosts/load, and the worker's adequacy guard fails loudly on any residual
+        # too-coarse mesh rather than handing back wrong physics — so ±3 % holds.
         sub = w.call("thermal_transient_submit", body=box["handle"],
                      convection_faces=[1, 2], h_conv=10000.0, duration_s=0.6,
                      k=200.0, rho=2700.0, cp=900.0, char_length_mm=2.0,

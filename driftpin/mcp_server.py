@@ -2106,7 +2106,10 @@ def drawing_gate(page: str, process: str = "auto",
     needs only Ø + axial length. process='auto' infers it from the geometry.
 
     Returns {ok, violations, slots_total, slots_covered, process, features,
-    dimensions, enumerated_features, datum_faces}. Each violation has a `code`
+    dimensions, enumerated_features, datum_faces, section_recommended}.
+    `section_recommended` ({recommended, reasons, feature_ids}) advises whether the
+    part has internal geometry that needs a cross-section (see add_section_view).
+    Each violation has a `code`
     (under = a feature size/location is missing; redundant = a DOF dimensioned more
     than once; conflict = dimensioned twice with disagreeing values; extra = a dim
     that pins nothing; no_datum = a location not taken from a datum) and a human
@@ -2143,6 +2146,46 @@ def drawing_legibility(page: str, min_gap: float = 0.5) -> dict:
     (overlap/crosses_view/out_of_border) and a human `reason`. ok=True means the
     placed dimensions read cleanly on the sheet."""
     return _call("drawing_legibility", page=page, min_gap=min_gap)
+
+
+@mcp.tool()
+def add_thumbnail(page: str, name: str = "IsoThumb") -> dict:
+    """Place a small isometric pictorial of the part in the top-right corner of the
+    sheet — the "glance" reference a machinist uses to grok the 3-D shape before
+    reading the orthographic views — IF it fits there without crowding the existing
+    views and dimensions.
+
+    It is a real TechDraw isometric projection rendered through the same path as the
+    other views (a vector line drawing, not a raster), scaled to fit a reserved
+    top-right box and pinned to that corner (fit_page leaves it put, and it is never
+    dimensioned or counted by the manufacturability gate). Best-effort: when the
+    top-right corner is already occupied it returns {placed: False, reason} rather
+    than overlapping content. Call it AFTER placing the views and dimensions (and
+    after fit_page) so "fits" is judged against the final layout.
+
+    Returns {placed, box, scale?, view?, reason?}."""
+    return _call("add_thumbnail", page=page, name=name)
+
+
+@mcp.tool()
+def add_section_view(page: str, auto: bool = True, process: str = "auto",
+                     name: str = "Section", symbol: str = "A") -> dict:
+    """Add a cross-section view when the part has internal features the outline /
+    hidden-line views convey ambiguously — a counterbore, a blind hole/bore, or a
+    pocket. The need is judged automatically from the real solid (the same feature
+    enumeration the manufacturability gate uses); the cut runs lengthwise through
+    such a feature so its bore profile and depth read directly, and the view is
+    placed in clear space beside the existing views.
+
+    auto (default True): add the section ONLY if the part actually has hidden
+        internal geometry; otherwise return {added: False, recommended: False}. Set
+        auto=False to force a section regardless.
+    process: 'auto' (default) | 'prismatic' | 'turned' — how features are enumerated.
+
+    Returns {added, recommended, reasons, feature_ids, view?, normal?, origin?}.
+    (drawing_gate also reports `section_recommended` so you can decide in advance.)"""
+    return _call("add_section_view", page=page, auto=auto, process=process,
+                 name=name, symbol=symbol)
 
 
 @mcp.tool()
