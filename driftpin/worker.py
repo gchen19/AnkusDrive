@@ -7517,7 +7517,6 @@ def _h_add_thumbnail(p):
     (and after fit_page) so "fits" is judged against the final layout.
 
     Returns {placed, box, scale?, view?, reason?}."""
-    from driftpin import drawing_gate
     doc = _active_doc()
     page = _resolve(p["page"])
     doc.recompute()
