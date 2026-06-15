@@ -43,11 +43,13 @@ dependencies = [
     "mcp>=1.0",
     "Pillow>=10.0",
     "numpy>=1.24",
-    # headless TechDraw PDF/SVG export (export_drawing). Pure-Python, no native
-    # deps — svglib's optional rlPyCairo (gradients) is unused for line art.
-    "reportlab>=4.0",
-    "svglib>=1.5",
 ]
+# NOTE: headless drawing PDF/SVG export (export_drawing) renders inside FreeCAD's
+# *bundled* Python, so reportlab + svglib must be installed there, not in this
+# host env — see README "Drawing export (PDF/SVG)". They are deliberately NOT
+# host dependencies: pin svglib<1.6 anywhere you install it, or pip drags in
+# rlPyCairo -> pycairo (a native build that has nothing to do with our line art).
+# DXF export and every other tool need nothing extra.
 
 [project.optional-dependencies]
 dev = [
