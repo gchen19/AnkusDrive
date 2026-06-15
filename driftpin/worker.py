@@ -15,6 +15,7 @@ The very first response line is `{"ready": true, "freecad": [...]}`, emitted
 before entering the dispatch loop so the host can confirm the worker booted.
 """
 import json
+import math
 import os
 import sys
 import traceback
@@ -6204,6 +6205,66 @@ def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
     return "<g>\n" + "\n".join(seg) + "\n</g>"
 
 
+def _dim_is_leader(dim):
+    """A Ø/R dimension is drawn as a leader callout — an arrow at the hole/arc and
+    the value placed in open space beside the view — the conventional way to call out
+    a hole, and a label set away from its feature with a leader (issue #85 A2+)."""
+    return str(getattr(dim, "DP_Prefix", "") or "") in ("Ø", "R")
+
+
+def _leader_layout(dim, cx, cy, idx, bbox=None):
+    """Compute a Ø/R leader callout in SVG page coords: an arrow touching the circle,
+    a bent leader out past the view's right edge, and the value stacked there by
+    ``idx`` so several holes' callouts don't pile up. Returns the same layout dict
+    shape as ``_dim_layout`` (lines/arrows/text), or None for a degenerate dim."""
+    try:
+        pts = list(dim.getLinearPoints())
+    except Exception:
+        pts = []
+    if len(pts) < 2:
+        return None
+    a, b = pts[0], pts[1]
+    if str(getattr(dim, "DP_Prefix", "")) == "R":
+        cxl, cyl = a.x, a.y                       # radius: first point is the centre
+        r = math.hypot(b.x - a.x, b.y - a.y)
+    else:
+        cxl, cyl = (a.x + b.x) / 2.0, (a.y + b.y) / 2.0   # diameter: midpoint
+        r = math.hypot(b.x - a.x, b.y - a.y) / 2.0
+    ccx = cx + cxl
+    ccy = cy + _VIEW_Y_SIGN * cyl
+    # land the value just past the view's right edge, stacked downward from the top
+    if bbox is not None:
+        out_right = cx + bbox[1]
+        out_top = cy + _VIEW_Y_SIGN * bbox[3]
+    else:
+        out_right, out_top = ccx + r + 12.0, ccy - 12.0
+    lx = out_right + 8.0
+    ly = out_top + 2.0 + idx * (_DIM_FONT_MM + 2.5)
+    ex, ey = lx - 4.0, ly                         # elbow before the horizontal landing
+    dx, dy = ex - ccx, ey - ccy
+    n = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / n, dy / n
+    p0 = (ccx + r * ux, ccy + r * uy)             # arrow tip, on the circle
+    text = _dim_text(dim)
+    return {
+        "lines": [(p0[0], p0[1], ex, ey), (ex, ey, lx, ly)],
+        "arrows": [(p0[0], p0[1], -ux, -uy)],     # arrowhead into the circle
+        "text": (lx + 0.5, ly + _DIM_FONT_MM * 0.35, "start", text),
+        "orient": "leader",
+    }
+
+
+def _leader_to_svg(dim, cx, cy, idx, bbox=None):
+    lay = _leader_layout(dim, cx, cy, idx, bbox)
+    if lay is None:
+        return ""
+    seg = [_svg_line(*ln) for ln in lay["lines"]]
+    seg += [_svg_arrow(*ar) for ar in lay["arrows"]]
+    tx, ty, anchor, text = lay["text"]
+    seg.append(_svg_text(tx, ty, text, anchor=anchor))
+    return "<g>\n" + "\n".join(seg) + "\n</g>"
+
+
 # --- title block (issue #85 Part A3) -----------------------------------------
 # FreeCAD's default A4 template is a BARE sheet — no frame, no title block — so a
 # drawing exports with the title block blank. We compose our own bottom-right block:
@@ -6375,35 +6436,45 @@ def _dim_axis_interval(dim, cx, cy, h_side, v_side, bbox):
 def _iter_placed_dims(page):
     """Yield every page dimension with its final placement — the single source of
     truth shared by the renderer (_compose_page_svg) and the legibility gate
-    (_page_dim_graphics), so the gate checks exactly what is drawn. Dims are grouped
-    by (view, orientation), ordered smallest-span-first, then lane-packed
-    (drawing_gate.pack_lanes) so non-overlapping dims share an offset instead of
-    each blindly claiming its own. Yields dicts {dim, cx, cy, offset, h_side,
-    v_side, bbox}."""
+    (_page_dim_graphics), so the gate checks exactly what is drawn.
+
+    Two modes per yielded dict (`mode`): 'linear' dims (extents, lengths, locations)
+    are grouped by (view, orientation), ordered smallest-span-first, then lane-packed
+    (drawing_gate.pack_lanes) so non-overlapping dims share an offset; Ø/R dims
+    ('leader') are pulled out and drawn as leader callouts stacked beside the view.
+    'linear' yields {mode, dim, cx, cy, offset, h_side, v_side, bbox}; 'leader'
+    yields {mode, dim, cx, cy, idx, bbox}."""
     from collections import defaultdict
     from driftpin import drawing_gate
     views = _page_part_views(page)
     centres = {v.Name: (cx, cy) for (v, cx, cy) in views}
     view_by_name = {v.Name: v for (v, cx, cy) in views}
-    groups = defaultdict(list)
+    by_view = defaultdict(list)
     for dim in _page_dimensions(page):
         pv = _dim_parent_view(dim)
         if pv is None or pv.Name not in centres:
             continue
-        groups[(pv.Name, _dim_is_vertical(dim))].append(dim)
-    for (vname, _vert), dims in groups.items():
+        by_view[pv.Name].append(dim)
+    for vname, dims in by_view.items():
         cx, cy = centres[vname]
         view = view_by_name[vname]
         h_side, v_side = _view_dim_sides(view)
         bbox = _view_local_bbox(view)
-        ordered = sorted(dims, key=_dim_span)
-        intervals = [(_dim_axis_interval(d, cx, cy, h_side, v_side, bbox) or (0.0, 0.0))
-                     for d in ordered]
-        lanes = drawing_gate.pack_lanes(intervals)
-        for dim, lane in zip(ordered, lanes):
-            yield {"dim": dim, "cx": cx, "cy": cy,
-                   "offset": _DIM_OFFSET_MM + lane * _DIM_STACK_MM,
-                   "h_side": h_side, "v_side": v_side, "bbox": bbox}
+        leaders = [d for d in dims if _dim_is_leader(d)]
+        linear = [d for d in dims if not _dim_is_leader(d)]
+        for vert in (False, True):   # lane-pack each orientation independently
+            grp = [d for d in linear if _dim_is_vertical(d) == vert]
+            ordered = sorted(grp, key=_dim_span)
+            intervals = [(_dim_axis_interval(d, cx, cy, h_side, v_side, bbox)
+                          or (0.0, 0.0)) for d in ordered]
+            lanes = drawing_gate.pack_lanes(intervals)
+            for dim, lane in zip(ordered, lanes):
+                yield {"mode": "linear", "dim": dim, "cx": cx, "cy": cy,
+                       "offset": _DIM_OFFSET_MM + lane * _DIM_STACK_MM,
+                       "h_side": h_side, "v_side": v_side, "bbox": bbox}
+        for idx, dim in enumerate(leaders):
+            yield {"mode": "leader", "dim": dim, "cx": cx, "cy": cy,
+                   "idx": idx, "bbox": bbox}
 
 
 def _compose_page_svg(page):
@@ -6425,11 +6496,14 @@ def _compose_page_svg(page):
             f'<g transform="translate({cx:.4f},{cy:.4f}) scale(1,{_VIEW_Y_SIGN:g})">\n'
             f'{frag}\n</g>'
         )
-    # Dimensions: grouped, smallest-span-innermost, then lane-packed so disjoint
-    # dims share an offset instead of each claiming a lane (see _iter_placed_dims).
+    # Dimensions: linear dims lane-packed outside the view; Ø/R drawn as leader
+    # callouts beside it (see _iter_placed_dims).
     for pl in _iter_placed_dims(page):
-        svg = _dim_to_svg(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
-                          pl["h_side"], pl["v_side"], pl["bbox"])
+        if pl["mode"] == "leader":
+            svg = _leader_to_svg(pl["dim"], pl["cx"], pl["cy"], pl["idx"], pl["bbox"])
+        else:
+            svg = _dim_to_svg(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
+                              pl["h_side"], pl["v_side"], pl["bbox"])
         if svg:
             parts.append(svg)
     for ann in _page_annotations(page):
@@ -7114,8 +7188,11 @@ def _page_dim_graphics(page):
 
     labels, segments = [], []
     for pl in _iter_placed_dims(page):
-        lay = _dim_layout(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
-                          pl["h_side"], pl["v_side"], pl["bbox"])
+        if pl["mode"] == "leader":
+            lay = _leader_layout(pl["dim"], pl["cx"], pl["cy"], pl["idx"], pl["bbox"])
+        else:
+            lay = _dim_layout(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
+                              pl["h_side"], pl["v_side"], pl["bbox"])
         if not lay:
             continue
         vname = _dim_parent_view(pl["dim"]).Name

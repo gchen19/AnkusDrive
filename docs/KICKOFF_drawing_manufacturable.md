@@ -129,11 +129,15 @@ The gate (A1) is the prerequisite; it makes "legible" a regression assertion.
   artifacts (`artifacts/{plate,lbracket}_demo.pdf`) now carry it. Test:
   `test_title_block_renders_fields`.
 
-Still open, in cost order:
+* **A2+ — leaders (DONE 2026-06-15).** Ø/R dimensions now render as leader callouts
+  — an arrow touching the hole/arc and the value stacked in open space beside the
+  view (`_leader_layout`) — instead of linear-stacked dimensions. This is the
+  conventional hole callout and exactly "a label placed away from its feature with a
+  leader"; it also frees the linear lanes for true length/location dims.
+  `_iter_placed_dims` splits leaders from linear dims; the legibility gate scores
+  both. `test_diameter_leaders_legible` stacks two and stays clean.
 
-* **A2+ — leaders.** When even its own lane can't fit a label at its feature, emit
-  `makeLeader` into open space. (Packing handles the common dense case; leaders are
-  the overflow valve for pathological clusters.)
+Still open, in cost order:
 * **Regression set.** DONE 2026-06-15 (`tests/test_drawing_legibility_regression.py`):
   a high-aspect bar, a hole grid, a small part, and a tight chain-dimensioned cluster
   are each driven through the real pipeline and asserted clean by the legibility gate

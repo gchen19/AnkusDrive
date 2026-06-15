@@ -338,6 +338,36 @@ def test_dimension_tolerances_render():
         _check("fit-class upper deviation rendered", "+0.018/-0" in svg, dim)
 
 
+def test_diameter_leaders_legible():
+    """Ø dimensions render as leader callouts (arrow at the hole, value stacked
+    beside the view) rather than linear-stacked dims. Two holes of different sizes
+    each get a leader, and the sheet stays legible."""
+    print("test_diameter_leaders_legible")
+    import os
+    import tempfile
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        w.call("new_document", name="gate_leaders")
+        plate = w.call("add_primitive", kind="box", w=80, d=50, h=8)["handle"]
+        for (x, y, r) in [(25, 25, 4), (60, 25, 3)]:
+            drill = w.call("add_primitive", kind="cylinder", r=r, h=8,
+                           placement=[x, y, 0])
+            plate = w.call("boolean_op", op="cut", base=plate,
+                           tool=drill["handle"])["handle"]
+        page = w.call("make_drawing_page", name="Page")["handle"]
+        w.call("add_projection_group", page=page, body=plate, views=["Front", "Top"])
+        w.call("add_dimension", page=page, auto=True)
+        for r in (4, 3):
+            e = next(ed["tag"] for ed in w.call("list_edges", handle=plate)
+                     if ed.get("radius") and abs(ed["radius"] - r) < 1e-6)
+            w.call("add_dimension", page=page, view="Top", kind="diameter", edge=e)
+        out = os.path.join(tmp, "leaders.svg")
+        w.call("export_drawing", page=page, path=out)
+        svg = open(out, encoding="utf-8").read()
+        _check("both Ø callouts rendered", "Ø8.00" in svg and "Ø6.00" in svg)
+        rep = w.call("drawing_legibility", page=page)
+        _check("leader callouts are legible", rep["ok"], rep["violations"][:3])
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
