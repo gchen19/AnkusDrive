@@ -3354,6 +3354,8 @@ _ADD_NOT_SOLID = {
     "add_projection_group",  # a TechDraw view
     "add_dimension",         # a TechDraw dimension annotation
     "add_annotation",        # a TechDraw text annotation
+    "add_thumbnail",         # a TechDraw isometric pictorial view
+    "add_section_view",      # a TechDraw cross-section view
 }
 
 
