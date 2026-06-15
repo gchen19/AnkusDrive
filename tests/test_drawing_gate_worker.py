@@ -310,6 +310,34 @@ def test_title_block_renders_fields():
                "driftpin-titleblock" not in open(out2, encoding="utf-8").read())
 
 
+def test_dimension_tolerances_render():
+    """A dimension can carry a tolerance — symmetric ±, asymmetric, or an ISO fit
+    code (hole-side ISO 286 limits) — rendered next to the value so the part can be
+    made to size."""
+    print("test_dimension_tolerances_render")
+    import os
+    import tempfile
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        page, hole, _part = _plate(w, "gate_tol")
+        # symmetric ± on the overall width
+        w.call("add_dimension", page=page, view="Front", kind="horizontal",
+               from_point=[0, 0, 0], to_point=[60, 0, 0], tolerance={"sym": 0.1})
+        # asymmetric on a position
+        w.call("add_dimension", page=page, view="Top", kind="horizontal",
+               from_point=[0, 20, 0], to_point=[30, 20, 0],
+               tolerance={"plus": 0.05, "minus": -0.02})
+        # ISO fit on the Ø12 hole -> H7 hole-side limits at basic 12
+        dim = w.call("add_dimension", page=page, view="Top", kind="diameter",
+                     edge=hole, tolerance={"fit": "H7"})["dimensions"][0]
+        out = os.path.join(tmp, "tol.svg")
+        w.call("export_drawing", page=page, path=out)
+        svg = open(out, encoding="utf-8").read()
+        _check("symmetric tolerance rendered", "±0.1" in svg, svg[:0])
+        _check("asymmetric tolerance rendered", "+0.05/-0.02" in svg)
+        # ISO 286 IT7 at 12 mm is 0.018 mm; hole H is +IT7 / -0
+        _check("fit-class upper deviation rendered", "+0.018/-0" in svg, dim)
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

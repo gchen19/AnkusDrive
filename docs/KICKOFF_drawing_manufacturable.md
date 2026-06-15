@@ -79,10 +79,16 @@ placed graphics.
   faces declared, locating the hole from them is clean; locating it from the far edge
   flags `no_datum`. (GD&T position/tolerance frames remain future work.)
 * **Enumeration is conservative.** An unrecognised face yields *no* slot rather than
-  a wrong one (no false `under`). Chamfers/fillets/threads/tolerances are not yet
-  enumerated; `gdt_check` / `tolerance_stackup` / `fit_class` are the hooks for the
-  GD&T layer. Counterbore through-ness is read from the UNION of a hole's coaxial
-  cylinder spans, so a counterbored through-hole isn't mistaken for a blind bore.
+  a wrong one (no false `under`). Chamfers/fillets/threads are not yet enumerated.
+  Counterbore through-ness is read from the UNION of a hole's coaxial cylinder spans,
+  so a counterbored through-hole isn't mistaken for a blind bore.
+* **Tolerances (DONE 2026-06-15).** `add_dimension` takes a `tolerance`:
+  `{"sym": 0.1}` (±0.1), `{"plus": .., "minus": ..}` (asymmetric), or
+  `{"fit": "H7"}` / `{"fit": "H7/g6"}` — ISO 286 hole-side limits looked up at the
+  dimension's basic size via `tolerance.fit_class`. Stamped (`DP_TolPlus/Minus`) and
+  rendered next to the value (`Ø12.00 +0.018/-0`). This is the *palette* layer; a
+  gate check for *which* features must carry a tolerance (fits, positions) is future
+  work, building on `gdt_check` / `tolerance_stackup`.
 
 ## Acceptance — the issue's headline
 

@@ -59,7 +59,8 @@ def plate(w):
     w.call("add_projection_group", page=page, body=part["handle"],
            views=["Front", "Top"])
     w.call("add_dimension", page=page, auto=True)                        # overall
-    w.call("add_dimension", page=page, view="Top", kind="diameter", edge=hole)
+    w.call("add_dimension", page=page, view="Top", kind="diameter", edge=hole,
+           tolerance={"fit": "H7"})                                      # Ø12 H7 fit
     w.call("add_dimension", page=page, view="Top", kind="horizontal",    # hole X
            from_point=[0, 20, 0], to_point=[30, 20, 0])
     w.call("add_dimension", page=page, view="Top", kind="vertical",      # hole Y

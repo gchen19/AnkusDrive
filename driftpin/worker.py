@@ -6046,7 +6046,32 @@ def _dim_text(dim):
     prefix = str(getattr(dim, "DP_Prefix", "") or "")
     if not prefix:
         prefix = {"Diameter": "Ø", "Radius": "R"}.get(str(getattr(dim, "Type", "")), "")
-    return f"{prefix}{val:.2f}"
+    return f"{prefix}{val:.2f}{_dim_tol_text(dim)}"
+
+
+def _fmt_dev(x):
+    """A signed deviation, trimmed: 0.012 -> '0.012', -0 -> '0'."""
+    if abs(x) < 5e-7:
+        return "0"
+    return f"{x:.3f}".rstrip("0").rstrip(".")
+
+
+def _dim_tol_text(dim):
+    """The tolerance suffix for a dimension's label, from stamped DP_TolPlus/
+    DP_TolMinus (signed, plus>=minus): ' ±0.1' when symmetric, else
+    ' +0.012/-0' (upper over lower). '' when no tolerance is attached."""
+    if not (hasattr(dim, "DP_TolPlus") and hasattr(dim, "DP_TolMinus")):
+        return ""
+    try:
+        plus = float(dim.DP_TolPlus)
+        minus = float(dim.DP_TolMinus)
+    except Exception:
+        return ""
+    if plus == 0.0 and minus == 0.0:
+        return ""
+    if abs(plus + minus) < 5e-7:   # symmetric: minus == -plus
+        return f" ±{_fmt_dev(plus)}"
+    return f" +{_fmt_dev(plus)}/-{_fmt_dev(abs(minus))}"
 
 
 def _dim_is_vertical(dim):
@@ -6548,6 +6573,50 @@ def _stamp_model_ref(dim, ref):
         pass
 
 
+def _stamp_tolerance(dim, plus, minus):
+    """Attach a signed tolerance (plus >= minus) to a dimension; rendered by
+    _dim_tol_text as ±/over-under next to the value."""
+    for name, val in (("DP_TolPlus", plus), ("DP_TolMinus", minus)):
+        if not hasattr(dim, name):
+            try:
+                dim.addProperty("App::PropertyFloat", name, "DriftPin",
+                                "dimension tolerance deviation, mm")
+            except Exception:
+                continue
+        try:
+            setattr(dim, name, float(val))
+        except Exception:
+            pass
+
+
+def _resolve_tolerance(tol, basic):
+    """Turn an add_dimension `tolerance` spec into signed (plus, minus) deviations
+    in mm (plus >= minus), or None. Specs: {"sym": 0.1} -> ±0.1;
+    {"plus": .., "minus": ..} -> asymmetric; {"fit": "H7"} or {"fit": "H7/g6"} ->
+    ISO 286 hole-side deviations via tolerance.fit_class at this basic size."""
+    if not tol:
+        return None
+    if isinstance(tol, (int, float)):
+        s = abs(float(tol))
+        return (s, -s)
+    if "sym" in tol:
+        s = abs(float(tol["sym"]))
+        return (s, -s)
+    if "plus" in tol or "minus" in tol:
+        plus = float(tol.get("plus", 0.0))
+        minus = float(tol.get("minus", 0.0))
+        return (max(plus, minus), min(plus, minus))
+    if "fit" in tol:
+        from driftpin.analysis import tolerance as _T
+        code = str(tol["fit"])
+        if "/" not in code:                 # a hole grade only, e.g. "H7"
+            grade = "".join(ch for ch in code if ch.isdigit()) or "7"
+            code = f"{code}/h{grade}"        # pair with an arbitrary shaft; read hole
+        hole = _T.fit_class(float(basic), code)["hole"]
+        return (hole["upper_dev"], hole["lower_dev"])
+    return None
+
+
 def _project_centred(view, vec):
     """Project a 3D model point into the view's centred local 2D frame — the
     same frame viewPartAsSvg and getLinearPoints use."""
@@ -6572,6 +6641,9 @@ def _h_add_dimension(p):
                              -> ⌀/R dimension of a hole or arc.
       * view + from_point/to_point -> dimension between two 3D model points.
     kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'.
+    tolerance: optional, attaches a tolerance rendered next to the value —
+      {"sym": 0.1} (±0.1) | {"plus": .., "minus": ..} (asymmetric) |
+      {"fit": "H7"} / {"fit": "H7/g6"} (ISO 286 hole-side deviations at this size).
     Returns {dimensions:[{handle,name,type,value}...]}.
     """
     import TechDraw
@@ -6587,6 +6659,10 @@ def _h_add_dimension(p):
             _stamp_true_value(dim, true_value)
         if model_ref is not None:
             _stamp_model_ref(dim, model_ref)
+        tol = _resolve_tolerance(p.get("tolerance"),
+                                 true_value if true_value is not None else 0.0)
+        if tol is not None:
+            _stamp_tolerance(dim, tol[0], tol[1])
         h = _register("dim", dim)
         try:
             shown = float(dim.DP_TrueValue) if hasattr(dim, "DP_TrueValue") \

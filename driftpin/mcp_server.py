@@ -2012,6 +2012,7 @@ def add_dimension(
     from_point: list | None = None,
     to_point: list | None = None,
     views: list | None = None,
+    tolerance: dict | None = None,
 ) -> dict:
     """Add dimension(s) to a drawing page.
 
@@ -2027,10 +2028,16 @@ def add_dimension(
         two 3D points.
     view: a view handle, object name, or projection code ('Front', 'Top', ...).
     kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'.
+    tolerance: optional, rendered next to the value (a machinist needs it to make
+      the part to size): {"sym": 0.1} for ±0.1, {"plus": .., "minus": ..} for an
+      asymmetric tolerance, or {"fit": "H7"} / {"fit": "H7/g6"} to look up ISO 286
+      hole-side limits at the dimension's basic size.
     Returns {dimensions: [{handle, name, type, value}, ...]} — value is the
     true measured size of each dimension created.
     """
     params: dict = {"page": page}
+    if tolerance is not None:
+        params["tolerance"] = tolerance
     if auto:
         params["auto"] = True
         if views is not None:
