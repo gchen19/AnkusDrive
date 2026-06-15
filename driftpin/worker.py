@@ -15,6 +15,7 @@ The very first response line is `{"ready": true, "freecad": [...]}`, emitted
 before entering the dispatch loop so the host can confirm the worker booted.
 """
 import json
+import math
 import os
 import sys
 import traceback
@@ -4155,7 +4156,9 @@ def _h_publish_interface(p):
 # string back to the current face through the stored tag.
 
 _FACEROLE_PROP = "DP_FaceRoles"
-_FACE_ROLES = ("inlet", "outlet", "sealing", "wetted", "ambient", "mating")
+# 'datum' marks a functional reference face a drawing should dimension FROM
+# (issue #85); the drawing completeness gate reads it via _datum_faces.
+_FACE_ROLES = ("inlet", "outlet", "sealing", "wetted", "ambient", "mating", "datum")
 
 
 def _read_face_roles(obj):
@@ -6044,7 +6047,32 @@ def _dim_text(dim):
     prefix = str(getattr(dim, "DP_Prefix", "") or "")
     if not prefix:
         prefix = {"Diameter": "Ø", "Radius": "R"}.get(str(getattr(dim, "Type", "")), "")
-    return f"{prefix}{val:.2f}"
+    return f"{prefix}{val:.2f}{_dim_tol_text(dim)}"
+
+
+def _fmt_dev(x):
+    """A signed deviation, trimmed: 0.012 -> '0.012', -0 -> '0'."""
+    if abs(x) < 5e-7:
+        return "0"
+    return f"{x:.3f}".rstrip("0").rstrip(".")
+
+
+def _dim_tol_text(dim):
+    """The tolerance suffix for a dimension's label, from stamped DP_TolPlus/
+    DP_TolMinus (signed, plus>=minus): ' ±0.1' when symmetric, else
+    ' +0.012/-0' (upper over lower). '' when no tolerance is attached."""
+    if not (hasattr(dim, "DP_TolPlus") and hasattr(dim, "DP_TolMinus")):
+        return ""
+    try:
+        plus = float(dim.DP_TolPlus)
+        minus = float(dim.DP_TolMinus)
+    except Exception:
+        return ""
+    if plus == 0.0 and minus == 0.0:
+        return ""
+    if abs(plus + minus) < 5e-7:   # symmetric: minus == -plus
+        return f" ±{_fmt_dev(plus)}"
+    return f" +{_fmt_dev(plus)}/-{_fmt_dev(abs(minus))}"
 
 
 def _dim_is_vertical(dim):
@@ -6091,19 +6119,26 @@ def _view_local_bbox(view):
     return (min(xs), max(xs), min(ys), max(ys))
 
 
-def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
-    """Render a dimension as extension lines + dimension line + arrows + text,
-    in SVG page coords. (cx, cy) is the parent view's page centre; `offset` is
-    how far the dimension line sits beyond the view outline (stacked by the
-    caller); h_side/v_side place it on the view's outward side; bbox is the
-    view's local outline box so dim lines clear the part even for interior
-    features."""
+def _dim_layout(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
+    """Compute one dimension's placed graphics in SVG page coords, without
+    serialising: the lines (extension + dimension), arrowheads, and the text
+    anchor. This is the single source of truth for placement — both ``_dim_to_svg``
+    (renders it) and the legibility gate (``_page_dim_graphics`` → checks it) read
+    it, so the gate validates the *actual* layout, not a re-derivation of it.
+
+    (cx, cy) is the parent view's page centre; `offset` is how far the dimension
+    line sits beyond the view outline (stacked by the caller); h_side/v_side place
+    it on the view's outward side; bbox is the view's local outline box so dim lines
+    clear the part even for interior features. Returns None for a degenerate dim.
+
+    Layout keys: ``lines`` [(x1,y1,x2,y2)…], ``arrows`` [(x,y,dx,dy)…],
+    ``text`` (x, y, anchor, string), ``orient`` 'h'|'v'."""
     try:
         pts = list(dim.getLinearPoints())
     except Exception:
         pts = []
     if len(pts) < 2:
-        return ""
+        return None
     p1, p2 = pts[0], pts[1]
 
     def L(p):  # local view mm (+Y up, centred) -> SVG page mm
@@ -6123,7 +6158,7 @@ def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
         out_top, out_bottom = min(y1, y2), max(y1, y2)
     text = _dim_text(dim)
     dtype = str(getattr(dim, "Type", "Distance"))
-    seg = []
+    lines, arrows = [], []
     if dtype == "DistanceY" or (dtype == "Distance" and abs(x2 - x1) < abs(y2 - y1)):
         # vertical measurement: dimension line left or right of the outline
         if v_side == "right":
@@ -6132,12 +6167,13 @@ def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
         else:
             dl = out_left - offset
             stub, tx, anchor = dl - 1.0, dl - 1.5, "end"
-        seg.append(_svg_line(x1, y1, stub, y1))
-        seg.append(_svg_line(x2, y2, stub, y2))
-        seg.append(_svg_line(dl, y1, dl, y2))
-        seg.append(_svg_arrow(dl, y1, 0, 1 if y1 < y2 else -1))
-        seg.append(_svg_arrow(dl, y2, 0, 1 if y2 < y1 else -1))
-        seg.append(_svg_text(tx, (y1 + y2) / 2 + _DIM_FONT_MM * 0.35, text, anchor=anchor))
+        lines.append((x1, y1, stub, y1))
+        lines.append((x2, y2, stub, y2))
+        lines.append((dl, y1, dl, y2))
+        arrows.append((dl, y1, 0, 1 if y1 < y2 else -1))
+        arrows.append((dl, y2, 0, 1 if y2 < y1 else -1))
+        txt = (tx, (y1 + y2) / 2 + _DIM_FONT_MM * 0.35, anchor, text)
+        orient = "v"
     else:
         # horizontal measurement: dimension line above or below the outline
         if h_side == "below":
@@ -6146,13 +6182,228 @@ def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
         else:
             dl = out_top - offset
             stub, ty = dl - 1.0, dl - 1.4
-        seg.append(_svg_line(x1, y1, x1, stub))
-        seg.append(_svg_line(x2, y2, x2, stub))
-        seg.append(_svg_line(x1, dl, x2, dl))
-        seg.append(_svg_arrow(x1, dl, 1 if x1 < x2 else -1, 0))
-        seg.append(_svg_arrow(x2, dl, 1 if x2 < x1 else -1, 0))
-        seg.append(_svg_text((x1 + x2) / 2, ty, text, anchor="middle"))
+        lines.append((x1, y1, x1, stub))
+        lines.append((x2, y2, x2, stub))
+        lines.append((x1, dl, x2, dl))
+        arrows.append((x1, dl, 1 if x1 < x2 else -1, 0))
+        arrows.append((x2, dl, 1 if x2 < x1 else -1, 0))
+        txt = ((x1 + x2) / 2, ty, "middle", text)
+        orient = "h"
+    return {"lines": lines, "arrows": arrows, "text": txt, "orient": orient}
+
+
+def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
+    """Render a dimension as extension lines + dimension line + arrows + text,
+    in SVG page coords (serialises the layout from ``_dim_layout``)."""
+    lay = _dim_layout(dim, cx, cy, offset, h_side, v_side, bbox)
+    if lay is None:
+        return ""
+    seg = [_svg_line(*ln) for ln in lay["lines"]]
+    seg += [_svg_arrow(*ar) for ar in lay["arrows"]]
+    tx, ty, anchor, text = lay["text"]
+    seg.append(_svg_text(tx, ty, text, anchor=anchor))
     return "<g>\n" + "\n".join(seg) + "\n</g>"
+
+
+def _dim_is_leader(dim):
+    """A Ø/R dimension is drawn as a leader callout — an arrow at the hole/arc and
+    the value placed in open space beside the view — the conventional way to call out
+    a hole, and a label set away from its feature with a leader (issue #85 A2+)."""
+    return str(getattr(dim, "DP_Prefix", "") or "") in ("Ø", "R")
+
+
+def _leader_layout(dim, cx, cy, idx, bbox=None):
+    """Compute a Ø/R leader callout in SVG page coords: an arrow touching the circle,
+    a bent leader out past the view's right edge, and the value stacked there by
+    ``idx`` so several holes' callouts don't pile up. Returns the same layout dict
+    shape as ``_dim_layout`` (lines/arrows/text), or None for a degenerate dim."""
+    try:
+        pts = list(dim.getLinearPoints())
+    except Exception:
+        pts = []
+    if len(pts) < 2:
+        return None
+    a, b = pts[0], pts[1]
+    if str(getattr(dim, "DP_Prefix", "")) == "R":
+        cxl, cyl = a.x, a.y                       # radius: first point is the centre
+        r = math.hypot(b.x - a.x, b.y - a.y)
+    else:
+        cxl, cyl = (a.x + b.x) / 2.0, (a.y + b.y) / 2.0   # diameter: midpoint
+        r = math.hypot(b.x - a.x, b.y - a.y) / 2.0
+    ccx = cx + cxl
+    ccy = cy + _VIEW_Y_SIGN * cyl
+    # land the value just past the view's right edge, stacked downward from the top
+    if bbox is not None:
+        out_right = cx + bbox[1]
+        out_top = cy + _VIEW_Y_SIGN * bbox[3]
+    else:
+        out_right, out_top = ccx + r + 12.0, ccy - 12.0
+    lx = out_right + 8.0
+    ly = out_top + 2.0 + idx * (_DIM_FONT_MM + 2.5)
+    ex, ey = lx - 4.0, ly                         # elbow before the horizontal landing
+    dx, dy = ex - ccx, ey - ccy
+    n = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / n, dy / n
+    p0 = (ccx + r * ux, ccy + r * uy)             # arrow tip, on the circle
+    text = _dim_text(dim)
+    return {
+        "lines": [(p0[0], p0[1], ex, ey), (ex, ey, lx, ly)],
+        "arrows": [(p0[0], p0[1], -ux, -uy)],     # arrowhead into the circle
+        "text": (lx + 0.5, ly + _DIM_FONT_MM * 0.35, "start", text),
+        "orient": "leader",
+    }
+
+
+def _leader_to_svg(dim, cx, cy, idx, bbox=None):
+    lay = _leader_layout(dim, cx, cy, idx, bbox)
+    if lay is None:
+        return ""
+    seg = [_svg_line(*ln) for ln in lay["lines"]]
+    seg += [_svg_arrow(*ar) for ar in lay["arrows"]]
+    tx, ty, anchor, text = lay["text"]
+    seg.append(_svg_text(tx, ty, text, anchor=anchor))
+    return "<g>\n" + "\n".join(seg) + "\n</g>"
+
+
+# --- title block (issue #85 Part A3) -----------------------------------------
+# FreeCAD's default A4 template is a BARE sheet — no frame, no title block — so a
+# drawing exports with the title block blank. We compose our own bottom-right block:
+# scale / units / sheet-size / part-name auto-derived, material / rev / drawn-by /
+# date / project supplied via set_title_block (stamped as DP_TitleBlock JSON).
+
+_TB_W = 96.0      # title-block width, mm
+_TB_RH = 7.0      # row height, mm
+_TB_ROWS = 4
+_TB_MARGIN = 5.0  # gap from the sheet edge
+
+
+def _title_block_box(page_w, page_h):
+    """The title block's [x0, y0, x1, y1] in page mm (origin top-left, +Y down)."""
+    h = _TB_RH * _TB_ROWS
+    x0 = page_w - _TB_MARGIN - _TB_W
+    y0 = page_h - _TB_MARGIN - h
+    return [x0, y0, x0 + _TB_W, y0 + h]
+
+
+def _page_title_fields(page):
+    raw = str(getattr(page, "DP_TitleBlock", "") or "")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _stamp_title_block(page, fields):
+    if not hasattr(page, "DP_TitleBlock"):
+        try:
+            page.addProperty("App::PropertyString", "DP_TitleBlock",
+                             "DriftPin", "title block fields (JSON)")
+        except Exception:
+            return
+    try:
+        page.DP_TitleBlock = json.dumps(fields)
+    except Exception:
+        pass
+
+
+def _page_part_name(page):
+    views = _page_part_views(page)
+    if views:
+        src = getattr(views[0][0], "Source", None)
+        if src:
+            return getattr(src[0], "Label", None) or src[0].Name
+    return getattr(page, "Label", None) or page.Name
+
+
+def _page_scale(page):
+    views = _page_part_views(page)
+    if views:
+        try:
+            return float(views[0][0].Scale)
+        except Exception:
+            pass
+    return 1.0
+
+
+def _fmt_scale(s):
+    if s >= 1.0:
+        return f"{s:g}:1"
+    return f"1:{1.0 / s:g}"
+
+
+def _sheet_name(w, h):
+    for name, (a, b) in (("A4", (297, 210)), ("A3", (420, 297)),
+                         ("A2", (594, 420)), ("A1", (841, 594)),
+                         ("A0", (1189, 841))):
+        if abs(w - a) < 2 and abs(h - b) < 2:
+            return name
+        if abs(w - b) < 2 and abs(h - a) < 2:
+            return name + "P"  # portrait
+    return f"{w:g}x{h:g}"
+
+
+def _tb_text(x, y, s, size, anchor="start", bold=False):
+    weight = ' font-weight="bold"' if bold else ''
+    return (f'<text x="{x:.2f}" y="{y:.2f}" font-size="{size}" '
+            f'font-family="sans-serif" text-anchor="{anchor}"{weight} '
+            f'fill="#000" stroke="none">{_xml_escape(s)}</text>')
+
+
+def _tb_line(x1, y1, x2, y2):
+    return (f'<line x1="{x1:.2f}" y1="{y1:.2f}" x2="{x2:.2f}" y2="{y2:.2f}" '
+            f'stroke="#000" stroke-width="0.3" fill="none"/>')
+
+
+def _title_block_svg(page, page_w, page_h):
+    """Compose the bottom-right title block. Auto fields (scale, units, sheet size,
+    part name) are always filled; supplied fields (material, rev, drawn-by, date,
+    project) come from the DP_TitleBlock stamp. Returns '' if no stamp is present
+    (the block is opt-in via set_title_block)."""
+    fields = _page_title_fields(page)
+    if fields is None:
+        return ""
+    x0, y0, x1, y1 = _title_block_box(page_w, page_h)
+    xmid = x0 + _TB_W * 0.5
+    name = str(fields.get("part") or _page_part_name(page))
+    auto = {
+        "MATERIAL": str(fields.get("material", "—")),
+        "SCALE": _fmt_scale(_page_scale(page)),
+        "SIZE": _sheet_name(page_w, page_h),
+        "UNITS": str(fields.get("units", "mm")),
+        "REV": str(fields.get("rev", "—")),
+        "DRAWN": str(fields.get("drawn_by", fields.get("by", "—"))),
+        "DATE": str(fields.get("date", "—")),
+    }
+    seg = []
+    # frame: outer rectangle + row separators + a column split below the name row
+    seg.append(_tb_line(x0, y0, x1, y0))
+    seg.append(_tb_line(x0, y1, x1, y1))
+    seg.append(_tb_line(x0, y0, x0, y1))
+    seg.append(_tb_line(x1, y0, x1, y1))
+    for r in range(1, _TB_ROWS):
+        yy = y0 + r * _TB_RH
+        seg.append(_tb_line(x0, yy, x1, yy))
+    seg.append(_tb_line(xmid, y0 + _TB_RH, xmid, y1))
+
+    def cell(cx0, row, label, value, big=True):
+        cy0 = y0 + row * _TB_RH
+        out = [_tb_text(cx0 + 1.5, cy0 + 2.4, label, 1.9)]
+        out.append(_tb_text(cx0 + 1.5, cy0 + 6.0, value, 3.0 if big else 2.6,
+                            bold=big and row == 0))
+        return out
+
+    seg += cell(x0, 0, "PART / DRAWING", name)
+    seg += cell(x0, 1, "MATERIAL", auto["MATERIAL"])
+    seg += cell(xmid, 1, "SCALE", auto["SCALE"])
+    seg += cell(x0, 2, "SIZE / UNITS", f"{auto['SIZE']}  ({auto['UNITS']})")
+    seg += cell(xmid, 2, "REV", auto["REV"])
+    seg += cell(x0, 3, "DRAWN BY", auto["DRAWN"])
+    seg += cell(xmid, 3, "DATE", auto["DATE"])
+    if fields.get("project"):
+        seg.append(_tb_text(x0 + 1.5, y0 - 1.0, str(fields["project"]), 2.2))
+    return "<g id=\"driftpin-titleblock\">\n" + "\n".join(seg) + "\n</g>"
 
 
 def _annotation_to_svg(ann, page_h):
@@ -6165,6 +6416,67 @@ def _annotation_to_svg(ann, page_h):
     return _svg_text(x, y, body, anchor="start")
 
 
+def _dim_axis_interval(dim, cx, cy, h_side, v_side, bbox):
+    """A dimension's extent along its own dimension-line axis (x for a horizontal
+    dim, y for a vertical one), covering both the lines and the label box — the
+    footprint lane packing must keep clear. Offset-invariant on that axis, so it is
+    computed once at the base offset. Returns (lo, hi) or None for a degenerate dim."""
+    lay = _dim_layout(dim, cx, cy, _DIM_OFFSET_MM, h_side, v_side, bbox)
+    if not lay:
+        return None
+    tx, ty, anchor, text = lay["text"]
+    box = _text_box(tx, ty, anchor, text)
+    if lay["orient"] == "h":
+        vals = [c for ln in lay["lines"] for c in (ln[0], ln[2])] + [box[0], box[2]]
+    else:
+        vals = [c for ln in lay["lines"] for c in (ln[1], ln[3])] + [box[1], box[3]]
+    return (min(vals), max(vals))
+
+
+def _iter_placed_dims(page):
+    """Yield every page dimension with its final placement — the single source of
+    truth shared by the renderer (_compose_page_svg) and the legibility gate
+    (_page_dim_graphics), so the gate checks exactly what is drawn.
+
+    Two modes per yielded dict (`mode`): 'linear' dims (extents, lengths, locations)
+    are grouped by (view, orientation), ordered smallest-span-first, then lane-packed
+    (drawing_gate.pack_lanes) so non-overlapping dims share an offset; Ø/R dims
+    ('leader') are pulled out and drawn as leader callouts stacked beside the view.
+    'linear' yields {mode, dim, cx, cy, offset, h_side, v_side, bbox}; 'leader'
+    yields {mode, dim, cx, cy, idx, bbox}."""
+    from collections import defaultdict
+    from driftpin import drawing_gate
+    views = _page_part_views(page)
+    centres = {v.Name: (cx, cy) for (v, cx, cy) in views}
+    view_by_name = {v.Name: v for (v, cx, cy) in views}
+    by_view = defaultdict(list)
+    for dim in _page_dimensions(page):
+        pv = _dim_parent_view(dim)
+        if pv is None or pv.Name not in centres:
+            continue
+        by_view[pv.Name].append(dim)
+    for vname, dims in by_view.items():
+        cx, cy = centres[vname]
+        view = view_by_name[vname]
+        h_side, v_side = _view_dim_sides(view)
+        bbox = _view_local_bbox(view)
+        leaders = [d for d in dims if _dim_is_leader(d)]
+        linear = [d for d in dims if not _dim_is_leader(d)]
+        for vert in (False, True):   # lane-pack each orientation independently
+            grp = [d for d in linear if _dim_is_vertical(d) == vert]
+            ordered = sorted(grp, key=_dim_span)
+            intervals = [(_dim_axis_interval(d, cx, cy, h_side, v_side, bbox)
+                          or (0.0, 0.0)) for d in ordered]
+            lanes = drawing_gate.pack_lanes(intervals)
+            for dim, lane in zip(ordered, lanes):
+                yield {"mode": "linear", "dim": dim, "cx": cx, "cy": cy,
+                       "offset": _DIM_OFFSET_MM + lane * _DIM_STACK_MM,
+                       "h_side": h_side, "v_side": v_side, "bbox": bbox}
+        for idx, dim in enumerate(leaders):
+            yield {"mode": "leader", "dim": dim, "cx": cx, "cy": cy,
+                   "idx": idx, "bbox": bbox}
+
+
 def _compose_page_svg(page):
     """Build a complete page SVG headless: the template (frame + title block)
     with each view's geometry fragment placed at its page position, plus
@@ -6175,10 +6487,8 @@ def _compose_page_svg(page):
         raise RuntimeError("page has no SVG template to compose onto")
     with open(tpl, encoding="utf-8", errors="replace") as f:
         base = f.read()
-    _, page_h = _page_size_mm(page)
+    page_w, page_h = _page_size_mm(page)
     views = _page_part_views(page)
-    centres = {v.Name: (cx, cy) for (v, cx, cy) in views}
-    view_by_name = {v.Name: v for (v, cx, cy) in views}
     parts = []
     for (v, cx, cy) in views:
         frag = TechDraw.viewPartAsSvg(v)
@@ -6186,30 +6496,23 @@ def _compose_page_svg(page):
             f'<g transform="translate({cx:.4f},{cy:.4f}) scale(1,{_VIEW_Y_SIGN:g})">\n'
             f'{frag}\n</g>'
         )
-    # Group dims by (view, orientation) and stack them outward — smallest span
-    # innermost — so feature dims sit between the part and the overall extents,
-    # the way a manufacturer reads a drawing.
-    from collections import defaultdict
-    groups = defaultdict(list)
-    for dim in _page_dimensions(page):
-        pv = _dim_parent_view(dim)
-        if pv is None or pv.Name not in centres:
-            continue
-        groups[(pv.Name, _dim_is_vertical(dim))].append(dim)
-    for (vname, _vert), dims in groups.items():
-        cx, cy = centres[vname]
-        view = view_by_name[vname]
-        h_side, v_side = _view_dim_sides(view)
-        bbox = _view_local_bbox(view)
-        for idx, dim in enumerate(sorted(dims, key=_dim_span)):
-            svg = _dim_to_svg(dim, cx, cy, _DIM_OFFSET_MM + idx * _DIM_STACK_MM,
-                              h_side, v_side, bbox)
-            if svg:
-                parts.append(svg)
+    # Dimensions: linear dims lane-packed outside the view; Ø/R drawn as leader
+    # callouts beside it (see _iter_placed_dims).
+    for pl in _iter_placed_dims(page):
+        if pl["mode"] == "leader":
+            svg = _leader_to_svg(pl["dim"], pl["cx"], pl["cy"], pl["idx"], pl["bbox"])
+        else:
+            svg = _dim_to_svg(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
+                              pl["h_side"], pl["v_side"], pl["bbox"])
+        if svg:
+            parts.append(svg)
     for ann in _page_annotations(page):
         svg = _annotation_to_svg(ann, page_h)
         if svg:
             parts.append(svg)
+    tb = _title_block_svg(page, page_w, page_h)
+    if tb:
+        parts.append(tb)
     overlay = '<g id="driftpin-overlay">\n' + "\n".join(parts) + "\n</g>\n"
     idx = base.rfind("</svg>")
     if idx == -1:
@@ -6326,14 +6629,83 @@ def _stamp_parent_view(dim, view):
         pass
 
 
+def _stamp_model_ref(dim, ref):
+    """Record, on the dimension, the model-space geometry it references — a circle
+    {"circle":{"center":[x,y,z],"radius":r}} or a span {"span":{"p1":[..],"p2":[..]}}
+    — as JSON in DP_ModelRef. The manufacturability gate (drawing_gate) reads this to
+    decide which feature degree of freedom each dim pins (a Ø on hole A, the X
+    location of hole B), which cannot be recovered from the projected 2D dim alone."""
+    if not hasattr(dim, "DP_ModelRef"):
+        try:
+            dim.addProperty("App::PropertyString", "DP_ModelRef",
+                            "DriftPin", "model-space geometry this dim references (JSON)")
+        except Exception:
+            return
+    try:
+        dim.DP_ModelRef = json.dumps(ref)
+    except Exception:
+        pass
+
+
+def _stamp_tolerance(dim, plus, minus):
+    """Attach a signed tolerance (plus >= minus) to a dimension; rendered by
+    _dim_tol_text as ±/over-under next to the value."""
+    for name, val in (("DP_TolPlus", plus), ("DP_TolMinus", minus)):
+        if not hasattr(dim, name):
+            try:
+                dim.addProperty("App::PropertyFloat", name, "DriftPin",
+                                "dimension tolerance deviation, mm")
+            except Exception:
+                continue
+        try:
+            setattr(dim, name, float(val))
+        except Exception:
+            pass
+
+
+def _resolve_tolerance(tol, basic):
+    """Turn an add_dimension `tolerance` spec into signed (plus, minus) deviations
+    in mm (plus >= minus), or None. Specs: {"sym": 0.1} -> ±0.1;
+    {"plus": .., "minus": ..} -> asymmetric; {"fit": "H7"} or {"fit": "H7/g6"} ->
+    ISO 286 hole-side deviations via tolerance.fit_class at this basic size."""
+    if not tol:
+        return None
+    if isinstance(tol, (int, float)):
+        s = abs(float(tol))
+        return (s, -s)
+    if "sym" in tol:
+        s = abs(float(tol["sym"]))
+        return (s, -s)
+    if "plus" in tol or "minus" in tol:
+        plus = float(tol.get("plus", 0.0))
+        minus = float(tol.get("minus", 0.0))
+        return (max(plus, minus), min(plus, minus))
+    if "fit" in tol:
+        from driftpin.analysis import tolerance as _T
+        code = str(tol["fit"])
+        if "/" not in code:                 # a hole grade only, e.g. "H7"
+            grade = "".join(ch for ch in code if ch.isdigit()) or "7"
+            code = f"{code}/h{grade}"        # pair with an arbitrary shaft; read hole
+        hole = _T.fit_class(float(basic), code)["hole"]
+        return (hole["upper_dev"], hole["lower_dev"])
+    return None
+
+
 def _project_centred(view, vec):
     """Project a 3D model point into the view's centred local 2D frame — the
-    same frame viewPartAsSvg and getLinearPoints use."""
+    same frame viewPartAsSvg and getLinearPoints use. viewPartAsSvg emits geometry
+    PRE-SCALED by the view's Scale, so we scale the projected point to match; at the
+    usual Scale=1 this is a no-op, but it keeps dimensions aligned with the geometry
+    when a view is reduced to fit the sheet."""
     src = view.Source[0]
     centre = src.Shape.BoundBox.Center
     p = view.projectPoint(App.Vector(vec.x, vec.y, vec.z))
     c = view.projectPoint(centre)
-    return App.Vector(p.x - c.x, p.y - c.y, 0.0)
+    try:
+        s = float(view.Scale) or 1.0
+    except Exception:
+        s = 1.0
+    return App.Vector((p.x - c.x) * s, (p.y - c.y) * s, 0.0)
 
 
 @handler("add_dimension")
@@ -6350,6 +6722,9 @@ def _h_add_dimension(p):
                              -> ⌀/R dimension of a hole or arc.
       * view + from_point/to_point -> dimension between two 3D model points.
     kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'.
+    tolerance: optional, attaches a tolerance rendered next to the value —
+      {"sym": 0.1} (±0.1) | {"plus": .., "minus": ..} (asymmetric) |
+      {"fit": "H7"} / {"fit": "H7/g6"} (ISO 286 hole-side deviations at this size).
     Returns {dimensions:[{handle,name,type,value}...]}.
     """
     import TechDraw
@@ -6357,12 +6732,18 @@ def _h_add_dimension(p):
     page = _resolve(p["page"])
     created = []
 
-    def _record(dim, view, true_value=None):
+    def _record(dim, view, true_value=None, model_ref=None):
         if dim is None:
             return
         _stamp_parent_view(dim, view)
         if true_value is not None:
             _stamp_true_value(dim, true_value)
+        if model_ref is not None:
+            _stamp_model_ref(dim, model_ref)
+        tol = _resolve_tolerance(p.get("tolerance"),
+                                 true_value if true_value is not None else 0.0)
+        if tol is not None:
+            _stamp_tolerance(dim, tol[0], tol[1])
         h = _register("dim", dim)
         try:
             shown = float(dim.DP_TrueValue) if hasattr(dim, "DP_TrueValue") \
@@ -6399,18 +6780,21 @@ def _h_add_dimension(p):
         xdir = App.Vector(view.XDirection)
         # lay the dimension across the circle (diameter) or to its rim (radius),
         # along the view's local X so it reads true-size in the face-on view
+        rad = _vscale(xdir, r)  # NOT xdir.multiply(r): that mutates xdir in place
         if kind == "diameter":
-            a = _project_centred(view, centre - xdir.multiply(r))
-            b = _project_centred(view, centre + xdir.multiply(r))
+            a = _project_centred(view, centre - rad)
+            b = _project_centred(view, centre + rad)
             value, prefix = 2.0 * r, "Ø"
         else:
             a = _project_centred(view, centre)
-            b = _project_centred(view, centre + xdir.multiply(r))
+            b = _project_centred(view, centre + rad)
             value, prefix = r, "R"
         dim = TechDraw.makeDistanceDim(view, "DistanceX", a, b)
         if dim is not None:
             _stamp_prefix(dim, prefix)
-        _record(dim, view, true_value=value)
+        _record(dim, view, true_value=value,
+                model_ref={"circle": {"center": [centre.x, centre.y, centre.z],
+                                      "radius": r}})
     elif "edge" in p:
         src = view.Source[0]
         edge = _edge_by_tag(src.Shape, p["edge"])
@@ -6421,14 +6805,19 @@ def _h_add_dimension(p):
         a = _project_centred(view, vs[0].Point)
         b = _project_centred(view, vs[-1].Point)
         dim = TechDraw.makeDistanceDim(view, dim_type, a, b)
-        _record(dim, view, true_value=edge.Length)
+        p0, p1 = vs[0].Point, vs[-1].Point
+        _record(dim, view, true_value=edge.Length,
+                model_ref={"span": {"p1": [p0.x, p0.y, p0.z],
+                                    "p2": [p1.x, p1.y, p1.z]}})
     elif p.get("from_point") and p.get("to_point"):
         fa = App.Vector(*p["from_point"])
         tb = App.Vector(*p["to_point"])
         a = _project_centred(view, fa)
         b = _project_centred(view, tb)
         dim = TechDraw.makeDistanceDim(view, dim_type, a, b)
-        _record(dim, view, true_value=fa.distanceToPoint(tb))
+        _record(dim, view, true_value=fa.distanceToPoint(tb),
+                model_ref={"span": {"p1": list(p["from_point"]),
+                                    "p2": list(p["to_point"])}})
     else:
         raise ValueError(
             "add_dimension needs auto=True, edge=<tag>, or from_point/to_point")
@@ -6458,6 +6847,522 @@ def _h_add_annotation(p):
     doc.recompute()
     h = _register("note", ann)
     return {"handle": h, "name": ann.Name, "text": p["text"]}
+
+
+@handler("set_title_block")
+def _h_set_title_block(p):
+    """Populate the drawing's title block (issue #85 Part A3). The default FreeCAD
+    template is a bare sheet, so DriftPin composes its own bottom-right block on
+    SVG/PDF export. Scale, sheet size, units, and part name are auto-derived; the
+    supplied fields override or add to them. Fields: part, material, rev, drawn_by,
+    date, project, units. Calling this opts the page into rendering the block.
+    Returns {handle, name, fields}."""
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    keys = ("part", "material", "rev", "drawn_by", "by", "date", "project", "units")
+    fields = {k: p[k] for k in keys if p.get(k) is not None}
+    _stamp_title_block(page, fields)
+    doc.recompute()
+    return {"handle": p["page"], "name": page.Name, "fields": fields}
+
+
+# --- drawing-is-manufacturable gates (issue #85, the "Next layer") ------------
+#
+# The renderer places exactly the dimensions it is told and reads each off the real
+# solid (DP_TrueValue): a green render is NOT a manufacturable drawing. These two
+# handlers are the gate, one layer up — they validate the *drawing*: does the
+# dimension set reconstruct the part (completeness), and is the sheet legible? The
+# accounting/geometry lives in driftpin.drawing_gate (FreeCAD-free, unit-tested);
+# these shims read the descriptors off the Part.Shape and the placed graphics.
+
+
+def _surf_kind(face):
+    s = getattr(face, "Surface", None)
+    return type(s).__name__ if s is not None else ""
+
+
+def _v3(v):
+    return [float(v.x), float(v.y), float(v.z)]
+
+
+def _vscale(v, k):
+    """v * k as a NEW vector. FreeCAD's Vector.multiply scales IN PLACE and returns
+    self, so `axis.multiply(t)` silently corrupts `axis` for any later use — this
+    avoids that trap."""
+    return App.Vector(v.x * k, v.y * k, v.z * k)
+
+
+def _axis_canon(axis):
+    """Sign-normalise an axis direction so collinear-but-opposite axes share a key
+    (the dominant component is made positive). Returns a fresh unit vector and never
+    mutates the input (FreeCAD's Vector.normalize/multiply scale in place)."""
+    a = App.Vector(axis)
+    n = a.Length
+    if n > 1e-12:
+        a = _vscale(a, 1.0 / n)
+    i = max(range(3), key=lambda k: abs((a.x, a.y, a.z)[k]))
+    if (a.x, a.y, a.z)[i] < 0:
+        a = _vscale(a, -1.0)
+    return a
+
+
+def _cyl_is_hole(face, surf):
+    """A cylindrical face is a HOLE wall (material outside) iff its surface normal
+    points inward, toward the axis; a boss (material inside) points outward."""
+    try:
+        u0, u1, v0, v1 = face.ParameterRange
+        um, vm = (u0 + u1) / 2.0, (v0 + v1) / 2.0
+        pt = face.valueAt(um, vm)
+        n = face.normalAt(um, vm)
+        axis = _axis_canon(surf.Axis)
+        rel = pt - surf.Center
+        radial = rel - _vscale(axis, rel.dot(axis))
+        if radial.Length < 1e-9:
+            return False
+        radial.normalize()
+        # face.normalAt already accounts for face orientation
+        return n.dot(radial) < 0.0
+    except Exception:
+        return False
+
+
+def _cyl_uextent(face):
+    """Angular (U) span of a cylindrical face in radians. A full bore/boss is ~2π;
+    a fillet edge-round is a partial cylinder (~π/2)."""
+    try:
+        u0, u1, _v0, _v1 = face.ParameterRange
+        return abs(u1 - u0)
+    except Exception:
+        return 2.0 * math.pi
+
+
+_FULL_CYL = 1.5 * math.pi  # U-extent above this == a full bore/boss, not a fillet
+
+
+def _is_axis_aligned(n, tol=0.05):
+    """True if a unit normal points along a principal axis (±X/±Y/±Z)."""
+    comps = sorted(abs(c) for c in (n.x, n.y, n.z))
+    return comps[0] < tol and comps[1] < tol and comps[2] > 1.0 - tol
+
+
+def _enumerate_fillets_chamfers(shape, bb):
+    """Fillet (partial-cylinder edge round) and chamfer (off-axis narrow bevel)
+    features, deduped to DISTINCT sizes — a drawing calls out "R3" or "2×45°" once,
+    not per edge. A fillet is matched by an R dimension, a chamfer by a linear one."""
+    out = []
+    diag = bb.DiagonalLength or 1.0
+    min_dim = min(bb.XLength, bb.YLength, bb.ZLength) or diag
+    radii = set()
+    for f in shape.Faces:
+        if _surf_kind(f) != "Cylinder" or _cyl_uextent(f) >= _FULL_CYL:
+            continue
+        r = round(float(f.Surface.Radius), 2)
+        if 1e-3 < r < 0.3 * diag:            # an edge round, not a large arc
+            radii.add(r)
+    for i, r in enumerate(sorted(radii), 1):
+        out.append({"id": f"FIL{i}", "kind": "fillet", "radius": r})
+    sizes = set()
+    for f in shape.Faces:
+        if _surf_kind(f) != "Plane":
+            continue
+        try:
+            u0, u1, v0, v1 = f.ParameterRange
+            n = f.normalAt((u0 + u1) / 2.0, (v0 + v1) / 2.0)
+        except Exception:
+            continue
+        if _is_axis_aligned(n):
+            continue
+        mid = sorted((f.BoundBox.XLength, f.BoundBox.YLength, f.BoundBox.ZLength))[1]
+        if 1e-3 < mid < 0.5 * min_dim:        # a narrow bevel, not a main angled face
+            sizes.add(round(mid, 2))
+    for i, sz in enumerate(sorted(sizes), 1):
+        out.append({"id": f"CHM{i}", "kind": "chamfer", "size": sz})
+    return out
+
+
+def _enumerate_features(shape, process):
+    """Build drawing_gate feature descriptors off the real solid: the overall
+    bounding box, plus holes (inward cylinders, grouped coaxially so a counterbore
+    is recognised) for a prismatic part, or outer cylindrical steps for a turned
+    one, plus fillet (partial-cylinder edge-round) and chamfer (off-axis bevel)
+    features. Deliberately conservative — an unrecognised face simply yields no slot
+    rather than a wrong one."""
+    bb = shape.BoundBox
+    feats = [{"id": "BBOX", "kind": "bbox",
+              "size": [bb.XLength, bb.YLength, bb.ZLength]}]
+
+    # Only FULL cylinders are holes/bores/steps; partial cylinders are edge fillets
+    # (handled in _enumerate_fillets_chamfers), so a fillet is never mistaken for a
+    # tiny blind hole.
+    cyls = []
+    for f in shape.Faces:
+        if _surf_kind(f) != "Cylinder":
+            continue
+        if _cyl_uextent(f) < _FULL_CYL:
+            continue
+        surf = f.Surface
+        cyls.append((f, surf, _cyl_is_hole(f, surf)))
+
+    if process == "turned":
+        # outer cylindrical steps: dia + axial length, concentric by construction
+        axis = None
+        bosses = [(f, s) for (f, s, hole) in cyls if not hole]
+        if bosses:
+            axis = _axis_canon(bosses[0][1].Axis)
+        n = 0
+        for (f, s) in sorted(bosses, key=lambda fs: fs[0].BoundBox.Center.z):
+            n += 1
+            fb = f.BoundBox
+            ai = max(range(3), key=lambda k: (fb.XLength, fb.YLength, fb.ZLength)[k])
+            length = (fb.XLength, fb.YLength, fb.ZLength)[ai]
+            feats.append({"id": f"S{n}", "kind": "cyl_step",
+                          "dia": 2.0 * float(s.Radius), "length": float(length)})
+        # internal bores (inward cylinders) become turned bores: Ø + depth
+        nb = 0
+        for (f, s, hole) in cyls:
+            if not hole:
+                continue
+            nb += 1
+            fb = f.BoundBox
+            ai = max(range(3), key=lambda k: (fb.XLength, fb.YLength, fb.ZLength)[k])
+            depth = (fb.XLength, fb.YLength, fb.ZLength)[ai]
+            through = abs(depth - (bb.XLength, bb.YLength, bb.ZLength)[ai]) < 0.05
+            feats.append({"id": f"B{nb}", "kind": "bore",
+                          "dia": 2.0 * float(s.Radius),
+                          "depth": None if through else float(depth)})
+        feats += _enumerate_fillets_chamfers(shape, bb)
+        return feats
+
+    # prismatic: group inward cylinders coaxially (a counterbore = two radii on one
+    # axis line); smallest radius is the through bore, larger ones counterbores.
+    groups = {}
+    for (f, s, hole) in cyls:
+        if not hole:
+            continue
+        axis = _axis_canon(s.Axis)
+        foot = s.Center - _vscale(axis, s.Center.dot(axis))
+        key = (round(axis.x, 3), round(axis.y, 3), round(axis.z, 3),
+               round(foot.x, 2), round(foot.y, 2), round(foot.z, 2))
+        groups.setdefault(key, []).append((f, s))
+    def _axis_min(bbx, k):
+        return (bbx.XMin, bbx.YMin, bbx.ZMin)[k]
+
+    def _axis_max(bbx, k):
+        return (bbx.XMax, bbx.YMax, bbx.ZMax)[k]
+
+    n = 0
+    for key, members in groups.items():
+        n += 1
+        members.sort(key=lambda fs: fs[1].Radius)
+        f0, s0 = members[0]
+        c = s0.Center
+        axis = _axis_canon(s0.Axis)
+        ai = max(range(3), key=lambda k: abs((axis.x, axis.y, axis.z)[k]))
+        # through-ness from the UNION of the coaxial members' axial spans, so a
+        # counterbored through-hole (a narrow bore for part of the depth, a wider
+        # recess for the rest) reads through — the bore face alone spans only its
+        # own segment and would look blind.
+        gmin = min(_axis_min(fc.BoundBox, ai) for (fc, _s) in members)
+        gmax = max(_axis_max(fc.BoundBox, ai) for (fc, _s) in members)
+        span = gmax - gmin
+        through = abs(span - (bb.XLength, bb.YLength, bb.ZLength)[ai]) < 0.05
+        # blind-bore depth is the bore face's own axial length (not the wider recess)
+        bore_depth = (f0.BoundBox.XLength, f0.BoundBox.YLength,
+                      f0.BoundBox.ZLength)[ai]
+        hid = f"H{n}"
+        feats.append({"id": hid, "kind": "hole", "dia": 2.0 * float(s0.Radius),
+                      "through": bool(through),
+                      "depth": None if through else float(bore_depth),
+                      "center": _v3(c), "axis": _v3(axis)})
+        for (fc, sc) in members[1:]:
+            cbdepth = (fc.BoundBox.XLength, fc.BoundBox.YLength,
+                       fc.BoundBox.ZLength)[ai]
+            feats.append({"id": f"{hid}.cb", "kind": "counterbore", "parent": hid,
+                          "dia": 2.0 * float(sc.Radius), "depth": float(cbdepth)})
+    feats += _enumerate_fillets_chamfers(shape, bb)
+    return feats
+
+
+def _infer_process(shape):
+    """Guess the manufacturing process from the solid: a part with an outer
+    cylindrical/conical boss whose cross-section perpendicular to its axis is round
+    (the two perpendicular bbox extents ≈ equal ≈ the boss diameter) is TURNED;
+    otherwise PRISMATIC. Callers may override with an explicit `process`."""
+    bb = shape.BoundBox
+    dims = (bb.XLength, bb.YLength, bb.ZLength)
+    for f in shape.Faces:
+        if _surf_kind(f) not in ("Cylinder", "Cone"):
+            continue
+        surf = f.Surface
+        try:
+            if _cyl_is_hole(f, surf):
+                continue
+            axis = _axis_canon(surf.Axis)
+            ai = max(range(3), key=lambda k: abs((axis.x, axis.y, axis.z)[k]))
+            perp = [dims[k] for k in range(3) if k != ai]
+            if perp[0] <= 1e-9:
+                continue
+            if abs(perp[0] - perp[1]) / max(perp) < 0.05:
+                return "turned"
+        except Exception:
+            continue
+    return "prismatic"
+
+
+def _datum_faces(obj, shape):
+    """The faces annotated role='datum' on the source body (issue #85 datum hook),
+    re-resolved against the current geometry. A location dimension is expected to be
+    measured FROM one of these functional references."""
+    roles = _read_face_roles(obj)
+    if not roles:
+        return []
+    current = {f"f_{_hash_sig(_face_signature(f))}": f for f in shape.Faces}
+    out = []
+    for _name, e in roles.items():
+        if e.get("role") == "datum":
+            f = current.get(e.get("tag"))
+            if f is not None:
+                out.append(f)
+    return out
+
+
+def _point_on_any_face(faces, pt, tol=0.1):
+    v = Part.Vertex(App.Vector(float(pt[0]), float(pt[1]), float(pt[2])))
+    for f in faces:
+        try:
+            if f.distToShape(v)[0] <= tol:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _dim_descriptors(page, datum_faces=None):
+    """Read each placed DrawViewDimension into a drawing_gate dim descriptor:
+    its kind (Ø/R via DP_Prefix, else linear Type), its true value (DP_TrueValue,
+    so it reads the real geometry), and the model-space geometry it references
+    (DP_ModelRef → circle/span). Dims without a model ref still size-match by value.
+    When datum faces are declared, a span dim's `from_datum` reflects whether an
+    endpoint actually sits on a datum face (else it is left True, unenforced)."""
+    out = []
+    datum_faces = datum_faces or []
+    centres = {v.Name for (v, _cx, _cy) in _page_part_views(page)}
+    for dim in _page_dimensions(page):
+        pv = _dim_parent_view(dim)
+        if pv is None or pv.Name not in centres:
+            continue
+        prefix = str(getattr(dim, "DP_Prefix", "") or "")
+        if prefix == "Ø":
+            kind = "Diameter"
+        elif prefix == "R":
+            kind = "Radius"
+        else:
+            kind = str(getattr(dim, "Type", "Distance"))
+        try:
+            value = float(dim.DP_TrueValue) if hasattr(dim, "DP_TrueValue") \
+                else float(dim.getRawValue())
+        except Exception:
+            value = 0.0
+        d = {"name": dim.Name, "type": kind, "value": value,
+             "circle": None, "span": None, "from_datum": True}
+        raw = str(getattr(dim, "DP_ModelRef", "") or "")
+        if raw:
+            try:
+                ref = json.loads(raw)
+                d["circle"] = ref.get("circle")
+                d["span"] = ref.get("span")
+            except Exception:
+                pass
+        if datum_faces and d["span"]:
+            d["from_datum"] = (_point_on_any_face(datum_faces, d["span"]["p1"])
+                               or _point_on_any_face(datum_faces, d["span"]["p2"]))
+        out.append(d)
+    return out
+
+
+@handler("drawing_gate")
+def _h_drawing_gate(p):
+    """Manufacturing-completeness gate for a drawing page (issue #85 Part B): does
+    the placed dimension set fully and non-redundantly reconstruct the part? Reads
+    the real solid + the placed dimensions, accounts degrees of freedom
+    (process-aware: prismatic locates holes X/Y from a datum, turned is concentric
+    Ø + length), and returns {ok, violations, slots_total, slots_covered, process,
+    ...}. Each violation carries a code (under/redundant/conflict/extra/no_datum)
+    and a human reason. `process`: 'auto' (default) | 'prismatic' | 'turned'."""
+    from driftpin import drawing_gate
+    page = _resolve(p["page"])
+    doc = _active_doc()
+    doc.recompute()
+    views = _page_part_views(page)
+    if not views:
+        raise ValueError("page has no part-views to gate")
+    src = views[0][0].Source[0]
+    shape = src.Shape
+    process = p.get("process", "auto")
+    if process == "auto":
+        process = _infer_process(shape)
+    feats = _enumerate_features(shape, process)
+    datum_faces = _datum_faces(src, shape)
+    dims = _dim_descriptors(page, datum_faces)
+    # enforce datum-origin discipline when datum faces are declared (or forced on)
+    datums_declared = bool(datum_faces) or bool(p.get("datums_declared", False))
+    rep = drawing_gate.completeness_report(
+        feats, dims, process, datums_declared=datums_declared)
+    rep["enumerated_features"] = [{"id": f["id"], "kind": f["kind"]} for f in feats]
+    rep["datum_faces"] = len(datum_faces)
+    return rep
+
+
+def _text_box(tx, ty, anchor, text):
+    """Approximate a dimension label's bounding box in page mm from its anchor and
+    a sans-serif glyph-width estimate (≈0.6·font per char). ty is the text baseline;
+    the box runs one font-height above it."""
+    w = max(1, len(text)) * _DIM_FONT_MM * 0.6
+    h = _DIM_FONT_MM
+    if anchor == "start":
+        x0, x1 = tx, tx + w
+    elif anchor == "end":
+        x0, x1 = tx - w, tx
+    else:
+        x0, x1 = tx - w / 2.0, tx + w / 2.0
+    return [x0, ty - h, x1, ty]
+
+
+def _page_dim_graphics(page):
+    """Extract the placed dimension graphics (label boxes, line segments) and the
+    view-outline boxes in page mm. Consumes the SAME placement iterator the composer
+    renders from (_iter_placed_dims), so the legibility gate checks exactly what is
+    drawn — including the lane packing."""
+    views = _page_part_views(page)
+    view_boxes = []
+    for (v, cx, cy) in views:
+        bbox = _view_local_bbox(v)
+        if not bbox:
+            continue
+        bxmin, bxmax, bymin, bymax = bbox
+        xs = sorted((cx + bxmin, cx + bxmax))
+        ys = sorted((cy + _VIEW_Y_SIGN * bymax, cy + _VIEW_Y_SIGN * bymin))
+        view_boxes.append({"id": v.Name, "box": [xs[0], ys[0], xs[1], ys[1]]})
+    # the title block is keep-out too: a dim line crossing it is a legibility fault
+    if _page_title_fields(page) is not None:
+        pw, ph = _page_size_mm(page)
+        view_boxes.append({"id": "TitleBlock", "box": _title_block_box(pw, ph)})
+
+    labels, segments = [], []
+    for pl in _iter_placed_dims(page):
+        if pl["mode"] == "leader":
+            lay = _leader_layout(pl["dim"], pl["cx"], pl["cy"], pl["idx"], pl["bbox"])
+        else:
+            lay = _dim_layout(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
+                              pl["h_side"], pl["v_side"], pl["bbox"])
+        if not lay:
+            continue
+        vname = _dim_parent_view(pl["dim"]).Name
+        for ln in lay["lines"]:
+            segments.append({"id": pl["dim"].Name, "p1": [ln[0], ln[1]],
+                             "p2": [ln[2], ln[3]], "refs": [vname]})
+        tx, ty, anchor, text = lay["text"]
+        labels.append({"id": pl["dim"].Name, "text": text,
+                       "box": _text_box(tx, ty, anchor, text)})
+    return labels, segments, view_boxes
+
+
+@handler("drawing_legibility")
+def _h_drawing_legibility(p):
+    """Legibility gate for a drawing page (issue #85 Part A): on the ACTUAL placed
+    graphics, flag overlapping dimension labels, dimension lines that cross a view
+    they don't reference, and anything past the sheet border. Returns {ok,
+    violations, labels, segments, views}; each violation has a code
+    (overlap/crosses_view/out_of_border) and a reason. `min_gap` mm (default 0.5)
+    is the breathing room required between labels."""
+    from driftpin import drawing_gate
+    page = _resolve(p["page"])
+    _active_doc().recompute()
+    labels, segments, view_boxes = _page_dim_graphics(page)
+    pw, ph = _page_size_mm(page)
+    border = [0.0, 0.0, pw, ph]
+    return drawing_gate.legibility_report(
+        labels, segments, view_boxes, border, min_gap=float(p.get("min_gap", 0.5)))
+
+
+def _page_dim_envelope(page):
+    """The bounding box [x0,y0,x1,y1] in page mm of everything DriftPin draws —
+    view outlines, dimension lines, and dimension labels — i.e. the real footprint
+    the sheet must contain. None if nothing is placed yet."""
+    labels, segments, view_boxes = _page_dim_graphics(page)
+    xs, ys = [], []
+    for b in view_boxes:
+        xs += [b["box"][0], b["box"][2]]
+        ys += [b["box"][1], b["box"][3]]
+    for lab in labels:
+        xs += [lab["box"][0], lab["box"][2]]
+        ys += [lab["box"][1], lab["box"][3]]
+    for seg in segments:
+        xs += [seg["p1"][0], seg["p2"][0]]
+        ys += [seg["p1"][1], seg["p2"][1]]
+    if not xs:
+        return None
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _page_top_views(page):
+    return [o for o in page.Views
+            if o.TypeId == "TechDraw::DrawProjGroup" or _is_partview(o)]
+
+
+@handler("fit_page")
+def _h_fit_page(p):
+    """Auto-fit the drawing to its sheet (issue #85 Part A3+): recentre the views so
+    the part AND its placed dimensions sit inside the printable border (default 8 mm
+    margins, clear of the title block). The projection group's Automatic scale
+    already sizes the part to the sheet; the dimensions extend a fixed margin beyond
+    it, which at the default placement can run off an edge — this slides the drawing
+    into the printable area. Returns {scale, fits, envelope, border}; fits=False
+    means the part + dims are too large even centred (use a larger sheet). Call it
+    after the dimensions are placed. (Rescaling is intentionally NOT done here: a
+    dimension's points are baked at creation, so changing Scale afterwards would
+    misalign them — size the view before dimensioning instead.)"""
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    doc.recompute()
+    pw, ph = _page_size_mm(page)
+    margin = float(p.get("margin", 8.0))
+    border = [margin, margin, pw - margin, ph - margin]
+    # keep clear of the title block (bottom-right): trim the printable height
+    if _page_title_fields(page) is not None:
+        tb = _title_block_box(pw, ph)
+        border[3] = min(border[3], tb[1] - margin)
+    views = _page_top_views(page)
+    if not views:
+        raise ValueError("page has no views to fit")
+
+    def _fits(e):
+        return (e is not None and e[0] >= border[0] - 0.1 and e[1] >= border[1] - 0.1
+                and e[2] <= border[2] + 0.1 and e[3] <= border[3] + 0.1)
+
+    env = _page_dim_envelope(page)
+    for _ in range(4):
+        if env is None or _fits(env):
+            break
+        # recentre into the printable area (SVG +Y down; FreeCAD view Y is +up)
+        dx = (border[0] - env[0] if env[0] < border[0]
+              else border[2] - env[2] if env[2] > border[2] else 0.0)
+        dy = (border[1] - env[1] if env[1] < border[1]
+              else border[3] - env[3] if env[3] > border[3] else 0.0)
+        if abs(dx) < 0.05 and abs(dy) < 0.05:
+            break   # already aligned on both axes, or genuinely too big to fit
+        for o in views:
+            try:
+                o.X = float(o.X) + dx
+                o.Y = float(o.Y) - dy   # SVG-down shift == FreeCAD-Y-up decrease
+            except Exception:
+                pass
+        doc.recompute()
+        env = _page_dim_envelope(page)
+
+    scale = float(views[0].Scale) if hasattr(views[0], "Scale") else 1.0
+    return {"scale": scale, "fits": bool(_fits(env)),
+            "envelope": env, "border": border}
 
 
 # --- tessellation -------------------------------------------------------------

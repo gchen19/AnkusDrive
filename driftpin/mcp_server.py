@@ -2012,6 +2012,7 @@ def add_dimension(
     from_point: list | None = None,
     to_point: list | None = None,
     views: list | None = None,
+    tolerance: dict | None = None,
 ) -> dict:
     """Add dimension(s) to a drawing page.
 
@@ -2027,10 +2028,16 @@ def add_dimension(
         two 3D points.
     view: a view handle, object name, or projection code ('Front', 'Top', ...).
     kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'.
+    tolerance: optional, rendered next to the value (a machinist needs it to make
+      the part to size): {"sym": 0.1} for ±0.1, {"plus": .., "minus": ..} for an
+      asymmetric tolerance, or {"fit": "H7"} / {"fit": "H7/g6"} to look up ISO 286
+      hole-side limits at the dimension's basic size.
     Returns {dimensions: [{handle, name, type, value}, ...]} — value is the
     true measured size of each dimension created.
     """
     params: dict = {"page": page}
+    if tolerance is not None:
+        params["tolerance"] = tolerance
     if auto:
         params["auto"] = True
         if views is not None:
@@ -2057,6 +2064,85 @@ def add_annotation(page: str, text: str, x: float = 20.0, y: float = 20.0,
     mm (origin bottom-left, +Y up, matching TechDraw view placement).
     Returns {handle, name, text}."""
     return _call("add_annotation", page=page, text=text, x=x, y=y, name=name)
+
+
+@mcp.tool()
+def set_title_block(
+    page: str,
+    part: str | None = None,
+    material: str | None = None,
+    rev: str | None = None,
+    drawn_by: str | None = None,
+    date: str | None = None,
+    project: str | None = None,
+    units: str | None = None,
+) -> dict:
+    """Populate the drawing's title block. FreeCAD's default template is a bare
+    sheet, so DriftPin composes its own block in the bottom-right corner on SVG/PDF
+    export. Scale, sheet size, units, and part name are auto-derived from the page;
+    the fields here override or add to them (a machinist needs material + scale +
+    units to cut from the sheet). Calling this opts the page into rendering the
+    block. Returns {handle, name, fields}."""
+    params: dict = {"page": page}
+    for k, v in (("part", part), ("material", material), ("rev", rev),
+                 ("drawn_by", drawn_by), ("date", date),
+                 ("project", project), ("units", units)):
+        if v is not None:
+            params[k] = v
+    return _call("set_title_block", **params)
+
+
+@mcp.tool()
+def drawing_gate(page: str, process: str = "auto",
+                 datums_declared: bool = False) -> dict:
+    """Manufacturing-completeness gate for a drawing page: does the placed
+    dimension set fully and non-redundantly reconstruct the part? A green render
+    is not a manufacturable drawing — this validates the *drawing* itself, the way
+    the geometry-realizes-declaration gate validates an assembly.
+
+    Reads the real solid + the placed dimensions and accounts degrees of freedom,
+    process-aware: a 'prismatic' (milled/plate) part must locate each hole by X/Y
+    from a datum and size the block W×H×T; a 'turned' part is concentric, so a step
+    needs only Ø + axial length. process='auto' infers it from the geometry.
+
+    Returns {ok, violations, slots_total, slots_covered, process, features,
+    dimensions, enumerated_features, datum_faces}. Each violation has a `code`
+    (under = a feature size/location is missing; redundant = a DOF dimensioned more
+    than once; conflict = dimensioned twice with disagreeing values; extra = a dim
+    that pins nothing; no_datum = a location not taken from a datum) and a human
+    `reason`. ok=True (empty violations) means the drawing is manufacturing-complete.
+
+    Datum-origin discipline turns on automatically when the part has faces annotated
+    role='datum' (annotate_face): a location dimension not measured from a datum face
+    is then flagged no_datum. Set datums_declared=True to force the check on even
+    without annotated datums."""
+    return _call("drawing_gate", page=page, process=process,
+                 datums_declared=datums_declared)
+
+
+@mcp.tool()
+def fit_page(page: str, margin: float = 8.0) -> dict:
+    """Auto-fit a drawing to its sheet: recentre the views so the part AND its
+    placed dimensions sit inside the printable border (clear of the title block).
+    The projection group's Automatic scale already sizes the part; its dimensions
+    extend a fixed margin beyond it which can run off an edge — call this after
+    placing dimensions to slide everything inside. `margin` mm is the border inset.
+    Returns {scale, fits, envelope, border}; fits=False means the part + dims are too
+    large even when centred (use a larger sheet)."""
+    return _call("fit_page", page=page, margin=margin)
+
+
+@mcp.tool()
+def drawing_legibility(page: str, min_gap: float = 0.5) -> dict:
+    """Legibility gate for a drawing page: on the ACTUAL placed graphics, flag the
+    ways the layout becomes unreadable — overlapping dimension labels, a dimension
+    line crossing a view it does not reference, or anything past the sheet border.
+
+    min_gap (mm) is the breathing room required between two labels. Returns {ok,
+    violations, labels, segments, views}; each violation has a `code`
+    (overlap/crosses_view/out_of_border) and a human `reason`. ok=True means the
+    placed dimensions read cleanly on the sheet."""
+    return _call("drawing_legibility", page=page, min_gap=min_gap)
 
 
 @mcp.tool()

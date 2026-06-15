@@ -52,20 +52,12 @@
 <text x="133.500" y="35.600" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">30.00</text>
 </g>
 <g>
-<line x1="142.500" y1="66.000" x2="142.500" y2="29.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
-<line x1="184.500" y1="66.000" x2="184.500" y2="29.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
-<line x1="142.500" y1="30.000" x2="184.500" y2="30.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
-<path d="M 142.500 30.000 L 139.900 30.858 L 139.900 29.142 Z" fill="#0048a0" stroke="none"/>
-<path d="M 184.500 30.000 L 187.100 29.142 L 187.100 30.858 Z" fill="#0048a0" stroke="none"/>
-<text x="163.500" y="28.600" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">Ø12.00</text>
-</g>
-<g>
-<line x1="118.500" y1="46.000" x2="118.500" y2="22.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
-<line x1="178.500" y1="46.000" x2="178.500" y2="22.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
-<line x1="118.500" y1="23.000" x2="178.500" y2="23.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
-<path d="M 118.500 23.000 L 115.900 23.858 L 115.900 22.142 Z" fill="#0048a0" stroke="none"/>
-<path d="M 178.500 23.000 L 181.100 22.142 L 181.100 23.858 Z" fill="#0048a0" stroke="none"/>
-<text x="148.500" y="21.600" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">60.00</text>
+<line x1="118.500" y1="46.000" x2="118.500" y2="29.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="178.500" y1="46.000" x2="178.500" y2="29.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="118.500" y1="30.000" x2="178.500" y2="30.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 118.500 30.000 L 115.900 30.858 L 115.900 29.142 Z" fill="#0048a0" stroke="none"/>
+<path d="M 178.500 30.000 L 181.100 29.142 L 181.100 30.858 Z" fill="#0048a0" stroke="none"/>
+<text x="148.500" y="28.600" font-size="3.2" font-family="sans-serif" text-anchor="middle" fill="#0048a0" stroke="none">60.00</text>
 </g>
 <g>
 <line x1="148.500" y1="46.000" x2="108.500" y2="46.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
@@ -83,6 +75,36 @@
 <path d="M 102.500 46.000 L 101.642 43.400 L 103.358 43.400 Z" fill="#0048a0" stroke="none"/>
 <text x="101.000" y="67.120" font-size="3.2" font-family="sans-serif" text-anchor="end" fill="#0048a0" stroke="none">40.00</text>
 </g>
-<text x="14.000" y="194.000" font-size="3.2" font-family="sans-serif" text-anchor="start" fill="#0048a0" stroke="none">MOUNT PLATE  rev A  (mm)</text>
+<g>
+<line x1="153.803" y1="63.193" x2="182.500" y2="48.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<line x1="182.500" y1="48.000" x2="186.500" y2="48.000" stroke="#0048a0" stroke-width="0.18" fill="none"/>
+<path d="M 153.803 63.193 L 155.699 61.218 L 156.502 62.734 Z" fill="#0048a0" stroke="none"/>
+<text x="187.000" y="49.120" font-size="3.2" font-family="sans-serif" text-anchor="start" fill="#0048a0" stroke="none">Ø12.00 +0.018/-0</text>
+</g>
+<g id="driftpin-titleblock">
+<line x1="196.00" y1="177.00" x2="292.00" y2="177.00" stroke="#000" stroke-width="0.3" fill="none"/>
+<line x1="196.00" y1="205.00" x2="292.00" y2="205.00" stroke="#000" stroke-width="0.3" fill="none"/>
+<line x1="196.00" y1="177.00" x2="196.00" y2="205.00" stroke="#000" stroke-width="0.3" fill="none"/>
+<line x1="292.00" y1="177.00" x2="292.00" y2="205.00" stroke="#000" stroke-width="0.3" fill="none"/>
+<line x1="196.00" y1="184.00" x2="292.00" y2="184.00" stroke="#000" stroke-width="0.3" fill="none"/>
+<line x1="196.00" y1="191.00" x2="292.00" y2="191.00" stroke="#000" stroke-width="0.3" fill="none"/>
+<line x1="196.00" y1="198.00" x2="292.00" y2="198.00" stroke="#000" stroke-width="0.3" fill="none"/>
+<line x1="244.00" y1="184.00" x2="244.00" y2="205.00" stroke="#000" stroke-width="0.3" fill="none"/>
+<text x="197.50" y="179.40" font-size="1.9" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">PART / DRAWING</text>
+<text x="197.50" y="183.00" font-size="3.0" font-family="sans-serif" text-anchor="start" font-weight="bold" fill="#000" stroke="none">MOUNT PLATE</text>
+<text x="197.50" y="186.40" font-size="1.9" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">MATERIAL</text>
+<text x="197.50" y="190.00" font-size="3.0" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">AL 6061-T6</text>
+<text x="245.50" y="186.40" font-size="1.9" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">SCALE</text>
+<text x="245.50" y="190.00" font-size="3.0" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">1:1</text>
+<text x="197.50" y="193.40" font-size="1.9" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">SIZE / UNITS</text>
+<text x="197.50" y="197.00" font-size="3.0" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">A4  (mm)</text>
+<text x="245.50" y="193.40" font-size="1.9" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">REV</text>
+<text x="245.50" y="197.00" font-size="3.0" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">A</text>
+<text x="197.50" y="200.40" font-size="1.9" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">DRAWN BY</text>
+<text x="197.50" y="204.00" font-size="3.0" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">DriftPin</text>
+<text x="245.50" y="200.40" font-size="1.9" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">DATE</text>
+<text x="245.50" y="204.00" font-size="3.0" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">2026-06-15</text>
+<text x="197.50" y="176.00" font-size="2.2" font-family="sans-serif" text-anchor="start" fill="#000" stroke="none">DEMO</text>
+</g>
 </g>
 </svg>
