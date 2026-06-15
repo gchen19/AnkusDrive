@@ -44,7 +44,7 @@ _INTERNAL_HANDLERS = {"list_handles", "recompute_stress"}
 # do not add to it. (Seeded 2026-06-01 from the then-current corpus.)
 _RETURNS_GRANDFATHERED = {
     'add_part', 'add_projection_group', 'add_sketch_constraint', 'add_sketch_external', 'draft',
-    'export_drawing', 'export_shape', 'fem_add_constraint', 'fem_buckling',
+    'export_shape', 'fem_add_constraint', 'fem_buckling',
     'fem_mesh_refinement', 'fem_modal', 'fem_set_material', 'fem_set_solver', 'get_object',
     'hole', 'linear_pattern', 'list_assembly_parts', 'list_documents', 'loft',
     'make_datum_plane', 'make_drawing_page', 'mirrored', 'pad', 'partdesign_chamfer',

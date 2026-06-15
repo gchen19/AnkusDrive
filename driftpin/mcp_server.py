@@ -1995,8 +1995,68 @@ def add_projection_group(
 
 @mcp.tool()
 def export_drawing(page: str, path: str) -> dict:
-    """Export a drawing page to PDF or SVG. Format inferred from path extension."""
+    """Export a drawing page to PDF, SVG, or DXF (format inferred from the path
+    extension), headless. PDF/SVG are composed from the template, the per-view
+    geometry, and any dimensions/annotations on the page; DXF uses FreeCAD's
+    native page writer. Returns {path, size, format, views, dimensions}."""
     return _call("export_drawing", page=page, path=path)
+
+
+@mcp.tool()
+def add_dimension(
+    page: str,
+    view: str | None = None,
+    auto: bool = False,
+    edge: str | None = None,
+    kind: str = "aligned",
+    from_point: list | None = None,
+    to_point: list | None = None,
+    views: list | None = None,
+) -> dict:
+    """Add dimension(s) to a drawing page.
+
+    Modes (pick one):
+      * auto=True: overall horizontal + vertical extent dimensions for every
+        part-view (or only those named in `views`, by name or projection code).
+      * view + edge=<edge tag>: dimension the true length of a model edge,
+        projected into that view. The printed value is the real measured
+        length, not the foreshortened projection.
+      * view + kind='diameter'|'radius' + edge=<circular edge tag>: a ⌀/R
+        dimension of a hole or arc.
+      * view + from_point/to_point ([x,y,z] model points): dimension between
+        two 3D points.
+    view: a view handle, object name, or projection code ('Front', 'Top', ...).
+    kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'.
+    Returns {dimensions: [{handle, name, type, value}, ...]} — value is the
+    true measured size of each dimension created.
+    """
+    params: dict = {"page": page}
+    if auto:
+        params["auto"] = True
+        if views is not None:
+            params["views"] = views
+    else:
+        if view is None:
+            raise ValueError("add_dimension requires `view` unless auto=True")
+        params["view"] = view
+        params["kind"] = kind
+        if edge is not None:
+            params["edge"] = edge
+        elif from_point is not None and to_point is not None:
+            params["from_point"] = from_point
+            params["to_point"] = to_point
+        else:
+            raise ValueError("manual add_dimension needs edge or from_point/to_point")
+    return _call("add_dimension", **params)
+
+
+@mcp.tool()
+def add_annotation(page: str, text: str, x: float = 20.0, y: float = 20.0,
+                   name: str = "Note") -> dict:
+    """Add a free text annotation to a drawing page at page position (x, y) in
+    mm (origin bottom-left, +Y up, matching TechDraw view placement).
+    Returns {handle, name, text}."""
+    return _call("add_annotation", page=page, text=text, x=x, y=y, name=name)
 
 
 @mcp.tool()
