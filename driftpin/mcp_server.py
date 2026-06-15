@@ -4089,6 +4089,7 @@ def mechanism_simulate_submit(
     obstacles: list | None = None,
     base: dict | None = None,
     loop_closures: list | None = None,
+    gears: list | None = None,
 ) -> dict:
     """Simulate a rigid-link mechanism's DYNAMICS with PyBullet, asynchronously (the
     MBD family; requires the `mbd` extra — `pip install 'driftpin[mbd]'`). Use
@@ -4099,15 +4100,19 @@ def mechanism_simulate_submit(
     joint_at_mm:[x,y,z] (in the parent frame), com_mm:[x,y,z]}]. `drivers`:
     [{link, rate_dps}] (revolute) or [{link, rate_mm_s}] (prismatic). Optional
     `obstacles` ([{box_mm, at_mm}]) for through-motion contact, `base`, `gravity`
-    (m/s², default [0,0,−9.81]), `dt_s`, `duration_s`.
+    (m/s², default [0,0,−9.81]), `dt_s`, `duration_s`. `gears`
+    ([{link_a, link_b, ratio, axis?, max_force?}]) couples two revolute links by
+    ω_b = −ω_a/ratio (ratio = Nb/Na for an Na/Nb external mesh) — the moving image of
+    the gear-train ratio gate.
 
     Returns immediately. If PyBullet is absent: {ok:false, reason, install,
     mobility_dof, n_links}. Otherwise {job_id, status, cache_hit, mobility_dof}; poll
-    job_result(job_id) for {trajectories, max_torques, collisions_through_motion (with
-    the sim time of each contact), reachable_envelope {bbox_mm}, mobility_dof}."""
+    job_result(job_id) for {trajectories, orientations (per-link world quaternion,
+    sampled with trajectories), max_torques, collisions_through_motion (with the sim
+    time of each contact), reachable_envelope {bbox_mm}, mobility_dof}."""
     params = {"links": links, "duration_s": duration_s, "dt_s": dt_s}
     for k, v in (("drivers", drivers), ("gravity", gravity), ("obstacles", obstacles),
-                 ("base", base), ("loop_closures", loop_closures)):
+                 ("base", base), ("loop_closures", loop_closures), ("gears", gears)):
         if v is not None:
             params[k] = v
     return _call("mechanism_simulate_submit", **params)

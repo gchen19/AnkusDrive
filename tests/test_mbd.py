@@ -76,6 +76,42 @@ def test_collision_through_motion_two_sided():
     assert cols[0]["t_s"] > 0.0, cols[0]
 
 
+def test_orientations_track_driven_revolution():
+    """A link driven about Z at a known rate has a STATIONARY com (trajectories show
+    nothing), so a review video needs `orientations`: the recorded world quaternion must
+    advance by omega*t about Z, sampled in lockstep with trajectories. Pins the field a
+    motion video consumes (KICKOFF_simulation_video_capture, item A)."""
+    import math
+
+    from driftpin.analysis import mbd
+    w, dur = 2.0, 1.0                                     # 2 rad/s for 1 s -> 2.0 rad (<pi)
+    spec = {
+        "base": {"half_extents_m": [0.01, 0.01, 0.01], "mass_kg": 0.0, "pos_m": [0, 0, 0]},
+        "links": [{
+            "name": "spinner", "half_extents_m": [0.05, 0.01, 0.01], "mass_kg": 0.2,
+            "parent": -1, "joint_type": "revolute", "joint_axis": [0, 0, 1],
+            "joint_pos_m": [0, 0, 0], "com_m": [0.05, 0, 0],
+        }],
+        "drivers": [{"link": 0, "target_velocity": w, "max_force": 1e3}],
+    }
+    dt, every = 1 / 240, 10                              # run_mbd's defaults
+    r = mbd.run_mbd(spec, duration_s=dur, dt_s=dt, gravity=(0, 0, -9.81), sample_every=every)
+    orn = r["orientations"]["spinner"]
+    traj = r["trajectories"]["spinner"]
+    assert len(orn) == len(traj) and len(orn) > 1, (len(orn), len(traj))
+    assert all(len(q) == 4 for q in orn), orn[0]
+    # com on a 0.05 m crank traces a circle of radius 50 mm — present in trajectories;
+    # the spin itself is ONLY legible from the quaternion.
+    qx, qy, qz, qw = orn[-1]
+    assert abs(qx) < 1e-3 and abs(qy) < 1e-3, ("pure Z rotation", orn[-1])
+    angle = 2.0 * math.atan2(qz, qw)                     # recovered Z angle (no wrap < pi)
+    t_last = (len(orn) - 1) * every * dt                 # last sample lands before duration
+    assert abs(angle - w * t_last) < 0.03, (angle, w * t_last)
+    # per-sample increment is constant at omega*every*dt — the rate, read off the quats
+    a0 = 2.0 * math.atan2(orn[1][2], orn[1][3])
+    assert abs(a0 - w * every * dt) < 0.02, (a0, w * every * dt)
+
+
 def _two_shaft_gear_spec(gears, drive=10.0, driver_force=50.0):
     """Fixed base + two revolute shafts on Z, coupled by `gears`. The Tier-2 motion
     oracle: spin the input, measure the output's steady velocity ratio."""

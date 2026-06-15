@@ -46,11 +46,15 @@ def run_mbd(spec: dict, duration_s: float = 1.0, dt_s: float = 1.0 / 240.0,
     far below its commanded speed), the moving counterpart to the closed-form
     ratio-consistency check.
 
-    Returns {engine, steps, duration_s, trajectories {name: [[x,y,z]...]}, max_torques
-    {joint_i: N·m or N}, joint_velocity {name: rad·s⁻¹ final}, mean_joint_velocity
-    {name: rad·s⁻¹ over the last fifth}, reachable_envelope {bbox_m, bbox_mm},
-    collisions_through_motion [{t_s, step, between:[nameA,nameB], max_depth_m}]}. Raises
-    RuntimeError if PyBullet is missing (gate on driftpin.solvers.require_solver)."""
+    Returns {engine, steps, duration_s, trajectories {name: [[x,y,z]...]}, orientations
+    {name: [[x,y,z,w]...]}, max_torques {joint_i: N·m or N}, joint_velocity {name:
+    rad·s⁻¹ final}, mean_joint_velocity {name: rad·s⁻¹ over the last fifth},
+    reachable_envelope {bbox_m, bbox_mm}, collisions_through_motion [{t_s, step,
+    between:[nameA,nameB], max_depth_m}]}. ``orientations`` is the per-link world
+    quaternion sampled in lockstep with ``trajectories`` — it is what a review video
+    needs to place a real mesh, since a revolute link spinning on its own axis has a
+    stationary COM (``trajectories`` alone shows no motion). Raises RuntimeError if
+    PyBullet is missing (gate on driftpin.solvers.require_solver)."""
     try:
         p, cid = _connect()
     except Exception as e:                            # ImportError or connect failure
@@ -137,6 +141,7 @@ def run_mbd(spec: dict, duration_s: float = 1.0, dt_s: float = 1.0 / 240.0,
         # --- step + record ----------------------------------------------------
         n_steps = max(int(round(duration_s / dt_s)), 1)
         trajectories = {name_by_link[i]: [] for i in range(len(links))}
+        orientations = {name_by_link[i]: [] for i in range(len(links))}
         max_torque = {f"joint_{i}": 0.0 for i in range(len(links))}
         vel_tail = {i: [] for i in range(len(links))}     # joint velocities, last fifth
         tail_start = int(n_steps * 0.8)
@@ -153,14 +158,17 @@ def run_mbd(spec: dict, duration_s: float = 1.0, dt_s: float = 1.0 / 240.0,
                     max_torque[f"joint_{i}"] = tq
                 if step >= tail_start:
                     vel_tail[i].append(js[1])
-            # sampled link world positions (COM)
+            # sampled link world placement (COM position + frame orientation)
             if step % sample_every == 0:
                 states = p.getLinkStates(body, list(range(len(links))),
                                          physicsClientId=cid)
                 for i, st in enumerate(states):
-                    pos = st[0]
+                    pos, orn = st[0], st[1]
                     trajectories[name_by_link[i]].append(
                         [round(pos[0], 6), round(pos[1], 6), round(pos[2], 6)])
+                    orientations[name_by_link[i]].append(
+                        [round(orn[0], 6), round(orn[1], 6),
+                         round(orn[2], 6), round(orn[3], 6)])
             # contacts with obstacles, through the motion
             for ob_id in obstacles:
                 for cp in p.getContactPoints(bodyA=body, bodyB=ob_id,
@@ -198,6 +206,7 @@ def run_mbd(spec: dict, duration_s: float = 1.0, dt_s: float = 1.0 / 240.0,
             "steps": n_steps,
             "duration_s": duration_s,
             "trajectories": trajectories,
+            "orientations": orientations,
             "max_torques": {k: round(v, 6) for k, v in max_torque.items()},
             "joint_velocity": final_vel,
             "mean_joint_velocity": mean_vel,
