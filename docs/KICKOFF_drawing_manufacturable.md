@@ -97,14 +97,24 @@ The gate (A1) is the prerequisite; it makes "legible" a regression assertion.
   would sprawl four lanes out (`test_packing_keeps_dense_part_legible`). Pure tests:
   `test_pack_lanes_*`.
 
+* **A3 — title block.** DONE 2026-06-15. FreeCAD's default A4 template is a BARE
+  sheet (no frame, no title block — which is why drawings exported blank), so
+  DriftPin composes its own bottom-right block (`_title_block_svg`): scale, sheet
+  size, units and part name auto-derived from the page; material / rev / drawn-by /
+  date / project supplied via `set_title_block` (stamped `DP_TitleBlock` JSON, MCP
+  tool). Opt-in (rendered only once `set_title_block` is called). Its box is a
+  keep-out in the legibility gate, so a dim line crossing it is flagged. Demo
+  artifacts (`artifacts/{plate,lbracket}_demo.pdf`) now carry it. Test:
+  `test_title_block_renders_fields`.
+
 Still open, in cost order:
 
 * **A2+ — leaders.** When even its own lane can't fit a label at its feature, emit
   `makeLeader` into open space. (Packing handles the common dense case; leaders are
   the overflow valve for pathological clusters.)
-* **A3 — auto sheet/scale + title block.** Pick A4/A3 and a scale so the part + its
-  dim envelope fit the border; fill title-block fields from
-  `mass_properties`/`material_get`/`bom_extract`.
+* **A3+ — auto sheet/scale selection.** Pick A4/A3 and a view scale so the part +
+  its dim envelope fit the border (the title block already reports whatever scale
+  the projection chose).
 * **Regression set** — golden artifacts spanning the stress cases (many holes, high
   aspect ratio, tight clusters, tiny features), each asserted clean by A1.
 

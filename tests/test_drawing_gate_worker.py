@@ -175,6 +175,33 @@ def test_packing_keeps_dense_part_legible():
               f"violations={len(rep['violations'])}")
 
 
+def test_title_block_renders_fields():
+    print("test_title_block_renders_fields")
+    import os
+    import tempfile
+    with Worker() as w, tempfile.TemporaryDirectory() as tmp:
+        page, hole = _plate(w, "gate_tb")
+        w.call("add_dimension", page=page, auto=True)
+        w.call("set_title_block", page=page, part="MOUNT PLATE",
+               material="AL 6061-T6", rev="B", drawn_by="GC", date="2026-06-15")
+        out = os.path.join(tmp, "tb.svg")
+        w.call("export_drawing", page=page, path=out)
+        svg = open(out, encoding="utf-8").read()
+        _check("part name in title block", "MOUNT PLATE" in svg)
+        _check("material in title block", "AL 6061-T6" in svg)
+        _check("rev in title block", "REV" in svg and ">B<" in svg)
+        _check("auto scale present", "SCALE" in svg)
+        _check("auto sheet size present", "A4" in svg)
+        _check("title-block group emitted", "driftpin-titleblock" in svg)
+        # no title block when never set
+        page2, _ = _plate(w, "gate_no_tb")
+        w.call("add_dimension", page=page2, auto=True)
+        out2 = os.path.join(tmp, "notb.svg")
+        w.call("export_drawing", page=page2, path=out2)
+        _check("block is opt-in (absent when unset)",
+               "driftpin-titleblock" not in open(out2, encoding="utf-8").read())
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -41,7 +41,8 @@ def lbracket(w):
            from_point=[0, 0, 7], to_point=[25, 0, 7])
     w.call("add_dimension", page=page, view="Front", kind="vertical",    # step height
            from_point=[0, 0, 0], to_point=[0, 0, 7])
-    w.call("add_annotation", page=page, text="L-BRACKET  rev A  (mm)", x=12, y=16)
+    w.call("set_title_block", page=page, part="L-BRACKET", material="STEEL 1045",
+           rev="A", drawn_by="DriftPin", date="2026-06-15", project="DEMO")
     _export_all(w, page, "lbracket_demo")
 
 
@@ -63,7 +64,8 @@ def plate(w):
            from_point=[0, 20, 0], to_point=[30, 20, 0])
     w.call("add_dimension", page=page, view="Top", kind="vertical",      # hole Y
            from_point=[30, 0, 0], to_point=[30, 20, 0])
-    w.call("add_annotation", page=page, text="MOUNT PLATE  rev A  (mm)", x=14, y=16)
+    w.call("set_title_block", page=page, part="MOUNT PLATE", material="AL 6061-T6",
+           rev="A", drawn_by="DriftPin", date="2026-06-15", project="DEMO")
     _export_all(w, page, "plate_demo")
 
 

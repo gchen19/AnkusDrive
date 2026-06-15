@@ -2060,6 +2060,32 @@ def add_annotation(page: str, text: str, x: float = 20.0, y: float = 20.0,
 
 
 @mcp.tool()
+def set_title_block(
+    page: str,
+    part: str | None = None,
+    material: str | None = None,
+    rev: str | None = None,
+    drawn_by: str | None = None,
+    date: str | None = None,
+    project: str | None = None,
+    units: str | None = None,
+) -> dict:
+    """Populate the drawing's title block. FreeCAD's default template is a bare
+    sheet, so DriftPin composes its own block in the bottom-right corner on SVG/PDF
+    export. Scale, sheet size, units, and part name are auto-derived from the page;
+    the fields here override or add to them (a machinist needs material + scale +
+    units to cut from the sheet). Calling this opts the page into rendering the
+    block. Returns {handle, name, fields}."""
+    params: dict = {"page": page}
+    for k, v in (("part", part), ("material", material), ("rev", rev),
+                 ("drawn_by", drawn_by), ("date", date),
+                 ("project", project), ("units", units)):
+        if v is not None:
+            params[k] = v
+    return _call("set_title_block", **params)
+
+
+@mcp.tool()
 def drawing_gate(page: str, process: str = "auto",
                  datums_declared: bool = False) -> dict:
     """Manufacturing-completeness gate for a drawing page: does the placed

@@ -6177,6 +6177,147 @@ def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
     return "<g>\n" + "\n".join(seg) + "\n</g>"
 
 
+# --- title block (issue #85 Part A3) -----------------------------------------
+# FreeCAD's default A4 template is a BARE sheet — no frame, no title block — so a
+# drawing exports with the title block blank. We compose our own bottom-right block:
+# scale / units / sheet-size / part-name auto-derived, material / rev / drawn-by /
+# date / project supplied via set_title_block (stamped as DP_TitleBlock JSON).
+
+_TB_W = 96.0      # title-block width, mm
+_TB_RH = 7.0      # row height, mm
+_TB_ROWS = 4
+_TB_MARGIN = 5.0  # gap from the sheet edge
+
+
+def _title_block_box(page_w, page_h):
+    """The title block's [x0, y0, x1, y1] in page mm (origin top-left, +Y down)."""
+    h = _TB_RH * _TB_ROWS
+    x0 = page_w - _TB_MARGIN - _TB_W
+    y0 = page_h - _TB_MARGIN - h
+    return [x0, y0, x0 + _TB_W, y0 + h]
+
+
+def _page_title_fields(page):
+    raw = str(getattr(page, "DP_TitleBlock", "") or "")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _stamp_title_block(page, fields):
+    if not hasattr(page, "DP_TitleBlock"):
+        try:
+            page.addProperty("App::PropertyString", "DP_TitleBlock",
+                             "DriftPin", "title block fields (JSON)")
+        except Exception:
+            return
+    try:
+        page.DP_TitleBlock = json.dumps(fields)
+    except Exception:
+        pass
+
+
+def _page_part_name(page):
+    views = _page_part_views(page)
+    if views:
+        src = getattr(views[0][0], "Source", None)
+        if src:
+            return getattr(src[0], "Label", None) or src[0].Name
+    return getattr(page, "Label", None) or page.Name
+
+
+def _page_scale(page):
+    views = _page_part_views(page)
+    if views:
+        try:
+            return float(views[0][0].Scale)
+        except Exception:
+            pass
+    return 1.0
+
+
+def _fmt_scale(s):
+    if s >= 1.0:
+        return f"{s:g}:1"
+    return f"1:{1.0 / s:g}"
+
+
+def _sheet_name(w, h):
+    for name, (a, b) in (("A4", (297, 210)), ("A3", (420, 297)),
+                         ("A2", (594, 420)), ("A1", (841, 594)),
+                         ("A0", (1189, 841))):
+        if abs(w - a) < 2 and abs(h - b) < 2:
+            return name
+        if abs(w - b) < 2 and abs(h - a) < 2:
+            return name + "P"  # portrait
+    return f"{w:g}x{h:g}"
+
+
+def _tb_text(x, y, s, size, anchor="start", bold=False):
+    weight = ' font-weight="bold"' if bold else ''
+    return (f'<text x="{x:.2f}" y="{y:.2f}" font-size="{size}" '
+            f'font-family="sans-serif" text-anchor="{anchor}"{weight} '
+            f'fill="#000" stroke="none">{_xml_escape(s)}</text>')
+
+
+def _tb_line(x1, y1, x2, y2):
+    return (f'<line x1="{x1:.2f}" y1="{y1:.2f}" x2="{x2:.2f}" y2="{y2:.2f}" '
+            f'stroke="#000" stroke-width="0.3" fill="none"/>')
+
+
+def _title_block_svg(page, page_w, page_h):
+    """Compose the bottom-right title block. Auto fields (scale, units, sheet size,
+    part name) are always filled; supplied fields (material, rev, drawn-by, date,
+    project) come from the DP_TitleBlock stamp. Returns '' if no stamp is present
+    (the block is opt-in via set_title_block)."""
+    fields = _page_title_fields(page)
+    if fields is None:
+        return ""
+    x0, y0, x1, y1 = _title_block_box(page_w, page_h)
+    xmid = x0 + _TB_W * 0.5
+    name = str(fields.get("part") or _page_part_name(page))
+    auto = {
+        "MATERIAL": str(fields.get("material", "—")),
+        "SCALE": _fmt_scale(_page_scale(page)),
+        "SIZE": _sheet_name(page_w, page_h),
+        "UNITS": str(fields.get("units", "mm")),
+        "REV": str(fields.get("rev", "—")),
+        "DRAWN": str(fields.get("drawn_by", fields.get("by", "—"))),
+        "DATE": str(fields.get("date", "—")),
+    }
+    seg = []
+    # frame: outer rectangle + row separators + a column split below the name row
+    seg.append(_tb_line(x0, y0, x1, y0))
+    seg.append(_tb_line(x0, y1, x1, y1))
+    seg.append(_tb_line(x0, y0, x0, y1))
+    seg.append(_tb_line(x1, y0, x1, y1))
+    for r in range(1, _TB_ROWS):
+        yy = y0 + r * _TB_RH
+        seg.append(_tb_line(x0, yy, x1, yy))
+    seg.append(_tb_line(xmid, y0 + _TB_RH, xmid, y1))
+
+    def cell(cx0, row, label, value, big=True):
+        cy0 = y0 + row * _TB_RH
+        out = [_tb_text(cx0 + 1.5, cy0 + 2.4, label, 1.9)]
+        out.append(_tb_text(cx0 + 1.5, cy0 + 6.0, value, 3.0 if big else 2.6,
+                            bold=big and row == 0))
+        return out
+
+    seg += cell(x0, 0, "PART / DRAWING", name)
+    seg += cell(x0, 1, "MATERIAL", auto["MATERIAL"])
+    seg += cell(xmid, 1, "SCALE", auto["SCALE"])
+    seg += cell(x0, 2, "SIZE / UNITS", f"{auto['SIZE']}  ({auto['UNITS']})")
+    seg += cell(xmid, 2, "REV", auto["REV"])
+    seg += cell(x0, 3, "DRAWN BY", auto["DRAWN"])
+    seg += cell(xmid, 3, "DATE", auto["DATE"])
+    if fields.get("project"):
+        seg.append(_tb_text(x0 + 1.5, y0 - 1.0, str(fields["project"]), 2.2))
+    return "<g id=\"driftpin-titleblock\">\n" + "\n".join(seg) + "\n</g>"
+
+
 def _annotation_to_svg(ann, page_h):
     text = getattr(ann, "Text", None)
     if not text:
@@ -6248,7 +6389,7 @@ def _compose_page_svg(page):
         raise RuntimeError("page has no SVG template to compose onto")
     with open(tpl, encoding="utf-8", errors="replace") as f:
         base = f.read()
-    _, page_h = _page_size_mm(page)
+    page_w, page_h = _page_size_mm(page)
     views = _page_part_views(page)
     parts = []
     for (v, cx, cy) in views:
@@ -6268,6 +6409,9 @@ def _compose_page_svg(page):
         svg = _annotation_to_svg(ann, page_h)
         if svg:
             parts.append(svg)
+    tb = _title_block_svg(page, page_w, page_h)
+    if tb:
+        parts.append(tb)
     overlay = '<g id="driftpin-overlay">\n' + "\n".join(parts) + "\n</g>\n"
     idx = base.rfind("</svg>")
     if idx == -1:
@@ -6545,6 +6689,23 @@ def _h_add_annotation(p):
     return {"handle": h, "name": ann.Name, "text": p["text"]}
 
 
+@handler("set_title_block")
+def _h_set_title_block(p):
+    """Populate the drawing's title block (issue #85 Part A3). The default FreeCAD
+    template is a bare sheet, so DriftPin composes its own bottom-right block on
+    SVG/PDF export. Scale, sheet size, units, and part name are auto-derived; the
+    supplied fields override or add to them. Fields: part, material, rev, drawn_by,
+    date, project, units. Calling this opts the page into rendering the block.
+    Returns {handle, name, fields}."""
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    keys = ("part", "material", "rev", "drawn_by", "by", "date", "project", "units")
+    fields = {k: p[k] for k in keys if p.get(k) is not None}
+    _stamp_title_block(page, fields)
+    doc.recompute()
+    return {"handle": p["page"], "name": page.Name, "fields": fields}
+
+
 # --- drawing-is-manufacturable gates (issue #85, the "Next layer") ------------
 #
 # The renderer places exactly the dimensions it is told and reads each off the real
@@ -6799,6 +6960,10 @@ def _page_dim_graphics(page):
         xs = sorted((cx + bxmin, cx + bxmax))
         ys = sorted((cy + _VIEW_Y_SIGN * bymax, cy + _VIEW_Y_SIGN * bymin))
         view_boxes.append({"id": v.Name, "box": [xs[0], ys[0], xs[1], ys[1]]})
+    # the title block is keep-out too: a dim line crossing it is a legibility fault
+    if _page_title_fields(page) is not None:
+        pw, ph = _page_size_mm(page)
+        view_boxes.append({"id": "TitleBlock", "box": _title_block_box(pw, ph)})
 
     labels, segments = [], []
     for pl in _iter_placed_dims(page):
