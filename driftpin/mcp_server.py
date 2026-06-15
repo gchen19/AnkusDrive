@@ -2060,6 +2060,43 @@ def add_annotation(page: str, text: str, x: float = 20.0, y: float = 20.0,
 
 
 @mcp.tool()
+def drawing_gate(page: str, process: str = "auto",
+                 datums_declared: bool = False) -> dict:
+    """Manufacturing-completeness gate for a drawing page: does the placed
+    dimension set fully and non-redundantly reconstruct the part? A green render
+    is not a manufacturable drawing — this validates the *drawing* itself, the way
+    the geometry-realizes-declaration gate validates an assembly.
+
+    Reads the real solid + the placed dimensions and accounts degrees of freedom,
+    process-aware: a 'prismatic' (milled/plate) part must locate each hole by X/Y
+    from a datum and size the block W×H×T; a 'turned' part is concentric, so a step
+    needs only Ø + axial length. process='auto' infers it from the geometry.
+
+    Returns {ok, violations, slots_total, slots_covered, process, features,
+    dimensions, enumerated_features}. Each violation has a `code`
+    (under = a feature size/location is missing; redundant = a DOF dimensioned more
+    than once; conflict = dimensioned twice with disagreeing values; extra = a dim
+    that pins nothing; no_datum = a location not taken from a datum) and a human
+    `reason`. ok=True (empty violations) means the drawing is manufacturing-complete.
+    Set datums_declared=True to also enforce datum-origin discipline on locations."""
+    return _call("drawing_gate", page=page, process=process,
+                 datums_declared=datums_declared)
+
+
+@mcp.tool()
+def drawing_legibility(page: str, min_gap: float = 0.5) -> dict:
+    """Legibility gate for a drawing page: on the ACTUAL placed graphics, flag the
+    ways the layout becomes unreadable — overlapping dimension labels, a dimension
+    line crossing a view it does not reference, or anything past the sheet border.
+
+    min_gap (mm) is the breathing room required between two labels. Returns {ok,
+    violations, labels, segments, views}; each violation has a `code`
+    (overlap/crosses_view/out_of_border) and a human `reason`. ok=True means the
+    placed dimensions read cleanly on the sheet."""
+    return _call("drawing_legibility", page=page, min_gap=min_gap)
+
+
+@mcp.tool()
 def render_view(
     handle: str,
     view: str = "iso",

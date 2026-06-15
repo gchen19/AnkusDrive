@@ -6091,19 +6091,26 @@ def _view_local_bbox(view):
     return (min(xs), max(xs), min(ys), max(ys))
 
 
-def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
-    """Render a dimension as extension lines + dimension line + arrows + text,
-    in SVG page coords. (cx, cy) is the parent view's page centre; `offset` is
-    how far the dimension line sits beyond the view outline (stacked by the
-    caller); h_side/v_side place it on the view's outward side; bbox is the
-    view's local outline box so dim lines clear the part even for interior
-    features."""
+def _dim_layout(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
+    """Compute one dimension's placed graphics in SVG page coords, without
+    serialising: the lines (extension + dimension), arrowheads, and the text
+    anchor. This is the single source of truth for placement — both ``_dim_to_svg``
+    (renders it) and the legibility gate (``_page_dim_graphics`` → checks it) read
+    it, so the gate validates the *actual* layout, not a re-derivation of it.
+
+    (cx, cy) is the parent view's page centre; `offset` is how far the dimension
+    line sits beyond the view outline (stacked by the caller); h_side/v_side place
+    it on the view's outward side; bbox is the view's local outline box so dim lines
+    clear the part even for interior features. Returns None for a degenerate dim.
+
+    Layout keys: ``lines`` [(x1,y1,x2,y2)…], ``arrows`` [(x,y,dx,dy)…],
+    ``text`` (x, y, anchor, string), ``orient`` 'h'|'v'."""
     try:
         pts = list(dim.getLinearPoints())
     except Exception:
         pts = []
     if len(pts) < 2:
-        return ""
+        return None
     p1, p2 = pts[0], pts[1]
 
     def L(p):  # local view mm (+Y up, centred) -> SVG page mm
@@ -6123,7 +6130,7 @@ def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
         out_top, out_bottom = min(y1, y2), max(y1, y2)
     text = _dim_text(dim)
     dtype = str(getattr(dim, "Type", "Distance"))
-    seg = []
+    lines, arrows = [], []
     if dtype == "DistanceY" or (dtype == "Distance" and abs(x2 - x1) < abs(y2 - y1)):
         # vertical measurement: dimension line left or right of the outline
         if v_side == "right":
@@ -6132,12 +6139,13 @@ def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
         else:
             dl = out_left - offset
             stub, tx, anchor = dl - 1.0, dl - 1.5, "end"
-        seg.append(_svg_line(x1, y1, stub, y1))
-        seg.append(_svg_line(x2, y2, stub, y2))
-        seg.append(_svg_line(dl, y1, dl, y2))
-        seg.append(_svg_arrow(dl, y1, 0, 1 if y1 < y2 else -1))
-        seg.append(_svg_arrow(dl, y2, 0, 1 if y2 < y1 else -1))
-        seg.append(_svg_text(tx, (y1 + y2) / 2 + _DIM_FONT_MM * 0.35, text, anchor=anchor))
+        lines.append((x1, y1, stub, y1))
+        lines.append((x2, y2, stub, y2))
+        lines.append((dl, y1, dl, y2))
+        arrows.append((dl, y1, 0, 1 if y1 < y2 else -1))
+        arrows.append((dl, y2, 0, 1 if y2 < y1 else -1))
+        txt = (tx, (y1 + y2) / 2 + _DIM_FONT_MM * 0.35, anchor, text)
+        orient = "v"
     else:
         # horizontal measurement: dimension line above or below the outline
         if h_side == "below":
@@ -6146,12 +6154,26 @@ def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
         else:
             dl = out_top - offset
             stub, ty = dl - 1.0, dl - 1.4
-        seg.append(_svg_line(x1, y1, x1, stub))
-        seg.append(_svg_line(x2, y2, x2, stub))
-        seg.append(_svg_line(x1, dl, x2, dl))
-        seg.append(_svg_arrow(x1, dl, 1 if x1 < x2 else -1, 0))
-        seg.append(_svg_arrow(x2, dl, 1 if x2 < x1 else -1, 0))
-        seg.append(_svg_text((x1 + x2) / 2, ty, text, anchor="middle"))
+        lines.append((x1, y1, x1, stub))
+        lines.append((x2, y2, x2, stub))
+        lines.append((x1, dl, x2, dl))
+        arrows.append((x1, dl, 1 if x1 < x2 else -1, 0))
+        arrows.append((x2, dl, 1 if x2 < x1 else -1, 0))
+        txt = ((x1 + x2) / 2, ty, "middle", text)
+        orient = "h"
+    return {"lines": lines, "arrows": arrows, "text": txt, "orient": orient}
+
+
+def _dim_to_svg(dim, cx, cy, offset, h_side="below", v_side="left", bbox=None):
+    """Render a dimension as extension lines + dimension line + arrows + text,
+    in SVG page coords (serialises the layout from ``_dim_layout``)."""
+    lay = _dim_layout(dim, cx, cy, offset, h_side, v_side, bbox)
+    if lay is None:
+        return ""
+    seg = [_svg_line(*ln) for ln in lay["lines"]]
+    seg += [_svg_arrow(*ar) for ar in lay["arrows"]]
+    tx, ty, anchor, text = lay["text"]
+    seg.append(_svg_text(tx, ty, text, anchor=anchor))
     return "<g>\n" + "\n".join(seg) + "\n</g>"
 
 
@@ -6326,6 +6348,24 @@ def _stamp_parent_view(dim, view):
         pass
 
 
+def _stamp_model_ref(dim, ref):
+    """Record, on the dimension, the model-space geometry it references — a circle
+    {"circle":{"center":[x,y,z],"radius":r}} or a span {"span":{"p1":[..],"p2":[..]}}
+    — as JSON in DP_ModelRef. The manufacturability gate (drawing_gate) reads this to
+    decide which feature degree of freedom each dim pins (a Ø on hole A, the X
+    location of hole B), which cannot be recovered from the projected 2D dim alone."""
+    if not hasattr(dim, "DP_ModelRef"):
+        try:
+            dim.addProperty("App::PropertyString", "DP_ModelRef",
+                            "DriftPin", "model-space geometry this dim references (JSON)")
+        except Exception:
+            return
+    try:
+        dim.DP_ModelRef = json.dumps(ref)
+    except Exception:
+        pass
+
+
 def _project_centred(view, vec):
     """Project a 3D model point into the view's centred local 2D frame — the
     same frame viewPartAsSvg and getLinearPoints use."""
@@ -6357,12 +6397,14 @@ def _h_add_dimension(p):
     page = _resolve(p["page"])
     created = []
 
-    def _record(dim, view, true_value=None):
+    def _record(dim, view, true_value=None, model_ref=None):
         if dim is None:
             return
         _stamp_parent_view(dim, view)
         if true_value is not None:
             _stamp_true_value(dim, true_value)
+        if model_ref is not None:
+            _stamp_model_ref(dim, model_ref)
         h = _register("dim", dim)
         try:
             shown = float(dim.DP_TrueValue) if hasattr(dim, "DP_TrueValue") \
@@ -6410,7 +6452,9 @@ def _h_add_dimension(p):
         dim = TechDraw.makeDistanceDim(view, "DistanceX", a, b)
         if dim is not None:
             _stamp_prefix(dim, prefix)
-        _record(dim, view, true_value=value)
+        _record(dim, view, true_value=value,
+                model_ref={"circle": {"center": [centre.x, centre.y, centre.z],
+                                      "radius": r}})
     elif "edge" in p:
         src = view.Source[0]
         edge = _edge_by_tag(src.Shape, p["edge"])
@@ -6421,14 +6465,19 @@ def _h_add_dimension(p):
         a = _project_centred(view, vs[0].Point)
         b = _project_centred(view, vs[-1].Point)
         dim = TechDraw.makeDistanceDim(view, dim_type, a, b)
-        _record(dim, view, true_value=edge.Length)
+        p0, p1 = vs[0].Point, vs[-1].Point
+        _record(dim, view, true_value=edge.Length,
+                model_ref={"span": {"p1": [p0.x, p0.y, p0.z],
+                                    "p2": [p1.x, p1.y, p1.z]}})
     elif p.get("from_point") and p.get("to_point"):
         fa = App.Vector(*p["from_point"])
         tb = App.Vector(*p["to_point"])
         a = _project_centred(view, fa)
         b = _project_centred(view, tb)
         dim = TechDraw.makeDistanceDim(view, dim_type, a, b)
-        _record(dim, view, true_value=fa.distanceToPoint(tb))
+        _record(dim, view, true_value=fa.distanceToPoint(tb),
+                model_ref={"span": {"p1": list(p["from_point"]),
+                                    "p2": list(p["to_point"])}})
     else:
         raise ValueError(
             "add_dimension needs auto=True, edge=<tag>, or from_point/to_point")
@@ -6458,6 +6507,308 @@ def _h_add_annotation(p):
     doc.recompute()
     h = _register("note", ann)
     return {"handle": h, "name": ann.Name, "text": p["text"]}
+
+
+# --- drawing-is-manufacturable gates (issue #85, the "Next layer") ------------
+#
+# The renderer places exactly the dimensions it is told and reads each off the real
+# solid (DP_TrueValue): a green render is NOT a manufacturable drawing. These two
+# handlers are the gate, one layer up — they validate the *drawing*: does the
+# dimension set reconstruct the part (completeness), and is the sheet legible? The
+# accounting/geometry lives in driftpin.drawing_gate (FreeCAD-free, unit-tested);
+# these shims read the descriptors off the Part.Shape and the placed graphics.
+
+
+def _surf_kind(face):
+    s = getattr(face, "Surface", None)
+    return type(s).__name__ if s is not None else ""
+
+
+def _v3(v):
+    return [float(v.x), float(v.y), float(v.z)]
+
+
+def _axis_canon(axis):
+    """Sign-normalise an axis direction so collinear-but-opposite axes share a key
+    (the dominant component is made positive)."""
+    a = App.Vector(axis)
+    try:
+        a.normalize()
+    except Exception:
+        pass
+    i = max(range(3), key=lambda k: abs((a.x, a.y, a.z)[k]))
+    if (a.x, a.y, a.z)[i] < 0:
+        a = a.multiply(-1.0)
+    return a
+
+
+def _cyl_is_hole(face, surf):
+    """A cylindrical face is a HOLE wall (material outside) iff its surface normal
+    points inward, toward the axis; a boss (material inside) points outward."""
+    try:
+        u0, u1, v0, v1 = face.ParameterRange
+        um, vm = (u0 + u1) / 2.0, (v0 + v1) / 2.0
+        pt = face.valueAt(um, vm)
+        n = face.normalAt(um, vm)
+        axis = _axis_canon(surf.Axis)
+        rel = pt - surf.Center
+        radial = rel - axis.multiply(rel.dot(axis))
+        if radial.Length < 1e-9:
+            return False
+        radial.normalize()
+        # face.normalAt already accounts for face orientation
+        return n.dot(radial) < 0.0
+    except Exception:
+        return False
+
+
+def _enumerate_features(shape, process):
+    """Build drawing_gate feature descriptors off the real solid: the overall
+    bounding box, plus holes (inward cylinders, grouped coaxially so a counterbore
+    is recognised) for a prismatic part, or outer cylindrical steps for a turned
+    one. Deliberately conservative — an unrecognised face simply yields no slot
+    rather than a wrong one."""
+    bb = shape.BoundBox
+    feats = [{"id": "BBOX", "kind": "bbox",
+              "size": [bb.XLength, bb.YLength, bb.ZLength]}]
+
+    cyls = []
+    for f in shape.Faces:
+        if _surf_kind(f) != "Cylinder":
+            continue
+        surf = f.Surface
+        cyls.append((f, surf, _cyl_is_hole(f, surf)))
+
+    if process == "turned":
+        # outer cylindrical steps: dia + axial length, concentric by construction
+        axis = None
+        bosses = [(f, s) for (f, s, hole) in cyls if not hole]
+        if bosses:
+            axis = _axis_canon(bosses[0][1].Axis)
+        n = 0
+        for (f, s) in sorted(bosses, key=lambda fs: fs[0].BoundBox.Center.z):
+            n += 1
+            fb = f.BoundBox
+            ai = max(range(3), key=lambda k: (fb.XLength, fb.YLength, fb.ZLength)[k])
+            length = (fb.XLength, fb.YLength, fb.ZLength)[ai]
+            feats.append({"id": f"S{n}", "kind": "cyl_step",
+                          "dia": 2.0 * float(s.Radius), "length": float(length)})
+        # internal bores (inward cylinders) become turned bores: Ø + depth
+        nb = 0
+        for (f, s, hole) in cyls:
+            if not hole:
+                continue
+            nb += 1
+            fb = f.BoundBox
+            ai = max(range(3), key=lambda k: (fb.XLength, fb.YLength, fb.ZLength)[k])
+            depth = (fb.XLength, fb.YLength, fb.ZLength)[ai]
+            through = abs(depth - (bb.XLength, bb.YLength, bb.ZLength)[ai]) < 0.05
+            feats.append({"id": f"B{nb}", "kind": "bore",
+                          "dia": 2.0 * float(s.Radius),
+                          "depth": None if through else float(depth)})
+        return feats
+
+    # prismatic: group inward cylinders coaxially (a counterbore = two radii on one
+    # axis line); smallest radius is the through bore, larger ones counterbores.
+    groups = {}
+    for (f, s, hole) in cyls:
+        if not hole:
+            continue
+        axis = _axis_canon(s.Axis)
+        foot = s.Center - axis.multiply(s.Center.dot(axis))
+        key = (round(axis.x, 3), round(axis.y, 3), round(axis.z, 3),
+               round(foot.x, 2), round(foot.y, 2), round(foot.z, 2))
+        groups.setdefault(key, []).append((f, s))
+    n = 0
+    for key, members in groups.items():
+        n += 1
+        members.sort(key=lambda fs: fs[1].Radius)
+        f0, s0 = members[0]
+        c = s0.Center
+        axis = _axis_canon(s0.Axis)
+        ai = max(range(3), key=lambda k: abs((axis.x, axis.y, axis.z)[k]))
+        depth = (f0.BoundBox.XLength, f0.BoundBox.YLength, f0.BoundBox.ZLength)[ai]
+        through = abs(depth - (bb.XLength, bb.YLength, bb.ZLength)[ai]) < 0.05
+        hid = f"H{n}"
+        feats.append({"id": hid, "kind": "hole", "dia": 2.0 * float(s0.Radius),
+                      "through": bool(through), "depth": None if through else float(depth),
+                      "center": _v3(c), "axis": _v3(axis)})
+        for (fc, sc) in members[1:]:
+            cb_ai = ai
+            cbdepth = (fc.BoundBox.XLength, fc.BoundBox.YLength,
+                       fc.BoundBox.ZLength)[cb_ai]
+            feats.append({"id": f"{hid}.cb", "kind": "counterbore", "parent": hid,
+                          "dia": 2.0 * float(sc.Radius), "depth": float(cbdepth)})
+    return feats
+
+
+def _infer_process(shape):
+    """Guess the manufacturing process from the solid: a part with an outer
+    cylindrical/conical boss whose cross-section perpendicular to its axis is round
+    (the two perpendicular bbox extents ≈ equal ≈ the boss diameter) is TURNED;
+    otherwise PRISMATIC. Callers may override with an explicit `process`."""
+    bb = shape.BoundBox
+    dims = (bb.XLength, bb.YLength, bb.ZLength)
+    for f in shape.Faces:
+        if _surf_kind(f) not in ("Cylinder", "Cone"):
+            continue
+        surf = f.Surface
+        try:
+            if _cyl_is_hole(f, surf):
+                continue
+            axis = _axis_canon(surf.Axis)
+            ai = max(range(3), key=lambda k: abs((axis.x, axis.y, axis.z)[k]))
+            perp = [dims[k] for k in range(3) if k != ai]
+            if perp[0] <= 1e-9:
+                continue
+            if abs(perp[0] - perp[1]) / max(perp) < 0.05:
+                return "turned"
+        except Exception:
+            continue
+    return "prismatic"
+
+
+def _dim_descriptors(page):
+    """Read each placed DrawViewDimension into a drawing_gate dim descriptor:
+    its kind (Ø/R via DP_Prefix, else linear Type), its true value (DP_TrueValue,
+    so it reads the real geometry), and the model-space geometry it references
+    (DP_ModelRef → circle/span). Dims without a model ref still size-match by value."""
+    out = []
+    centres = {v.Name for (v, _cx, _cy) in _page_part_views(page)}
+    for dim in _page_dimensions(page):
+        pv = _dim_parent_view(dim)
+        if pv is None or pv.Name not in centres:
+            continue
+        prefix = str(getattr(dim, "DP_Prefix", "") or "")
+        if prefix == "Ø":
+            kind = "Diameter"
+        elif prefix == "R":
+            kind = "Radius"
+        else:
+            kind = str(getattr(dim, "Type", "Distance"))
+        try:
+            value = float(dim.DP_TrueValue) if hasattr(dim, "DP_TrueValue") \
+                else float(dim.getRawValue())
+        except Exception:
+            value = 0.0
+        d = {"name": dim.Name, "type": kind, "value": value,
+             "circle": None, "span": None, "from_datum": True}
+        raw = str(getattr(dim, "DP_ModelRef", "") or "")
+        if raw:
+            try:
+                ref = json.loads(raw)
+                d["circle"] = ref.get("circle")
+                d["span"] = ref.get("span")
+            except Exception:
+                pass
+        out.append(d)
+    return out
+
+
+@handler("drawing_gate")
+def _h_drawing_gate(p):
+    """Manufacturing-completeness gate for a drawing page (issue #85 Part B): does
+    the placed dimension set fully and non-redundantly reconstruct the part? Reads
+    the real solid + the placed dimensions, accounts degrees of freedom
+    (process-aware: prismatic locates holes X/Y from a datum, turned is concentric
+    Ø + length), and returns {ok, violations, slots_total, slots_covered, process,
+    ...}. Each violation carries a code (under/redundant/conflict/extra/no_datum)
+    and a human reason. `process`: 'auto' (default) | 'prismatic' | 'turned'."""
+    from driftpin import drawing_gate
+    page = _resolve(p["page"])
+    doc = _active_doc()
+    doc.recompute()
+    views = _page_part_views(page)
+    if not views:
+        raise ValueError("page has no part-views to gate")
+    shape = views[0][0].Source[0].Shape
+    process = p.get("process", "auto")
+    if process == "auto":
+        process = _infer_process(shape)
+    feats = _enumerate_features(shape, process)
+    dims = _dim_descriptors(page)
+    rep = drawing_gate.completeness_report(
+        feats, dims, process, datums_declared=bool(p.get("datums_declared", False)))
+    rep["enumerated_features"] = [{"id": f["id"], "kind": f["kind"]} for f in feats]
+    return rep
+
+
+def _text_box(tx, ty, anchor, text):
+    """Approximate a dimension label's bounding box in page mm from its anchor and
+    a sans-serif glyph-width estimate (≈0.6·font per char). ty is the text baseline;
+    the box runs one font-height above it."""
+    w = max(1, len(text)) * _DIM_FONT_MM * 0.6
+    h = _DIM_FONT_MM
+    if anchor == "start":
+        x0, x1 = tx, tx + w
+    elif anchor == "end":
+        x0, x1 = tx - w, tx
+    else:
+        x0, x1 = tx - w / 2.0, tx + w / 2.0
+    return [x0, ty - h, x1, ty]
+
+
+def _page_dim_graphics(page):
+    """Extract the placed dimension graphics (label boxes, line segments) and the
+    view-outline boxes in page mm, replaying the SAME stacking the composer uses
+    (via _dim_layout) so the legibility gate checks the actual rendered layout."""
+    from collections import defaultdict
+    views = _page_part_views(page)
+    centres = {v.Name: (cx, cy) for (v, cx, cy) in views}
+    view_by_name = {v.Name: v for (v, cx, cy) in views}
+    view_boxes = []
+    for (v, cx, cy) in views:
+        bbox = _view_local_bbox(v)
+        if not bbox:
+            continue
+        bxmin, bxmax, bymin, bymax = bbox
+        xs = sorted((cx + bxmin, cx + bxmax))
+        ys = sorted((cy + _VIEW_Y_SIGN * bymax, cy + _VIEW_Y_SIGN * bymin))
+        view_boxes.append({"id": v.Name, "box": [xs[0], ys[0], xs[1], ys[1]]})
+
+    groups = defaultdict(list)
+    for dim in _page_dimensions(page):
+        pv = _dim_parent_view(dim)
+        if pv is None or pv.Name not in centres:
+            continue
+        groups[(pv.Name, _dim_is_vertical(dim))].append(dim)
+
+    labels, segments = [], []
+    for (vname, _vert), dims in groups.items():
+        cx, cy = centres[vname]
+        view = view_by_name[vname]
+        h_side, v_side = _view_dim_sides(view)
+        bbox = _view_local_bbox(view)
+        for idx, dim in enumerate(sorted(dims, key=_dim_span)):
+            lay = _dim_layout(dim, cx, cy, _DIM_OFFSET_MM + idx * _DIM_STACK_MM,
+                              h_side, v_side, bbox)
+            if not lay:
+                continue
+            for ln in lay["lines"]:
+                segments.append({"id": dim.Name, "p1": [ln[0], ln[1]],
+                                 "p2": [ln[2], ln[3]], "refs": [vname]})
+            tx, ty, anchor, text = lay["text"]
+            labels.append({"id": dim.Name, "text": text,
+                           "box": _text_box(tx, ty, anchor, text)})
+    return labels, segments, view_boxes
+
+
+@handler("drawing_legibility")
+def _h_drawing_legibility(p):
+    """Legibility gate for a drawing page (issue #85 Part A): on the ACTUAL placed
+    graphics, flag overlapping dimension labels, dimension lines that cross a view
+    they don't reference, and anything past the sheet border. Returns {ok,
+    violations, labels, segments, views}; each violation has a code
+    (overlap/crosses_view/out_of_border) and a reason. `min_gap` mm (default 0.5)
+    is the breathing room required between labels."""
+    from driftpin import drawing_gate
+    page = _resolve(p["page"])
+    _active_doc().recompute()
+    labels, segments, view_boxes = _page_dim_graphics(page)
+    pw, ph = _page_size_mm(page)
+    border = [0.0, 0.0, pw, ph]
+    return drawing_gate.legibility_report(
+        labels, segments, view_boxes, border, min_gap=float(p.get("min_gap", 0.5)))
 
 
 # --- tessellation -------------------------------------------------------------
