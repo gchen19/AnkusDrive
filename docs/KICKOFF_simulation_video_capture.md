@@ -26,8 +26,19 @@ watch, not just scalar tables and one-off scratch GIFs.
 > (`artifacts/modal_mode{1,2,3}.gif`) as `node + amp·sin(2π·phase)·eigenvector`, coloured
 > by modal amplitude, with the closed-form `beam_modal` oracle overlaid per frame:
 > CalculiX 93 / 276 / 580 Hz match Euler-Bernoulli at **ratio 1.00** (1st out-of-plane
-> bend, 1st in-plane bend, 2nd out-of-plane). Items **C** (transient thermal) and **D**
-> (CFD) open.
+> bend, 1st in-plane bend, 2nd out-of-plane). **Item C (transient-thermal animation) is
+> also DONE** — `scratch/thermal_field_video.py` colours a real meshed plate's surface by
+> the transient conduction field T(x,t) (exact one-term Heisler) as it quenches 200°C→25°C,
+> beside the centre/surface history curve. Two claim-checks ride the frame: the real
+> **Elmer FEM** slab solve over-plots the analytic curves and agrees to **0.83% of span**,
+> and the **lumped** (isothermal) model is drawn visibly wrong (Bi≈1.5 → a 74°C
+> through-thickness gradient it cannot see). `artifacts/thermal_field.gif`. **Item D (CFD
+> field animation, the deferred spike) is also DONE** — `scratch/cfd_field_video.py` runs a
+> transient OpenFOAM lid-driven cavity (`icoFoam`, Re=100) and animates the velocity field
+> forming its primary vortex from rest, beside the vertical-centre-line u(y) converging onto
+> the **Ghia et al. (1982)** published benchmark (rms 1.2% of U_lid, max 5.3% at the lid
+> boundary layer). No heavy dep: OpenFOAM's own `foamToVTK -legacy -ascii` writes each step,
+> meshio reads it. `artifacts/cfd_cavity_field.gif`. **All four items A–D are now done.**
 
 ## Why this exists
 
@@ -105,15 +116,30 @@ principle: the `beam_modal` Euler-Bernoulli oracle rides on each frame, and Calc
 93/276/580 Hz match it at ratio 1.00 (the dominant-axis classifier labels each mode and
 matches it to its bending plane). `artifacts/modal_mode{1,2,3}.gif`.
 
-**C. Transient thermal animation.** `elmer.py` returns T(t) at centre/surface. Colour
-the real part (or a section) by interpolated temperature over the time steps; overlay the
-scalar curve. Reuses the pipeline from A. (Field-on-mesh colouring is the new bit; the
-1-D fallback — an animated profile + curve — is trivial and a fine first cut.)
+**C. Transient thermal animation — DONE** (`scratch/thermal_field_video.py`). It went
+past the 1-D fallback straight to field-on-mesh: a real meshed plate (the tet-mesh surface
+from B's extractor) coloured by the through-thickness conduction field T(x,t) — the exact
+one-term Heisler series, `T∞ + (T₀−T∞)·C₁·exp(−ζ₁²·Fo)·cos(ζ₁·x/L)` — as it quenches
+200°C→25°C, beside the centre/surface scalar curve. Rendering the FEM *surface* (not the
+flat plate) is what makes the gradient visible: the edge nodes span the thickness, so the
+side faces show a bright mid-plane band fading to the cooler convective faces (74°C
+gradient at Bi≈1.5). Two claim-checks on the frame, per the §11.10 principle: the real
+**Elmer FEM** slab solve (`thermal_transient_submit`) is over-plotted from its
+`scalars.dat` history and agrees with the analytic field to 0.83% of span; the **lumped**
+isothermal model is drawn too and is visibly wrong — that miss is the whole reason a field
+is worth rendering over a single number. `artifacts/thermal_field.gif`.
 
-**D. CFD field animation (deferred — scope as a spike).** OpenFOAM writes full transient
-U/p fields, but only as native `.foam` binaries; rendering them needs field parsing + mesh
-reconstruction (or a VTK/ParaView dependency). Highest effort, lowest near-term value;
-punt unless a CFD review specifically needs it.
+**D. CFD field animation — DONE** (`scratch/cfd_field_video.py`). The spike landed: the
+mesh-reconstruction worry is sidestepped by letting OpenFOAM's own `foamToVTK -legacy
+-ascii` write each time step as a legacy `.vtk` that **meshio reads with no lxml/vtk
+dependency** (the `.vtu` path needs lxml, which is absent — legacy ascii is the no-dep
+route). The case is a transient lid-driven cavity (`icoFoam`, Re=100) — the canonical
+incompressible verification problem — so the field is genuinely time-developing (the primary
+vortex forms from rest, not a steady solve converging) and there is a *published benchmark*
+to overlay: the vertical-centre-line u(y) lands on Ghia, Ghia & Shin (1982) to rms 1.2% of
+U_lid (max 5.3% in the under-resolved lid boundary layer). Frame = |U| contour + velocity
+vectors beside the centre-line-vs-Ghia panel. Runs in ~13 s on a 64×64 mesh.
+`artifacts/cfd_cavity_field.gif`.
 
 **Cross-cutting (after A proves out):** promote the pipeline from `scratch/sim_video.py`
 into `driftpin/render.py` and expose a `render_motion` / `*_animate` worker tool so a
@@ -144,5 +170,13 @@ video is a first-class job result (like `render_photoreal_submit`), not a scratc
   tet-mesh surface extraction + eigenvector animation, `beam_modal` oracle overlaid
   (`artifacts/modal_mode{1,2,3}.gif`). Modal pipeline: `fem_modal`/`fem_modal_results` +
   `_build_cantilever_fem` in `tests/test_worker.py` (`test_fem_modal_cantilever`).
+- Item C (done): `scratch/thermal_field_video.py` — real meshed plate coloured by the
+  Heisler field, Elmer FEM (`thermal_transient_submit`) + lumped overlaid on the history
+  curve (`artifacts/thermal_field.gif`). Field/solver: `thermal_transient_1d` (Heisler
+  oracle) + `driftpin/analysis/elmer.py` (slab `scalars.dat` = centre/surface history).
+- Item D (done): `scratch/cfd_field_video.py` — transient OpenFOAM lid-driven cavity
+  (`icoFoam`), `foamToVTK -legacy -ascii` → meshio (no lxml), Ghia 1982 benchmark overlaid
+  (`artifacts/cfd_cavity_field.gif`). OpenFOAM env via `solvers.openfoam_bashrc()`; CFD
+  case-generation reference `driftpin/analysis/openfoam.py`, handlers `cfd_*_flow_submit`.
 - Lineage: validate-the-artifact arc (`docs/VALIDATE_THE_ARTIFACT.md`, RFC §11.10) — the
   geometry oracle whose verdicts these videos overlay.
