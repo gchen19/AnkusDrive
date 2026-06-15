@@ -89,6 +89,37 @@ available. If startup hangs or the host reports a closed connection, run
 `driftpin ping` directly — that exercises the same worker boot path with
 cleaner error messages.
 
+## Simulation solvers & review-video demos
+
+The base install (FreeCAD + `pip install driftpin`) covers geometry, the analytic
+oracles, and the MCP surface. The heavy simulation families each shell out to an
+**external solver**, discovered at runtime by [`driftpin/solvers.py`](driftpin/solvers.py)
+(`$DRIFTPIN_<SOLVER>_PATH` → `PATH` → standard install dirs). A family whose solver is
+absent degrades to a clean `{ok: false, reason, install}` dict instead of crashing — check
+what currently resolves with the `solve_capabilities` MCP tool or
+`scripts/install-solvers.sh --list`. That script installs the pip-wheel solvers and prints
+the apt/conda commands for the system ones.
+
+The review-video demos under [`scratch/`](scratch/) turn a solver result into a GIF a human
+can watch — the **real exported geometry** in motion with the matching oracle overlaid on
+the frame (written to `artifacts/`). Each needs its family's solver plus `matplotlib`, and
+the CFD one needs `meshio` (on top of the base `numpy`/`Pillow`):
+
+```bash
+pip install matplotlib meshio        # frame rendering + reading OpenFOAM's VTK output
+```
+
+| Review-video demo (`scratch/…`) | Solver it drives | Install |
+|---|---|---|
+| `dog_clutch_cad_sim.py` — rigid-body contact via `p.vhacd` | **PyBullet** (pip wheel) | `pip install 'driftpin[mbd]'` |
+| `meshing_gears_video.py` — MBD gear train | **PyBullet** (pip wheel) | `pip install 'driftpin[mbd]'` |
+| `modal_shape_video.py` — FEM modal shapes | **CalculiX** `ccx` (FreeCAD FEM) | `apt install calculix-ccx` (Linux); FreeCAD finds `ccx` on `PATH` |
+| `thermal_field_video.py` — transient thermal field | **Elmer** | `apt install elmerfem-csc`; ensure `ElmerSolver` on `PATH` (or set `DRIFTPIN_ELMER_PATH`) |
+| `cfd_field_video.py` — CFD field (lid-driven cavity) | **OpenFOAM** + `meshio` | OpenFOAM via apt/conda, then `source <install>/etc/bashrc` (or set `DRIFTPIN_OPENFOAM_BASHRC`); `pip install meshio` |
+
+All of them also use FreeCAD for the geometry/meshing, so run each with the same
+interpreter that launches the worker — e.g. `.venv/bin/python3 scratch/cfd_field_video.py`.
+
 ## Architecture sketch
 
 ```
