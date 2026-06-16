@@ -880,7 +880,10 @@ def test_drawing_page_constructed_and_persisted():
 
 def test_export_drawing_three_formats():
     """export_drawing produces a non-empty, well-formed PDF, SVG, and DXF
-    headless (no TechDrawGui), each carrying the multi-view geometry."""
+    headless (no TechDrawGui), each carrying the multi-view geometry. SVG/DXF are
+    native TechDraw output; the PDF leg rasterises the SVG via svglib+reportlab,
+    which are deliberately NOT host deps (see pyproject) — so it SKIPs on a minimal
+    env (e.g. the conda-forge nightly) that lacks them, like the FEM/slicer gates."""
     with Worker() as w, tempfile.TemporaryDirectory() as tmp:
         w.call("new_document", name="exp")
         box = w.call("add_primitive", kind="box", w=30, d=20, h=10)
@@ -888,17 +891,25 @@ def test_export_drawing_three_formats():
         w.call("add_projection_group", page=page, body=box["handle"],
                views=["Front", "Top", "Right"])
 
-        pdf = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.pdf"))
         svg = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.svg"))
         dxf = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.dxf"))
-
-        for r in (pdf, svg, dxf):
+        for r in (svg, dxf):
             assert r["size"] > 0 and r["views"] == 3, r
-
-        assert open(os.path.join(tmp, "d.pdf"), "rb").read(5) == b"%PDF-"
         assert "<svg" in open(os.path.join(tmp, "d.svg"), encoding="utf-8").read(400)
         assert "SECTION" in open(os.path.join(tmp, "d.dxf"), encoding="utf-8",
                                  errors="replace").read()
+
+        # PDF rasterisation needs the optional svglib+reportlab in the worker's Python.
+        try:
+            pdf = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.pdf"))
+        except WorkerError as e:
+            if "No module named" in e.remote_message and (
+                    "svglib" in e.remote_message or "reportlab" in e.remote_message):
+                print("    SKIP PDF leg — svglib/reportlab not installed in the worker")
+                return
+            raise
+        assert pdf["size"] > 0 and pdf["views"] == 3, pdf
+        assert open(os.path.join(tmp, "d.pdf"), "rb").read(5) == b"%PDF-"
 
 
 def test_auto_and_manual_dimensions():
