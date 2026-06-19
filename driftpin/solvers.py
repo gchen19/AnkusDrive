@@ -117,6 +117,12 @@ _SOLVERS: dict = {
                         "DRIFTPIN_SU2_PATH",
     },
     # --- optics: pip wheels (the `optics` extra) -----------------------------
+    # Two lanes (see memory optics-library-selection). SEQUENTIAL imaging/lens
+    # design + optimization runs IN-PROCESS on optiland (MIT). NON-SEQUENTIAL
+    # tracing through real STL solids runs on KrakenOS, which is GPL-3.0 and is
+    # therefore invoked ONLY out-of-process via driftpin/optics_gpl_runner.py —
+    # find_spec discovery below merely checks the file exists, it does not import
+    # (or link) the GPL code, so the copyleft boundary stays intact.
     "rayoptics": {
         "kind": "wheel",
         "family": "optics",
@@ -124,6 +130,25 @@ _SOLVERS: dict = {
         "modules": ("rayoptics", "optiland"),
         "install_hint": "pip install 'driftpin[optics]'  (pulls rayoptics), "
                         "or: pip install rayoptics optiland",
+    },
+    "optiland": {
+        "kind": "wheel",
+        "family": "optics",
+        "extra": "optics",
+        "modules": ("optiland",),
+        "install_hint": "pip install 'driftpin[optics]'  (pulls optiland), "
+                        "or: pip install optiland",
+    },
+    "kraken": {
+        "kind": "wheel",
+        "family": "optics_nonseq",
+        "extra": "optics_gpl",
+        "modules": ("KrakenOS",),
+        # GPL-3.0: never imported in-process; run via optics_gpl_runner subprocess.
+        "license": "GPL-3.0",
+        "isolation": "subprocess",
+        "install_hint": "pip install 'driftpin[optics_gpl]'  (pulls KrakenOS, GPL-3.0; "
+                        "run out-of-process only), or: pip install KrakenOS 'setuptools<81'",
     },
     # --- Sprint 4 follow-on: slicer CLI (apt/AppImage, not vendored) ----------
     "prusaslicer": {
