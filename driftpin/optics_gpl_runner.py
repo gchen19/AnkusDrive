@@ -77,9 +77,11 @@ def _solid_trace(problem):
 
     S = Kos.system([P_Obj, Solid, P_Ima], Kos.Setup())
     S.energy_probability = 0                    # geometric trace (no Fresnel weighting)
+    want_paths = bool(problem.get("want_paths"))
 
     per_ray = []
     turns = []
+    paths = []
     n_valid = 0
     for r in rays:
         origin = [float(x) for x in r["origin"]]
@@ -95,9 +97,12 @@ def _solid_trace(problem):
             rec["turn_deg"] = (round(turn, 4) if turn is not None else None)
             if turn is not None:
                 turns.append(turn)
+            if want_paths:                      # the ray polyline (per-surface hit points)
+                paths.append([[round(float(c), 5) for c in pt]
+                              for pt in np.asarray(S.XYZ)])
         per_ray.append(rec)
 
-    return {
+    out = {
         "problem": "solid_trace",
         "n_launched": len(rays),
         "n_valid": n_valid,
@@ -106,6 +111,9 @@ def _solid_trace(problem):
         "max_turn_deg": (round(max(turns), 4) if turns else None),
         "rays": per_ray,
     }
+    if want_paths:
+        out["paths"] = paths
+    return out
 
 
 def _dispatch(problem):
