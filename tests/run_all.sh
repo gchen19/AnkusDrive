@@ -153,6 +153,10 @@ echo "== Nonlinear structural FEM (plastic/elastica/Hertz oracles always; ccx ga
 python3 tests/test_fem_nonlinear.py
 
 echo
+echo "== Granular DEM (RCP/Beverloo/repose oracles always; live YADE solve gated when present) =="
+python3 tests/test_granular.py
+
+echo
 echo "== Golden fixtures (issue #19 real adapters) =="
 python3 tests/test_golden_issue19.py
 
