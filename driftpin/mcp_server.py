@@ -3305,6 +3305,108 @@ def hertz_contact(
 
 
 @mcp.tool()
+def monopole_sphere(
+    a_m: float,
+    freq_hz: float,
+    u_amp: float = 1.0,
+    r_m: float | None = None,
+    rho: float = 1.204,
+    c: float = 343.0,
+) -> dict:
+    """Exact pulsating (monopole) sphere radiated power + far-field pressure (NO
+    solver) — the closed-form twin the Bempp exterior-acoustics BEM radiation solve
+    (`acoustic_radiation_submit`) is gated against. A sphere of radius `a_m`
+    vibrating with uniform surface normal velocity `u_amp` at `freq_hz` radiates
+    W = (ρc/2)|U|²(4πa²)(ka)²/(1+(ka)²) and, at range `r_m`, |p(r)| =
+    ρc|U|·ka/√(1+(ka)²)·(a/r) — both EXACT. The radiation efficiency
+    σ=(ka)²/(1+(ka)²) → 0 (poor sub-wavelength radiator) as ka→0 and → 1 as ka→∞.
+    `rho`/`c` default to air at 20 °C. A BEM Neumann (velocity) solve must reproduce
+    W and |p(r)|.
+
+    Returns {a_m, freq_hz, k_per_m, ka, u_amp, rho, c, radiation_efficiency,
+    radiated_power_w, surface_pressure_abs, r_m, farfield_pressure_abs,
+    farfield_pressure_x_r, fidelity, band_pct, valid_range_ok, warnings,
+    escalate_to}."""
+    params = {"a_m": a_m, "freq_hz": freq_hz, "u_amp": u_amp, "rho": rho, "c": c}
+    if r_m is not None:
+        params["r_m"] = r_m
+    return _call("monopole_sphere", **params)
+
+
+@mcp.tool()
+def rigid_sphere_scattering(
+    ka: float,
+    theta_deg: float = 180.0,
+    a_m: float | None = None,
+) -> dict:
+    """Exact rigid-sphere plane-wave scattering far-field form function via the Mie
+    series (NO solver) — the closed-form twin the Bempp exterior-acoustics BEM
+    scattering solve (`acoustic_radiation_submit`, problem='scattering') is gated
+    against. For compactness `ka` and scattering angle `theta_deg` (from the forward
+    direction; 180° is backscatter), f∞(θ) = (2/ika)·Σₙ(2n+1)[−j'ₙ(ka)/h'ₙ(ka)]·
+    Pₙ(cosθ) — a rigorous spherical-harmonic sum (Neumann ∂p/∂r=0 on the sphere)
+    truncated past convergence (fidelity='exact'). The backscatter |f∞(π)| → 1 in
+    the geometric (ka≫1) limit and rises through the resonance region. A BEM
+    scattered far field must land on |f∞(θ)|.
+
+    Returns {ka, theta_deg, a_m, form_function_abs, form_function_re,
+    form_function_im, backscatter_abs, n_terms, fidelity, band_pct, valid_range_ok,
+    warnings, escalate_to}."""
+    params = {"ka": ka, "theta_deg": theta_deg}
+    if a_m is not None:
+        params["a_m"] = a_m
+    return _call("rigid_sphere_scattering", **params)
+
+
+@mcp.tool()
+def acoustic_radiation_submit(
+    problem: str = "radiation",
+    a_m: float = 0.1,
+    freq_hz: float = 2000.0,
+    u_amp: float = 1.0,
+    r_m: float | None = None,
+    rho: float = 1.204,
+    c: float = 343.0,
+    h: float = 0.25,
+    ka_list: list[float] | None = None,
+    theta_deg: list[float] | None = None,
+    h_per_wl: float = 10.0,
+    model: str | None = None,
+    scale_to_m: float = 1e-3,
+    linear_deflection: float = 0.0,
+    timeout: int = 900,
+) -> dict:
+    """Exterior-acoustics boundary-element solve on Bempp, asynchronous (OFF the MCP
+    channel) — the real-field twin of the analytic `monopole_sphere` /
+    `rigid_sphere_scattering` oracles. Bempp is MIT but needs meshio>=4 (clashing
+    with solidspy's meshio==3 in the shared venv), so it is run ONLY out-of-process
+    via driftpin/bempp_runner.py under a dedicated .venv-bempp; degrades to
+    {ok:false, reason, install} when no bempp venv resolves.
+
+    `problem`='radiation' (default): a pulsating (monopole) sphere of radius `a_m`,
+    uniform surface velocity `u_amp` at `freq_hz`, into air (`rho`,`c`), mesh size
+    `h` (fraction of a). The result's `radiated_power_w` / `farfield_pressure_x_r`
+    vs the monopole_sphere oracle (ratio≈1) IS the gate. `problem`='scattering': a
+    rigid sphere insonified by a unit plane wave; sweep `ka_list`, report the
+    far-field form function at `theta_deg` angles (`h_per_wl` elements/wavelength) —
+    gated against the rigid_sphere_scattering Mie oracle. `problem`='mesh_solve': a
+    radiation solve on a REAL FreeCAD `model` (handle), tessellated to a surface
+    mesh here and fed to the BEM engine (`scale_to_m` mm→m, `linear_deflection`
+    mesh tolerance).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result
+    for {ok, ka, radiated_power_w, farfield_pressure_x_r, surface_pressure_abs_mean,
+    n_elements, wall_s} (radiation/mesh_solve) or {results:[{ka, form_function_abs{},
+    backscatter_abs, n_elements}]} (scattering)."""
+    params = {"problem": problem, "a_m": a_m, "freq_hz": freq_hz, "u_amp": u_amp,
+              "rho": rho, "c": c, "h": h, "h_per_wl": h_per_wl,
+              "scale_to_m": scale_to_m, "linear_deflection": linear_deflection,
+              "timeout": timeout}
+    for k, v in (("r_m", r_m), ("ka_list", ka_list), ("theta_deg", theta_deg),
+                 ("model", model)):
+        if v is not None:
+            params[k] = v
+    return _call("acoustic_radiation_submit", **params)
 def waveguide_cutoff(
     a_mm: float,
     b_mm: float | None = None,

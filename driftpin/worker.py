@@ -9527,6 +9527,34 @@ def _h_dipole_resonance(p):
     return em_fullwave.dipole_resonance(**p)
 
 
+@handler("monopole_sphere")
+def _h_monopole_sphere(p):
+    """Exact pulsating (monopole) sphere radiated power + far-field pressure — the
+    closed-form twin the Bempp exterior-Helmholtz BEM radiation solve
+    (acoustic_radiation_submit) is gated against. W = (ρc/2)|U|²(4πa²)(ka)²/(1+(ka)²)
+    and |p(r)| = ρc|U|·ka/√(1+(ka)²)·(a/r), both EXACT. See
+    driftpin.analysis.acoustics_bem. Returns {a_m, freq_hz, k_per_m, ka, u_amp, rho,
+    c, radiation_efficiency, radiated_power_w, surface_pressure_abs, r_m,
+    farfield_pressure_abs, farfield_pressure_x_r, fidelity, band_pct,
+    valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import acoustics_bem
+    return acoustics_bem.monopole_sphere(**p)
+
+
+@handler("rigid_sphere_scattering")
+def _h_rigid_sphere_scattering(p):
+    """Exact rigid-sphere plane-wave scattering far-field form function (Mie series)
+    — the closed-form twin the Bempp exterior-Helmholtz BEM scattering solve
+    (acoustic_radiation_submit, problem='scattering') is gated against. f∞(θ) =
+    (2/ika)Σₙ(2n+1)[−j'ₙ(ka)/h'ₙ(ka)]Pₙ(cosθ), an exact modal sum; θ=180° is
+    backscatter. See driftpin.analysis.acoustics_bem. Returns {ka, theta_deg, a_m,
+    form_function_abs, form_function_re, form_function_im, backscatter_abs, n_terms,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import acoustics_bem
+    return acoustics_bem.rigid_sphere_scattering(**p)
+
+
+
 @handler("molding_screen")
 def _h_molding_screen(p):
     """Injection-molding screen: exact one-term cooling time + spiral-flow fill
@@ -10555,6 +10583,211 @@ def _h_granular_oracle(p):
     raise ValueError(
         f"unknown granular problem {kind!r}; use 'packing', 'beverloo', "
         "'beverloo_exponent', 'repose', or 'repose_monotone'")
+
+
+
+# --- exterior acoustics: Bempp boundary-element method (MIT, dep-isolated) -----
+# Bempp is MIT — the SAME permissive footing as DriftPin — so the subprocess here
+# is NOT a license boundary. It is a DEPENDENCY-CLASH boundary: Bempp needs
+# meshio>=4 (cells_dict), but DriftPin's shared venv pins meshio==3.0 for solidspy
+# (driftpin/analysis/topology.py). Rather than break topology optimisation, Bempp
+# lives in a DEDICATED venv (.venv-bempp) and is invoked OUT-OF-PROCESS via
+# driftpin/bempp_runner.py (sentinel-delimited JSON over a pipe), resolved exactly
+# like _optics_gpl_python resolves KrakenOS. The two analytic oracles
+# (monopole_sphere / rigid_sphere_scattering) are FreeCAD-free and run in-process
+# above; the BEM solve runs out-of-process.
+
+_BEMPP_PY = None  # cache: None=unprobed, False=absent, str=python exe that imports bempp_cl
+
+
+def _bempp_python():
+    """The Python interpreter to run the Bempp BEM engine under — the one whose
+    environment can import bempp_cl (a dedicated .venv-bempp with meshio>=5), NOT
+    this worker's interpreter (which pins meshio==3 for solidspy). Resolution order
+    mirrors _optics_gpl_python: DRIFTPIN_BEMPP_PYTHON override → the venv that owns
+    bempp_cl (from find_spec's origin; find_spec does NOT import it) → a repo-local
+    .venv-bempp beside the repo or one level up → sys.executable. Each candidate is
+    probed with find_spec('bempp_cl') in a child, so a hit is guaranteed runnable.
+    Cached. Returns the exe path, or None."""
+    global _BEMPP_PY
+    if _BEMPP_PY is not None:
+        return _BEMPP_PY or None
+    import importlib.util
+    import subprocess
+
+    candidates = []
+    if env := os.environ.get("DRIFTPIN_BEMPP_PYTHON"):
+        candidates.append(env)
+    try:
+        spec = importlib.util.find_spec("bempp_cl")
+    except Exception:
+        spec = None
+    if spec and spec.origin:                          # ascend toward the venv root
+        d = os.path.dirname(spec.origin)
+        for _ in range(5):
+            d = os.path.dirname(d)
+            candidates += [os.path.join(d, "bin", "python3"),
+                           os.path.join(d, "bin", "python"),
+                           os.path.join(d, "Scripts", "python.exe")]
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # the dedicated bempp venv lives beside the repo or one level up (next to it)
+    for base in (repo, os.path.dirname(repo)):
+        candidates += [os.path.join(base, ".venv-bempp", "bin", "python3"),
+                       os.path.join(base, ".venv-bempp", "bin", "python"),
+                       os.path.join(base, ".venv-bempp", "Scripts", "python.exe")]
+    candidates.append(sys.executable)
+
+    seen = set()
+    probe = ("import importlib.util,sys;"
+             "sys.exit(0 if importlib.util.find_spec('bempp_cl') else 1)")
+    for c in candidates:
+        if not c or c in seen or not os.path.isfile(c):
+            continue
+        seen.add(c)
+        try:
+            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
+        except Exception:
+            continue
+        if r.returncode == 0:
+            _BEMPP_PY = c
+            return c
+    _BEMPP_PY = False
+    return None
+
+
+def _run_bempp(problem, python_exe, timeout=900):
+    """Invoke the Bempp BEM engine OUT-OF-PROCESS via driftpin/bempp_runner.py (a
+    standalone script that imports no driftpin code) and return its JSON result.
+    DriftPin never imports bempp_cl in-process; this fork/exec + pipe-IPC keeps the
+    meshio dependency clash off the shared venv. Raises RuntimeError if the
+    subprocess emits no sentinel-delimited JSON."""
+    import json as _json
+    import subprocess
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bempp_runner.py")
+    proc = subprocess.run(
+        [python_exe, runner],
+        input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
+    _, _, rest = proc.stdout.partition("@@JSON@@")
+    body, _, _ = rest.partition("@@END@@")
+    if not body:
+        raise RuntimeError(
+            f"bempp_runner produced no JSON (rc={proc.returncode}); "
+            f"stderr tail: {proc.stderr[-400:]}")
+    return _json.loads(body)
+
+
+def _surface_mesh_arrays(shape, linear_deflection=0.0):
+    """Tessellate a FreeCAD shape to a triangular surface mesh and return
+    (vertices 3×nv, elements 3×ne, 0-based) — the arrays bempp_runner builds a Grid
+    from. Runs on the worker thread (FreeCAD lives here); the BEM solve consumes the
+    arrays out-of-process so no FreeCAD type crosses the pipe."""
+    tol = linear_deflection or 0.0
+    if tol <= 0:
+        # default deflection: a fraction of the bounding-box diagonal
+        bb = shape.BoundBox
+        tol = 0.02 * (bb.DiagonalLength or 1.0)
+    tri = shape.tessellate(tol)
+    verts = [[v.x, v.y, v.z] for v in tri[0]]
+    faces = list(tri[1])
+    vx = [[v[0] for v in verts], [v[1] for v in verts], [v[2] for v in verts]]
+    ex = [[f[0] for f in faces], [f[1] for f in faces], [f[2] for f in faces]]
+    return vx, ex
+
+
+@handler("acoustic_radiation_submit")
+def _h_acoustic_radiation_submit(p):
+    """Exterior-acoustics boundary-element solve on Bempp, OFF the MCP channel
+    (asynchronous) — the real-field twin of the analytic monopole_sphere /
+    rigid_sphere_scattering oracles. Bempp is MIT but needs meshio>=4 (clashing with
+    solidspy's meshio==3 in the shared venv), so it is run ONLY in a subprocess via
+    bempp_runner under a dedicated .venv-bempp; degrades to {ok:false, reason,
+    install} when no bempp venv resolves, never raising.
+
+    Problems (`problem`):
+      'radiation' (default): a pulsating (monopole) sphere of radius `a_m` vibrating
+        with uniform surface normal velocity `u_amp` at `freq_hz` radiates into air
+        (`rho`, `c`). Solve the exterior Neumann problem for the surface pressure,
+        recover the radiated power W and the far-field |p(r_m)|. Knobs: a_m, freq_hz,
+        u_amp, r_m, h (mesh size, fraction of a). The result's radiated_power_w and
+        farfield_pressure_x_r vs the monopole_sphere oracle (ratio≈1) is the gate.
+      'scattering': a rigid (sound-hard) sphere of radius `a_m` insonified by a unit
+        plane wave; sweep `ka_list`, report the far-field form function at `theta_deg`
+        angles. Gated against the rigid_sphere_scattering Mie oracle.
+      'mesh_solve': a 'radiation' solve on a REAL FreeCAD model (`model`/`handle`),
+        tessellated to a surface mesh here on the worker thread and fed to the BEM
+        engine — the path that consumes the actual exported geometry.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, ka, radiated_power_w, farfield_pressure_x_r, surface_pressure_abs_mean,
+    n_elements, wall_s} (radiation/mesh_solve) or {results:[{ka, form_function_abs{},
+    backscatter_abs}]} (scattering)."""
+    python_exe = _bempp_python()
+    if python_exe is None:
+        from driftpin import solvers
+        info = solvers.find_solver("bempp")
+        return {"ok": False, "solver": "bempp", "reason": "solver not installed",
+                "install": info.get("install_hint",
+                                    "python3 -m venv .venv-bempp && "
+                                    ".venv-bempp/bin/pip install bempp-cl gmsh 'meshio>=5'")}
+
+    from driftpin import jobs
+    kind = p.get("problem", "radiation")
+    if kind == "radiation":
+        problem = {
+            "problem": "radiation",
+            "a_m": float(p.get("a_m", 0.1)),
+            "freq_hz": float(p.get("freq_hz", 2000.0)),
+            "u_amp": float(p.get("u_amp", 1.0)),
+            "r_m": float(p.get("r_m", p.get("a_m", 0.1) * 10.0)),
+            "rho": float(p.get("rho", 1.204)),
+            "c": float(p.get("c", 343.0)),
+            "h": float(p.get("h", 0.25)),
+        }
+        meta = {"problem": kind}
+    elif kind == "scattering":
+        problem = {
+            "problem": "scattering",
+            "a_m": float(p.get("a_m", 1.0)),
+            "ka_list": [float(x) for x in p.get("ka_list", [1.0, 2.0, 3.0, 4.0])],
+            "theta_deg": [float(t) for t in p.get("theta_deg", [180.0])],
+            "h_per_wl": float(p.get("h_per_wl", 10.0)),
+        }
+        meta = {"problem": kind}
+    elif kind == "mesh_solve":
+        handle = p.get("model") or p.get("handle")
+        if not handle:
+            raise ValueError("acoustic_radiation_submit mesh_solve needs a `model` handle")
+        _, shape = _shape_of(handle)
+        # tessellate on the worker thread (FreeCAD lives here); units mm → m
+        verts, elems = _surface_mesh_arrays(
+            shape, linear_deflection=float(p.get("linear_deflection", 0.0)))
+        scale = float(p.get("scale_to_m", 1e-3))      # FreeCAD mm → SI metres
+        verts = [[x * scale for x in row] for row in verts]
+        problem = {
+            "problem": "mesh_solve",
+            "vertices": verts, "elements": elems,
+            "a_m": float(p.get("a_m", 0.1)),
+            "freq_hz": float(p.get("freq_hz", 2000.0)),
+            "u_amp": float(p.get("u_amp", 1.0)),
+            "r_m": float(p.get("r_m", p.get("a_m", 0.1) * 10.0)),
+            "rho": float(p.get("rho", 1.204)),
+            "c": float(p.get("c", 343.0)),
+        }
+        meta = {"problem": kind, "n_vertices": len(verts[0]), "n_faces": len(elems[0])}
+    else:
+        raise ValueError(f"unknown acoustic_radiation problem {kind!r} "
+                         "(want 'radiation', 'scattering' or 'mesh_solve')")
+
+    timeout = int(p.get("timeout", 900))
+    # mesh_solve carries the (large) vertex arrays in the cache key only by a hash
+    key = jobs.content_key("acoustic_bem", problem)
+
+    def _work():
+        out = _run_bempp(problem, python_exe, timeout=timeout)
+        out["backend"] = "bempp-cl (subprocess-isolated, MIT; meshio>=5 venv)"
+        return out
+
+    return jobs.submit("acoustic_bem", _work, key=key, meta=meta)
 
 
 
