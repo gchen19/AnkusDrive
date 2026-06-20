@@ -3407,6 +3407,104 @@ def acoustic_radiation_submit(
         if v is not None:
             params[k] = v
     return _call("acoustic_radiation_submit", **params)
+def waveguide_cutoff(
+    a_mm: float,
+    b_mm: float | None = None,
+    mode: str = "TE10",
+    eps_r: float = 1.0,
+    freq_ghz: float | None = None,
+) -> dict:
+    """Exact rectangular-waveguide cutoff frequency (NO solver) — the closed-form
+    twin the openEMS FDTD full-wave solve (`em_fullwave_submit`) is gated against.
+    Broad wall `a_mm`, narrow wall `b_mm` (default a/2, WR convention). `mode` is
+    'TE<m><n>'/'TM<m><n>'. f_c(m,n) = (c/2√εᵣ)·√((m/a)²+(n/b)²); dominant TE10
+    reduces to the EXACT f_c = c/(2a√εᵣ). Below f_c the guide is evanescent
+    (axial β imaginary, nothing transmits), above it propagates with guided
+    wavelength λ_g = 2π/β. With a probe `freq_ghz` the regime (propagating /
+    evanescent), k, β and λ_g are returned. An FDTD drive straddling f_c must
+    collapse its transmission below the analytic cutoff and rise above it.
+
+    Returns {mode, m, n, a_mm, b_mm, eps_r, cutoff_hz, cutoff_ghz, kc_per_m,
+    next_mode_cutoff_ghz, single_mode_band_ghz, probe_freq_ghz, regime, k_per_m,
+    beta_per_m, guided_wavelength_mm, fidelity, band_pct, valid_range_ok,
+    warnings, escalate_to}."""
+    params = {"a_mm": a_mm, "mode": mode, "eps_r": eps_r}
+    for k, v in (("b_mm", b_mm), ("freq_ghz", freq_ghz)):
+        if v is not None:
+            params[k] = v
+    return _call("waveguide_cutoff", **params)
+
+
+@mcp.tool()
+def dipole_resonance(
+    length_mm: float | None = None,
+    freq_ghz: float | None = None,
+    shortening: float = 0.48,
+) -> dict:
+    """Thin centre-fed half-wave dipole first resonance (NO solver, banded) — the
+    closed-form twin the openEMS FDTD S11 antenna sweep (`em_fullwave_submit`) is
+    gated against. Give EXACTLY ONE of `length_mm` (→ resonant frequency) or
+    `freq_ghz` (→ resonant length). End-effect shortening k = `shortening` makes
+    the resonant length a little under λ/2: L = k·λ, f_r = k·c/L (k≈0.48 textbook;
+    ≈0.475 typical wire). Because k tracks the length/diameter ratio this is a
+    ±band correlation (fidelity='banded', ~±3% over k∈[0.46,0.49]); an FDTD S11
+    sweep must put its first resonance inside [freq_lo, freq_hi] (or [length_lo,
+    length_hi]).
+
+    Returns {given, shortening, half_wavelength_mm, resonant_length_mm,
+    resonant_freq_ghz, freq_lo_ghz, freq_hi_ghz, length_lo_mm, length_hi_mm,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"shortening": shortening}
+    for k, v in (("length_mm", length_mm), ("freq_ghz", freq_ghz)):
+        if v is not None:
+            params[k] = v
+    return _call("dipole_resonance", **params)
+
+
+@mcp.tool()
+def em_fullwave_submit(
+    problem: str = "waveguide_sweep",
+    a_mm: float = 22.86,
+    b_mm: float | None = None,
+    length_mm: float | None = None,
+    f_start_ghz: float | None = None,
+    f_stop_ghz: float | None = None,
+    n_freq: int | None = None,
+    nrts: int | None = None,
+    cells_per_wl: float | None = None,
+    eps_r: float = 1.0,
+    gap_mm: float | None = None,
+    radius_mm: float | None = None,
+    timeout: int = 600,
+) -> dict:
+    """Full-wave FDTD EM solve on openEMS, asynchronous (OFF the MCP channel) — the
+    real-field twin of the analytic `waveguide_cutoff` / `dipole_resonance`
+    oracles. openEMS is GPL-3.0 and is run ONLY out-of-process via
+    driftpin/em_fullwave_gpl_runner.py; degrades to {ok:false, reason, install}
+    when no openEMS venv resolves.
+
+    `problem`='waveguide_sweep' (default): hollow rectangular guide, broad wall
+    `a_mm`/narrow wall `b_mm` (default a/2), length `length_mm` (default 60), TE10
+    port at each end. Sweep `f_start_ghz`..`f_stop_ghz` (default 4..10 GHz —
+    straddling the WR-90 cutoff 6.56 GHz) in `n_freq` points, `nrts` max timesteps,
+    `cells_per_wl` mesh density, `eps_r` fill. The result's `fc_crossing_ghz`
+    (half-power transmission) vs the analytic c/(2a) (`fc_ratio`≈1, evanescent_mean
+    ≈0, propagating_mean≈1) IS the gate. `problem`='dipole_s11': centre-fed thin
+    dipole (`length_mm`, `gap_mm`, `radius_mm`), sweep S11, report first resonance.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result
+    for {ok, fc_analytic_ghz, freq_ghz[], s21_db[], transmission_norm[],
+    fc_crossing_ghz, fc_ratio, evanescent_mean, propagating_mean, n_cells, wall_s}
+    (waveguide) or {freq_ghz[], s11_db[], resonance_ghz} (dipole)."""
+    params = {"problem": problem, "a_mm": a_mm, "eps_r": eps_r, "timeout": timeout}
+    for k, v in (("b_mm", b_mm), ("length_mm", length_mm),
+                 ("f_start_ghz", f_start_ghz), ("f_stop_ghz", f_stop_ghz),
+                 ("n_freq", n_freq), ("nrts", nrts),
+                 ("cells_per_wl", cells_per_wl), ("gap_mm", gap_mm),
+                 ("radius_mm", radius_mm)):
+        if v is not None:
+            params[k] = v
+    return _call("em_fullwave_submit", **params)
 
 
 @mcp.tool()
@@ -4418,6 +4516,137 @@ def optics_solid_trace(
         if v is not None:
             params[k] = v
     return _call("optics_solid_trace", **params)
+
+
+# --- granular / powder discrete-element mechanics (YADE DEM, GPL-3.0) ----------
+# The closed-form oracle (granular_screen) gates the solver; dem_pack_submit /
+# dem_flow_submit run the REAL YADE DEM solve off the MCP channel (background
+# jobs.py jobs — poll with job_status / job_result). YADE is GPL-3.0 and is run
+# ONLY out-of-process via the `yade` executable, so its copyleft never reaches
+# DriftPin's permissive code; absent YADE, the *_submit tools degrade to
+# {ok:false, reason, install, oracle} (the oracle band still comes back).
+
+@mcp.tool()
+def granular_screen(
+    problem: str = "packing",
+    regime: str = "random_close",
+    coordination: float | None = None,
+    outlet_m: float | None = None,
+    particle_d_m: float | None = None,
+    bulk_density_kg_m3: float | None = None,
+    material: str | None = None,
+    friction_coeff: float | None = None,
+    saturation: float = 1.0,
+    outlet1_m: float | None = None,
+    flow1_kg_s: float | None = None,
+    outlet2_m: float | None = None,
+    flow2_kg_s: float | None = None,
+    mu_low: float | None = None,
+    repose_low_deg: float | None = None,
+    mu_high: float | None = None,
+    repose_high_deg: float | None = None,
+) -> dict:
+    """Closed-form granular/powder-mechanics oracles — banded correlations, NO
+    external solver (the FreeCAD-free analytic twins the YADE DEM solve is gated
+    against). These are correlations, not exact theory, so each returns
+    fidelity='correlation' + an honest [low, high] band; the band IS the oracle.
+    Dispatch on `problem`:
+
+      'packing' (regime='random_close'|'random_loose'|'fcc'[, coordination]) —
+          monodisperse sphere solid-volume fraction φ. RCP ≈ 0.637 (band
+          0.60–0.66), the random pile a real settle must hit, well below the
+          crystalline FCC/HCP 0.7405.
+      'beverloo' (outlet_m, particle_d_m[, bulk_density_kg_m3 | material]) —
+          flat-bottom hopper discharge W = C·ρ·√g·(D−k·d)^2.5 [kg/s]; flow ∝
+          outlet to the 2.5 power, independent of fill height.
+      'beverloo_exponent' (outlet1_m, flow1_kg_s, outlet2_m, flow2_kg_s
+          [, particle_d_m]) — recover the log-log flow exponent from two
+          (outlet, flow) points; granular 2.5 (band 2.2–2.8) vs Torricelli 2.0.
+      'repose' (friction_coeff[, saturation]) — poured-pile repose angle
+          θ ≈ atan(μ) + ±25% band.
+      'repose_monotone' (mu_low, repose_low_deg, mu_high, repose_high_deg) —
+          the steeper-with-friction monotonicity gate.
+
+    SI units (m, kg/m³, kg/s, degrees). Escalate to dem_pack_submit /
+    dem_flow_submit (the real YADE solve) for polydisperse mixes, non-spherical
+    grains, cohesion, or geometry this monodisperse idealization can't see."""
+    params: dict = {"problem": problem}
+    for k, v in (("regime", regime), ("coordination", coordination),
+                 ("outlet_m", outlet_m), ("particle_d_m", particle_d_m),
+                 ("bulk_density_kg_m3", bulk_density_kg_m3), ("material", material),
+                 ("friction_coeff", friction_coeff), ("saturation", saturation),
+                 ("outlet1_m", outlet1_m), ("flow1_kg_s", flow1_kg_s),
+                 ("outlet2_m", outlet2_m), ("flow2_kg_s", flow2_kg_s),
+                 ("mu_low", mu_low), ("repose_low_deg", repose_low_deg),
+                 ("mu_high", mu_high), ("repose_high_deg", repose_high_deg)):
+        if v is not None:
+            params[k] = v
+    return _call("granular_oracle", **params)
+
+
+@mcp.tool()
+def dem_pack_submit(
+    n_spheres: int = 800,
+    radius_m: float = 0.004,
+    box_m: list | None = None,
+    friction_deg: float = 26.0,
+    young_pa: float = 1e7,
+    density: float = 2600.0,
+    steps: int = 30000,
+) -> dict:
+    """Pour N monodisperse spheres into a box and settle them under gravity with
+    the REAL YADE discrete-element engine, then measure the random close-packing
+    fraction φ of the settled bed — gated against granular_screen('packing') (RCP
+    band 0.60–0.66, well below the crystalline 0.7405). YADE is GPL-3.0 and is run
+    ONLY in a subprocess (the parent never imports it — same arm's-length
+    isolation as the GPL Elmer/OpenFOAM binaries). Runs OFF the MCP channel via a
+    background job, so a multi-second settle never blocks the worker.
+
+    `box_m` is the [Lx, Ly] floor footprint (m; default [0.06, 0.06]); the column
+    height is sized to hold n_spheres. `friction_deg` is the inter-particle
+    friction angle; `young_pa` the contact modulus; `density` the grain density.
+    Returns {job_id, status, cache_hit, oracle} (poll job_status / job_result);
+    the job result carries the oracle band PLUS the measured {packing_fraction,
+    in_band, n_settled, settled_height_m, mean_coordination, positions:[[x,y,z,r]]}.
+    Absent YADE: {ok:false, reason, install, oracle}."""
+    params = {"n_spheres": n_spheres, "radius_m": radius_m,
+              "box_m": box_m or [0.06, 0.06], "friction_deg": friction_deg,
+              "young_pa": young_pa, "density": density, "steps": steps}
+    return _call("dem_pack_submit", **params)
+
+
+@mcp.tool()
+def dem_flow_submit(
+    n_spheres: int = 1500,
+    radius_m: float = 0.003,
+    box_m: list | None = None,
+    outlet_m: float = 0.03,
+    friction_deg: float = 26.0,
+    young_pa: float = 1e7,
+    density: float = 2600.0,
+    settle_steps: int = 20000,
+    flow_steps: int = 60000,
+) -> dict:
+    """Discharge spheres from a flat-bottomed hopper box through a central orifice
+    with the REAL YADE discrete-element engine and measure the steady mass-flow
+    rate — gated against granular_screen('beverloo') (flow ∝ outlet^2.5). Submit
+    two `outlet_m` sizes and feed the (outlet, flow) pair to
+    granular_screen('beverloo_exponent') to check the Beverloo 2.5 exponent (vs the
+    Torricelli 2.0 of a draining fluid). YADE is GPL-3.0 and is run ONLY in a
+    subprocess; runs OFF the MCP channel via a background job.
+
+    `box_m` is the [Lx, Ly, Lz] hopper box (m; default [0.10, 0.10, 0.20]);
+    `outlet_m` the central orifice diameter; `settle_steps`/`flow_steps` the DEM
+    step budgets. Returns {job_id, status, cache_hit, oracle}; the job result
+    carries the Beverloo oracle PLUS {mass_flow_kg_s, n_discharged,
+    discharge_time_s, positions:[...]}. Absent YADE: {ok:false, reason, install,
+    oracle}."""
+    params = {"n_spheres": n_spheres, "radius_m": radius_m,
+              "box_m": box_m or [0.10, 0.10, 0.20], "outlet_m": outlet_m,
+              "friction_deg": friction_deg, "young_pa": young_pa,
+              "density": density, "settle_steps": settle_steps,
+              "flow_steps": flow_steps}
+    return _call("dem_flow_submit", **params)
 
 
 @mcp.tool()

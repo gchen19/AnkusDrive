@@ -20,6 +20,12 @@
 #       meshio==3 in the shared venv. So it installs into a DEDICATED venv (.venv-bempp)
 #       and runs out-of-process via driftpin/bempp_runner.py. Request it explicitly
 #       (`install-solvers.sh acoustics_bem`); never installed in the no-arg run.
+#     * GPL opt-in SOURCE BUILD (em_gpl: openEMS FDTD full-wave EM) — GPL-3.0 AND not
+#       on PyPI/conda, so it is source-built from the openEMS-Project meta-repo into a
+#       DEDICATED venv (.venv-openems) and run ONLY out-of-process via
+#       driftpin/em_fullwave_gpl_runner.py. Request it explicitly
+#       (`install-solvers.sh em_gpl`); never installed in the no-arg run. Same
+#       arm's-length copyleft boundary as KrakenOS / the GPL Elmer/OpenFOAM bins.
 #     * system-package solvers (CFD: OpenFOAM/SU2; transient/radiation thermal:
 #       Elmer) — large apt/conda installs that vary by distro and need root, so this
 #       script PRINTS the documented commands rather than running them. Install them,
@@ -40,6 +46,7 @@
 #   scripts/install-solvers.sh topology optics  # several extras
 #   scripts/install-solvers.sh optics_gpl       # opt-in GPL-3.0 non-sequential engine (KrakenOS)
 #   scripts/install-solvers.sh acoustics_bem    # opt-in exterior-acoustics BEM (bempp-cl, dedicated venv)
+#   scripts/install-solvers.sh em_gpl           # opt-in GPL-3.0 full-wave FDTD (openEMS, source-built)
 #   scripts/install-solvers.sh --optics-gallery # bootstrap: install BOTH optics lanes + render every gallery figure
 #   scripts/install-solvers.sh cfd              # print OpenFOAM/SU2 install guidance (no auto-install)
 #   scripts/install-solvers.sh --list           # show what resolves right now (per solve_capabilities)
@@ -123,6 +130,49 @@ EOF
   fi
 }
 
+# --- em_gpl: openEMS FDTD full-wave EM (GPL-3.0, source build) ------------------
+# openEMS is NOT a pip wheel — it is built from the openEMS-Project meta-repo with
+# its update_openEMS.sh into a prefix + a DEDICATED venv (.venv-openems) carrying
+# the openEMS/CSXCAD python bindings. DriftPin runs it only out-of-process
+# (driftpin/em_fullwave_gpl_runner.py); set DRIFTPIN_OPENEMS_PYTHON to that venv's
+# python so the worker resolves it. Override the prefix/clone/venv with EM_PREFIX /
+# EM_SRC / EM_VENV.
+build_openems() {
+  warn "openEMS is GPL-3.0. DriftPin runs it ONLY out-of-process"
+  warn "(driftpin/em_fullwave_gpl_runner.py), keeping its own license clean."
+  local prefix="${EM_PREFIX:-$HOME/opt/openEMS}"
+  local src="${EM_SRC:-$HOME/openEMS-Project}"
+  local venv="${EM_VENV:-$REPO_ROOT/.venv-openems}"
+
+  log "openEMS build deps (apt — needs sudo; adjust package names per distro)"
+  cat <<'EOF'
+  sudo apt-get install -y build-essential cmake git libhdf5-dev libvtk9-dev \
+       libboost-all-dev libcgal-dev libtinyxml-dev libqt5xml5 qtbase5-dev
+EOF
+  if [ ! -d "$src" ]; then
+    log "clone openEMS-Project -> $src"
+    git clone --recursive https://github.com/thliebig/openEMS-Project.git "$src" \
+      || die "git clone failed"
+  fi
+  log "build openEMS (+ python bindings) into $prefix  (this takes a while)"
+  ( cd "$src" && ./update_openEMS.sh "$prefix" --python ) || die "update_openEMS.sh failed"
+
+  log "dedicated venv -> $venv  (openEMS/CSXCAD python bindings)"
+  python3 -m venv "$venv" || die "venv create failed"
+  "$venv/bin/pip" install --quiet --upgrade pip numpy h5py cython || die "venv deps failed"
+  CSXCAD_INSTALL_PATH="$prefix" "$venv/bin/pip" install --quiet "$src/CSXCAD/python" \
+    || die "CSXCAD python install failed"
+  CSXCAD_INSTALL_PATH="$prefix" OPENEMS_INSTALL_PATH="$prefix" \
+    "$venv/bin/pip" install --quiet "$src/openEMS/python" || die "openEMS python install failed"
+
+  log "smoke-test the engine"
+  "$venv/bin/python" -c "import openEMS, CSXCAD; print('openEMS', openEMS.__version__)" \
+    || die "openEMS import failed — check $prefix/lib is on the runtime path"
+  ok "openEMS built. Point the worker at it:"
+  ok "    export DRIFTPIN_OPENEMS_PYTHON=$venv/bin/python"
+  ok "(or it is auto-discovered if .venv-openems sits beside the repo)"
+}
+
 # --- optics gallery bootstrap (install both lanes + render every figure) -------
 build_optics_gallery() {
   log "bootstrapping the optics gallery (install both lanes, then render every figure)"
@@ -167,6 +217,39 @@ PYEOF
   ok "(or it is auto-discovered if .venv-bempp sits beside the repo)"
 }
 
+# --- DEM source-build: YADE (GPL-3.0, not a pip wheel) -------------------------
+# YADE ships no PyPI/conda-noble wheel, so the `dem_gpl` extra is a SOURCE BUILD,
+# not a pip install. DriftPin drives it only out-of-process via the `yade`
+# executable running driftpin/dem_gpl_runner.py, so its GPL-3.0 copyleft does not
+# reach into DriftPin's own (permissive) code. Installs into ~/opt/yade by default.
+# RESOURCE NOTE: caps the build at -j8 so it never starves a co-resident CI runner.
+build_dem_gpl() {
+  warn "'dem_gpl' source-builds YADE (GPL-3.0). DriftPin runs it only out-of-process"
+  warn "(driftpin/dem_gpl_runner.py via the \`yade\` executable), keeping its own license clean."
+  local prefix="${YADE_PREFIX:-$HOME/opt/yade}"
+  local src="${YADE_SRC:-$HOME/yade-trunk}"
+  local jobs="${YADE_JOBS:-8}"   # cap parallelism — do NOT use -j$(nproc) on a CI host
+  log "build deps (apt) — boost, gmp/mpfr, cgal, eigen, vtk, gts, metis, ccache"
+  sudo apt-get install -y cmake git build-essential ccache libboost-all-dev \
+      libgmp-dev libmpfr-dev libcgal-dev libeigen3-dev python3-dev python3-numpy \
+      python3-mpmath libvtk9-dev libgts-dev libmetis-dev libopenblas-dev \
+      libsuitesparse-dev zlib1g-dev || die "apt build-deps failed"
+  if [ ! -d "$src/.git" ]; then
+    log "clone YADE (gitlab.com/yade-dev/trunk) -> $src"
+    git clone --depth 1 https://gitlab.com/yade-dev/trunk.git "$src" || die "git clone failed"
+  fi
+  log "cmake configure (prefix=$prefix, GUI off, VTK on, ccache, PYTHON_VERSION=3)"
+  cmake -B "$src/build" -S "$src" \
+      -DCMAKE_INSTALL_PREFIX="$prefix" -DENABLE_GUI=OFF -DENABLE_VTK=ON \
+      -DENABLE_GTS=ON -DENABLE_MPI=OFF -DENABLE_LBMFLOW=OFF \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_BUILD_TYPE=Release \
+      -DPYTHON_VERSION=3 || die "cmake configure failed"
+  log "cmake build -j$jobs  (capped — keep headroom for any co-resident runner)"
+  cmake --build "$src/build" -j"$jobs" || die "cmake build failed"
+  cmake --build "$src/build" --target install || die "cmake install failed"
+  ok "YADE installed to $prefix — verify: $prefix/bin/yade --version  (or set DRIFTPIN_YADE)"
+}
+
 # --- list / status (delegates to driftpin.solvers — same probe as the tool) ----
 do_list() {
   printf 'P2 solver discovery (what resolves in %s right now):\n\n' "$PY"
@@ -199,6 +282,8 @@ main() {
       -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
       mbd|topology|optics|optics_gpl) extras+=("$1"); do_all=0 ;;
       acoustics_bem|bempp) build_bempp; exit 0 ;;
+      dem_gpl|dem|yade)  build_dem_gpl; exit 0 ;;   # GPL-3.0 source build, never default
+      em_gpl|openems)    build_openems; exit 0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
       thermal|elmer)     systems+=("thermal"); do_all=0 ;;
       openfoam|su2)      systems+=("cfd"); do_all=0 ;;
@@ -215,6 +300,10 @@ main() {
     warn "is GPL-3.0 — install it explicitly with: scripts/install-solvers.sh optics_gpl"
     warn "Exterior-acoustics BEM (bempp-cl) is MIT but needs meshio>=4 (clashes with"
     warn "solidspy) — install it in its own venv: scripts/install-solvers.sh acoustics_bem"
+    warn "Granular DEM (YADE, GPL-3.0) is also opt-in and SOURCE-BUILT — install with:"
+    warn "  scripts/install-solvers.sh dem_gpl   (cmake build into ~/opt/yade, -j8)"
+    warn "Full-wave FDTD EM (openEMS) is GPL-3.0 AND source-built (not a pip wheel) —"
+    warn "build it explicitly with: scripts/install-solvers.sh em_gpl"
   else
     for e in "${extras[@]:-}";  do [ -n "$e" ] && pip_install_extra "$e"; done
     for s in "${systems[@]:-}"; do [ -n "$s" ] && system_guidance "$s"; done
