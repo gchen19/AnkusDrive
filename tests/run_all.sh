@@ -153,6 +153,10 @@ echo "== Nonlinear structural FEM (plastic/elastica/Hertz oracles always; ccx ga
 python3 tests/test_fem_nonlinear.py
 
 echo
+echo "== Exterior acoustics BEM (monopole/Mie oracles always; bempp solve gated when present) =="
+python3 tests/test_acoustics_bem.py
+
+echo
 echo "== Golden fixtures (issue #19 real adapters) =="
 python3 tests/test_golden_issue19.py
 

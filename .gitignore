@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 scratch/out/
 .venv/
+.venv-bempp/                 # dedicated bempp-cl venv (meshio>=5 clash isolation)
+.venv-openems/               # dedicated openEMS venv (GPL, source-built)
 tests/reliability_cache/
 tests/multiagent_cache/
 # generated CAD artifacts (scratch/gen_artifacts.py output)

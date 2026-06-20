@@ -15,6 +15,11 @@
 #       it explicitly (`install-solvers.sh optics_gpl`). DriftPin only ever runs it
 #       out-of-process via driftpin/optics_gpl_runner.py, so its copyleft does not reach
 #       DriftPin's own code (same arm's-length boundary as the GPL Elmer/OpenFOAM bins).
+#     * dedicated-venv wheel (acoustics_bem: bempp-cl, exterior-acoustics BEM) — MIT,
+#       NOT a license boundary, but it needs meshio>=4 which clashes with solidspy's
+#       meshio==3 in the shared venv. So it installs into a DEDICATED venv (.venv-bempp)
+#       and runs out-of-process via driftpin/bempp_runner.py. Request it explicitly
+#       (`install-solvers.sh acoustics_bem`); never installed in the no-arg run.
 #     * system-package solvers (CFD: OpenFOAM/SU2; transient/radiation thermal:
 #       Elmer) — large apt/conda installs that vary by distro and need root, so this
 #       script PRINTS the documented commands rather than running them. Install them,
@@ -34,6 +39,7 @@
 #   scripts/install-solvers.sh mbd              # just the MBD wheels (PyBullet)
 #   scripts/install-solvers.sh topology optics  # several extras
 #   scripts/install-solvers.sh optics_gpl       # opt-in GPL-3.0 non-sequential engine (KrakenOS)
+#   scripts/install-solvers.sh acoustics_bem    # opt-in exterior-acoustics BEM (bempp-cl, dedicated venv)
 #   scripts/install-solvers.sh --optics-gallery # bootstrap: install BOTH optics lanes + render every gallery figure
 #   scripts/install-solvers.sh cfd              # print OpenFOAM/SU2 install guidance (no auto-install)
 #   scripts/install-solvers.sh --list           # show what resolves right now (per solve_capabilities)
@@ -131,6 +137,36 @@ build_optics_gallery() {
   ok "optics gallery written to $REPO_ROOT/examples/optics_gallery/  ($(ls "$REPO_ROOT"/examples/optics_gallery/*.png 2>/dev/null | wc -l | tr -d ' ') PNGs)"
 }
 
+# --- acoustics_bem: Bempp exterior-acoustics BEM (MIT, dedicated venv) ----------
+# Bempp is MIT — NOT a license boundary. It still installs into a DEDICATED venv
+# (.venv-bempp) and runs out-of-process (driftpin/bempp_runner.py) for a DEPENDENCY
+# reason: bempp needs meshio>=4 (cells_dict) while the shared venv pins meshio==3
+# for solidspy (the `topology` extra). Installing bempp into the shared venv would
+# break topology optimisation. Override the venv path with BEMPP_VENV.
+build_bempp() {
+  warn "Bempp is MIT, but it needs meshio>=4 — which clashes with solidspy's"
+  warn "meshio==3 in the shared venv. Installing it in a DEDICATED venv to keep"
+  warn "topology optimisation working; DriftPin runs it out-of-process."
+  local venv="${BEMPP_VENV:-$REPO_ROOT/.venv-bempp}"
+  log "dedicated venv -> $venv  (bempp-cl + gmsh + meshio>=5)"
+  python3 -m venv "$venv" || die "venv create failed"
+  "$venv/bin/pip" install --quiet --upgrade pip || die "pip upgrade failed"
+  "$venv/bin/pip" install --quiet bempp-cl gmsh "meshio>=5" || die "bempp-cl install failed"
+  log "smoke-test the engine (sphere mesh + Helmholtz single-layer)"
+  PATH="$venv/bin:$PATH" "$venv/bin/python" - <<'PYEOF' || die "bempp smoke-test failed"
+import bempp_cl.api as bem
+from bempp_cl.api.operators.boundary import helmholtz
+g = bem.shapes.sphere(h=0.4)
+sp = bem.function_space(g, "P", 1)
+n = helmholtz.single_layer(sp, sp, sp, 2.0).weak_form().shape
+print("bempp-cl", bem.__version__ if hasattr(bem, "__version__") else "ok",
+      "sphere", g.number_of_elements, "slp", n)
+PYEOF
+  ok "Bempp built. Point the worker at it:"
+  ok "    export DRIFTPIN_BEMPP_PYTHON=$venv/bin/python"
+  ok "(or it is auto-discovered if .venv-bempp sits beside the repo)"
+}
+
 # --- list / status (delegates to driftpin.solvers — same probe as the tool) ----
 do_list() {
   printf 'P2 solver discovery (what resolves in %s right now):\n\n' "$PY"
@@ -162,6 +198,7 @@ main() {
       --optics-gallery) build_optics_gallery; exit 0 ;;
       -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
       mbd|topology|optics|optics_gpl) extras+=("$1"); do_all=0 ;;
+      acoustics_bem|bempp) build_bempp; exit 0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
       thermal|elmer)     systems+=("thermal"); do_all=0 ;;
       openfoam|su2)      systems+=("cfd"); do_all=0 ;;
@@ -176,6 +213,8 @@ main() {
     echo
     warn "GPL opt-in NOT installed by default: the non-sequential optics engine (KrakenOS)"
     warn "is GPL-3.0 — install it explicitly with: scripts/install-solvers.sh optics_gpl"
+    warn "Exterior-acoustics BEM (bempp-cl) is MIT but needs meshio>=4 (clashes with"
+    warn "solidspy) — install it in its own venv: scripts/install-solvers.sh acoustics_bem"
   else
     for e in "${extras[@]:-}";  do [ -n "$e" ] && pip_install_extra "$e"; done
     for s in "${systems[@]:-}"; do [ -n "$s" ] && system_guidance "$s"; done

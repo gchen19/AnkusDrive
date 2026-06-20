@@ -150,6 +150,28 @@ _SOLVERS: dict = {
         "install_hint": "pip install 'driftpin[optics_gpl]'  (pulls KrakenOS, GPL-3.0; "
                         "run out-of-process only), or: pip install KrakenOS 'setuptools<81'",
     },
+    # --- exterior acoustics: Bempp BEM (MIT, but meshio>=4 clashes with solidspy) ---
+    # Bempp is MIT — NOT a license boundary. The subprocess isolation is purely a
+    # DEPENDENCY clash: bempp needs meshio>=4 (cells_dict) while the shared venv pins
+    # meshio==3.0 for solidspy (driftpin/analysis/topology.py). So bempp lives in a
+    # DEDICATED venv (.venv-bempp) and is invoked out-of-process via
+    # driftpin/bempp_runner.py; the worker resolves that interpreter via
+    # _bempp_python() (the find_spec probe below merely reports installability).
+    "bempp": {
+        "kind": "wheel",
+        "family": "acoustics_bem",
+        "extra": "acoustics_bem",
+        "modules": ("bempp_cl",),
+        # MIT — no copyleft. The subprocess is for the meshio>=4 dependency clash.
+        "license": "MIT",
+        "isolation": "subprocess",
+        "install_hint": "Bempp needs meshio>=4 (cells_dict), which clashes with the "
+                        "shared venv's meshio==3 (solidspy). Install it in a DEDICATED "
+                        "venv and run out-of-process: python3 -m venv .venv-bempp && "
+                        ".venv-bempp/bin/pip install bempp-cl gmsh 'meshio>=5'  "
+                        "(scripts/install-solvers.sh acoustics_bem); then point "
+                        "DRIFTPIN_BEMPP_PYTHON at that venv's python.",
+    },
     # --- Sprint 4 follow-on: slicer CLI (apt/AppImage, not vendored) ----------
     "prusaslicer": {
         "kind": "binary",
