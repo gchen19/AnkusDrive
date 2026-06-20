@@ -2535,6 +2535,50 @@ def contact_setup(
 
 
 @mcp.tool()
+def fem_set_nonlinear_material(
+    analysis: str,
+    base_material: str,
+    yield_mpa: float | None = None,
+    yield_points: list | None = None,
+    tangent_modulus_mpa: float | None = None,
+    max_plastic_strain: float = 0.2,
+    hardening: str = "isotropic",
+    geometric_nonlinearity: bool = False,
+    ramp_increments: int = 10,
+    name: str = "NonlinearMaterial",
+) -> dict:
+    """Attach an elastoplastic (`*PLASTIC`) hardening curve to a linear FEM material
+    and switch the CalculiX solve to nonlinear — the material-nonlinearity half of
+    the nonlinear FEM path (`contact_setup` is the geometric/contact half). No new
+    solver: this promotes the CCX `MaterialNonlinearity` / `GeometricalNonlinearity`
+    flags the FEM path already exposes. `base_material` is the handle from
+    `fem_set_material` (its YoungsModulus/PoissonRatio stay the elastic branch).
+
+    Give the post-yield curve either as `yield_points` ([[stress_MPa,
+    plastic_strain], ...], first point at plastic_strain 0 = initial yield) or from
+    `yield_mpa` (+ optional `tangent_modulus_mpa` linear-hardening slope and
+    `max_plastic_strain`). With no tangent modulus the curve is
+    elastic–perfectly-plastic and caps the stress at σ_y exactly. `hardening`:
+    'isotropic' (monotonic) or 'kinematic' (cyclic/Bauschinger). Set
+    `geometric_nonlinearity=true` to combine plasticity with large deflection
+    (*NLGEOM). `ramp_increments` sub-divides the load step so ccx's plastic
+    return-mapping converges. Run `fem_run` + `fem_results` after; gate against
+    `plastic_collapse` (perfectly-plastic stress saturates at σ_y, collapse at M_p).
+
+    Returns {handle, name, hardening, yield_points, n_points,
+    solver_material_nonlinear, solver_geometric_nonlinear, ramp_increments}."""
+    params = {"analysis": analysis, "base_material": base_material,
+              "max_plastic_strain": max_plastic_strain, "hardening": hardening,
+              "geometric_nonlinearity": geometric_nonlinearity,
+              "ramp_increments": ramp_increments, "name": name}
+    for k, v in (("yield_mpa", yield_mpa), ("yield_points", yield_points),
+                 ("tangent_modulus_mpa", tangent_modulus_mpa)):
+        if v is not None:
+            params[k] = v
+    return _call("fem_set_nonlinear_material", **params)
+
+
+@mcp.tool()
 def fem_buckling(analysis: str, n_factors: int = 1) -> dict:
     """Configure analysis for linear buckling. Apply a unit-magnitude force
     constraint at the load location; the result factors are the multipliers
@@ -3155,6 +3199,109 @@ def beam_buckling(
         if v is not None:
             params[k] = v
     return _call("beam_buckling", **params)
+
+
+@mcp.tool()
+def plastic_collapse(
+    length_mm: float,
+    width_mm: float,
+    height_mm: float,
+    yield_mpa: float | None = None,
+    material: str | None = None,
+    load_n: float | None = None,
+    support: str = "cantilever",
+) -> dict:
+    """Exact plastic-hinge collapse of a solid rectangular beam (NO solver) — the
+    closed-form twin the perfectly-plastic CalculiX solve
+    (`fem_set_nonlinear_material`) is gated against. The beam bends about the
+    `width_mm` axis (depth = `height_mm`). σ_y from `yield_mpa` or a Materials-DB
+    `material`. Elastic modulus S = b·h²/6, plastic modulus Z = b·h²/4, shape
+    factor Z/S = 1.5; yield moment M_y = σ_y·S, fully-plastic moment M_p = σ_y·Z.
+    `support` maps the collapse moment to a point load: 'cantilever' (M = P·L) or
+    'simply_supported' (central, M = P·L/4). With `load_n` the applied moment and
+    its margins to M_y / M_p (and the regime: elastic / partially_plastic /
+    collapsed) are returned. A perfectly-plastic FEM solve caps the surface stress
+    at σ_y and loses equilibrium at M_p; linear theory climbs past both — that
+    contrast is the gate. Escalate to `fem_set_nonlinear_material` for
+    non-rectangular sections or partial-plasticity fields.
+
+    Returns {support, S_elastic_mm3, Z_plastic_mm3, shape_factor, yield_mpa,
+    yield_moment_nmm, plastic_moment_nmm, yield_load_n, collapse_load_n,
+    applied_moment_nmm, margin_to_yield, margin_to_collapse, regime, fidelity,
+    band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"length_mm": length_mm, "width_mm": width_mm, "height_mm": height_mm,
+              "support": support}
+    for k, v in (("yield_mpa", yield_mpa), ("material", material),
+                 ("load_n", load_n)):
+        if v is not None:
+            params[k] = v
+    return _call("plastic_collapse", **params)
+
+
+@mcp.tool()
+def elastica_deflection(
+    load_n: float,
+    length_mm: float,
+    youngs_gpa: float | None = None,
+    width_mm: float | None = None,
+    height_mm: float | None = None,
+    i_mm4: float | None = None,
+    material: str | None = None,
+) -> dict:
+    """Exact large-deflection cantilever tip — Bisshopp–Drucker elastica (NO
+    solver) — the closed-form twin the *NLGEOM CalculiX solve is gated against.
+    Section: width_mm+height_mm (solid rectangle, I = b·h³/12, load transverse to
+    height_mm) or explicit i_mm4. E from youngs_gpa or a Materials-DB `material`.
+    Load parameter α = P·L²/(E·I); the tip slope solves the elliptic-integral
+    elastica. Linear theory δ/L = α/3 over-predicts the transverse tip and ignores
+    the axial draw-in — the elastica captures both, and `nonlinear_over_linear` is
+    the divergence the solve must reproduce. Valid for tip slope < ~80° (α ≲ 3.5);
+    beyond that escalate to a follower-load `fem_set_nonlinear_material` solve.
+
+    Returns {alpha, tip_slope_deg, tip_disp_mm (transverse), tip_x_mm (axial
+    projection), axial_drawin_mm, linear_tip_mm, nonlinear_over_linear, youngs_mpa,
+    I_mm4, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"load_n": load_n, "length_mm": length_mm}
+    for k, v in (("youngs_gpa", youngs_gpa), ("width_mm", width_mm),
+                 ("height_mm", height_mm), ("i_mm4", i_mm4), ("material", material)):
+        if v is not None:
+            params[k] = v
+    return _call("elastica_deflection", **params)
+
+
+@mcp.tool()
+def hertz_contact(
+    load_n: float,
+    radius_mm: float,
+    youngs1_gpa: float | None = None,
+    poisson1: float | None = None,
+    material1: str | None = None,
+    radius2_mm: float | None = None,
+    youngs2_gpa: float | None = None,
+    poisson2: float | None = None,
+    material2: str | None = None,
+) -> dict:
+    """Exact Hertzian point-contact peak pressure (NO solver) — the screening twin
+    of a frictional *CONTACT PAIR solve. Sphere of `radius_mm` on a flat (default)
+    or on a second sphere `radius2_mm` (negative for a conforming socket). Each
+    body's elastics from youngs#_gpa+poisson# or a Materials-DB `material#`; body 2
+    defaults to body 1. Reduced modulus 1/E* = (1−ν₁²)/E₁ + (1−ν₂²)/E₂, effective
+    radius 1/R = 1/R₁ + 1/R₂; contact radius a = (3FR/4E*)^(1/3), peak pressure
+    p₀ = 3F/(2πa²) = 1.5× mean, approach δ = a²/R. Half-space theory: valid while
+    a ≪ R and p₀ below first sub-surface yield (~1.6·σ_y) — past that escalate to
+    the nonlinear `fem_set_nonlinear_material` contact path.
+
+    Returns {e_star_mpa, effective_radius_mm, contact_radius_mm, peak_pressure_mpa,
+    mean_pressure_mpa, approach_mm, a_over_R, fidelity, band_pct, valid_range_ok,
+    warnings, escalate_to}."""
+    params = {"load_n": load_n, "radius_mm": radius_mm}
+    for k, v in (("youngs1_gpa", youngs1_gpa), ("poisson1", poisson1),
+                 ("material1", material1), ("radius2_mm", radius2_mm),
+                 ("youngs2_gpa", youngs2_gpa), ("poisson2", poisson2),
+                 ("material2", material2)):
+        if v is not None:
+            params[k] = v
+    return _call("hertz_contact", **params)
 
 
 @mcp.tool()

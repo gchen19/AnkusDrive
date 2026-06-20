@@ -18,6 +18,7 @@ import contextlib
 import json
 import math
 import os
+import re
 import sys
 import traceback
 
@@ -8517,7 +8518,9 @@ def _h_fem_add_constraint(p):
     elif kind == "force":
         c = ObjectsFem.makeConstraintForce(doc, p.get("name", "Force"))
         c.References = refs
-        c.Force = float(p["force"])
+        # Force is an App::PropertyForce: its raw base unit is mN (kg·mm/s²), so a
+        # bare float would be applied 1000× too small. Assign as an N quantity.
+        c.Force = f"{float(p['force'])} N"
         if "direction" in p:
             d = p["direction"]
             obj = _shape_handle_to_obj(d["handle"])
@@ -8533,7 +8536,9 @@ def _h_fem_add_constraint(p):
     elif kind == "pressure":
         c = ObjectsFem.makeConstraintPressure(doc, p.get("name", "Pressure"))
         c.References = refs
-        c.Pressure = float(p["pressure"])
+        # Pressure is an App::PropertyPressure: raw base unit is kPa, so a bare
+        # float would be 1000× too small. Assign as an MPa quantity.
+        c.Pressure = f"{float(p['pressure'])} MPa"
         c.Reversed = bool(p.get("reversed", False))
     elif kind == "displacement":
         c = ObjectsFem.makeConstraintDisplacement(doc, p.get("name", "Displacement"))
@@ -8647,15 +8652,26 @@ def _h_fem_run(p):
 @handler("fem_results")
 def _h_fem_results(p):
     """Extract summary results: max von Mises (+location), max displacement
-    (+location + vector), top-N hot nodes by stress."""
+    (+location + vector), top-N hot nodes by stress. A nonlinear ccx run writes
+    one result object per converged increment (named CCX_Time_<t>_Results); the
+    FINAL increment (highest time = full applied load) is the one summarized."""
     analysis = _resolve_analysis(p["analysis"])
-    result = None
-    for o in analysis.Group:
-        if o.isDerivedFrom("Fem::FemResultObject"):
-            result = o
-            break
-    if result is None:
+    results = [o for o in analysis.Group if o.isDerivedFrom("Fem::FemResultObject")]
+    if not results:
         raise RuntimeError("no result object on analysis (run fem_run first)")
+    # One object per increment on a nonlinear run — take the last applied step.
+    # Prefer the parsed time stamp (robust to Group ordering); fall back to the
+    # last object FreeCAD appended (increments are added in solve order).
+    def _result_time(o):
+        m = re.search(r"Time_(\d+)_(\d+)_Results", o.Name)
+        if m:
+            return float(f"{m.group(1)}.{m.group(2)}")
+        t = getattr(o, "Time", None)
+        return float(t) if t else -1.0
+    if any(_result_time(o) >= 0 for o in results):
+        result = max(results, key=_result_time)
+    else:
+        result = results[-1]
 
     stress = list(result.vonMises)
     disp_lengths = list(result.DisplacementLengths)
@@ -8838,11 +8854,138 @@ def _h_contact_setup(p):
             if "GeometricalNonlinearity" in solver.PropertiesList:
                 solver.GeometricalNonlinearity = "nonlinear"
                 nonlinear = True
+            # Store only the final converged increment (see fem_set_nonlinear_material):
+            # a contact run is nonlinear and would otherwise write a many-frame .frd.
+            if "OutputFrequency" in solver.PropertiesList:
+                solver.OutputFrequency = 1000000
         except RuntimeError:
             pass                                     # no solver yet; set one with fem_set_solver
     doc.recompute()
     return {"contacts": handles, "n_pairs": len(pairs), "friction": friction,
             "nonlinear": nonlinear}
+
+
+@handler("fem_set_nonlinear_material")
+def _h_fem_set_nonlinear_material(p):
+    """Attach an elastoplastic (`*PLASTIC`) hardening curve to a linear material
+    and switch the CalculiX solve to nonlinear — the material-nonlinearity half
+    of the nonlinear FEM path (`contact_setup` is the geometric/contact half; no
+    new solver). `base_material` is the handle returned by `fem_set_material`
+    (its YoungsModulus/PoissonRatio stay the elastic branch).
+
+    Give the post-yield curve either explicitly as `yield_points`
+    (a list of [stress_MPa, plastic_strain] pairs, first at plastic_strain 0 =
+    initial yield) or from `yield_mpa` (+ optional `tangent_modulus_mpa` for the
+    linear hardening slope and `max_plastic_strain`, default 0.2). With no
+    tangent modulus the curve is elastic–perfectly-plastic (ideal plasticity),
+    which caps the stress at σ_y exactly. `hardening` is 'isotropic' (default,
+    monotonic) or 'kinematic' (reversed/cyclic, Bauschinger). CCX needs the
+    curve's plastic strain monotonically increasing and the stress non-
+    decreasing.
+
+    The solver's `MaterialNonlinearity` is flipped to 'nonlinear'; pass
+    `geometric_nonlinearity=true` to also set `GeometricalNonlinearity`
+    (combined plasticity + large deflection). `ramp_increments` (default 10)
+    sub-divides the load step so ccx ramps the load and converges the plastic
+    return-mapping (sets the solver's initial/max time increment). Run `fem_run`
+    + `fem_results` after.
+
+    Returns {handle, name, hardening, yield_points (CCX strings), n_points,
+    solver_material_nonlinear, solver_geometric_nonlinear, ramp_increments}."""
+    doc = _active_doc()
+    analysis = _resolve_analysis(p["analysis"])
+    base = _resolve(p["base_material"])
+    if not hasattr(base, "Material"):
+        raise TypeError(f"base_material handle {p['base_material']!r} is not a "
+                        f"linear FEM material (got {getattr(base, 'TypeId', '?')})")
+
+    yield_points = p.get("yield_points")
+    if not yield_points:
+        sy = p.get("yield_mpa")
+        if sy is None:
+            raise ValueError(
+                "provide yield_points [[stress_mpa, plastic_strain], ...] or yield_mpa")
+        sy = float(sy)
+        if sy <= 0:
+            raise ValueError("yield_mpa must be > 0")
+        max_strain = float(p.get("max_plastic_strain", 0.2))
+        if max_strain <= 0:
+            raise ValueError("max_plastic_strain must be > 0")
+        tangent = p.get("tangent_modulus_mpa")
+        if tangent:
+            yield_points = [[sy, 0.0], [sy + float(tangent) * max_strain, max_strain]]
+        else:
+            yield_points = [[sy, 0.0], [sy, max_strain]]  # elastic–perfectly-plastic
+
+    # validate + format the curve as CCX "stress, plastic_strain" lines
+    yp_strings = []
+    prev_eps = None
+    prev_stress = None
+    for i, pt in enumerate(yield_points):
+        if len(pt) != 2:
+            raise ValueError(f"yield_points[{i}] must be [stress_mpa, plastic_strain]")
+        stress, eps = float(pt[0]), float(pt[1])
+        if stress <= 0:
+            raise ValueError(f"yield_points[{i}] stress must be > 0")
+        if i == 0 and eps != 0.0:
+            raise ValueError("first yield point must be at plastic_strain 0 (initial yield)")
+        if prev_eps is not None and eps <= prev_eps:
+            raise ValueError("plastic_strain must be strictly increasing along the curve")
+        if prev_stress is not None and stress < prev_stress:
+            raise ValueError("stress must be non-decreasing (no softening) along the curve")
+        yp_strings.append(f"{stress:.6G}, {eps:.6G}")
+        prev_eps, prev_stress = eps, stress
+
+    hardening = p.get("hardening", "isotropic")
+    if hardening not in ("isotropic", "kinematic"):
+        raise ValueError("hardening must be 'isotropic' or 'kinematic'")
+    model = "isotropic hardening" if hardening == "isotropic" else "kinematic hardening"
+
+    nlmat = ObjectsFem.makeMaterialMechanicalNonlinear(doc, base)
+    nlmat.MaterialModelNonlinearity = model
+    nlmat.YieldPoints = yp_strings
+    analysis.addObject(nlmat)
+
+    mat_nl = geo_nl = False
+    ramp = int(p.get("ramp_increments", 10))
+    try:
+        solver = _solver_of(analysis)
+        if "MaterialNonlinearity" in solver.PropertiesList:
+            solver.MaterialNonlinearity = "nonlinear"
+            mat_nl = True
+        if p.get("geometric_nonlinearity", False) and \
+                "GeometricalNonlinearity" in solver.PropertiesList:
+            solver.GeometricalNonlinearity = "nonlinear"
+            geo_nl = True
+        # Ramp the load over several increments so ccx's plastic return-mapping
+        # converges (one-shot loading past first yield routinely diverges).
+        if ramp > 1 and "TimeInitialIncrement" in solver.PropertiesList:
+            period = solver.TimePeriod.getValueAs("s").Value
+            solver.TimeInitialIncrement = period / ramp
+            if "TimeMaximumIncrement" in solver.PropertiesList:
+                solver.TimeMaximumIncrement = period / max(ramp // 2, 1)
+        # Emit only the final converged increment. ccx always stores the last
+        # increment, so a large FREQUENCY avoids the many-frame .frd whose
+        # cutback-clustered time stamps collide on import ("Values need to be
+        # unique"); it also makes fem_results unambiguous (full-load state).
+        if p.get("keep_all_increments", False) is False \
+                and "OutputFrequency" in solver.PropertiesList:
+            solver.OutputFrequency = 1000000
+    except RuntimeError:
+        pass  # no solver yet; set one with fem_set_solver, then re-run this
+
+    doc.recompute()
+    h = _register("nonlinear_material", nlmat)
+    return {
+        "handle": h,
+        "name": nlmat.Name,
+        "hardening": hardening,
+        "yield_points": yp_strings,
+        "n_points": len(yp_strings),
+        "solver_material_nonlinear": mat_nl,
+        "solver_geometric_nonlinear": geo_nl,
+        "ramp_increments": ramp,
+    }
 
 
 @handler("fem_buckling")
@@ -9112,7 +9255,9 @@ def _h_fem_cantilever(p):
 
     force = ObjectsFem.makeConstraintForce(doc, "Force")
     force.References = [(box, "Face2")]
-    force.Force = float(p.get("force", 9_000_000.0))
+    # App::PropertyForce base unit is mN — assign as an N quantity (see
+    # fem_add_constraint) so the demo applies a physical Newton load.
+    force.Force = f"{float(p.get('force', 9000.0))} N"
     force.Direction = (box, ["Edge5"])
     force.Reversed = True
     analysis.addObject(force)
@@ -9317,6 +9462,42 @@ def _h_beam_buckling(p):
     safety_factor, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
     from driftpin.analysis import buckling
     return buckling.beam_buckling(**p)
+
+
+@handler("plastic_collapse")
+def _h_plastic_collapse(p):
+    """Exact plastic-hinge collapse of a rectangular beam — the closed-form twin
+    the perfectly-plastic CalculiX solve (fem_set_nonlinear_material) is gated
+    against. M_y = σ_y·b·h²/6, M_p = σ_y·b·h²/4, shape factor 1.5. See
+    driftpin.analysis.nonlinear. Returns {support, S_elastic_mm3, Z_plastic_mm3,
+    shape_factor, yield_mpa, yield_moment_nmm, plastic_moment_nmm, yield_load_n,
+    collapse_load_n, applied_moment_nmm, margin_to_yield, margin_to_collapse,
+    regime, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import nonlinear
+    return nonlinear.plastic_collapse(**p)
+
+
+@handler("elastica_deflection")
+def _h_elastica_deflection(p):
+    """Exact large-deflection cantilever tip (Bisshopp–Drucker elastica) — the
+    closed-form twin the *NLGEOM CalculiX solve is gated against. α = P·L²/(E·I);
+    linear δ/L = α/3 over-predicts and the elastica tracks the real tip. See
+    driftpin.analysis.nonlinear. Returns {alpha, tip_slope_deg, tip_disp_mm,
+    tip_x_mm, axial_drawin_mm, linear_tip_mm, nonlinear_over_linear, youngs_mpa,
+    I_mm4, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import nonlinear
+    return nonlinear.elastica_deflection(**p)
+
+
+@handler("hertz_contact")
+def _h_hertz_contact(p):
+    """Exact Hertzian point-contact peak pressure — the screening twin of a
+    frictional *CONTACT PAIR solve. p₀ = 3F/(2πa²), a = (3FR/4E*)^(1/3). See
+    driftpin.analysis.nonlinear. Returns {e_star_mpa, effective_radius_mm,
+    contact_radius_mm, peak_pressure_mpa, mean_pressure_mpa, approach_mm,
+    a_over_R, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import nonlinear
+    return nonlinear.hertz_contact(**p)
 
 
 @handler("molding_screen")
