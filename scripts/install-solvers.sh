@@ -21,6 +21,12 @@
 #       driftpin/em_fullwave_gpl_runner.py. Request it explicitly
 #       (`install-solvers.sh em_gpl`); never installed in the no-arg run. Same
 #       arm's-length copyleft boundary as KrakenOS / the GPL Elmer/OpenFOAM bins.
+#     * FSI coupling SOURCE BUILD (fsi: preCICE OpenFOAM<->CalculiX) — LGPL-3.0 core
+#       + two C++ adapters, version-sensitive and NOT a pip wheel for this path, so it
+#       is source-built (serial libprecice + calculix-adapter ccx_preCICE +
+#       openfoam-adapter .so) and the two heavy solvers run ONLY out-of-process via
+#       driftpin/analysis/fsi_case.py. Request it explicitly (`install-solvers.sh fsi`);
+#       capped at -j8 + ccache to spare the co-located CI runner.
 #     * system-package solvers (CFD: OpenFOAM/SU2; transient/radiation thermal:
 #       Elmer) — large apt/conda installs that vary by distro and need root, so this
 #       script PRINTS the documented commands rather than running them. Install them,
@@ -167,6 +173,78 @@ EOF
   ok "(or it is auto-discovered if .venv-openems sits beside the repo)"
 }
 
+# --- FSI: preCICE OpenFOAM<->CalculiX coupling (LGPL core + two source adapters) -
+# preCICE is LGPL-3.0 and DriftPin runs both heavy solvers ONLY out-of-process
+# (driftpin/analysis/fsi_case.py), so the copyleft never links in. This builds the
+# version-sensitive stack EXACTLY as validated on the self-hosted runner. RESOURCE
+# GUARDRAIL: every compile is capped at -j8 (never -j$(nproc)) + ccache — this host
+# also runs the CI runner and parallel full-core builds crash it.
+build_fsi() {
+  warn "preCICE FSI stack (LGPL core + precice/calculix-adapter + precice/openfoam-adapter)."
+  warn "Both heavy solvers run out-of-process (fsi_case.py) — DriftPin never imports preCICE."
+  local jobs="${FSI_JOBS:-8}"        # -j cap: NEVER $(nproc) on the CI host
+  local pserial="${PRECICE_PREFIX:-$HOME/precice-serial}"
+  local ccxadapter="${CCX_ADAPTER:-$HOME/calculix-adapter}"
+  local ofadapter="${OF_ADAPTER:-$HOME/openfoam-adapter}"
+  local ofver="${OF_VERSION:-2512}"  # ESI OpenFOAM with dev headers + wmake
+  export CCACHE_DIR="${CCACHE_DIR:-$HOME/.ccache}"
+
+  cat <<EOF
+  # ---- 0) apt deps (sudo) ----------------------------------------------------
+  sudo apt-get install -y cmake g++ gfortran pkg-config ccache libboost-all-dev \\
+       libeigen3-dev libxml2-dev libspooles-dev libarpack2-dev liblapack-dev libblas-dev
+  # ESI OpenFOAM WITH dev headers + wmake (the apt 'openfoam' 1912 ships runtime
+  # libs only — no headers/wmake, so the OF adapter cannot compile against it):
+  curl -s https://dl.openfoam.com/add-debian-repo.sh | sudo bash
+  sudo apt-get install -y openfoam${ofver}-dev      # gives \$FOAM_SRC + wmake
+
+  # ---- 1) serial libprecice (MPI OFF) ---------------------------------------
+  # GOTCHA: conda-forge 'precice'/'pyprecice' are MPI-enabled (MPICH libmpi.so.12);
+  # run standalone next to OpenFOAM's OpenMPI (libmpi.so.40) they double-load MPI and
+  # segfault in MPI_Comm_rank. Build preCICE serial (no MPI) and link BOTH adapters
+  # against it — the validated, conflict-free path.
+  git clone --depth 1 --branch v3.4.0 https://github.com/precice/precice.git ~/precice-src
+  cmake -S ~/precice-src -B ~/precice-src/build -DCMAKE_BUILD_TYPE=Release \\
+        -DCMAKE_INSTALL_PREFIX=$pserial -DPRECICE_FEATURE_MPI_COMMUNICATION=OFF \\
+        -DPRECICE_FEATURE_PETSC_MAPPING=OFF -DPRECICE_FEATURE_PYTHON_ACTIONS=OFF \\
+        -DBUILD_TESTING=OFF -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+  cmake --build ~/precice-src/build -j${jobs} && cmake --install ~/precice-src/build
+
+  # ---- 2) CalculiX-preCICE adapter -> ccx_preCICE ---------------------------
+  # Needs CalculiX 2.20 SOURCE (matches the adapter; the resulting solver is its own
+  # binary, independent of the system ccx). Build with gcc/gfortran (NOT mpicc) so it
+  # carries no MPI.
+  wget http://www.dhondt.de/ccx_2.20.src.tar.bz2 -O /tmp/ccx.tbz2
+  mkdir -p ~/CalculiX && tar xjf /tmp/ccx.tbz2 -C ~/CalculiX --strip-components=1 \\
+       CalculiX/ccx_2.20    # -> ~/CalculiX/ccx_2.20/src
+  git clone --depth 1 https://github.com/precice/calculix-adapter.git $ccxadapter
+  ( cd $ccxadapter && \\
+    PKG_CONFIG_PATH=$pserial/lib/pkgconfig \\
+    make -j${jobs} CC="ccache gcc" CXX="ccache g++" FC=gfortran )
+  #  -> $ccxadapter/bin/ccx_preCICE
+
+  # ---- 3) OpenFOAM-preCICE adapter -> libpreciceAdapterFunctionObject.so -----
+  git clone --depth 1 https://github.com/precice/openfoam-adapter.git $ofadapter
+  ( cd $ofadapter && source /usr/lib/openfoam/openfoam${ofver}/etc/bashrc && \\
+    WM_NCOMPPROCS=${jobs} PKG_CONFIG_PATH=$pserial/lib/pkgconfig ./Allwmake )
+  #  -> ~/OpenFOAM/<user>-v${ofver}/platforms/*/lib/libpreciceAdapterFunctionObject.so
+  #  (Allwmake's post-build ldd may warn 'undefined symbols' — harmless; the .so
+  #   resolves once $pserial/lib is on LD_LIBRARY_PATH at run time.)
+
+  # ---- 4) point DriftPin at the stack ---------------------------------------
+  export DRIFTPIN_CCX_PRECICE=$ccxadapter/bin/ccx_preCICE
+  export DRIFTPIN_PRECICE_LIB=$pserial/lib
+  export DRIFTPIN_OPENFOAM_ADAPTER_LIB=\$(echo ~/OpenFOAM/*-v${ofver}/platforms/*/lib)
+  export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam${ofver}/etc/bashrc
+  # (all four are auto-discovered at the default build paths above, so the env
+  #  overrides are only needed for non-default prefixes.)
+EOF
+  warn "This prints the exact validated build; run the steps above (they need sudo +"
+  warn "network and take a few minutes). Verify with the solve_capabilities tool"
+  warn "(family 'fsi') or: python3 -c \"from driftpin import solvers; print(solvers.fsi_stack_status())\""
+  ok "smoke-test the coupled stack: python3 tests/test_fsi.py  (runs the live solve when present)"
+}
+
 # --- optics gallery bootstrap (install both lanes + render every figure) -------
 build_optics_gallery() {
   log "bootstrapping the optics gallery (install both lanes, then render every figure)"
@@ -213,6 +291,7 @@ main() {
       -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
       mbd|topology|optics|optics_gpl) extras+=("$1"); do_all=0 ;;
       em_gpl|openems)    build_openems; exit 0 ;;
+      fsi|precice)       build_fsi; exit 0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
       thermal|elmer)     systems+=("thermal"); do_all=0 ;;
       openfoam|su2)      systems+=("cfd"); do_all=0 ;;
@@ -229,6 +308,8 @@ main() {
     warn "is GPL-3.0 — install it explicitly with: scripts/install-solvers.sh optics_gpl"
     warn "Full-wave FDTD EM (openEMS) is GPL-3.0 AND source-built (not a pip wheel) —"
     warn "build it explicitly with: scripts/install-solvers.sh em_gpl"
+    warn "FSI (preCICE OpenFOAM<->CalculiX) is LGPL core + two source-built adapters —"
+    warn "build it explicitly with: scripts/install-solvers.sh fsi"
   else
     for e in "${extras[@]:-}";  do [ -n "$e" ] && pip_install_extra "$e"; done
     for s in "${systems[@]:-}"; do [ -n "$s" ] && system_guidance "$s"; done

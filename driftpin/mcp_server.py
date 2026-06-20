@@ -3406,6 +3406,132 @@ def em_fullwave_submit(
 
 
 @mcp.tool()
+def fsi_plate_deflection(
+    pressure_pa: float,
+    length_mm: float,
+    width_mm: float,
+    thickness_mm: float,
+    youngs_gpa: float | None = None,
+    material: str | None = None,
+    support: str = "cantilever",
+    i_mm4: float | None = None,
+) -> dict:
+    """Exact small-deflection tip/centre deflection of a uniform-pressure-loaded
+    thin plate strip (NO solver) — the closed-form twin the coupled
+    OpenFOAM→CalculiX FSI solve (`fsi_pressure_plate_submit`) is gated against. The
+    wetted strip is `width_mm`×`length_mm`; the fluid pressure `pressure_pa` (Pa)
+    acts normal to it, giving the line load q = pressure·width. Section is the
+    solid rectangle I = width·thickness³/12 unless an explicit `i_mm4` is given. E
+    from `youngs_gpa` or a Materials-DB `material`. `support`='cantilever' (clamped
+    one edge): δ_tip = q·L⁴/(8·E·I), root moment q·L²/2, reaction q·L; 'clamped-
+    clamped': centre δ = q·L⁴/(384·E·I), reaction q·L/2 each. Valid while δ ≲
+    thickness (small-deflection); past that escalate to an NLGEOM follower-pressure
+    ccx solve.
+
+    Returns {support, pressure_pa, line_load_n_per_mm, total_load_n, I_mm4,
+    tip_disp_mm, root_moment_nmm, reaction_n, max_stress_mpa, youngs_mpa,
+    slenderness, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"pressure_pa": pressure_pa, "length_mm": length_mm,
+              "width_mm": width_mm, "thickness_mm": thickness_mm,
+              "support": support}
+    for k, v in (("youngs_gpa", youngs_gpa), ("material", material),
+                 ("i_mm4", i_mm4)):
+        if v is not None:
+            params[k] = v
+    return _call("fsi_plate_deflection", **params)
+
+
+@mcp.tool()
+def fsi_interface_balance(
+    pressure_pa: float,
+    length_mm: float,
+    width_mm: float,
+    solid_reaction_n: float | None = None,
+    fluid_force_n: float | None = None,
+) -> dict:
+    """Partitioned wet-interface force balance (NO solver) — the FSI analogue of
+    the optics energy-balance gate. The fluid presses a uniform `pressure_pa` over
+    the `length_mm`×`width_mm` strip, so the total traction is F = pressure·area; a
+    converged partitioned solve must hand the solid exactly this load and the
+    solid's support reactions must carry it (Newton's third law across the coupling
+    surface). Pass the measured `fluid_force_n` (∮p·dA over the OpenFOAM wet patch)
+    and/or `solid_reaction_n` (Σ ccx reaction at the clamp); the relative residual
+    |F_fluid − R_solid|/F_fluid is the conservation error. With neither supplied it
+    returns the reference analytic load (residual 0) the real solve closes on.
+
+    Returns {area_mm2, reference_load_n, fluid_force_n, solid_reaction_n,
+    residual_n, relative_residual, balanced, fidelity, escalate_to}."""
+    params = {"pressure_pa": pressure_pa, "length_mm": length_mm,
+              "width_mm": width_mm}
+    for k, v in (("solid_reaction_n", solid_reaction_n),
+                 ("fluid_force_n", fluid_force_n)):
+        if v is not None:
+            params[k] = v
+    return _call("fsi_interface_balance", **params)
+
+
+@mcp.tool()
+def fsi_channel_pressure(
+    velocity_m_s: float,
+    length_mm: float,
+    gap_mm: float,
+    mu_pa_s: float = 1.0e-3,
+    rho_kg_m3: float = 1000.0,
+) -> dict:
+    """Fully-developed plane-channel pressure drop Δp = 12·μ·U·L/h² (NO solver) —
+    the *fluid* load that physically sources the pressure-loaded-plate FSI anchor.
+    For laminar flow between parallel plates a gap `gap_mm` apart with mean velocity
+    `velocity_m_s` over length `length_mm`, the exact plane-Poiseuille wall pressure
+    drop feeds `fsi_plate_deflection`/`fsi_interface_balance` as `pressure_pa`. The
+    Reynolds number Re = ρ·U·h/μ flags when the laminar (exact) assumption holds
+    (Re ≲ 1400). Default fluid is water at 20 °C (μ=1e-3 Pa·s, ρ=1000).
+
+    Returns {pressure_pa, pressure_drop_pa, reynolds, regime, velocity_m_s,
+    wall_shear_pa, fidelity, valid_range_ok, warnings, escalate_to}."""
+    return _call("fsi_channel_pressure", velocity_m_s=velocity_m_s,
+                 length_mm=length_mm, gap_mm=gap_mm, mu_pa_s=mu_pa_s,
+                 rho_kg_m3=rho_kg_m3)
+
+
+@mcp.tool()
+def fsi_pressure_plate_submit(
+    inlet_velocity_m_s: float = 10.0,
+    nu_m2_s: float = 1.0,
+    rho_kg_m3: float = 1.0,
+    youngs_pa: float = 4.0e6,
+    poisson: float = 0.3,
+    density_kg_m3: float = 3000.0,
+    end_time_s: float = 5.0,
+    time_window_s: float = 0.01,
+    max_iterations: int = 50,
+    timeout: int = 900,
+) -> dict:
+    """Partitioned fluid-structure-interaction solve on the preCICE OpenFOAM↔
+    CalculiX stack, asynchronous (OFF the MCP channel) — the real coupled-field
+    twin of the analytic `fsi_plate_deflection` / `fsi_interface_balance` oracles.
+    A flexible flap clamped at a channel floor deflects under the flow: OpenFOAM
+    (pimpleFoam) writes the wet-interface Force, ccx_preCICE returns the
+    Displacement, and preCICE drives the implicit coupling to convergence each
+    time window. preCICE is LGPL-3.0 and the two heavy solvers run ONLY as
+    subprocesses; degrades to {ok:false, reason, install, stack} when the stack is
+    absent (build via scripts/install-solvers.sh fsi).
+
+    Physics knobs: `inlet_velocity_m_s`, `nu_m2_s`, `rho_kg_m3` (fluid),
+    `youngs_pa`/`poisson`/`density_kg_m3` (solid), `end_time_s`/`time_window_s`/
+    `max_iterations` (coupling). Geometry/mesh come from the validated vendored
+    template (no FreeCAD touch). Returns the degradation dict, or {job_id, status,
+    cache_hit}; poll `job_result` for {ok, time_windows, tip_disp_m, tip_history,
+    coupling_converged, case_dir} — the tip displacement is the field the
+    `fsi_plate_deflection` oracle gates."""
+    return _call("fsi_pressure_plate_submit",
+                 inlet_velocity_m_s=inlet_velocity_m_s, nu_m2_s=nu_m2_s,
+                 rho_kg_m3=rho_kg_m3, youngs_pa=youngs_pa, poisson=poisson,
+                 density_kg_m3=density_kg_m3, end_time_s=end_time_s,
+                 time_window_s=time_window_s, max_iterations=max_iterations,
+                 timeout=timeout)
+
+
+@mcp.tool()
 def molding_screen(
     wall_thickness_mm: float,
     material: str | None = None,

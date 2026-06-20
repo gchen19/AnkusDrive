@@ -171,6 +171,55 @@ _SOLVERS: dict = {
                         "point DRIFTPIN_OPENEMS_PYTHON at that venv's python. Run "
                         "out-of-process only via driftpin/em_fullwave_gpl_runner.py.",
     },
+    # --- FSI coupling: preCICE OpenFOAM<->CalculiX (LGPL core, source adapters) -
+    # The partitioned fluid-structure-interaction family. preCICE (LGPL-3.0) is the
+    # coupling library; it is only ever invoked OUT-OF-PROCESS (the two heavy
+    # solvers — OpenFOAM pimpleFoam and the preCICE-enabled ccx_preCICE — run as
+    # their own subprocesses, the same arm's-length boundary OpenFOAM/Elmer already
+    # use), so the copyleft never links into DriftPin's permissive code. The stack
+    # is version-sensitive and NOT a pip wheel: it needs (a) libprecice (LGPL,
+    # conda-forge `precice`/`pyprecice` OR source-built serial — see below), (b) the
+    # `precice/calculix-adapter` built against CalculiX 2.20 source + SPOOLES +
+    # ARPACK, producing the `ccx_preCICE` binary, and (c) the
+    # `precice/openfoam-adapter` function-object lib built with `wmake` against an
+    # OpenFOAM with dev headers (ESI openfoam2512-dev). scripts/install-solvers.sh
+    # fsi documents the full build; this entry RESOLVES the stack and degrades
+    # cleanly — it keys on the `ccx_preCICE` binary (the linchpin that proves the
+    # adapter chain built) and the helper resolvers below find the lib/OF dirs.
+    # NOTE on the MPI gotcha: conda's libprecice is MPI-enabled (libmpi.so.12,
+    # MPICH); a non-MPI standalone run alongside OpenFOAM's OpenMPI (libmpi.so.40)
+    # double-loads MPI and segfaults in MPI_Comm_rank. The serial source build
+    # (PRECICE_FEATURE_MPI_COMMUNICATION=OFF) avoids this; both adapters must then
+    # link that serial libprecice (and the ccx adapter built with gcc/gfortran, not
+    # mpicc). install-solvers.sh fsi captures exactly this.
+    "precice": {
+        "kind": "binary",
+        "family": "fsi",
+        "extra": "fsi",
+        # LGPL-3.0 core; invoked out-of-process only (never imported in-process).
+        "license": "LGPL-3.0",
+        "isolation": "subprocess",
+        # The ccx_preCICE binary is the linchpin: it exists only if the CalculiX
+        # adapter built against libprecice + CalculiX source, so it proves the
+        # whole stack. DRIFTPIN_PRECICE_PATH / DRIFTPIN_CCX_PRECICE override.
+        "binaries": ("ccx_preCICE",),
+        "dirs": {
+            "Linux":   (os.path.expanduser("~/calculix-adapter/bin"),
+                        "/usr/local/bin", "/usr/bin",
+                        os.path.expanduser("~/opt/calculix-adapter/bin")),
+            "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin"),
+            "Windows": (),
+        },
+        "install_hint": "build the preCICE FSI stack (LGPL core + two source "
+                        "adapters; not a pip wheel): scripts/install-solvers.sh fsi "
+                        "— installs serial libprecice (MPI off), builds "
+                        "precice/calculix-adapter (ccx_preCICE, CalculiX 2.20 src + "
+                        "SPOOLES + ARPACK) and precice/openfoam-adapter (wmake vs "
+                        "openfoam2512-dev). Then set DRIFTPIN_CCX_PRECICE, "
+                        "DRIFTPIN_PRECICE_LIB, DRIFTPIN_OPENFOAM_ADAPTER_LIB and "
+                        "DRIFTPIN_OPENFOAM_BASHRC (the v2512 bashrc). Driven out-of-"
+                        "process only via driftpin/analysis/fsi_case.py.",
+    },
     # --- Sprint 4 follow-on: slicer CLI (apt/AppImage, not vendored) ----------
     "prusaslicer": {
         "kind": "binary",
@@ -347,6 +396,79 @@ def openfoam_bashrc() -> str | None:
         if hits:
             return hits[-1]
     return None
+
+
+# --- FSI (preCICE OpenFOAM<->CalculiX) stack resolvers -------------------------
+# Side-effect-free path resolution for the three pieces the partitioned solve
+# needs at run time. Each honours a DRIFTPIN_* env override first (the documented
+# install path), then a small set of build-default locations, mirroring the
+# openfoam_bashrc() resolution style. The FSI handler/runner consumes these.
+
+def ccx_precice_bin() -> str | None:
+    """The preCICE-enabled CalculiX solver (``ccx_preCICE``) — the solid
+    participant. DRIFTPIN_CCX_PRECICE / DRIFTPIN_PRECICE_PATH env -> the registry
+    binary resolution (~/calculix-adapter/bin etc.). Returns the path or None."""
+    env = os.environ.get("DRIFTPIN_CCX_PRECICE")
+    if env and os.path.isfile(env):
+        return env
+    return find_solver("precice").get("path")
+
+
+def precice_lib_dir() -> str | None:
+    """Directory holding ``libprecice.so`` (the serial, MPI-off build that the
+    adapters link). DRIFTPIN_PRECICE_LIB env -> the conda-forge env lib ->
+    the documented source-build prefix. Returns the dir or None."""
+    env = os.environ.get("DRIFTPIN_PRECICE_LIB")
+    if env and os.path.isdir(env):
+        return env
+    import glob as _glob
+    for pat in (os.path.expanduser("~/precice-serial/lib"),
+                os.path.expanduser("~/miniforge3/envs/precice/lib"),
+                os.path.expanduser("~/miniconda3/envs/precice/lib"),
+                "/usr/local/lib", "/usr/lib/x86_64-linux-gnu"):
+        if os.path.isfile(os.path.join(pat, "libprecice.so")) or \
+           _glob.glob(os.path.join(pat, "libprecice.so*")):
+            return pat
+    return None
+
+
+def openfoam_adapter_lib_dir() -> str | None:
+    """Directory holding ``libpreciceAdapterFunctionObject.so`` (the OpenFOAM
+    function-object adapter the fluid participant loads). DRIFTPIN_OPENFOAM_ADAPTER_LIB
+    env -> the wmake user-lib build prefix. Returns the dir or None."""
+    env = os.environ.get("DRIFTPIN_OPENFOAM_ADAPTER_LIB")
+    if env and os.path.isdir(env):
+        return env
+    import glob as _glob
+    for pat in (os.path.expanduser(
+                    "~/OpenFOAM/*/platforms/*/lib"),
+                os.path.expanduser("~/OpenFOAM/*-v*/platforms/*/lib")):
+        for d in sorted(_glob.glob(pat)):
+            if os.path.isfile(
+                    os.path.join(d, "libpreciceAdapterFunctionObject.so")):
+                return d
+    return None
+
+
+def fsi_stack_status() -> dict:
+    """Resolve the full FSI stack side-effect-free for the capabilities/degradation
+    report: ``{ok, ccx_precice, precice_lib, openfoam_adapter_lib, openfoam_bashrc,
+    missing}``. ``ok`` is true only when all four resolve."""
+    ccx = ccx_precice_bin()
+    lib = precice_lib_dir()
+    ofa = openfoam_adapter_lib_dir()
+    of = openfoam_bashrc()
+    missing = [n for n, v in (("ccx_preCICE", ccx), ("libprecice", lib),
+                              ("openfoam-adapter", ofa),
+                              ("openfoam-bashrc", of)) if not v]
+    return {
+        "ok": not missing,
+        "ccx_precice": ccx,
+        "precice_lib": lib,
+        "openfoam_adapter_lib": ofa,
+        "openfoam_bashrc": of,
+        "missing": missing,
+    }
 
 
 def capabilities() -> dict:
