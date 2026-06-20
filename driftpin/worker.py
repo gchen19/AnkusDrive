@@ -9500,6 +9500,43 @@ def _h_hertz_contact(p):
     return nonlinear.hertz_contact(**p)
 
 
+@handler("fsi_plate_deflection")
+def _h_fsi_plate_deflection(p):
+    """Exact small-deflection tip/centre deflection of a uniform-pressure-loaded
+    thin plate strip — the closed-form twin the coupled OpenFOAM→CalculiX FSI
+    solve (fsi_pressure_plate_submit) is gated against. δ_tip = q·L⁴/(8·E·I)
+    (cantilever) or q·L⁴/(384·E·I) (clamped-clamped), q = pressure·width. See
+    driftpin.analysis.fsi. Returns {support, pressure_pa, line_load_n_per_mm,
+    total_load_n, I_mm4, tip_disp_mm, root_moment_nmm, reaction_n, max_stress_mpa,
+    youngs_mpa, slenderness, fidelity, band_pct, valid_range_ok, warnings,
+    escalate_to}."""
+    from driftpin.analysis import fsi
+    return fsi.plate_deflection(**p)
+
+
+@handler("fsi_interface_balance")
+def _h_fsi_interface_balance(p):
+    """Partitioned wet-interface force balance — the FSI analogue of the optics
+    energy-balance gate. F_fluid = pressure·area must equal the solid reaction the
+    coupled solve carries (Newton's third law across the coupling surface); the
+    relative residual is the conservation error. See driftpin.analysis.fsi.
+    Returns {area_mm2, reference_load_n, fluid_force_n, solid_reaction_n,
+    residual_n, relative_residual, balanced, fidelity, escalate_to}."""
+    from driftpin.analysis import fsi
+    return fsi.interface_balance(**p)
+
+
+@handler("fsi_channel_pressure")
+def _h_fsi_channel_pressure(p):
+    """Fully-developed plane-channel pressure drop Δp = 12·μ·U·L/h² — the *fluid*
+    load that physically sources the pressure-plate FSI anchor. Reports the
+    Reynolds number / laminar regime. See driftpin.analysis.fsi. Returns
+    {pressure_pa, pressure_drop_pa, reynolds, regime, velocity_m_s, wall_shear_pa,
+    fidelity, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import fsi
+    return fsi.channel_pressure_load(**p)
+
+
 @handler("waveguide_cutoff")
 def _h_waveguide_cutoff(p):
     """Exact rectangular-waveguide cutoff frequency — the closed-form twin the
@@ -10348,6 +10385,76 @@ def _h_em_fullwave_submit(p):
                        meta={"problem": kind})
 
 
+# --- fluid-structure interaction (FSI) via preCICE (family: fsi) ---------------
+# Two surfaces: the fsi.* oracles (plate_deflection / interface_balance /
+# channel_pressure_load in analysis/fsi.py) are the closed-form, solver-free gate;
+# fsi_pressure_plate_submit runs the REAL partitioned preCICE solve (OpenFOAM
+# pimpleFoam <-> ccx_preCICE, analysis/fsi_case.py) off the MCP channel via jobs.py.
+# preCICE is LGPL and both heavy solvers run as their own subprocesses — DriftPin
+# never imports the coupling lib in-process; it degrades through solvers.require_
+# solver("precice") when the stack is absent, never raising.
+
+@handler("fsi_pressure_plate_submit")
+def _h_fsi_pressure_plate_submit(p):
+    """Partitioned fluid-structure-interaction solve on the preCICE OpenFOAM↔
+    CalculiX stack, OFF the MCP channel (asynchronous) — the real coupled-field
+    twin of the analytic ``plate_deflection`` / ``interface_balance`` oracles. A
+    flexible flap clamped at a channel floor deflects under the flow; OpenFOAM
+    (pimpleFoam) writes the wet-interface Force, ccx_preCICE returns the
+    Displacement, and preCICE drives the implicit coupling to convergence.
+
+    preCICE is LGPL-3.0 and the two heavy solvers run ONLY as subprocesses
+    (analysis/fsi_case.py); degrades to {ok:false, reason, install, stack} when the
+    stack is absent, never raising. The case geometry/mesh comes from the validated
+    vendored template (no FreeCAD touch on this thread); the *physics* are
+    parametric: inlet_velocity_m_s, nu_m2_s, rho_kg_m3, youngs_pa, poisson,
+    density_kg_m3, end_time_s, time_window_s, max_iterations, timeout.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result
+    for {ok, time_windows, tip_disp_m, tip_history, coupling_converged} — the tip
+    displacement is the field the fsi.plate_deflection oracle gates."""
+    from driftpin import solvers
+    gate = solvers.require_solver("precice")
+    if not gate.get("ok"):
+        gate["stack"] = solvers.fsi_stack_status()
+        return gate
+    stack = solvers.fsi_stack_status()
+    if not stack["ok"]:
+        return {"ok": False, "solver": "precice",
+                "reason": "fsi stack incomplete: " + ", ".join(stack["missing"]),
+                "install": solvers.find_solver("precice").get("install_hint"),
+                "stack": stack}
+
+    from driftpin import jobs
+    from driftpin.analysis import fsi_case
+    import tempfile as _tf
+
+    params = {
+        "inlet_velocity_m_s": float(p.get("inlet_velocity_m_s", 10.0)),
+        "nu_m2_s": float(p.get("nu_m2_s", 1.0)),
+        "rho_kg_m3": float(p.get("rho_kg_m3", 1.0)),
+        "youngs_pa": float(p.get("youngs_pa", 4.0e6)),
+        "poisson": float(p.get("poisson", 0.3)),
+        "density_kg_m3": float(p.get("density_kg_m3", 3000.0)),
+        "end_time_s": float(p.get("end_time_s", 5.0)),
+        "time_window_s": float(p.get("time_window_s", 0.01)),
+        "max_iterations": int(p.get("max_iterations", 50)),
+    }
+    timeout = int(p.get("timeout", 900))
+    key = jobs.content_key("fsi_pressure_plate", params)
+
+    def _work():
+        case_dir = _tf.mkdtemp(prefix="fsi_precice_")
+        built = fsi_case.write_fsi_case(case_dir, **params)
+        out = fsi_case.run_coupled_fsi(case_dir, timeout_s=timeout)
+        out["case_dir"] = case_dir
+        out["params"] = built["params"]
+        out["backend"] = ("preCICE OpenFOAM↔CalculiX "
+                          "(subprocess-isolated, LGPL coupling)")
+        return out
+
+    return jobs.submit("fsi_pressure_plate", _work, key=key,
+                       meta={"backend": "precice-openfoam-calculix"})
 # --- discrete-element granular mechanics (YADE, GPL-3.0, subprocess) -----------
 # Two surfaces, mirroring the optics lane above: the closed-form granular oracles
 # (RCP packing, Beverloo discharge, angle of repose) live in analysis/granular.py

@@ -107,6 +107,20 @@ em_gpl = [
     # scripts/install-solvers.sh em_gpl and update_openEMS.sh --python.
 ]
 cfd = []                    # OpenFOAM / SU2 ship via apt/conda — see scripts/install-solvers.sh
+# Partitioned fluid-structure interaction (FSI) runs on preCICE (LGPL-3.0) coupling
+# OpenFOAM <-> CalculiX. preCICE itself is NOT a pip wheel for this path (the version-
+# sensitive serial libprecice + the two C++ adapters — calculix-adapter producing
+# ccx_preCICE, openfoam-adapter producing the function-object .so — are source-built),
+# and the two heavy solvers run ONLY out-of-process (driftpin/analysis/fsi_case.py) so
+# the LGPL coupling lib never links into DriftPin. This extra carries only the pure-
+# Python deps the artifact/render path needs; the C++ stack is built by
+# scripts/install-solvers.sh fsi (then auto-discovered or pointed at via
+# DRIFTPIN_CCX_PRECICE / DRIFTPIN_PRECICE_LIB / DRIFTPIN_OPENFOAM_ADAPTER_LIB).
+fsi = [
+    "numpy",
+    # libprecice + ccx_preCICE + the OpenFOAM adapter are NOT here — they are
+    # source-built (LGPL core, version-sensitive); see scripts/install-solvers.sh fsi.
+]
 # Granular / powder discrete-element mechanics runs on YADE, which is GPL-3.0 and
 # ships no PyPI/conda-noble wheel — it is SOURCE-BUILT (scripts/install-solvers.sh
 # dem_gpl, into ~/opt/yade) and driven ONLY out-of-process via the `yade` executable
