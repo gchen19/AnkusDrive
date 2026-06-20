@@ -170,7 +170,12 @@ is **opt-in**: the no-argument `install-solvers.sh` run installs only the permis
 extras and prints how to add `optics_gpl`. Rendered examples for both lanes (lens layout,
 spot diagram, optimization, prism TIR, and a ball-lens spherical-aberration study) live in
 [`examples/optics_gallery/`](examples/optics_gallery/) — regenerate with
-`.venv/bin/python examples/optics_gallery.py` (and `…_3d.py`, `optics_ball_lens.py`).
+`.venv/bin/python examples/optics_gallery.py` (and `…_3d.py`, `optics_ball_lens.py`), or
+bootstrap everything in one shot (installs both lanes, then renders every figure):
+
+```bash
+scripts/install-solvers.sh --optics-gallery
+```
 
 ## Architecture sketch
 

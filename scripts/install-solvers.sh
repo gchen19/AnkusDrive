@@ -34,6 +34,7 @@
 #   scripts/install-solvers.sh mbd              # just the MBD wheels (PyBullet)
 #   scripts/install-solvers.sh topology optics  # several extras
 #   scripts/install-solvers.sh optics_gpl       # opt-in GPL-3.0 non-sequential engine (KrakenOS)
+#   scripts/install-solvers.sh --optics-gallery # bootstrap: install BOTH optics lanes + render every gallery figure
 #   scripts/install-solvers.sh cfd              # print OpenFOAM/SU2 install guidance (no auto-install)
 #   scripts/install-solvers.sh --list           # show what resolves right now (per solve_capabilities)
 #
@@ -116,6 +117,20 @@ EOF
   fi
 }
 
+# --- optics gallery bootstrap (install both lanes + render every figure) -------
+build_optics_gallery() {
+  log "bootstrapping the optics gallery (install both lanes, then render every figure)"
+  pip_install_extra optics            # sequential: optiland + rayoptics (permissive)
+  pip_install_extra optics_gpl        # non-sequential: KrakenOS (GPL-3.0, prints its notice)
+  local gens="examples/optics_gallery.py examples/optics_gallery_3d.py examples/optics_ball_lens.py"
+  for g in $gens; do
+    [ -f "$REPO_ROOT/$g" ] || die "generator not found: $g (run from a DriftPin checkout)"
+    log "render $g"
+    ( cd "$REPO_ROOT" && "$PY" "$g" >/dev/null ) || die "rendering $g failed"
+  done
+  ok "optics gallery written to $REPO_ROOT/examples/optics_gallery/  ($(ls "$REPO_ROOT"/examples/optics_gallery/*.png 2>/dev/null | wc -l | tr -d ' ') PNGs)"
+}
+
 # --- list / status (delegates to driftpin.solvers — same probe as the tool) ----
 do_list() {
   printf 'P2 solver discovery (what resolves in %s right now):\n\n' "$PY"
@@ -144,7 +159,8 @@ main() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --list|-l) do_list; exit 0 ;;
-      -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+      --optics-gallery) build_optics_gallery; exit 0 ;;
+      -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
       mbd|topology|optics|optics_gpl) extras+=("$1"); do_all=0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
       thermal|elmer)     systems+=("thermal"); do_all=0 ;;
