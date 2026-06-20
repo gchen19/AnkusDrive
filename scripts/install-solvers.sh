@@ -15,6 +15,12 @@
 #       it explicitly (`install-solvers.sh optics_gpl`). DriftPin only ever runs it
 #       out-of-process via driftpin/optics_gpl_runner.py, so its copyleft does not reach
 #       DriftPin's own code (same arm's-length boundary as the GPL Elmer/OpenFOAM bins).
+#     * GPL opt-in SOURCE BUILD (em_gpl: openEMS FDTD full-wave EM) — GPL-3.0 AND not
+#       on PyPI/conda, so it is source-built from the openEMS-Project meta-repo into a
+#       DEDICATED venv (.venv-openems) and run ONLY out-of-process via
+#       driftpin/em_fullwave_gpl_runner.py. Request it explicitly
+#       (`install-solvers.sh em_gpl`); never installed in the no-arg run. Same
+#       arm's-length copyleft boundary as KrakenOS / the GPL Elmer/OpenFOAM bins.
 #     * system-package solvers (CFD: OpenFOAM/SU2; transient/radiation thermal:
 #       Elmer) — large apt/conda installs that vary by distro and need root, so this
 #       script PRINTS the documented commands rather than running them. Install them,
@@ -34,6 +40,7 @@
 #   scripts/install-solvers.sh mbd              # just the MBD wheels (PyBullet)
 #   scripts/install-solvers.sh topology optics  # several extras
 #   scripts/install-solvers.sh optics_gpl       # opt-in GPL-3.0 non-sequential engine (KrakenOS)
+#   scripts/install-solvers.sh em_gpl           # opt-in GPL-3.0 full-wave FDTD (openEMS, source-built)
 #   scripts/install-solvers.sh --optics-gallery # bootstrap: install BOTH optics lanes + render every gallery figure
 #   scripts/install-solvers.sh cfd              # print OpenFOAM/SU2 install guidance (no auto-install)
 #   scripts/install-solvers.sh --list           # show what resolves right now (per solve_capabilities)
@@ -117,6 +124,49 @@ EOF
   fi
 }
 
+# --- em_gpl: openEMS FDTD full-wave EM (GPL-3.0, source build) ------------------
+# openEMS is NOT a pip wheel — it is built from the openEMS-Project meta-repo with
+# its update_openEMS.sh into a prefix + a DEDICATED venv (.venv-openems) carrying
+# the openEMS/CSXCAD python bindings. DriftPin runs it only out-of-process
+# (driftpin/em_fullwave_gpl_runner.py); set DRIFTPIN_OPENEMS_PYTHON to that venv's
+# python so the worker resolves it. Override the prefix/clone/venv with EM_PREFIX /
+# EM_SRC / EM_VENV.
+build_openems() {
+  warn "openEMS is GPL-3.0. DriftPin runs it ONLY out-of-process"
+  warn "(driftpin/em_fullwave_gpl_runner.py), keeping its own license clean."
+  local prefix="${EM_PREFIX:-$HOME/opt/openEMS}"
+  local src="${EM_SRC:-$HOME/openEMS-Project}"
+  local venv="${EM_VENV:-$REPO_ROOT/.venv-openems}"
+
+  log "openEMS build deps (apt — needs sudo; adjust package names per distro)"
+  cat <<'EOF'
+  sudo apt-get install -y build-essential cmake git libhdf5-dev libvtk9-dev \
+       libboost-all-dev libcgal-dev libtinyxml-dev libqt5xml5 qtbase5-dev
+EOF
+  if [ ! -d "$src" ]; then
+    log "clone openEMS-Project -> $src"
+    git clone --recursive https://github.com/thliebig/openEMS-Project.git "$src" \
+      || die "git clone failed"
+  fi
+  log "build openEMS (+ python bindings) into $prefix  (this takes a while)"
+  ( cd "$src" && ./update_openEMS.sh "$prefix" --python ) || die "update_openEMS.sh failed"
+
+  log "dedicated venv -> $venv  (openEMS/CSXCAD python bindings)"
+  python3 -m venv "$venv" || die "venv create failed"
+  "$venv/bin/pip" install --quiet --upgrade pip numpy h5py cython || die "venv deps failed"
+  CSXCAD_INSTALL_PATH="$prefix" "$venv/bin/pip" install --quiet "$src/CSXCAD/python" \
+    || die "CSXCAD python install failed"
+  CSXCAD_INSTALL_PATH="$prefix" OPENEMS_INSTALL_PATH="$prefix" \
+    "$venv/bin/pip" install --quiet "$src/openEMS/python" || die "openEMS python install failed"
+
+  log "smoke-test the engine"
+  "$venv/bin/python" -c "import openEMS, CSXCAD; print('openEMS', openEMS.__version__)" \
+    || die "openEMS import failed — check $prefix/lib is on the runtime path"
+  ok "openEMS built. Point the worker at it:"
+  ok "    export DRIFTPIN_OPENEMS_PYTHON=$venv/bin/python"
+  ok "(or it is auto-discovered if .venv-openems sits beside the repo)"
+}
+
 # --- optics gallery bootstrap (install both lanes + render every figure) -------
 build_optics_gallery() {
   log "bootstrapping the optics gallery (install both lanes, then render every figure)"
@@ -162,6 +212,7 @@ main() {
       --optics-gallery) build_optics_gallery; exit 0 ;;
       -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
       mbd|topology|optics|optics_gpl) extras+=("$1"); do_all=0 ;;
+      em_gpl|openems)    build_openems; exit 0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
       thermal|elmer)     systems+=("thermal"); do_all=0 ;;
       openfoam|su2)      systems+=("cfd"); do_all=0 ;;
@@ -176,6 +227,8 @@ main() {
     echo
     warn "GPL opt-in NOT installed by default: the non-sequential optics engine (KrakenOS)"
     warn "is GPL-3.0 — install it explicitly with: scripts/install-solvers.sh optics_gpl"
+    warn "Full-wave FDTD EM (openEMS) is GPL-3.0 AND source-built (not a pip wheel) —"
+    warn "build it explicitly with: scripts/install-solvers.sh em_gpl"
   else
     for e in "${extras[@]:-}";  do [ -n "$e" ] && pip_install_extra "$e"; done
     for s in "${systems[@]:-}"; do [ -n "$s" ] && system_guidance "$s"; done

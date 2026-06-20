@@ -150,6 +150,27 @@ _SOLVERS: dict = {
         "install_hint": "pip install 'driftpin[optics_gpl]'  (pulls KrakenOS, GPL-3.0; "
                         "run out-of-process only), or: pip install KrakenOS 'setuptools<81'",
     },
+    # --- full-wave EM: openEMS FDTD (GPL-3.0, source-built, NOT a pip wheel) ---
+    # Like KrakenOS, openEMS is GPL-3.0 and is therefore invoked ONLY out-of-process
+    # via driftpin/em_fullwave_gpl_runner.py — DriftPin never imports openEMS/CSXCAD
+    # in-process, so the copyleft does not link into DriftPin's permissive code. The
+    # python bindings (openEMS, CSXCAD) live in a DEDICATED venv (.venv-openems);
+    # the worker resolves that interpreter via _em_fullwave_gpl_python() (the
+    # find_spec probe below merely reports installability, it does not import).
+    "openems": {
+        "kind": "wheel",
+        "family": "em_fullwave",
+        "extra": "em_gpl",
+        "modules": ("openEMS",),
+        # GPL-3.0: never imported in-process; run via em_fullwave_gpl_runner subprocess.
+        "license": "GPL-3.0",
+        "isolation": "subprocess",
+        "install_hint": "source-build openEMS (GPL-3.0; not on PyPI/conda): "
+                        "scripts/install-solvers.sh em_gpl  (clones openEMS-Project, "
+                        "runs update_openEMS.sh --python into a dedicated venv); then "
+                        "point DRIFTPIN_OPENEMS_PYTHON at that venv's python. Run "
+                        "out-of-process only via driftpin/em_fullwave_gpl_runner.py.",
+    },
     # --- Sprint 4 follow-on: slicer CLI (apt/AppImage, not vendored) ----------
     "prusaslicer": {
         "kind": "binary",

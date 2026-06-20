@@ -153,6 +153,10 @@ echo "== Nonlinear structural FEM (plastic/elastica/Hertz oracles always; ccx ga
 python3 tests/test_fem_nonlinear.py
 
 echo
+echo "== Full-wave EM (waveguide-cutoff/dipole oracles always; openEMS FDTD solve gated when present) =="
+python3 tests/test_em_fullwave.py
+
+echo
 echo "== Golden fixtures (issue #19 real adapters) =="
 python3 tests/test_golden_issue19.py
 
