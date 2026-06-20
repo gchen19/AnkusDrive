@@ -9500,6 +9500,33 @@ def _h_hertz_contact(p):
     return nonlinear.hertz_contact(**p)
 
 
+@handler("waveguide_cutoff")
+def _h_waveguide_cutoff(p):
+    """Exact rectangular-waveguide cutoff frequency — the closed-form twin the
+    openEMS FDTD full-wave solve (em_fullwave_submit) is gated against. Dominant
+    TE10 f_c = c/(2a√εᵣ) is EXACT; with a probe freq the propagating/evanescent
+    regime, β = √(k²−k_c²) and the guided wavelength are returned. See
+    driftpin.analysis.em_fullwave. Returns {mode, m, n, a_mm, b_mm, eps_r,
+    cutoff_hz, cutoff_ghz, kc_per_m, next_mode_cutoff_ghz, single_mode_band_ghz,
+    probe_freq_ghz, regime, k_per_m, beta_per_m, guided_wavelength_mm, fidelity,
+    band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import em_fullwave
+    return em_fullwave.waveguide_cutoff(**p)
+
+
+@handler("dipole_resonance")
+def _h_dipole_resonance(p):
+    """Thin half-wave dipole first resonance (banded) — the closed-form twin the
+    openEMS FDTD S11 antenna sweep (em_fullwave_submit) is gated against. L ≈ k·λ
+    with end-effect k ≈ 0.48; give length_mm→f_r or freq_ghz→length, with a ±band
+    on the wire-diameter spread. See driftpin.analysis.em_fullwave. Returns
+    {given, shortening, half_wavelength_mm, resonant_length_mm, resonant_freq_ghz,
+    freq_lo_ghz, freq_hi_ghz, length_lo_mm, length_hi_mm, fidelity, band_pct,
+    valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import em_fullwave
+    return em_fullwave.dipole_resonance(**p)
+
+
 @handler("molding_screen")
 def _h_molding_screen(p):
     """Injection-molding screen: exact one-term cooling time + spiral-flow fill
@@ -10132,6 +10159,167 @@ def _h_optics_solid_trace(p):
     return result
 
 
+# --- full-wave EM: openEMS FDTD (GPL-3.0, subprocess-isolated) -----------------
+# Exactly the KrakenOS arrangement: openEMS/CSXCAD are GPL-3.0, so DriftPin never
+# imports them in-process. The worker resolves a DEDICATED venv interpreter that
+# can import openEMS (.venv-openems) and runs em_fullwave_gpl_runner.py in a child
+# process, exchanging sentinel-delimited JSON. The two analytic oracles
+# (waveguide_cutoff / dipole_resonance) are permissive and run in-process above.
+
+_EM_FULLWAVE_GPL_PY = None  # cache: None=unprobed, False=absent, str=python exe that imports openEMS
+
+
+def _em_fullwave_gpl_python():
+    """The Python interpreter to run the GPL full-wave engine (openEMS) under — the
+    one whose environment can import openEMS/CSXCAD, NOT this worker's interpreter.
+    Resolution order mirrors _optics_gpl_python: DRIFTPIN_OPENEMS_PYTHON override →
+    the venv that owns openEMS (from find_spec's origin; find_spec does NOT import
+    the module, so the copyleft boundary holds) → a repo-local .venv-openems →
+    sys.executable. Each candidate is verified by probing find_spec('openEMS') in a
+    child, so a hit is guaranteed runnable. Cached. Returns the exe path, or None."""
+    global _EM_FULLWAVE_GPL_PY
+    if _EM_FULLWAVE_GPL_PY is not None:
+        return _EM_FULLWAVE_GPL_PY or None
+    import importlib.util
+    import subprocess
+
+    candidates = []
+    if env := os.environ.get("DRIFTPIN_OPENEMS_PYTHON"):
+        candidates.append(env)
+    try:
+        spec = importlib.util.find_spec("openEMS")
+    except Exception:
+        spec = None
+    if spec and spec.origin:                          # ascend toward the venv root
+        d = os.path.dirname(spec.origin)
+        for _ in range(5):
+            d = os.path.dirname(d)
+            candidates += [os.path.join(d, "bin", "python3"),
+                           os.path.join(d, "bin", "python"),
+                           os.path.join(d, "Scripts", "python.exe")]
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # the dedicated openEMS venv lives beside the repo or one level up (next to it)
+    for base in (repo, os.path.dirname(repo)):
+        candidates += [os.path.join(base, ".venv-openems", "bin", "python3"),
+                       os.path.join(base, ".venv-openems", "bin", "python"),
+                       os.path.join(base, ".venv-openems", "Scripts", "python.exe")]
+    candidates.append(sys.executable)
+
+    seen = set()
+    probe = ("import importlib.util,sys;"
+             "sys.exit(0 if importlib.util.find_spec('openEMS') and "
+             "importlib.util.find_spec('CSXCAD') else 1)")
+    for c in candidates:
+        if not c or c in seen or not os.path.isfile(c):
+            continue
+        seen.add(c)
+        try:
+            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
+        except Exception:
+            continue
+        if r.returncode == 0:
+            _EM_FULLWAVE_GPL_PY = c
+            return c
+    _EM_FULLWAVE_GPL_PY = False
+    return None
+
+
+def _run_em_fullwave_gpl(problem, python_exe, timeout=600):
+    """Invoke the GPL-3.0 full-wave FDTD engine (openEMS) OUT-OF-PROCESS via
+    driftpin/em_fullwave_gpl_runner.py (a standalone script that imports no driftpin
+    code) and return its JSON result. DriftPin never imports openEMS in-process;
+    this fork/exec + pipe-IPC keeps the copyleft boundary clean — the same isolation
+    used for KrakenOS and the GPL Elmer/OpenFOAM binaries. Raises RuntimeError if
+    the subprocess emits no sentinel-delimited JSON."""
+    import json as _json
+    import subprocess
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "em_fullwave_gpl_runner.py")
+    proc = subprocess.run(
+        [python_exe, runner],
+        input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
+    _, _, rest = proc.stdout.partition("@@JSON@@")
+    body, _, _ = rest.partition("@@END@@")
+    if not body:
+        raise RuntimeError(
+            f"em_fullwave_gpl_runner produced no JSON (rc={proc.returncode}); "
+            f"stderr tail: {proc.stderr[-400:]}")
+    return _json.loads(body)
+
+
+@handler("em_fullwave_submit")
+def _h_em_fullwave_submit(p):
+    """Full-wave FDTD EM solve on openEMS, OFF the MCP channel (asynchronous) — the
+    real-field twin of the analytic waveguide_cutoff / dipole_resonance oracles.
+    openEMS is GPL-3.0 and is therefore run ONLY in a subprocess via
+    em_fullwave_gpl_runner; degrades to {ok:false, reason, install} when no openEMS
+    venv resolves, never raising.
+
+    Problems (`problem`):
+      'waveguide_sweep' (default): drive a hollow rectangular guide with a TE10
+        port, sweep transmission over a band STRADDLING the cutoff, and report the
+        propagating↔evanescent transition. Knobs: a_mm, b_mm, length_mm,
+        f_start_ghz, f_stop_ghz, n_freq, nrts, cells_per_wl, eps_r. The result's
+        fc_crossing_ghz vs the analytic c/(2a) (fc_ratio≈1) is the gate.
+      'dipole_s11': drive a centre-fed thin dipole, sweep S11, report the first
+        resonance. Knobs: length_mm, gap_mm, radius_mm, f_start_ghz, f_stop_ghz.
+
+    Geometry is parametric (built inside the runner from the dimensions) — no
+    FreeCAD export is needed for these canonical cases, but the submit still runs
+    on the worker thread off the MCP channel like every other *_submit. Returns the
+    degradation dict, or {job_id, status, cache_hit}; poll job_result for the
+    sweep arrays + fc_ratio / resonance."""
+    python_exe = _em_fullwave_gpl_python()
+    if python_exe is None:
+        from driftpin import solvers
+        info = solvers.find_solver("openems")
+        return {"ok": False, "solver": "openems", "reason": "solver not installed",
+                "install": info.get("install_hint",
+                                    "source-build openEMS (GPL-3.0) — "
+                                    "scripts/install-solvers.sh em_gpl")}
+
+    from driftpin import jobs
+    kind = p.get("problem", "waveguide_sweep")
+    if kind == "waveguide_sweep":
+        problem = {
+            "problem": "waveguide_sweep",
+            "a_mm": float(p.get("a_mm", 22.86)),
+            "b_mm": float(p.get("b_mm", p.get("a_mm", 22.86) / 2.0)),
+            "length_mm": float(p.get("length_mm", 60.0)),
+            "f_start_ghz": float(p.get("f_start_ghz", 4.0)),
+            "f_stop_ghz": float(p.get("f_stop_ghz", 10.0)),
+            "n_freq": int(p.get("n_freq", 121)),
+            "nrts": int(p.get("nrts", 30000)),
+            "cells_per_wl": float(p.get("cells_per_wl", 20)),
+            "eps_r": float(p.get("eps_r", 1.0)),
+        }
+    elif kind == "dipole_s11":
+        problem = {
+            "problem": "dipole_s11",
+            "length_mm": float(p["length_mm"]),
+            "gap_mm": float(p.get("gap_mm", float(p["length_mm"]) / 40.0)),
+            "radius_mm": float(p.get("radius_mm", float(p["length_mm"]) / 200.0)),
+            "f_start_ghz": float(p.get("f_start_ghz", 0.5)),
+            "f_stop_ghz": float(p.get("f_stop_ghz", 1.5)),
+            "n_freq": int(p.get("n_freq", 201)),
+            "nrts": int(p.get("nrts", 60000)),
+        }
+    else:
+        raise ValueError(f"unknown em_fullwave problem {kind!r} "
+                         "(want 'waveguide_sweep' or 'dipole_s11')")
+
+    timeout = int(p.get("timeout", 600))
+    key = jobs.content_key("em_fullwave", problem)
+
+    def _work():
+        out = _run_em_fullwave_gpl(problem, python_exe, timeout=timeout)
+        out["backend"] = "openEMS (subprocess-isolated, GPL-3.0)"
+        return out
+
+    return jobs.submit("em_fullwave", _work, key=key,
+                       meta={"problem": kind})
+
+
 # --- discrete-element granular mechanics (YADE, GPL-3.0, subprocess) -----------
 # Two surfaces, mirroring the optics lane above: the closed-form granular oracles
 # (RCP packing, Beverloo discharge, angle of repose) live in analysis/granular.py
@@ -10367,6 +10555,7 @@ def _h_granular_oracle(p):
     raise ValueError(
         f"unknown granular problem {kind!r}; use 'packing', 'beverloo', "
         "'beverloo_exponent', 'repose', or 'repose_monotone'")
+
 
 
 # --- multibody dynamics / kinematics (family 8) -------------------------------

@@ -3305,6 +3305,107 @@ def hertz_contact(
 
 
 @mcp.tool()
+def waveguide_cutoff(
+    a_mm: float,
+    b_mm: float | None = None,
+    mode: str = "TE10",
+    eps_r: float = 1.0,
+    freq_ghz: float | None = None,
+) -> dict:
+    """Exact rectangular-waveguide cutoff frequency (NO solver) — the closed-form
+    twin the openEMS FDTD full-wave solve (`em_fullwave_submit`) is gated against.
+    Broad wall `a_mm`, narrow wall `b_mm` (default a/2, WR convention). `mode` is
+    'TE<m><n>'/'TM<m><n>'. f_c(m,n) = (c/2√εᵣ)·√((m/a)²+(n/b)²); dominant TE10
+    reduces to the EXACT f_c = c/(2a√εᵣ). Below f_c the guide is evanescent
+    (axial β imaginary, nothing transmits), above it propagates with guided
+    wavelength λ_g = 2π/β. With a probe `freq_ghz` the regime (propagating /
+    evanescent), k, β and λ_g are returned. An FDTD drive straddling f_c must
+    collapse its transmission below the analytic cutoff and rise above it.
+
+    Returns {mode, m, n, a_mm, b_mm, eps_r, cutoff_hz, cutoff_ghz, kc_per_m,
+    next_mode_cutoff_ghz, single_mode_band_ghz, probe_freq_ghz, regime, k_per_m,
+    beta_per_m, guided_wavelength_mm, fidelity, band_pct, valid_range_ok,
+    warnings, escalate_to}."""
+    params = {"a_mm": a_mm, "mode": mode, "eps_r": eps_r}
+    for k, v in (("b_mm", b_mm), ("freq_ghz", freq_ghz)):
+        if v is not None:
+            params[k] = v
+    return _call("waveguide_cutoff", **params)
+
+
+@mcp.tool()
+def dipole_resonance(
+    length_mm: float | None = None,
+    freq_ghz: float | None = None,
+    shortening: float = 0.48,
+) -> dict:
+    """Thin centre-fed half-wave dipole first resonance (NO solver, banded) — the
+    closed-form twin the openEMS FDTD S11 antenna sweep (`em_fullwave_submit`) is
+    gated against. Give EXACTLY ONE of `length_mm` (→ resonant frequency) or
+    `freq_ghz` (→ resonant length). End-effect shortening k = `shortening` makes
+    the resonant length a little under λ/2: L = k·λ, f_r = k·c/L (k≈0.48 textbook;
+    ≈0.475 typical wire). Because k tracks the length/diameter ratio this is a
+    ±band correlation (fidelity='banded', ~±3% over k∈[0.46,0.49]); an FDTD S11
+    sweep must put its first resonance inside [freq_lo, freq_hi] (or [length_lo,
+    length_hi]).
+
+    Returns {given, shortening, half_wavelength_mm, resonant_length_mm,
+    resonant_freq_ghz, freq_lo_ghz, freq_hi_ghz, length_lo_mm, length_hi_mm,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"shortening": shortening}
+    for k, v in (("length_mm", length_mm), ("freq_ghz", freq_ghz)):
+        if v is not None:
+            params[k] = v
+    return _call("dipole_resonance", **params)
+
+
+@mcp.tool()
+def em_fullwave_submit(
+    problem: str = "waveguide_sweep",
+    a_mm: float = 22.86,
+    b_mm: float | None = None,
+    length_mm: float | None = None,
+    f_start_ghz: float | None = None,
+    f_stop_ghz: float | None = None,
+    n_freq: int | None = None,
+    nrts: int | None = None,
+    cells_per_wl: float | None = None,
+    eps_r: float = 1.0,
+    gap_mm: float | None = None,
+    radius_mm: float | None = None,
+    timeout: int = 600,
+) -> dict:
+    """Full-wave FDTD EM solve on openEMS, asynchronous (OFF the MCP channel) — the
+    real-field twin of the analytic `waveguide_cutoff` / `dipole_resonance`
+    oracles. openEMS is GPL-3.0 and is run ONLY out-of-process via
+    driftpin/em_fullwave_gpl_runner.py; degrades to {ok:false, reason, install}
+    when no openEMS venv resolves.
+
+    `problem`='waveguide_sweep' (default): hollow rectangular guide, broad wall
+    `a_mm`/narrow wall `b_mm` (default a/2), length `length_mm` (default 60), TE10
+    port at each end. Sweep `f_start_ghz`..`f_stop_ghz` (default 4..10 GHz —
+    straddling the WR-90 cutoff 6.56 GHz) in `n_freq` points, `nrts` max timesteps,
+    `cells_per_wl` mesh density, `eps_r` fill. The result's `fc_crossing_ghz`
+    (half-power transmission) vs the analytic c/(2a) (`fc_ratio`≈1, evanescent_mean
+    ≈0, propagating_mean≈1) IS the gate. `problem`='dipole_s11': centre-fed thin
+    dipole (`length_mm`, `gap_mm`, `radius_mm`), sweep S11, report first resonance.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result
+    for {ok, fc_analytic_ghz, freq_ghz[], s21_db[], transmission_norm[],
+    fc_crossing_ghz, fc_ratio, evanescent_mean, propagating_mean, n_cells, wall_s}
+    (waveguide) or {freq_ghz[], s11_db[], resonance_ghz} (dipole)."""
+    params = {"problem": problem, "a_mm": a_mm, "eps_r": eps_r, "timeout": timeout}
+    for k, v in (("b_mm", b_mm), ("length_mm", length_mm),
+                 ("f_start_ghz", f_start_ghz), ("f_stop_ghz", f_stop_ghz),
+                 ("n_freq", n_freq), ("nrts", nrts),
+                 ("cells_per_wl", cells_per_wl), ("gap_mm", gap_mm),
+                 ("radius_mm", radius_mm)):
+        if v is not None:
+            params[k] = v
+    return _call("em_fullwave_submit", **params)
+
+
+@mcp.tool()
 def molding_screen(
     wall_thickness_mm: float,
     material: str | None = None,

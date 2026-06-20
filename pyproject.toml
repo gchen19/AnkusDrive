@@ -80,6 +80,19 @@ optics_gpl = [
     "KrakenOS",
     "setuptools<81",
 ]
+# Full-wave FDTD EM runs on openEMS/CSXCAD, which is GPL-3.0 AND is not a pip wheel
+# (not on PyPI/conda — it is source-built from the openEMS-Project meta-repo). Like
+# optics_gpl it is a SEPARATE, opt-in extra invoked only out-of-process (via
+# driftpin/em_fullwave_gpl_runner.py) so its copyleft does not link into DriftPin.
+# The python bindings install into a DEDICATED venv; this extra carries only the
+# pure-Python deps the runner needs there. See scripts/install-solvers.sh em_gpl
+# for the source build, then set DRIFTPIN_OPENEMS_PYTHON to that venv's python.
+em_gpl = [
+    "numpy",
+    "h5py",
+    # openEMS + CSXCAD are NOT here — they are source-built (GPL-3.0); see
+    # scripts/install-solvers.sh em_gpl and update_openEMS.sh --python.
+]
 cfd = []                    # OpenFOAM / SU2 ship via apt/conda — see scripts/install-solvers.sh
 # Granular / powder discrete-element mechanics runs on YADE, which is GPL-3.0 and
 # ships no PyPI/conda-noble wheel — it is SOURCE-BUILT (scripts/install-solvers.sh
