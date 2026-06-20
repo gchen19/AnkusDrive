@@ -7,8 +7,14 @@
 # WHAT IT DOES
 #   Two solver shapes, two install paths:
 #     * pip-wheel solvers (MBD: PyBullet/MuJoCo; topology: solidspy/topopt; optics:
-#       rayoptics) — a thin `pip install '.[<extra>]'` into the worker's Python env.
-#       Clean, no system package; this script automates it.
+#       rayoptics + optiland for sequential lens design/optimize) — a thin
+#       `pip install '.[<extra>]'` into the worker's Python env. Clean, no system
+#       package; this script automates it.
+#     * GPL opt-in wheel (optics_gpl: KrakenOS, for non-sequential tracing through STL
+#       solids) — GPL-3.0, so it is NOT installed by the default (no-arg) run; request
+#       it explicitly (`install-solvers.sh optics_gpl`). DriftPin only ever runs it
+#       out-of-process via driftpin/optics_gpl_runner.py, so its copyleft does not reach
+#       DriftPin's own code (same arm's-length boundary as the GPL Elmer/OpenFOAM bins).
 #     * system-package solvers (CFD: OpenFOAM/SU2; transient/radiation thermal:
 #       Elmer) — large apt/conda installs that vary by distro and need root, so this
 #       script PRINTS the documented commands rather than running them. Install them,
@@ -24,9 +30,11 @@
 #   {ok:false, reason, install} dict; present -> the family can solve.
 #
 # USAGE
-#   scripts/install-solvers.sh                  # pip-install all wheel extras + print system guidance
+#   scripts/install-solvers.sh                  # pip-install permissive wheel extras + print system guidance
 #   scripts/install-solvers.sh mbd              # just the MBD wheels (PyBullet)
 #   scripts/install-solvers.sh topology optics  # several extras
+#   scripts/install-solvers.sh optics_gpl       # opt-in GPL-3.0 non-sequential engine (KrakenOS)
+#   scripts/install-solvers.sh --optics-gallery # bootstrap: install BOTH optics lanes + render every gallery figure
 #   scripts/install-solvers.sh cfd              # print OpenFOAM/SU2 install guidance (no auto-install)
 #   scripts/install-solvers.sh --list           # show what resolves right now (per solve_capabilities)
 #
@@ -51,8 +59,11 @@ fi
 FORCE="${FORCE:-0}"
 
 # Wheel-installable extras (pyproject [project.optional-dependencies]) -> the pip
-# install this script automates. Keep in lockstep with pyproject.toml.
+# install this script automates. Keep in lockstep with pyproject.toml. WHEEL_EXTRAS
+# are permissive-licensed and run by default; GPL_EXTRAS are GPL-3.0 and install ONLY
+# when named explicitly (never in the no-arg run).
 WHEEL_EXTRAS="mbd topology optics"
+GPL_EXTRAS="optics_gpl"
 
 # --- logging (matches install-renderers.sh) -----------------------------------
 _c() { [ -t 1 ] && printf '\033[%sm' "$1" || true; }
@@ -64,8 +75,12 @@ die()  { printf '%serror%s %s\n' "$(_c '1;31')" "$(_c 0)" "$*" >&2; exit 1; }
 # --- pip-wheel extras ----------------------------------------------------------
 pip_install_extra() {  # extra
   local extra="$1"
-  case " $WHEEL_EXTRAS " in *" $extra "*) ;; *) die "unknown wheel extra: $extra (have: $WHEEL_EXTRAS)";; esac
+  case " $WHEEL_EXTRAS $GPL_EXTRAS " in *" $extra "*) ;; *) die "unknown wheel extra: $extra (have: $WHEEL_EXTRAS $GPL_EXTRAS)";; esac
   command -v "$PY" >/dev/null 2>&1 || [ -x "$PY" ] || die "interpreter not found: $PY (set PY=...)"
+  case " $GPL_EXTRAS " in *" $extra "*)
+    warn "'$extra' pulls GPL-3.0 software (e.g. KrakenOS). DriftPin runs it only"
+    warn "out-of-process (driftpin/optics_gpl_runner.py), keeping its own license clean."
+  ;; esac
   local force_flag=""; [ "$FORCE" = "1" ] && force_flag="--force-reinstall"
   log "pip install '.[$extra]'  (into $PY)"
   "$PY" -m pip install $force_flag ".[$extra]" || die "pip install of '.[$extra]' failed"
@@ -102,6 +117,20 @@ EOF
   fi
 }
 
+# --- optics gallery bootstrap (install both lanes + render every figure) -------
+build_optics_gallery() {
+  log "bootstrapping the optics gallery (install both lanes, then render every figure)"
+  pip_install_extra optics            # sequential: optiland + rayoptics (permissive)
+  pip_install_extra optics_gpl        # non-sequential: KrakenOS (GPL-3.0, prints its notice)
+  local gens="examples/optics_gallery.py examples/optics_gallery_3d.py examples/optics_ball_lens.py"
+  for g in $gens; do
+    [ -f "$REPO_ROOT/$g" ] || die "generator not found: $g (run from a DriftPin checkout)"
+    log "render $g"
+    ( cd "$REPO_ROOT" && "$PY" "$g" >/dev/null ) || die "rendering $g failed"
+  done
+  ok "optics gallery written to $REPO_ROOT/examples/optics_gallery/  ($(ls "$REPO_ROOT"/examples/optics_gallery/*.png 2>/dev/null | wc -l | tr -d ' ') PNGs)"
+}
+
 # --- list / status (delegates to driftpin.solvers — same probe as the tool) ----
 do_list() {
   printf 'P2 solver discovery (what resolves in %s right now):\n\n' "$PY"
@@ -130,8 +159,9 @@ main() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --list|-l) do_list; exit 0 ;;
-      -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
-      mbd|topology|optics) extras+=("$1"); do_all=0 ;;
+      --optics-gallery) build_optics_gallery; exit 0 ;;
+      -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+      mbd|topology|optics|optics_gpl) extras+=("$1"); do_all=0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
       thermal|elmer)     systems+=("thermal"); do_all=0 ;;
       openfoam|su2)      systems+=("cfd"); do_all=0 ;;
@@ -143,6 +173,9 @@ main() {
   if [ "$do_all" = "1" ]; then
     for e in $WHEEL_EXTRAS; do pip_install_extra "$e"; done
     system_guidance all
+    echo
+    warn "GPL opt-in NOT installed by default: the non-sequential optics engine (KrakenOS)"
+    warn "is GPL-3.0 — install it explicitly with: scripts/install-solvers.sh optics_gpl"
   else
     for e in "${extras[@]:-}";  do [ -n "$e" ] && pip_install_extra "$e"; done
     for s in "${systems[@]:-}"; do [ -n "$s" ] && system_guidance "$s"; done

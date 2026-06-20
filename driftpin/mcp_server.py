@@ -4074,6 +4074,101 @@ def optics_raytrace(
 
 
 @mcp.tool()
+def optics_lens_design(
+    surfaces: list,
+    epd: float | None = None,
+    fno: float | None = None,
+    wavelengths_um: list | None = None,
+    field_angles_deg: list | None = None,
+    image_solve: bool = True,
+    want_spot: bool = True,
+) -> dict:
+    """First-order + spot analysis of a SEQUENTIAL optical system with optiland
+    (MIT, in-process). Requires the `optics` extra; degrades to {ok:false, reason,
+    install} otherwise. For a single lens optiland is gated against the analytic
+    thick-lens oracle (`oracle_dev_pct`).
+
+    `surfaces`: list (object->image) of {radius, thickness, material, stop?} — exactly
+    one surface must set stop:true (the aperture stop). `epd` (entrance-pupil dia)
+    OR `fno`. `wavelengths_um` (first is primary, default [0.5876]). `field_angles_deg`
+    (default [0.0]). `image_solve` solves the last gap to paraxial focus.
+
+    Returns the degradation dict, or {ok, backend:'optiland', optiland_version,
+    efl_mm, bfl_mm, fno, n_surfaces, rms_spot_um:[per field], oracle_efl_mm,
+    oracle_dev_pct}."""
+    params: dict = {"surfaces": surfaces, "image_solve": image_solve,
+                    "want_spot": want_spot}
+    for k, v in (("epd", epd), ("fno", fno), ("wavelengths_um", wavelengths_um),
+                 ("field_angles_deg", field_angles_deg)):
+        if v is not None:
+            params[k] = v
+    return _call("optics_lens_design", **params)
+
+
+@mcp.tool()
+def optics_lens_optimize(
+    surfaces: list,
+    variables: list,
+    targets: list,
+    epd: float | None = None,
+    wavelengths_um: list | None = None,
+    field_angles_deg: list | None = None,
+    maxiter: int = 200,
+) -> dict:
+    """Optimize a SEQUENTIAL optical system with optiland's optimizer (MIT,
+    in-process) — the capability rayoptics lacks. Requires the `optics` extra;
+    degrades to {ok:false, reason, install} otherwise.
+
+    `surfaces`: as in optics_lens_design. `variables`: [{type:'radius'|'thickness',
+    surface:<1-based int>}] — the degrees of freedom. `targets`: [{operand:'f2'|
+    'rms_spot_size'|…, target, weight?, surface?}] — the merit function. `maxiter`
+    caps iterations.
+
+    Returns the degradation dict, or {ok, backend:'optiland', converged, n_fev,
+    before:{efl_mm,rss}, after:{efl_mm,rss}, surfaces:[optimized]}."""
+    params: dict = {"surfaces": surfaces, "variables": variables, "targets": targets,
+                    "maxiter": maxiter}
+    for k, v in (("epd", epd), ("wavelengths_um", wavelengths_um),
+                 ("field_angles_deg", field_angles_deg)):
+        if v is not None:
+            params[k] = v
+    return _call("optics_lens_optimize", **params)
+
+
+@mcp.tool()
+def optics_solid_trace(
+    rays: list,
+    model: str | None = None,
+    stl_path: str | None = None,
+    glass: str | None = None,
+    n_refractive: float | None = None,
+    wavelength_um: float = 0.55,
+    solid: dict | None = None,
+) -> dict:
+    """NON-SEQUENTIAL ray trace through a real solid (STL mesh) with a refractive
+    index — the lane for molded optical parts (light-pipes, prisms, lenses). Backed
+    by KrakenOS, which is GPL-3.0 and is run ONLY in a subprocess (the parent never
+    imports it — same arm's-length isolation as the GPL Elmer/OpenFOAM binaries).
+    Requires the `optics_gpl` extra; degrades to {ok:false, reason, install} otherwise.
+
+    Geometry: pass a `model` handle (exported to STL here) OR a ready `stl_path`.
+    Material: `glass` (KrakenOS catalog name, e.g. 'BK7') or `n_refractive` (constant
+    index). `rays`: [{origin:[x,y,z], dir:[l,m,n]}]; each ray's turn_deg is its
+    input->exit bend (~90 for a TIR corner prism, ~0 for a straight pass). `solid`:
+    {diameter, thickness, axis_move} placement. `wavelength_um` default 0.55.
+
+    Returns the degradation dict, or {ok, backend:'KrakenOS (subprocess-isolated,
+    GPL-3.0)', n_launched, n_valid, valid_fraction, mean_turn_deg, max_turn_deg,
+    rays:[{valid, exit_dir, turn_deg}], stl_path}."""
+    params: dict = {"rays": rays, "wavelength_um": wavelength_um}
+    for k, v in (("model", model), ("stl_path", stl_path), ("glass", glass),
+                 ("n_refractive", n_refractive), ("solid", solid)):
+        if v is not None:
+            params[k] = v
+    return _call("optics_solid_trace", **params)
+
+
+@mcp.tool()
 def optics_moldability_check(
     model: str,
     pull_axis: str = "+z",

@@ -9748,6 +9748,209 @@ def _h_optics_raytrace(p):
     }
 
 
+@handler("optics_lens_design")
+def _h_optics_lens_design(p):
+    """First-order + spot analysis of a SEQUENTIAL optical system with optiland
+    (MIT, in-process) — degrades to {ok:false, reason, install} when the optics
+    extra is absent, never raising. optiland is gated against the analytic
+    thick-lens oracle for single lenses (`oracle_dev_pct`).
+
+    Args: surfaces ([{radius, thickness, material, stop?}], object->image; exactly
+    one surface sets stop:true), epd OR fno, wavelengths_um (first is primary,
+    default [0.5876]), field_angles_deg (default [0.0]), image_solve (default true).
+
+    Returns the degradation dict, or {ok, backend:'optiland', optiland_version,
+    efl_mm, bfl_mm, fno, n_surfaces, rms_spot_um:[per field], oracle_efl_mm,
+    oracle_dev_pct}."""
+    info = _require_solver("optiland")
+    if not info["ok"]:
+        return info
+    from driftpin.analysis import optics_design
+    system = {k: p[k] for k in (
+        "surfaces", "epd", "fno", "wavelengths_um", "field_angles_deg", "image_solve")
+        if k in p}
+    return optics_design.analyze(system, want_spot=bool(p.get("want_spot", True)))
+
+
+@handler("optics_lens_optimize")
+def _h_optics_lens_optimize(p):
+    """Optimize a SEQUENTIAL optical system with optiland's optimizer (MIT,
+    in-process) — the capability that makes optiland the chosen sequential engine
+    (rayoptics has none). Degrades to {ok:false, reason, install} when the optics
+    extra is absent.
+
+    Args: surfaces (as in optics_lens_design), variables ([{type:'radius'|
+    'thickness', surface:<1-based int>}]), targets ([{operand:'f2'|
+    'rms_spot_size'|…, target, weight?, surface?}]), maxiter (default 200), plus
+    the same epd/wavelengths_um/field_angles_deg knobs.
+
+    Returns the degradation dict, or {ok, backend:'optiland', converged, n_fev,
+    before:{efl_mm,rss}, after:{efl_mm,rss}, surfaces:[optimized]}."""
+    info = _require_solver("optiland")
+    if not info["ok"]:
+        return info
+    from driftpin.analysis import optics_design
+    system = {k: p[k] for k in (
+        "surfaces", "epd", "fno", "wavelengths_um", "field_angles_deg", "image_solve")
+        if k in p}
+    variables = p.get("variables") or []
+    targets = p.get("targets") or []
+    if not variables or not targets:
+        raise ValueError("optics_lens_optimize needs non-empty `variables` and `targets`")
+    return optics_design.optimize(system, variables, targets,
+                                  maxiter=int(p.get("maxiter", 200)))
+
+
+_OPTICS_GPL_PY = None  # cache: None=unprobed, False=absent, str=python exe that imports KrakenOS
+
+
+def _optics_gpl_python():
+    """The Python interpreter to run the GPL non-sequential engine under — the one
+    whose environment can import KrakenOS, NOT this worker's interpreter (which is
+    freecadcmd). Resolution order: DRIFTPIN_OPTICS_GPL_PYTHON override → the venv that
+    owns KrakenOS, derived from importlib find_spec's origin (find_spec does NOT import
+    the module, so the copyleft boundary holds) → a repo-local .venv → sys.executable.
+    Each candidate is verified by probing `find_spec('KrakenOS')` in a child, so a hit
+    is guaranteed runnable. Cached. Returns the exe path, or None when nothing works."""
+    global _OPTICS_GPL_PY
+    if _OPTICS_GPL_PY is not None:
+        return _OPTICS_GPL_PY or None
+    import importlib.util
+    import subprocess
+
+    candidates = []
+    if env := os.environ.get("DRIFTPIN_OPTICS_GPL_PYTHON"):
+        candidates.append(env)
+    try:
+        spec = importlib.util.find_spec("KrakenOS")
+    except Exception:
+        spec = None
+    if spec and spec.origin:                          # ascend toward the venv root
+        d = os.path.dirname(spec.origin)
+        for _ in range(5):
+            d = os.path.dirname(d)
+            candidates += [os.path.join(d, "bin", "python3"),
+                           os.path.join(d, "bin", "python"),
+                           os.path.join(d, "Scripts", "python.exe")]
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates += [os.path.join(repo, ".venv", "bin", "python3"),
+                   os.path.join(repo, ".venv", "bin", "python"),
+                   os.path.join(repo, ".venv", "Scripts", "python.exe"),
+                   sys.executable]
+
+    seen = set()
+    probe = ("import importlib.util,sys;"
+             "sys.exit(0 if importlib.util.find_spec('KrakenOS') else 1)")
+    for c in candidates:
+        if not c or c in seen or not os.path.isfile(c):
+            continue
+        seen.add(c)
+        try:
+            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
+        except Exception:
+            continue
+        if r.returncode == 0:
+            _OPTICS_GPL_PY = c
+            return c
+    _OPTICS_GPL_PY = False
+    return None
+
+
+def _run_optics_gpl(problem, python_exe, timeout=120):
+    """Invoke the GPL-3.0 non-sequential engine (KrakenOS) OUT-OF-PROCESS via
+    driftpin/optics_gpl_runner.py (a standalone script that imports no driftpin code)
+    and return its JSON result. DriftPin never imports KrakenOS in-process; this
+    fork/exec + pipe-IPC keeps the copyleft boundary clean — the same isolation used
+    for the GPL Elmer/OpenFOAM binaries. Raises RuntimeError if the subprocess emits
+    no sentinel-delimited JSON."""
+    import json as _json
+    import subprocess
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "optics_gpl_runner.py")
+    proc = subprocess.run(
+        [python_exe, runner],
+        input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
+    _, _, rest = proc.stdout.partition("@@JSON@@")
+    body, _, _ = rest.partition("@@END@@")
+    if not body:
+        raise RuntimeError(
+            f"optics_gpl_runner produced no JSON (rc={proc.returncode}); "
+            f"stderr tail: {proc.stderr[-400:]}")
+    return _json.loads(body)
+
+
+@handler("optics_solid_trace")
+def _h_optics_solid_trace(p):
+    """NON-SEQUENTIAL ray trace through a real solid (STL mesh) with a refractive
+    index — the lane for molded optical parts (light-pipes, prisms, lenses). Backed
+    by KrakenOS, which is GPL-3.0 and therefore run ONLY in a subprocess via
+    optics_gpl_runner; degrades to {ok:false, reason, install} when the `optics_gpl`
+    extra is absent, never raising.
+
+    Geometry source: pass a `model` handle (exported to STL here) or a ready
+    `stl_path`. Material: `glass` (KrakenOS catalog name) or `n_refractive` (constant
+    index). Rays: `rays` ([{origin:[x,y,z], dir:[l,m,n]}]); turn_deg is each ray's
+    input->exit bend (~90 for a TIR corner prism, ~0 for a straight pass). Solid
+    placement knobs: solid:{diameter, thickness, axis_move}, wavelength_um.
+
+    Returns the degradation dict, or {ok, backend:'KrakenOS' (subprocess),
+    n_launched, n_valid, valid_fraction, mean_turn_deg, max_turn_deg, rays:[{valid,
+    exit_dir, turn_deg}], stl_path}."""
+    # Gate on a Python that can actually import KrakenOS (a .venv subprocess), NOT this
+    # freecadcmd worker — KrakenOS is GPL-3.0 and is only ever run out-of-process.
+    python_exe = _optics_gpl_python()
+    if python_exe is None:
+        from driftpin import solvers
+        info = solvers.find_solver("kraken")
+        return {"ok": False, "solver": "kraken", "reason": "solver not installed",
+                "install": info.get("install_hint",
+                                    "pip install 'driftpin[optics_gpl]'  (KrakenOS, GPL-3.0)")}
+
+    stl_path = p.get("stl_path")
+    tmp = None
+    if not stl_path:
+        handle = p.get("model") or p.get("handle")
+        if not handle:
+            raise ValueError("optics_solid_trace needs a `model` handle or an `stl_path`")
+        _, shape = _shape_of(handle)
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
+        tmp.close()
+        shape.exportStl(tmp.name)               # real CAD geometry -> mesh the GPL engine reads
+        stl_path = tmp.name
+
+    rays = p.get("rays")
+    if not rays:
+        raise ValueError("optics_solid_trace needs a non-empty `rays` list "
+                         "([{origin:[x,y,z], dir:[l,m,n]}])")
+    problem = {
+        "problem": "solid_trace",
+        "stl_path": stl_path,
+        "wavelength_um": float(p.get("wavelength_um", 0.55)),
+        "rays": rays,
+        "solid": p.get("solid") or {},
+    }
+    if p.get("glass") is not None:
+        problem["glass"] = p["glass"]
+    if p.get("n_refractive") is not None:
+        problem["n_refractive"] = float(p["n_refractive"])
+    if "obj_thickness" in p:
+        problem["obj_thickness"] = float(p["obj_thickness"])
+    if "ima_diameter" in p:
+        problem["ima_diameter"] = float(p["ima_diameter"])
+
+    try:
+        result = _run_optics_gpl(problem, python_exe, timeout=int(p.get("timeout", 120)))
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+    result["backend"] = "KrakenOS (subprocess-isolated, GPL-3.0)"
+    result["stl_path"] = (None if tmp is not None else stl_path)
+    return result
+
+
 # --- multibody dynamics / kinematics (family 8) -------------------------------
 # Two surfaces: mechanism_kinematics is the closed-form, solver-free gate (Grübler
 # DOF, Grashof, slider-crank stroke = 2R, four-bar sweep) in analysis/kinematics.py;

@@ -150,6 +150,33 @@ pip install matplotlib meshio        # frame rendering + reading OpenFOAM's VTK 
 All of them also use FreeCAD for the geometry/meshing, so run each with the same
 interpreter that launches the worker — e.g. `.venv/bin/python3 scratch/cfd_field_video.py`.
 
+### Optics
+
+Two optics engines sit behind the MCP surface, in two licensing/runtime lanes:
+
+| Lane | Tools | Engine | Install |
+|---|---|---|---|
+| Sequential — lens design + optimization | `optics_lens_design`, `optics_lens_optimize`, `optics_raytrace` | **optiland** / rayoptics (MIT/BSD, in-process) | `pip install 'driftpin[optics]'` — or `scripts/install-solvers.sh optics` |
+| Non-sequential — tracing through STL solids | `optics_solid_trace` | **KrakenOS** (GPL-3.0, **out-of-process only**) | `pip install 'driftpin[optics_gpl]'` — or `scripts/install-solvers.sh optics_gpl` |
+
+The sequential engines import in-process, so install the `optics` extra into the **same
+interpreter that launches the worker** (like the other wheels). The non-sequential engine
+is GPL-3.0 and is therefore **never imported by DriftPin** — it runs in a separate
+subprocess ([`driftpin/optics_gpl_runner.py`](driftpin/optics_gpl_runner.py)), the same
+arm's-length boundary used for the GPL Elmer/OpenFOAM binaries. The worker locates a
+Python that can import KrakenOS automatically (from where the wheel is installed); override
+with `DRIFTPIN_OPTICS_GPL_PYTHON=/path/to/python`. Because of that isolation the GPL extra
+is **opt-in**: the no-argument `install-solvers.sh` run installs only the permissive
+extras and prints how to add `optics_gpl`. Rendered examples for both lanes (lens layout,
+spot diagram, optimization, prism TIR, and a ball-lens spherical-aberration study) live in
+[`examples/optics_gallery/`](examples/optics_gallery/) — regenerate with
+`.venv/bin/python examples/optics_gallery.py` (and `…_3d.py`, `optics_ball_lens.py`), or
+bootstrap everything in one shot (installs both lanes, then renders every figure):
+
+```bash
+scripts/install-solvers.sh --optics-gallery
+```
+
 ## Architecture sketch
 
 ```

@@ -68,7 +68,17 @@ topology = [
     "solidspy",             # 'topopt' is the registry's alternative
 ]
 optics = [
-    "rayoptics",            # 'optiland' is the registry's alternative
+    "rayoptics",            # sequential flat-interface trace (gated by analysis/optics)
+    "optiland",             # sequential lens design + optimization (MIT, in-process)
+]
+# Non-sequential STL solid tracing runs on KrakenOS, which is GPL-3.0. It is a
+# SEPARATE, opt-in extra because DriftPin invokes it only out-of-process (via
+# driftpin/optics_gpl_runner.py) to keep the copyleft boundary clean — installing it
+# does not link GPL code into DriftPin. setuptools<81 restores pkg_resources, which
+# KrakenOS imports.
+optics_gpl = [
+    "KrakenOS",
+    "setuptools<81",
 ]
 cfd = []                    # OpenFOAM / SU2 ship via apt/conda — see scripts/install-solvers.sh
 

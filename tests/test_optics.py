@@ -17,6 +17,7 @@ Run:  python3 tests/test_optics.py          (oracle only on a stock interpreter)
 """
 import importlib.util
 import math
+import os
 import sys
 import time
 import traceback
@@ -35,6 +36,46 @@ def _has_rayoptics():
         return importlib.util.find_spec("rayoptics") is not None
     except (ImportError, ValueError):
         return False
+
+
+def _has(module):
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _write_prism_stl(path, L=20.0, W=20.0):
+    """A 45-45-90 right-angle prism (triangular extrusion) as ASCII STL — the same
+    geometry the optics benchmark used. A +Z ray enters a leg, hits the hypotenuse
+    at 45° (> the BK7 critical angle), TIRs, and exits +Y: a 90° corner turn."""
+    import numpy as np
+    A, B, C = (0.0, 0.0), (L, 0.0), (0.0, L)          # triangle in (y,z), right angle at origin
+    x0, x1 = -W / 2, W / 2
+    V = []
+
+    def v(x, y, z):
+        V.append((x, y, z)); return len(V) - 1
+    a0, b0, c0 = v(x0, *A), v(x0, *B), v(x0, *C)
+    a1, b1, c1 = v(x1, *A), v(x1, *B), v(x1, *C)
+    tris = [(a0, c0, b0), (a1, b1, c1),
+            (a0, c1, c0), (a0, a1, c1), (a0, b0, b1), (a0, b1, a1),
+            (b0, c0, c1), (b0, c1, b1)]
+
+    def normal(p, q, r):
+        n = np.cross(np.array(q) - np.array(p), np.array(r) - np.array(p))
+        nn = np.linalg.norm(n)
+        return n / nn if nn > 0 else n
+    with open(path, "w") as f:
+        f.write("solid prism\n")
+        for i, j, k in tris:
+            p, q, r = V[i], V[j], V[k]
+            n = normal(p, q, r)
+            f.write(f"facet normal {n[0]:.6e} {n[1]:.6e} {n[2]:.6e}\n outer loop\n")
+            for P in (p, q, r):
+                f.write(f"  vertex {P[0]:.6e} {P[1]:.6e} {P[2]:.6e}\n")
+            f.write(" endloop\nendfacet\n")
+        f.write("endsolid prism\n")
 
 
 # --- Snell (exact) ------------------------------------------------------------
@@ -197,6 +238,93 @@ def test_rayoptics_reproduces_snell():
         theta_ro = math.degrees(math.acos(min(1.0, abs(after[2] / float(np.linalg.norm(after))))))
         snell = optics.refract_angle(theta_i, AIR, PMMA)
         assert abs(theta_ro - snell) < 1e-3, (theta_i, theta_ro, snell)
+
+
+# --- sequential lens design / optimization (optiland, in-process) -------------
+
+def test_thick_lens_oracle():
+    # Pure analytic gate (no optiland): equiconvex BK7 singlet, R=±50, t=4.
+    from driftpin.analysis import optics_design as od
+    f = od.thick_lens_efl(1.5168, 50.0, -50.0, 4.0)
+    assert abs(f - 49.043) < 0.01, f
+
+
+def test_optiland_design_gate():
+    if not _has("optiland"):
+        return                                        # SKIP: optics extra absent
+    from driftpin.analysis import optics_design as od
+    system = {"surfaces": [
+        {"radius": 50.0, "thickness": 4.0, "material": "N-BK7", "stop": True},
+        {"radius": -50.0, "thickness": 45.0, "material": "air"}],
+        "epd": 10.0}
+    res = od.analyze(system)
+    assert res["ok"], res
+    assert abs(res["oracle_dev_pct"]) < 0.1, res       # optiland matches the lensmaker oracle
+    assert res["rms_spot_um"] and res["rms_spot_um"][0] > 0.0, res
+
+
+def test_optiland_optimize_gate():
+    if not _has("optiland"):
+        return                                        # SKIP
+    from driftpin.analysis import optics_design as od
+    system = {"surfaces": [
+        {"radius": 80.0, "thickness": 4.0, "material": "N-BK7", "stop": True},
+        {"radius": -80.0, "thickness": 96.0, "material": "air"}],
+        "epd": 10.0}
+    res = od.optimize(
+        system,
+        variables=[{"type": "radius", "surface": 1}, {"type": "radius", "surface": 2}],
+        targets=[{"operand": "f2", "target": 100.0}])
+    assert res["ok"] and res["converged"], res
+    assert abs(res["after"]["efl_mm"] - 100.0) < 1e-3, res   # hit the EFL target
+
+
+# --- non-sequential STL solid trace (KrakenOS, subprocess-isolated, GPL-3.0) ---
+
+def test_kraken_runner_subprocess_clean():
+    """The GPL engine answers a ping over the subprocess + sentinel-JSON contract,
+    and this test process never imports KrakenOS."""
+    if not _has("KrakenOS"):
+        return                                        # SKIP: optics_gpl extra absent
+    import json as _json
+    import subprocess
+    runner = str(Path(__file__).resolve().parent.parent
+                 / "driftpin" / "optics_gpl_runner.py")
+    proc = subprocess.run([sys.executable, runner],
+                          input=_json.dumps({"problem": "ping"}),
+                          capture_output=True, text=True, timeout=60)
+    body = proc.stdout.partition("@@JSON@@")[2].partition("@@END@@")[0]
+    res = _json.loads(body)
+    assert res.get("ok") and res.get("engine") == "KrakenOS", res
+    assert "KrakenOS" not in sys.modules                # parent stayed clean
+
+
+def test_kraken_prism_tir_gate():
+    """A +Z bundle through a 45° BK7 prism STL totally-internally-reflects and exits
+    +Y — a 90° corner turn — traced non-sequentially through real mesh geometry."""
+    if not _has("KrakenOS"):
+        return                                        # SKIP
+    import json as _json
+    import subprocess
+    import tempfile
+    stl = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
+    stl.close()
+    _write_prism_stl(stl.name)
+    problem = {
+        "problem": "solid_trace", "stl_path": stl.name, "glass": "BK7",
+        "wavelength_um": 0.55, "solid": {"diameter": 40, "thickness": 30, "axis_move": 1},
+        "rays": [{"origin": [dx, 7.0 + dy, -2.0], "dir": [0, 0, 1.0]}
+                 for dx in (-4, 0, 4) for dy in (-3, 0, 3)]}
+    runner = str(Path(__file__).resolve().parent.parent
+                 / "driftpin" / "optics_gpl_runner.py")
+    proc = subprocess.run([sys.executable, runner], input=_json.dumps(problem),
+                          capture_output=True, text=True, timeout=120)
+    body = proc.stdout.partition("@@JSON@@")[2].partition("@@END@@")[0]
+    os.unlink(stl.name)
+    res = _json.loads(body)
+    assert res.get("ok"), res
+    assert res["n_valid"] == res["n_launched"] == 9, res
+    assert abs(res["mean_turn_deg"] - 90.0) < 0.5, res  # TIR corner-turn oracle
 
 
 # --- runner (mirrors tests/test_cfd.py) ---------------------------------------
