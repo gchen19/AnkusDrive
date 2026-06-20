@@ -150,6 +150,37 @@ _SOLVERS: dict = {
         "install_hint": "pip install 'driftpin[optics_gpl]'  (pulls KrakenOS, GPL-3.0; "
                         "run out-of-process only), or: pip install KrakenOS 'setuptools<81'",
     },
+    # --- granular DEM: YADE (GPL-3.0, source-built, NOT a pip wheel) ----------
+    # YADE is GPL-3.0 and ships no PyPI/conda-noble wheel, so it is source-built
+    # (scripts/install-solvers.sh dem_gpl) and driven ONLY out-of-process: the
+    # worker shells out to the `yade` EXECUTABLE running driftpin/dem_gpl_runner.py
+    # (sentinel-JSON over stdin/stdout). DriftPin never imports YADE in-process, so
+    # the copyleft does not link into the permissive code — the same arm's-length
+    # isolation used for the GPL Elmer/OpenFOAM binaries and the KrakenOS optics
+    # runner. Resolved as a BINARY (DRIFTPIN_YADE_PATH env → PATH → the documented
+    # ~/opt/yade/bin source-build prefix); the worker also honors a bare
+    # DRIFTPIN_YADE override.
+    "yade": {
+        "kind": "binary",
+        "family": "dem",
+        "extra": "dem_gpl",
+        # GPL-3.0: never imported in-process; run via dem_gpl_runner subprocess.
+        "license": "GPL-3.0",
+        "isolation": "subprocess",
+        "binaries": ("yade", "yade-batch"),
+        "dirs": {
+            "Linux":   (os.path.expanduser("~/opt/yade/bin"),
+                        "/usr/bin", "/usr/local/bin", "/opt/yade/bin"),
+            "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin"),
+            "Windows": (r"C:\Program Files\yade\bin",),
+        },
+        "install_hint": "source-build YADE (GPL-3.0; not on PyPI/conda-noble): "
+                        "scripts/install-solvers.sh dem_gpl  (cmake build into "
+                        "~/opt/yade), or your distro's 'yade'/'yade-dem' package; "
+                        "then ensure `yade` is on PATH or set DRIFTPIN_YADE / "
+                        "DRIFTPIN_YADE_PATH. Driven out-of-process only via "
+                        "driftpin/dem_gpl_runner.py.",
+    },
     # --- full-wave EM: openEMS FDTD (GPL-3.0, source-built, NOT a pip wheel) ---
     # Like KrakenOS, openEMS is GPL-3.0 and is therefore invoked ONLY out-of-process
     # via driftpin/em_fullwave_gpl_runner.py — DriftPin never imports openEMS/CSXCAD

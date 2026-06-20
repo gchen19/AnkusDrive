@@ -181,6 +181,39 @@ build_optics_gallery() {
   ok "optics gallery written to $REPO_ROOT/examples/optics_gallery/  ($(ls "$REPO_ROOT"/examples/optics_gallery/*.png 2>/dev/null | wc -l | tr -d ' ') PNGs)"
 }
 
+# --- DEM source-build: YADE (GPL-3.0, not a pip wheel) -------------------------
+# YADE ships no PyPI/conda-noble wheel, so the `dem_gpl` extra is a SOURCE BUILD,
+# not a pip install. DriftPin drives it only out-of-process via the `yade`
+# executable running driftpin/dem_gpl_runner.py, so its GPL-3.0 copyleft does not
+# reach into DriftPin's own (permissive) code. Installs into ~/opt/yade by default.
+# RESOURCE NOTE: caps the build at -j8 so it never starves a co-resident CI runner.
+build_dem_gpl() {
+  warn "'dem_gpl' source-builds YADE (GPL-3.0). DriftPin runs it only out-of-process"
+  warn "(driftpin/dem_gpl_runner.py via the \`yade\` executable), keeping its own license clean."
+  local prefix="${YADE_PREFIX:-$HOME/opt/yade}"
+  local src="${YADE_SRC:-$HOME/yade-trunk}"
+  local jobs="${YADE_JOBS:-8}"   # cap parallelism — do NOT use -j$(nproc) on a CI host
+  log "build deps (apt) — boost, gmp/mpfr, cgal, eigen, vtk, gts, metis, ccache"
+  sudo apt-get install -y cmake git build-essential ccache libboost-all-dev \
+      libgmp-dev libmpfr-dev libcgal-dev libeigen3-dev python3-dev python3-numpy \
+      python3-mpmath libvtk9-dev libgts-dev libmetis-dev libopenblas-dev \
+      libsuitesparse-dev zlib1g-dev || die "apt build-deps failed"
+  if [ ! -d "$src/.git" ]; then
+    log "clone YADE (gitlab.com/yade-dev/trunk) -> $src"
+    git clone --depth 1 https://gitlab.com/yade-dev/trunk.git "$src" || die "git clone failed"
+  fi
+  log "cmake configure (prefix=$prefix, GUI off, VTK on, ccache, PYTHON_VERSION=3)"
+  cmake -B "$src/build" -S "$src" \
+      -DCMAKE_INSTALL_PREFIX="$prefix" -DENABLE_GUI=OFF -DENABLE_VTK=ON \
+      -DENABLE_GTS=ON -DENABLE_MPI=OFF -DENABLE_LBMFLOW=OFF \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_BUILD_TYPE=Release \
+      -DPYTHON_VERSION=3 || die "cmake configure failed"
+  log "cmake build -j$jobs  (capped — keep headroom for any co-resident runner)"
+  cmake --build "$src/build" -j"$jobs" || die "cmake build failed"
+  cmake --build "$src/build" --target install || die "cmake install failed"
+  ok "YADE installed to $prefix — verify: $prefix/bin/yade --version  (or set DRIFTPIN_YADE)"
+}
+
 # --- list / status (delegates to driftpin.solvers — same probe as the tool) ----
 do_list() {
   printf 'P2 solver discovery (what resolves in %s right now):\n\n' "$PY"
@@ -212,6 +245,7 @@ main() {
       --optics-gallery) build_optics_gallery; exit 0 ;;
       -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
       mbd|topology|optics|optics_gpl) extras+=("$1"); do_all=0 ;;
+      dem_gpl|dem|yade)  build_dem_gpl; exit 0 ;;   # GPL-3.0 source build, never default
       em_gpl|openems)    build_openems; exit 0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
       thermal|elmer)     systems+=("thermal"); do_all=0 ;;
@@ -227,6 +261,8 @@ main() {
     echo
     warn "GPL opt-in NOT installed by default: the non-sequential optics engine (KrakenOS)"
     warn "is GPL-3.0 — install it explicitly with: scripts/install-solvers.sh optics_gpl"
+    warn "Granular DEM (YADE, GPL-3.0) is also opt-in and SOURCE-BUILT — install with:"
+    warn "  scripts/install-solvers.sh dem_gpl   (cmake build into ~/opt/yade, -j8)"
     warn "Full-wave FDTD EM (openEMS) is GPL-3.0 AND source-built (not a pip wheel) —"
     warn "build it explicitly with: scripts/install-solvers.sh em_gpl"
   else

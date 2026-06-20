@@ -10320,6 +10320,244 @@ def _h_em_fullwave_submit(p):
                        meta={"problem": kind})
 
 
+# --- discrete-element granular mechanics (YADE, GPL-3.0, subprocess) -----------
+# Two surfaces, mirroring the optics lane above: the closed-form granular oracles
+# (RCP packing, Beverloo discharge, angle of repose) live in analysis/granular.py
+# and gate the solver; dem_pack_submit / dem_flow_submit run the REAL DEM solve
+# off the MCP channel via jobs.py. YADE is GPL-3.0 and is therefore driven ONLY
+# out-of-process — the worker shells out to the `yade` executable running
+# driftpin/dem_gpl_runner.py, exchanging sentinel-JSON over stdin/stdout, exactly
+# the arm's-length isolation used for KrakenOS/openEMS. DriftPin never imports
+# YADE in-process, so the copyleft does not link into the permissive code.
+
+_DEM_YADE = None  # cache: None=unprobed, False=absent, str=yade exe that runs DEM
+
+
+def _yade_exec():
+    """The ``yade`` executable to drive the GPL DEM engine, NOT this worker's
+    interpreter (freecadcmd, which has no DEM). Resolution order:
+    DRIFTPIN_YADE override → DRIFTPIN_YADE_PATH (the solver-registry env) →
+    $HOME/opt/yade/bin/yade (the documented source-build prefix) → PATH/common
+    dirs via solvers.find_solver('yade'). Each candidate is verified by a tiny
+    ``yade`` ping probe (run the runner with {"problem":"ping"} and check the
+    sentinel), so a hit is guaranteed to actually run a DEM step. Cached. Returns
+    the exe path, or None when nothing works."""
+    global _DEM_YADE
+    if _DEM_YADE is not None:
+        return _DEM_YADE or None
+    import subprocess
+
+    candidates = []
+    for env in ("DRIFTPIN_YADE", "DRIFTPIN_YADE_PATH"):
+        if v := os.environ.get(env):
+            candidates.append(v)
+    candidates.append(os.path.expanduser("~/opt/yade/bin/yade"))
+    from driftpin import solvers
+    info = solvers.find_solver("yade")
+    if info.get("path"):
+        candidates.append(info["path"])
+
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "dem_gpl_runner.py")
+    seen = set()
+    for c in candidates:
+        if not c or c in seen or not os.path.isfile(c):
+            continue
+        seen.add(c)
+        try:  # YADE runs the script then exits (-x), reads {"problem":"ping"} on stdin
+            r = subprocess.run([c, "-x", "-n", runner], input='{"problem":"ping"}',
+                               capture_output=True, text=True, timeout=90)
+        except Exception:
+            continue
+        if "@@JSON@@" in r.stdout and '"engine": "YADE"' in r.stdout:
+            _DEM_YADE = c
+            return c
+    _DEM_YADE = False
+    return None
+
+
+def _run_dem_gpl(problem, yade_exe, timeout=600):
+    """Invoke the GPL-3.0 DEM engine (YADE) OUT-OF-PROCESS via
+    driftpin/dem_gpl_runner.py (a standalone script that imports no driftpin code)
+    and return its JSON result. DriftPin never imports YADE in-process; this
+    fork/exec + pipe-IPC keeps the copyleft boundary clean — the same isolation
+    used for the GPL Elmer/OpenFOAM binaries and the KrakenOS optics runner.
+    Raises RuntimeError if the subprocess emits no sentinel-delimited JSON."""
+    import json as _json
+    import subprocess
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "dem_gpl_runner.py")
+    proc = subprocess.run(
+        [yade_exe, "-x", "-n", runner],
+        input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
+    _, _, rest = proc.stdout.partition("@@JSON@@")
+    body, _, _ = rest.partition("@@END@@")
+    if not body:
+        raise RuntimeError(
+            f"dem_gpl_runner produced no JSON (rc={proc.returncode}); "
+            f"stderr tail: {proc.stderr[-400:]}")
+    return _json.loads(body)
+
+
+def _dem_unavailable():
+    """The structured miss dict when no usable `yade` resolves — the graceful
+    degradation a DEM *_submit returns verbatim, never raising."""
+    from driftpin import solvers
+    info = solvers.find_solver("yade")
+    return {"ok": False, "solver": "yade", "reason": "solver not installed",
+            "install": info.get("install_hint",
+                                "source-build YADE (GPL-3.0): scripts/install-solvers.sh "
+                                "dem_gpl, then set DRIFTPIN_YADE")}
+
+
+@handler("dem_pack_submit")
+def _h_dem_pack_submit(p):
+    """Pour N monodisperse spheres into a box and settle them under gravity with
+    the real YADE DEM engine, then measure the random close-packing fraction φ of
+    the settled bed — the granular twin of analysis.granular.packing_fraction
+    (RCP band 0.60–0.66). YADE is GPL-3.0 and is run ONLY in a subprocess via
+    dem_gpl_runner; degrades to {ok:false, reason, install} when no `yade`
+    resolves, never raising. Runs OFF the MCP channel via jobs.py (a settle is
+    multi-second), so it never blocks the worker.
+
+    Knobs: n_spheres, radius_m, box_m([Lx,Ly]), friction_deg, young_pa, density,
+    steps. Returns {job_id, status, cache_hit} (poll job_status / job_result);
+    the job result is the oracle band PLUS the measured {packing_fraction,
+    n_settled, settled_height_m, mean_coordination, positions:[[x,y,z,r],...]}."""
+    from driftpin import jobs
+    from driftpin.analysis import granular
+
+    yade_exe = _yade_exec()
+    oracle = granular.packing_fraction("random_close")
+    if yade_exe is None:
+        return {**_dem_unavailable(), "oracle": oracle}
+
+    problem = {
+        "problem": "pack",
+        "n_spheres": int(p.get("n_spheres", 800)),
+        "radius_m": float(p.get("radius_m", 0.004)),
+        "box_m": list(p.get("box_m", [0.06, 0.06])),
+        "friction_deg": float(p.get("friction_deg", 26.0)),
+        "young_pa": float(p.get("young_pa", 1e7)),
+        "density": float(p.get("density", 2600.0)),
+        "steps": int(p.get("steps", 30000)),
+    }
+    timeout = int(p.get("timeout", 600))
+    key = jobs.content_key("dem_pack", problem)
+
+    def _work():
+        res = _run_dem_gpl(problem, yade_exe, timeout=timeout)
+        res["oracle"] = oracle
+        if res.get("ok") and res.get("packing_fraction") is not None:
+            lo, hi = oracle["band"]
+            res["in_band"] = lo <= res["packing_fraction"] <= hi
+            res["backend"] = "YADE (subprocess-isolated, GPL-3.0)"
+        return res
+
+    out = jobs.submit("dem_pack", _work, key=key,
+                      meta={"n_spheres": problem["n_spheres"], "kind": "pack"})
+    out["oracle"] = oracle
+    return out
+
+
+@handler("dem_flow_submit")
+def _h_dem_flow_submit(p):
+    """Discharge spheres from a flat-bottomed hopper box through a central orifice
+    with the real YADE DEM engine and measure the steady mass-flow rate — the
+    granular twin of analysis.granular.beverloo_discharge (flow ∝ outlet^2.5). Run
+    two outlet sizes and feed the pair to granular.beverloo_exponent to check the
+    Beverloo 2.5 exponent (vs the Torricelli 2.0 of a draining fluid). YADE is
+    GPL-3.0, run ONLY in a subprocess via dem_gpl_runner; degrades cleanly when no
+    `yade` resolves. Runs OFF the MCP channel via jobs.py.
+
+    Knobs: n_spheres, radius_m, box_m([Lx,Ly,Lz]), outlet_m (orifice diameter),
+    friction_deg, young_pa, density, settle_steps, flow_steps. Returns {job_id,
+    status, cache_hit}; the job result carries the Beverloo oracle PLUS the
+    measured {mass_flow_kg_s, n_discharged, discharge_time_s, positions:[...]}."""
+    from driftpin import jobs
+    from driftpin.analysis import granular
+
+    yade_exe = _yade_exec()
+    outlet = float(p.get("outlet_m", 0.03))
+    radius = float(p.get("radius_m", 0.003))
+    oracle = granular.beverloo_discharge(outlet, 2 * radius,
+                                         bulk_density_kg_m3=float(p.get("density", 2600.0)) * 0.6)
+    if yade_exe is None:
+        return {**_dem_unavailable(), "oracle": oracle}
+
+    problem = {
+        "problem": "flow",
+        "n_spheres": int(p.get("n_spheres", 1500)),
+        "radius_m": radius,
+        "box_m": list(p.get("box_m", [0.10, 0.10, 0.20])),
+        "outlet_m": outlet,
+        "friction_deg": float(p.get("friction_deg", 26.0)),
+        "young_pa": float(p.get("young_pa", 1e7)),
+        "density": float(p.get("density", 2600.0)),
+        "settle_steps": int(p.get("settle_steps", 20000)),
+        "flow_steps": int(p.get("flow_steps", 60000)),
+    }
+    timeout = int(p.get("timeout", 900))
+    key = jobs.content_key("dem_flow", problem)
+
+    def _work():
+        res = _run_dem_gpl(problem, yade_exe, timeout=timeout)
+        res["oracle"] = oracle
+        if res.get("ok"):
+            res["backend"] = "YADE (subprocess-isolated, GPL-3.0)"
+        return res
+
+    out = jobs.submit("dem_flow", _work, key=key,
+                      meta={"outlet_m": outlet, "kind": "flow"})
+    out["oracle"] = oracle
+    return out
+
+
+@handler("granular_oracle")
+def _h_granular_oracle(p):
+    """Closed-form granular/powder oracles — exact-band correlations, no external
+    solver (the FreeCAD-free analysis.granular twins the YADE DEM solve is gated
+    against). Dispatches on `problem`:
+      'packing'  (regime[/coordination]) -> RCP/RLP/FCC φ + band 0.60–0.66
+      'beverloo' (outlet_m, particle_d_m[, bulk_density_kg_m3|material]) -> W ∝ D^2.5
+      'beverloo_exponent' (two (outlet,flow) points) -> log-log slope, in_band(2.2–2.8)
+      'repose'   (friction_coeff[, saturation]) -> θ ≈ atan(μ) + ±25% band
+      'repose_monotone' (two-μ repose pair) -> steeper-with-friction gate.
+    See driftpin.analysis.granular."""
+    from driftpin.analysis import granular
+    kind = p.get("problem", "packing")
+    if kind == "packing":
+        return granular.packing_fraction(
+            regime=p.get("regime", "random_close"),
+            coordination=p.get("coordination"))
+    if kind == "beverloo":
+        return granular.beverloo_discharge(
+            outlet_m=p["outlet_m"], particle_d_m=p["particle_d_m"],
+            bulk_density_kg_m3=p.get("bulk_density_kg_m3"),
+            material=p.get("material"),
+            discharge_coeff=float(p.get("discharge_coeff", 0.58)),
+            shape_factor=float(p.get("shape_factor", 1.4)),
+            g_m_s2=float(p.get("g_m_s2", 9.81)))
+    if kind == "beverloo_exponent":
+        return granular.beverloo_exponent(
+            outlet1_m=p["outlet1_m"], flow1_kg_s=p["flow1_kg_s"],
+            outlet2_m=p["outlet2_m"], flow2_kg_s=p["flow2_kg_s"],
+            particle_d_m=float(p.get("particle_d_m", 0.0)),
+            shape_factor=float(p.get("shape_factor", 1.4)))
+    if kind == "repose":
+        return granular.angle_of_repose(
+            friction_coeff=p["friction_coeff"],
+            saturation=float(p.get("saturation", 1.0)))
+    if kind == "repose_monotone":
+        return granular.repose_increases_with_friction(
+            mu_low=p["mu_low"], repose_low_deg=p["repose_low_deg"],
+            mu_high=p["mu_high"], repose_high_deg=p["repose_high_deg"])
+    raise ValueError(
+        f"unknown granular problem {kind!r}; use 'packing', 'beverloo', "
+        "'beverloo_exponent', 'repose', or 'repose_monotone'")
+
+
+
 # --- multibody dynamics / kinematics (family 8) -------------------------------
 # Two surfaces: mechanism_kinematics is the closed-form, solver-free gate (Grübler
 # DOF, Grashof, slider-crank stroke = 2R, four-bar sweep) in analysis/kinematics.py;

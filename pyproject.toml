@@ -94,6 +94,14 @@ em_gpl = [
     # scripts/install-solvers.sh em_gpl and update_openEMS.sh --python.
 ]
 cfd = []                    # OpenFOAM / SU2 ship via apt/conda — see scripts/install-solvers.sh
+# Granular / powder discrete-element mechanics runs on YADE, which is GPL-3.0 and
+# ships no PyPI/conda-noble wheel — it is SOURCE-BUILT (scripts/install-solvers.sh
+# dem_gpl, into ~/opt/yade) and driven ONLY out-of-process via the `yade` executable
+# running driftpin/dem_gpl_runner.py, so installing it does not link GPL code into
+# DriftPin. There is no pip package to pull, so this opt-in extra is intentionally
+# empty (the marker exists so `driftpin[dem_gpl]` resolves and the registry can name
+# the extra); the build itself is the install step, documented in install-solvers.sh.
+dem_gpl = []                # YADE (GPL-3.0) is source-built — see scripts/install-solvers.sh
 
 [project.scripts]
 driftpin = "driftpin.cli:main"

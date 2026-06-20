@@ -4416,6 +4416,137 @@ def optics_solid_trace(
     return _call("optics_solid_trace", **params)
 
 
+# --- granular / powder discrete-element mechanics (YADE DEM, GPL-3.0) ----------
+# The closed-form oracle (granular_screen) gates the solver; dem_pack_submit /
+# dem_flow_submit run the REAL YADE DEM solve off the MCP channel (background
+# jobs.py jobs — poll with job_status / job_result). YADE is GPL-3.0 and is run
+# ONLY out-of-process via the `yade` executable, so its copyleft never reaches
+# DriftPin's permissive code; absent YADE, the *_submit tools degrade to
+# {ok:false, reason, install, oracle} (the oracle band still comes back).
+
+@mcp.tool()
+def granular_screen(
+    problem: str = "packing",
+    regime: str = "random_close",
+    coordination: float | None = None,
+    outlet_m: float | None = None,
+    particle_d_m: float | None = None,
+    bulk_density_kg_m3: float | None = None,
+    material: str | None = None,
+    friction_coeff: float | None = None,
+    saturation: float = 1.0,
+    outlet1_m: float | None = None,
+    flow1_kg_s: float | None = None,
+    outlet2_m: float | None = None,
+    flow2_kg_s: float | None = None,
+    mu_low: float | None = None,
+    repose_low_deg: float | None = None,
+    mu_high: float | None = None,
+    repose_high_deg: float | None = None,
+) -> dict:
+    """Closed-form granular/powder-mechanics oracles — banded correlations, NO
+    external solver (the FreeCAD-free analytic twins the YADE DEM solve is gated
+    against). These are correlations, not exact theory, so each returns
+    fidelity='correlation' + an honest [low, high] band; the band IS the oracle.
+    Dispatch on `problem`:
+
+      'packing' (regime='random_close'|'random_loose'|'fcc'[, coordination]) —
+          monodisperse sphere solid-volume fraction φ. RCP ≈ 0.637 (band
+          0.60–0.66), the random pile a real settle must hit, well below the
+          crystalline FCC/HCP 0.7405.
+      'beverloo' (outlet_m, particle_d_m[, bulk_density_kg_m3 | material]) —
+          flat-bottom hopper discharge W = C·ρ·√g·(D−k·d)^2.5 [kg/s]; flow ∝
+          outlet to the 2.5 power, independent of fill height.
+      'beverloo_exponent' (outlet1_m, flow1_kg_s, outlet2_m, flow2_kg_s
+          [, particle_d_m]) — recover the log-log flow exponent from two
+          (outlet, flow) points; granular 2.5 (band 2.2–2.8) vs Torricelli 2.0.
+      'repose' (friction_coeff[, saturation]) — poured-pile repose angle
+          θ ≈ atan(μ) + ±25% band.
+      'repose_monotone' (mu_low, repose_low_deg, mu_high, repose_high_deg) —
+          the steeper-with-friction monotonicity gate.
+
+    SI units (m, kg/m³, kg/s, degrees). Escalate to dem_pack_submit /
+    dem_flow_submit (the real YADE solve) for polydisperse mixes, non-spherical
+    grains, cohesion, or geometry this monodisperse idealization can't see."""
+    params: dict = {"problem": problem}
+    for k, v in (("regime", regime), ("coordination", coordination),
+                 ("outlet_m", outlet_m), ("particle_d_m", particle_d_m),
+                 ("bulk_density_kg_m3", bulk_density_kg_m3), ("material", material),
+                 ("friction_coeff", friction_coeff), ("saturation", saturation),
+                 ("outlet1_m", outlet1_m), ("flow1_kg_s", flow1_kg_s),
+                 ("outlet2_m", outlet2_m), ("flow2_kg_s", flow2_kg_s),
+                 ("mu_low", mu_low), ("repose_low_deg", repose_low_deg),
+                 ("mu_high", mu_high), ("repose_high_deg", repose_high_deg)):
+        if v is not None:
+            params[k] = v
+    return _call("granular_oracle", **params)
+
+
+@mcp.tool()
+def dem_pack_submit(
+    n_spheres: int = 800,
+    radius_m: float = 0.004,
+    box_m: list | None = None,
+    friction_deg: float = 26.0,
+    young_pa: float = 1e7,
+    density: float = 2600.0,
+    steps: int = 30000,
+) -> dict:
+    """Pour N monodisperse spheres into a box and settle them under gravity with
+    the REAL YADE discrete-element engine, then measure the random close-packing
+    fraction φ of the settled bed — gated against granular_screen('packing') (RCP
+    band 0.60–0.66, well below the crystalline 0.7405). YADE is GPL-3.0 and is run
+    ONLY in a subprocess (the parent never imports it — same arm's-length
+    isolation as the GPL Elmer/OpenFOAM binaries). Runs OFF the MCP channel via a
+    background job, so a multi-second settle never blocks the worker.
+
+    `box_m` is the [Lx, Ly] floor footprint (m; default [0.06, 0.06]); the column
+    height is sized to hold n_spheres. `friction_deg` is the inter-particle
+    friction angle; `young_pa` the contact modulus; `density` the grain density.
+    Returns {job_id, status, cache_hit, oracle} (poll job_status / job_result);
+    the job result carries the oracle band PLUS the measured {packing_fraction,
+    in_band, n_settled, settled_height_m, mean_coordination, positions:[[x,y,z,r]]}.
+    Absent YADE: {ok:false, reason, install, oracle}."""
+    params = {"n_spheres": n_spheres, "radius_m": radius_m,
+              "box_m": box_m or [0.06, 0.06], "friction_deg": friction_deg,
+              "young_pa": young_pa, "density": density, "steps": steps}
+    return _call("dem_pack_submit", **params)
+
+
+@mcp.tool()
+def dem_flow_submit(
+    n_spheres: int = 1500,
+    radius_m: float = 0.003,
+    box_m: list | None = None,
+    outlet_m: float = 0.03,
+    friction_deg: float = 26.0,
+    young_pa: float = 1e7,
+    density: float = 2600.0,
+    settle_steps: int = 20000,
+    flow_steps: int = 60000,
+) -> dict:
+    """Discharge spheres from a flat-bottomed hopper box through a central orifice
+    with the REAL YADE discrete-element engine and measure the steady mass-flow
+    rate — gated against granular_screen('beverloo') (flow ∝ outlet^2.5). Submit
+    two `outlet_m` sizes and feed the (outlet, flow) pair to
+    granular_screen('beverloo_exponent') to check the Beverloo 2.5 exponent (vs the
+    Torricelli 2.0 of a draining fluid). YADE is GPL-3.0 and is run ONLY in a
+    subprocess; runs OFF the MCP channel via a background job.
+
+    `box_m` is the [Lx, Ly, Lz] hopper box (m; default [0.10, 0.10, 0.20]);
+    `outlet_m` the central orifice diameter; `settle_steps`/`flow_steps` the DEM
+    step budgets. Returns {job_id, status, cache_hit, oracle}; the job result
+    carries the Beverloo oracle PLUS {mass_flow_kg_s, n_discharged,
+    discharge_time_s, positions:[...]}. Absent YADE: {ok:false, reason, install,
+    oracle}."""
+    params = {"n_spheres": n_spheres, "radius_m": radius_m,
+              "box_m": box_m or [0.10, 0.10, 0.20], "outlet_m": outlet_m,
+              "friction_deg": friction_deg, "young_pa": young_pa,
+              "density": density, "settle_steps": settle_steps,
+              "flow_steps": flow_steps}
+    return _call("dem_flow_submit", **params)
+
+
 @mcp.tool()
 def optics_moldability_check(
     model: str,
