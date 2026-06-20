@@ -3305,6 +3305,108 @@ def hertz_contact(
 
 
 @mcp.tool()
+def monopole_sphere(
+    a_m: float,
+    freq_hz: float,
+    u_amp: float = 1.0,
+    r_m: float | None = None,
+    rho: float = 1.204,
+    c: float = 343.0,
+) -> dict:
+    """Exact pulsating (monopole) sphere radiated power + far-field pressure (NO
+    solver) — the closed-form twin the Bempp exterior-acoustics BEM radiation solve
+    (`acoustic_radiation_submit`) is gated against. A sphere of radius `a_m`
+    vibrating with uniform surface normal velocity `u_amp` at `freq_hz` radiates
+    W = (ρc/2)|U|²(4πa²)(ka)²/(1+(ka)²) and, at range `r_m`, |p(r)| =
+    ρc|U|·ka/√(1+(ka)²)·(a/r) — both EXACT. The radiation efficiency
+    σ=(ka)²/(1+(ka)²) → 0 (poor sub-wavelength radiator) as ka→0 and → 1 as ka→∞.
+    `rho`/`c` default to air at 20 °C. A BEM Neumann (velocity) solve must reproduce
+    W and |p(r)|.
+
+    Returns {a_m, freq_hz, k_per_m, ka, u_amp, rho, c, radiation_efficiency,
+    radiated_power_w, surface_pressure_abs, r_m, farfield_pressure_abs,
+    farfield_pressure_x_r, fidelity, band_pct, valid_range_ok, warnings,
+    escalate_to}."""
+    params = {"a_m": a_m, "freq_hz": freq_hz, "u_amp": u_amp, "rho": rho, "c": c}
+    if r_m is not None:
+        params["r_m"] = r_m
+    return _call("monopole_sphere", **params)
+
+
+@mcp.tool()
+def rigid_sphere_scattering(
+    ka: float,
+    theta_deg: float = 180.0,
+    a_m: float | None = None,
+) -> dict:
+    """Exact rigid-sphere plane-wave scattering far-field form function via the Mie
+    series (NO solver) — the closed-form twin the Bempp exterior-acoustics BEM
+    scattering solve (`acoustic_radiation_submit`, problem='scattering') is gated
+    against. For compactness `ka` and scattering angle `theta_deg` (from the forward
+    direction; 180° is backscatter), f∞(θ) = (2/ika)·Σₙ(2n+1)[−j'ₙ(ka)/h'ₙ(ka)]·
+    Pₙ(cosθ) — a rigorous spherical-harmonic sum (Neumann ∂p/∂r=0 on the sphere)
+    truncated past convergence (fidelity='exact'). The backscatter |f∞(π)| → 1 in
+    the geometric (ka≫1) limit and rises through the resonance region. A BEM
+    scattered far field must land on |f∞(θ)|.
+
+    Returns {ka, theta_deg, a_m, form_function_abs, form_function_re,
+    form_function_im, backscatter_abs, n_terms, fidelity, band_pct, valid_range_ok,
+    warnings, escalate_to}."""
+    params = {"ka": ka, "theta_deg": theta_deg}
+    if a_m is not None:
+        params["a_m"] = a_m
+    return _call("rigid_sphere_scattering", **params)
+
+
+@mcp.tool()
+def acoustic_radiation_submit(
+    problem: str = "radiation",
+    a_m: float = 0.1,
+    freq_hz: float = 2000.0,
+    u_amp: float = 1.0,
+    r_m: float | None = None,
+    rho: float = 1.204,
+    c: float = 343.0,
+    h: float = 0.25,
+    ka_list: list[float] | None = None,
+    theta_deg: list[float] | None = None,
+    h_per_wl: float = 10.0,
+    model: str | None = None,
+    scale_to_m: float = 1e-3,
+    linear_deflection: float = 0.0,
+    timeout: int = 900,
+) -> dict:
+    """Exterior-acoustics boundary-element solve on Bempp, asynchronous (OFF the MCP
+    channel) — the real-field twin of the analytic `monopole_sphere` /
+    `rigid_sphere_scattering` oracles. Bempp is MIT but needs meshio>=4 (clashing
+    with solidspy's meshio==3 in the shared venv), so it is run ONLY out-of-process
+    via driftpin/bempp_runner.py under a dedicated .venv-bempp; degrades to
+    {ok:false, reason, install} when no bempp venv resolves.
+
+    `problem`='radiation' (default): a pulsating (monopole) sphere of radius `a_m`,
+    uniform surface velocity `u_amp` at `freq_hz`, into air (`rho`,`c`), mesh size
+    `h` (fraction of a). The result's `radiated_power_w` / `farfield_pressure_x_r`
+    vs the monopole_sphere oracle (ratio≈1) IS the gate. `problem`='scattering': a
+    rigid sphere insonified by a unit plane wave; sweep `ka_list`, report the
+    far-field form function at `theta_deg` angles (`h_per_wl` elements/wavelength) —
+    gated against the rigid_sphere_scattering Mie oracle. `problem`='mesh_solve': a
+    radiation solve on a REAL FreeCAD `model` (handle), tessellated to a surface
+    mesh here and fed to the BEM engine (`scale_to_m` mm→m, `linear_deflection`
+    mesh tolerance).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result
+    for {ok, ka, radiated_power_w, farfield_pressure_x_r, surface_pressure_abs_mean,
+    n_elements, wall_s} (radiation/mesh_solve) or {results:[{ka, form_function_abs{},
+    backscatter_abs, n_elements}]} (scattering)."""
+    params = {"problem": problem, "a_m": a_m, "freq_hz": freq_hz, "u_amp": u_amp,
+              "rho": rho, "c": c, "h": h, "h_per_wl": h_per_wl,
+              "scale_to_m": scale_to_m, "linear_deflection": linear_deflection,
+              "timeout": timeout}
+    for k, v in (("r_m", r_m), ("ka_list", ka_list), ("theta_deg", theta_deg),
+                 ("model", model)):
+        if v is not None:
+            params[k] = v
+    return _call("acoustic_radiation_submit", **params)
 def waveguide_cutoff(
     a_mm: float,
     b_mm: float | None = None,
@@ -4540,6 +4642,137 @@ def optics_solid_trace(
         if v is not None:
             params[k] = v
     return _call("optics_solid_trace", **params)
+
+
+# --- granular / powder discrete-element mechanics (YADE DEM, GPL-3.0) ----------
+# The closed-form oracle (granular_screen) gates the solver; dem_pack_submit /
+# dem_flow_submit run the REAL YADE DEM solve off the MCP channel (background
+# jobs.py jobs — poll with job_status / job_result). YADE is GPL-3.0 and is run
+# ONLY out-of-process via the `yade` executable, so its copyleft never reaches
+# DriftPin's permissive code; absent YADE, the *_submit tools degrade to
+# {ok:false, reason, install, oracle} (the oracle band still comes back).
+
+@mcp.tool()
+def granular_screen(
+    problem: str = "packing",
+    regime: str = "random_close",
+    coordination: float | None = None,
+    outlet_m: float | None = None,
+    particle_d_m: float | None = None,
+    bulk_density_kg_m3: float | None = None,
+    material: str | None = None,
+    friction_coeff: float | None = None,
+    saturation: float = 1.0,
+    outlet1_m: float | None = None,
+    flow1_kg_s: float | None = None,
+    outlet2_m: float | None = None,
+    flow2_kg_s: float | None = None,
+    mu_low: float | None = None,
+    repose_low_deg: float | None = None,
+    mu_high: float | None = None,
+    repose_high_deg: float | None = None,
+) -> dict:
+    """Closed-form granular/powder-mechanics oracles — banded correlations, NO
+    external solver (the FreeCAD-free analytic twins the YADE DEM solve is gated
+    against). These are correlations, not exact theory, so each returns
+    fidelity='correlation' + an honest [low, high] band; the band IS the oracle.
+    Dispatch on `problem`:
+
+      'packing' (regime='random_close'|'random_loose'|'fcc'[, coordination]) —
+          monodisperse sphere solid-volume fraction φ. RCP ≈ 0.637 (band
+          0.60–0.66), the random pile a real settle must hit, well below the
+          crystalline FCC/HCP 0.7405.
+      'beverloo' (outlet_m, particle_d_m[, bulk_density_kg_m3 | material]) —
+          flat-bottom hopper discharge W = C·ρ·√g·(D−k·d)^2.5 [kg/s]; flow ∝
+          outlet to the 2.5 power, independent of fill height.
+      'beverloo_exponent' (outlet1_m, flow1_kg_s, outlet2_m, flow2_kg_s
+          [, particle_d_m]) — recover the log-log flow exponent from two
+          (outlet, flow) points; granular 2.5 (band 2.2–2.8) vs Torricelli 2.0.
+      'repose' (friction_coeff[, saturation]) — poured-pile repose angle
+          θ ≈ atan(μ) + ±25% band.
+      'repose_monotone' (mu_low, repose_low_deg, mu_high, repose_high_deg) —
+          the steeper-with-friction monotonicity gate.
+
+    SI units (m, kg/m³, kg/s, degrees). Escalate to dem_pack_submit /
+    dem_flow_submit (the real YADE solve) for polydisperse mixes, non-spherical
+    grains, cohesion, or geometry this monodisperse idealization can't see."""
+    params: dict = {"problem": problem}
+    for k, v in (("regime", regime), ("coordination", coordination),
+                 ("outlet_m", outlet_m), ("particle_d_m", particle_d_m),
+                 ("bulk_density_kg_m3", bulk_density_kg_m3), ("material", material),
+                 ("friction_coeff", friction_coeff), ("saturation", saturation),
+                 ("outlet1_m", outlet1_m), ("flow1_kg_s", flow1_kg_s),
+                 ("outlet2_m", outlet2_m), ("flow2_kg_s", flow2_kg_s),
+                 ("mu_low", mu_low), ("repose_low_deg", repose_low_deg),
+                 ("mu_high", mu_high), ("repose_high_deg", repose_high_deg)):
+        if v is not None:
+            params[k] = v
+    return _call("granular_oracle", **params)
+
+
+@mcp.tool()
+def dem_pack_submit(
+    n_spheres: int = 800,
+    radius_m: float = 0.004,
+    box_m: list | None = None,
+    friction_deg: float = 26.0,
+    young_pa: float = 1e7,
+    density: float = 2600.0,
+    steps: int = 30000,
+) -> dict:
+    """Pour N monodisperse spheres into a box and settle them under gravity with
+    the REAL YADE discrete-element engine, then measure the random close-packing
+    fraction φ of the settled bed — gated against granular_screen('packing') (RCP
+    band 0.60–0.66, well below the crystalline 0.7405). YADE is GPL-3.0 and is run
+    ONLY in a subprocess (the parent never imports it — same arm's-length
+    isolation as the GPL Elmer/OpenFOAM binaries). Runs OFF the MCP channel via a
+    background job, so a multi-second settle never blocks the worker.
+
+    `box_m` is the [Lx, Ly] floor footprint (m; default [0.06, 0.06]); the column
+    height is sized to hold n_spheres. `friction_deg` is the inter-particle
+    friction angle; `young_pa` the contact modulus; `density` the grain density.
+    Returns {job_id, status, cache_hit, oracle} (poll job_status / job_result);
+    the job result carries the oracle band PLUS the measured {packing_fraction,
+    in_band, n_settled, settled_height_m, mean_coordination, positions:[[x,y,z,r]]}.
+    Absent YADE: {ok:false, reason, install, oracle}."""
+    params = {"n_spheres": n_spheres, "radius_m": radius_m,
+              "box_m": box_m or [0.06, 0.06], "friction_deg": friction_deg,
+              "young_pa": young_pa, "density": density, "steps": steps}
+    return _call("dem_pack_submit", **params)
+
+
+@mcp.tool()
+def dem_flow_submit(
+    n_spheres: int = 1500,
+    radius_m: float = 0.003,
+    box_m: list | None = None,
+    outlet_m: float = 0.03,
+    friction_deg: float = 26.0,
+    young_pa: float = 1e7,
+    density: float = 2600.0,
+    settle_steps: int = 20000,
+    flow_steps: int = 60000,
+) -> dict:
+    """Discharge spheres from a flat-bottomed hopper box through a central orifice
+    with the REAL YADE discrete-element engine and measure the steady mass-flow
+    rate — gated against granular_screen('beverloo') (flow ∝ outlet^2.5). Submit
+    two `outlet_m` sizes and feed the (outlet, flow) pair to
+    granular_screen('beverloo_exponent') to check the Beverloo 2.5 exponent (vs the
+    Torricelli 2.0 of a draining fluid). YADE is GPL-3.0 and is run ONLY in a
+    subprocess; runs OFF the MCP channel via a background job.
+
+    `box_m` is the [Lx, Ly, Lz] hopper box (m; default [0.10, 0.10, 0.20]);
+    `outlet_m` the central orifice diameter; `settle_steps`/`flow_steps` the DEM
+    step budgets. Returns {job_id, status, cache_hit, oracle}; the job result
+    carries the Beverloo oracle PLUS {mass_flow_kg_s, n_discharged,
+    discharge_time_s, positions:[...]}. Absent YADE: {ok:false, reason, install,
+    oracle}."""
+    params = {"n_spheres": n_spheres, "radius_m": radius_m,
+              "box_m": box_m or [0.10, 0.10, 0.20], "outlet_m": outlet_m,
+              "friction_deg": friction_deg, "young_pa": young_pa,
+              "density": density, "settle_steps": settle_steps,
+              "flow_steps": flow_steps}
+    return _call("dem_flow_submit", **params)
 
 
 @mcp.tool()

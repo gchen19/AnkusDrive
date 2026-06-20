@@ -80,6 +80,19 @@ optics_gpl = [
     "KrakenOS",
     "setuptools<81",
 ]
+# Exterior-acoustics BEM runs on bempp-cl, which is MIT (NOT copyleft). It is still
+# a SEPARATE, opt-in extra installed into a DEDICATED venv (.venv-bempp) and invoked
+# only out-of-process (via driftpin/bempp_runner.py) for a DEPENDENCY reason, not a
+# license one: bempp needs meshio>=4 (cells_dict), but the shared venv pins
+# meshio==3 for solidspy (the `topology` extra / analysis/topology.py). Installing
+# this extra into the shared venv would break topology optimisation — so install it
+# in its own venv (scripts/install-solvers.sh acoustics_bem) and point
+# DRIFTPIN_BEMPP_PYTHON at that venv's python.
+acoustics_bem = [
+    "bempp-cl",
+    "gmsh",                 # bempp's shape generators shell out to the gmsh CLI binary
+    "meshio>=5",            # bempp needs cells_dict (>=4); KEEP OUT of the shared venv
+]
 # Full-wave FDTD EM runs on openEMS/CSXCAD, which is GPL-3.0 AND is not a pip wheel
 # (not on PyPI/conda — it is source-built from the openEMS-Project meta-repo). Like
 # optics_gpl it is a SEPARATE, opt-in extra invoked only out-of-process (via
@@ -108,6 +121,14 @@ fsi = [
     # libprecice + ccx_preCICE + the OpenFOAM adapter are NOT here — they are
     # source-built (LGPL core, version-sensitive); see scripts/install-solvers.sh fsi.
 ]
+# Granular / powder discrete-element mechanics runs on YADE, which is GPL-3.0 and
+# ships no PyPI/conda-noble wheel — it is SOURCE-BUILT (scripts/install-solvers.sh
+# dem_gpl, into ~/opt/yade) and driven ONLY out-of-process via the `yade` executable
+# running driftpin/dem_gpl_runner.py, so installing it does not link GPL code into
+# DriftPin. There is no pip package to pull, so this opt-in extra is intentionally
+# empty (the marker exists so `driftpin[dem_gpl]` resolves and the registry can name
+# the extra); the build itself is the install step, documented in install-solvers.sh.
+dem_gpl = []                # YADE (GPL-3.0) is source-built — see scripts/install-solvers.sh
 
 [project.scripts]
 driftpin = "driftpin.cli:main"

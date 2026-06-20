@@ -9564,6 +9564,34 @@ def _h_dipole_resonance(p):
     return em_fullwave.dipole_resonance(**p)
 
 
+@handler("monopole_sphere")
+def _h_monopole_sphere(p):
+    """Exact pulsating (monopole) sphere radiated power + far-field pressure — the
+    closed-form twin the Bempp exterior-Helmholtz BEM radiation solve
+    (acoustic_radiation_submit) is gated against. W = (ρc/2)|U|²(4πa²)(ka)²/(1+(ka)²)
+    and |p(r)| = ρc|U|·ka/√(1+(ka)²)·(a/r), both EXACT. See
+    driftpin.analysis.acoustics_bem. Returns {a_m, freq_hz, k_per_m, ka, u_amp, rho,
+    c, radiation_efficiency, radiated_power_w, surface_pressure_abs, r_m,
+    farfield_pressure_abs, farfield_pressure_x_r, fidelity, band_pct,
+    valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import acoustics_bem
+    return acoustics_bem.monopole_sphere(**p)
+
+
+@handler("rigid_sphere_scattering")
+def _h_rigid_sphere_scattering(p):
+    """Exact rigid-sphere plane-wave scattering far-field form function (Mie series)
+    — the closed-form twin the Bempp exterior-Helmholtz BEM scattering solve
+    (acoustic_radiation_submit, problem='scattering') is gated against. f∞(θ) =
+    (2/ika)Σₙ(2n+1)[−j'ₙ(ka)/h'ₙ(ka)]Pₙ(cosθ), an exact modal sum; θ=180° is
+    backscatter. See driftpin.analysis.acoustics_bem. Returns {ka, theta_deg, a_m,
+    form_function_abs, form_function_re, form_function_im, backscatter_abs, n_terms,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from driftpin.analysis import acoustics_bem
+    return acoustics_bem.rigid_sphere_scattering(**p)
+
+
+
 @handler("molding_screen")
 def _h_molding_screen(p):
     """Injection-molding screen: exact one-term cooling time + spiral-flow fill
@@ -10427,6 +10455,447 @@ def _h_fsi_pressure_plate_submit(p):
 
     return jobs.submit("fsi_pressure_plate", _work, key=key,
                        meta={"backend": "precice-openfoam-calculix"})
+# --- discrete-element granular mechanics (YADE, GPL-3.0, subprocess) -----------
+# Two surfaces, mirroring the optics lane above: the closed-form granular oracles
+# (RCP packing, Beverloo discharge, angle of repose) live in analysis/granular.py
+# and gate the solver; dem_pack_submit / dem_flow_submit run the REAL DEM solve
+# off the MCP channel via jobs.py. YADE is GPL-3.0 and is therefore driven ONLY
+# out-of-process — the worker shells out to the `yade` executable running
+# driftpin/dem_gpl_runner.py, exchanging sentinel-JSON over stdin/stdout, exactly
+# the arm's-length isolation used for KrakenOS/openEMS. DriftPin never imports
+# YADE in-process, so the copyleft does not link into the permissive code.
+
+_DEM_YADE = None  # cache: None=unprobed, False=absent, str=yade exe that runs DEM
+
+
+def _yade_exec():
+    """The ``yade`` executable to drive the GPL DEM engine, NOT this worker's
+    interpreter (freecadcmd, which has no DEM). Resolution order:
+    DRIFTPIN_YADE override → DRIFTPIN_YADE_PATH (the solver-registry env) →
+    $HOME/opt/yade/bin/yade (the documented source-build prefix) → PATH/common
+    dirs via solvers.find_solver('yade'). Each candidate is verified by a tiny
+    ``yade`` ping probe (run the runner with {"problem":"ping"} and check the
+    sentinel), so a hit is guaranteed to actually run a DEM step. Cached. Returns
+    the exe path, or None when nothing works."""
+    global _DEM_YADE
+    if _DEM_YADE is not None:
+        return _DEM_YADE or None
+    import subprocess
+
+    candidates = []
+    for env in ("DRIFTPIN_YADE", "DRIFTPIN_YADE_PATH"):
+        if v := os.environ.get(env):
+            candidates.append(v)
+    candidates.append(os.path.expanduser("~/opt/yade/bin/yade"))
+    from driftpin import solvers
+    info = solvers.find_solver("yade")
+    if info.get("path"):
+        candidates.append(info["path"])
+
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "dem_gpl_runner.py")
+    seen = set()
+    for c in candidates:
+        if not c or c in seen or not os.path.isfile(c):
+            continue
+        seen.add(c)
+        try:  # YADE runs the script then exits (-x), reads {"problem":"ping"} on stdin
+            r = subprocess.run([c, "-x", "-n", runner], input='{"problem":"ping"}',
+                               capture_output=True, text=True, timeout=90)
+        except Exception:
+            continue
+        if "@@JSON@@" in r.stdout and '"engine": "YADE"' in r.stdout:
+            _DEM_YADE = c
+            return c
+    _DEM_YADE = False
+    return None
+
+
+def _run_dem_gpl(problem, yade_exe, timeout=600):
+    """Invoke the GPL-3.0 DEM engine (YADE) OUT-OF-PROCESS via
+    driftpin/dem_gpl_runner.py (a standalone script that imports no driftpin code)
+    and return its JSON result. DriftPin never imports YADE in-process; this
+    fork/exec + pipe-IPC keeps the copyleft boundary clean — the same isolation
+    used for the GPL Elmer/OpenFOAM binaries and the KrakenOS optics runner.
+    Raises RuntimeError if the subprocess emits no sentinel-delimited JSON."""
+    import json as _json
+    import subprocess
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "dem_gpl_runner.py")
+    proc = subprocess.run(
+        [yade_exe, "-x", "-n", runner],
+        input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
+    _, _, rest = proc.stdout.partition("@@JSON@@")
+    body, _, _ = rest.partition("@@END@@")
+    if not body:
+        raise RuntimeError(
+            f"dem_gpl_runner produced no JSON (rc={proc.returncode}); "
+            f"stderr tail: {proc.stderr[-400:]}")
+    return _json.loads(body)
+
+
+def _dem_unavailable():
+    """The structured miss dict when no usable `yade` resolves — the graceful
+    degradation a DEM *_submit returns verbatim, never raising."""
+    from driftpin import solvers
+    info = solvers.find_solver("yade")
+    return {"ok": False, "solver": "yade", "reason": "solver not installed",
+            "install": info.get("install_hint",
+                                "source-build YADE (GPL-3.0): scripts/install-solvers.sh "
+                                "dem_gpl, then set DRIFTPIN_YADE")}
+
+
+@handler("dem_pack_submit")
+def _h_dem_pack_submit(p):
+    """Pour N monodisperse spheres into a box and settle them under gravity with
+    the real YADE DEM engine, then measure the random close-packing fraction φ of
+    the settled bed — the granular twin of analysis.granular.packing_fraction
+    (RCP band 0.60–0.66). YADE is GPL-3.0 and is run ONLY in a subprocess via
+    dem_gpl_runner; degrades to {ok:false, reason, install} when no `yade`
+    resolves, never raising. Runs OFF the MCP channel via jobs.py (a settle is
+    multi-second), so it never blocks the worker.
+
+    Knobs: n_spheres, radius_m, box_m([Lx,Ly]), friction_deg, young_pa, density,
+    steps. Returns {job_id, status, cache_hit} (poll job_status / job_result);
+    the job result is the oracle band PLUS the measured {packing_fraction,
+    n_settled, settled_height_m, mean_coordination, positions:[[x,y,z,r],...]}."""
+    from driftpin import jobs
+    from driftpin.analysis import granular
+
+    yade_exe = _yade_exec()
+    oracle = granular.packing_fraction("random_close")
+    if yade_exe is None:
+        return {**_dem_unavailable(), "oracle": oracle}
+
+    problem = {
+        "problem": "pack",
+        "n_spheres": int(p.get("n_spheres", 800)),
+        "radius_m": float(p.get("radius_m", 0.004)),
+        "box_m": list(p.get("box_m", [0.06, 0.06])),
+        "friction_deg": float(p.get("friction_deg", 26.0)),
+        "young_pa": float(p.get("young_pa", 1e7)),
+        "density": float(p.get("density", 2600.0)),
+        "steps": int(p.get("steps", 30000)),
+    }
+    timeout = int(p.get("timeout", 600))
+    key = jobs.content_key("dem_pack", problem)
+
+    def _work():
+        res = _run_dem_gpl(problem, yade_exe, timeout=timeout)
+        res["oracle"] = oracle
+        if res.get("ok") and res.get("packing_fraction") is not None:
+            lo, hi = oracle["band"]
+            res["in_band"] = lo <= res["packing_fraction"] <= hi
+            res["backend"] = "YADE (subprocess-isolated, GPL-3.0)"
+        return res
+
+    out = jobs.submit("dem_pack", _work, key=key,
+                      meta={"n_spheres": problem["n_spheres"], "kind": "pack"})
+    out["oracle"] = oracle
+    return out
+
+
+@handler("dem_flow_submit")
+def _h_dem_flow_submit(p):
+    """Discharge spheres from a flat-bottomed hopper box through a central orifice
+    with the real YADE DEM engine and measure the steady mass-flow rate — the
+    granular twin of analysis.granular.beverloo_discharge (flow ∝ outlet^2.5). Run
+    two outlet sizes and feed the pair to granular.beverloo_exponent to check the
+    Beverloo 2.5 exponent (vs the Torricelli 2.0 of a draining fluid). YADE is
+    GPL-3.0, run ONLY in a subprocess via dem_gpl_runner; degrades cleanly when no
+    `yade` resolves. Runs OFF the MCP channel via jobs.py.
+
+    Knobs: n_spheres, radius_m, box_m([Lx,Ly,Lz]), outlet_m (orifice diameter),
+    friction_deg, young_pa, density, settle_steps, flow_steps. Returns {job_id,
+    status, cache_hit}; the job result carries the Beverloo oracle PLUS the
+    measured {mass_flow_kg_s, n_discharged, discharge_time_s, positions:[...]}."""
+    from driftpin import jobs
+    from driftpin.analysis import granular
+
+    yade_exe = _yade_exec()
+    outlet = float(p.get("outlet_m", 0.03))
+    radius = float(p.get("radius_m", 0.003))
+    oracle = granular.beverloo_discharge(outlet, 2 * radius,
+                                         bulk_density_kg_m3=float(p.get("density", 2600.0)) * 0.6)
+    if yade_exe is None:
+        return {**_dem_unavailable(), "oracle": oracle}
+
+    problem = {
+        "problem": "flow",
+        "n_spheres": int(p.get("n_spheres", 1500)),
+        "radius_m": radius,
+        "box_m": list(p.get("box_m", [0.10, 0.10, 0.20])),
+        "outlet_m": outlet,
+        "friction_deg": float(p.get("friction_deg", 26.0)),
+        "young_pa": float(p.get("young_pa", 1e7)),
+        "density": float(p.get("density", 2600.0)),
+        "settle_steps": int(p.get("settle_steps", 20000)),
+        "flow_steps": int(p.get("flow_steps", 60000)),
+    }
+    timeout = int(p.get("timeout", 900))
+    key = jobs.content_key("dem_flow", problem)
+
+    def _work():
+        res = _run_dem_gpl(problem, yade_exe, timeout=timeout)
+        res["oracle"] = oracle
+        if res.get("ok"):
+            res["backend"] = "YADE (subprocess-isolated, GPL-3.0)"
+        return res
+
+    out = jobs.submit("dem_flow", _work, key=key,
+                      meta={"outlet_m": outlet, "kind": "flow"})
+    out["oracle"] = oracle
+    return out
+
+
+@handler("granular_oracle")
+def _h_granular_oracle(p):
+    """Closed-form granular/powder oracles — exact-band correlations, no external
+    solver (the FreeCAD-free analysis.granular twins the YADE DEM solve is gated
+    against). Dispatches on `problem`:
+      'packing'  (regime[/coordination]) -> RCP/RLP/FCC φ + band 0.60–0.66
+      'beverloo' (outlet_m, particle_d_m[, bulk_density_kg_m3|material]) -> W ∝ D^2.5
+      'beverloo_exponent' (two (outlet,flow) points) -> log-log slope, in_band(2.2–2.8)
+      'repose'   (friction_coeff[, saturation]) -> θ ≈ atan(μ) + ±25% band
+      'repose_monotone' (two-μ repose pair) -> steeper-with-friction gate.
+    See driftpin.analysis.granular."""
+    from driftpin.analysis import granular
+    kind = p.get("problem", "packing")
+    if kind == "packing":
+        return granular.packing_fraction(
+            regime=p.get("regime", "random_close"),
+            coordination=p.get("coordination"))
+    if kind == "beverloo":
+        return granular.beverloo_discharge(
+            outlet_m=p["outlet_m"], particle_d_m=p["particle_d_m"],
+            bulk_density_kg_m3=p.get("bulk_density_kg_m3"),
+            material=p.get("material"),
+            discharge_coeff=float(p.get("discharge_coeff", 0.58)),
+            shape_factor=float(p.get("shape_factor", 1.4)),
+            g_m_s2=float(p.get("g_m_s2", 9.81)))
+    if kind == "beverloo_exponent":
+        return granular.beverloo_exponent(
+            outlet1_m=p["outlet1_m"], flow1_kg_s=p["flow1_kg_s"],
+            outlet2_m=p["outlet2_m"], flow2_kg_s=p["flow2_kg_s"],
+            particle_d_m=float(p.get("particle_d_m", 0.0)),
+            shape_factor=float(p.get("shape_factor", 1.4)))
+    if kind == "repose":
+        return granular.angle_of_repose(
+            friction_coeff=p["friction_coeff"],
+            saturation=float(p.get("saturation", 1.0)))
+    if kind == "repose_monotone":
+        return granular.repose_increases_with_friction(
+            mu_low=p["mu_low"], repose_low_deg=p["repose_low_deg"],
+            mu_high=p["mu_high"], repose_high_deg=p["repose_high_deg"])
+    raise ValueError(
+        f"unknown granular problem {kind!r}; use 'packing', 'beverloo', "
+        "'beverloo_exponent', 'repose', or 'repose_monotone'")
+
+
+
+# --- exterior acoustics: Bempp boundary-element method (MIT, dep-isolated) -----
+# Bempp is MIT — the SAME permissive footing as DriftPin — so the subprocess here
+# is NOT a license boundary. It is a DEPENDENCY-CLASH boundary: Bempp needs
+# meshio>=4 (cells_dict), but DriftPin's shared venv pins meshio==3.0 for solidspy
+# (driftpin/analysis/topology.py). Rather than break topology optimisation, Bempp
+# lives in a DEDICATED venv (.venv-bempp) and is invoked OUT-OF-PROCESS via
+# driftpin/bempp_runner.py (sentinel-delimited JSON over a pipe), resolved exactly
+# like _optics_gpl_python resolves KrakenOS. The two analytic oracles
+# (monopole_sphere / rigid_sphere_scattering) are FreeCAD-free and run in-process
+# above; the BEM solve runs out-of-process.
+
+_BEMPP_PY = None  # cache: None=unprobed, False=absent, str=python exe that imports bempp_cl
+
+
+def _bempp_python():
+    """The Python interpreter to run the Bempp BEM engine under — the one whose
+    environment can import bempp_cl (a dedicated .venv-bempp with meshio>=5), NOT
+    this worker's interpreter (which pins meshio==3 for solidspy). Resolution order
+    mirrors _optics_gpl_python: DRIFTPIN_BEMPP_PYTHON override → the venv that owns
+    bempp_cl (from find_spec's origin; find_spec does NOT import it) → a repo-local
+    .venv-bempp beside the repo or one level up → sys.executable. Each candidate is
+    probed with find_spec('bempp_cl') in a child, so a hit is guaranteed runnable.
+    Cached. Returns the exe path, or None."""
+    global _BEMPP_PY
+    if _BEMPP_PY is not None:
+        return _BEMPP_PY or None
+    import importlib.util
+    import subprocess
+
+    candidates = []
+    if env := os.environ.get("DRIFTPIN_BEMPP_PYTHON"):
+        candidates.append(env)
+    try:
+        spec = importlib.util.find_spec("bempp_cl")
+    except Exception:
+        spec = None
+    if spec and spec.origin:                          # ascend toward the venv root
+        d = os.path.dirname(spec.origin)
+        for _ in range(5):
+            d = os.path.dirname(d)
+            candidates += [os.path.join(d, "bin", "python3"),
+                           os.path.join(d, "bin", "python"),
+                           os.path.join(d, "Scripts", "python.exe")]
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # the dedicated bempp venv lives beside the repo or one level up (next to it)
+    for base in (repo, os.path.dirname(repo)):
+        candidates += [os.path.join(base, ".venv-bempp", "bin", "python3"),
+                       os.path.join(base, ".venv-bempp", "bin", "python"),
+                       os.path.join(base, ".venv-bempp", "Scripts", "python.exe")]
+    candidates.append(sys.executable)
+
+    seen = set()
+    probe = ("import importlib.util,sys;"
+             "sys.exit(0 if importlib.util.find_spec('bempp_cl') else 1)")
+    for c in candidates:
+        if not c or c in seen or not os.path.isfile(c):
+            continue
+        seen.add(c)
+        try:
+            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
+        except Exception:
+            continue
+        if r.returncode == 0:
+            _BEMPP_PY = c
+            return c
+    _BEMPP_PY = False
+    return None
+
+
+def _run_bempp(problem, python_exe, timeout=900):
+    """Invoke the Bempp BEM engine OUT-OF-PROCESS via driftpin/bempp_runner.py (a
+    standalone script that imports no driftpin code) and return its JSON result.
+    DriftPin never imports bempp_cl in-process; this fork/exec + pipe-IPC keeps the
+    meshio dependency clash off the shared venv. Raises RuntimeError if the
+    subprocess emits no sentinel-delimited JSON."""
+    import json as _json
+    import subprocess
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bempp_runner.py")
+    proc = subprocess.run(
+        [python_exe, runner],
+        input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
+    _, _, rest = proc.stdout.partition("@@JSON@@")
+    body, _, _ = rest.partition("@@END@@")
+    if not body:
+        raise RuntimeError(
+            f"bempp_runner produced no JSON (rc={proc.returncode}); "
+            f"stderr tail: {proc.stderr[-400:]}")
+    return _json.loads(body)
+
+
+def _surface_mesh_arrays(shape, linear_deflection=0.0):
+    """Tessellate a FreeCAD shape to a triangular surface mesh and return
+    (vertices 3×nv, elements 3×ne, 0-based) — the arrays bempp_runner builds a Grid
+    from. Runs on the worker thread (FreeCAD lives here); the BEM solve consumes the
+    arrays out-of-process so no FreeCAD type crosses the pipe."""
+    tol = linear_deflection or 0.0
+    if tol <= 0:
+        # default deflection: a fraction of the bounding-box diagonal
+        bb = shape.BoundBox
+        tol = 0.02 * (bb.DiagonalLength or 1.0)
+    tri = shape.tessellate(tol)
+    verts = [[v.x, v.y, v.z] for v in tri[0]]
+    faces = list(tri[1])
+    vx = [[v[0] for v in verts], [v[1] for v in verts], [v[2] for v in verts]]
+    ex = [[f[0] for f in faces], [f[1] for f in faces], [f[2] for f in faces]]
+    return vx, ex
+
+
+@handler("acoustic_radiation_submit")
+def _h_acoustic_radiation_submit(p):
+    """Exterior-acoustics boundary-element solve on Bempp, OFF the MCP channel
+    (asynchronous) — the real-field twin of the analytic monopole_sphere /
+    rigid_sphere_scattering oracles. Bempp is MIT but needs meshio>=4 (clashing with
+    solidspy's meshio==3 in the shared venv), so it is run ONLY in a subprocess via
+    bempp_runner under a dedicated .venv-bempp; degrades to {ok:false, reason,
+    install} when no bempp venv resolves, never raising.
+
+    Problems (`problem`):
+      'radiation' (default): a pulsating (monopole) sphere of radius `a_m` vibrating
+        with uniform surface normal velocity `u_amp` at `freq_hz` radiates into air
+        (`rho`, `c`). Solve the exterior Neumann problem for the surface pressure,
+        recover the radiated power W and the far-field |p(r_m)|. Knobs: a_m, freq_hz,
+        u_amp, r_m, h (mesh size, fraction of a). The result's radiated_power_w and
+        farfield_pressure_x_r vs the monopole_sphere oracle (ratio≈1) is the gate.
+      'scattering': a rigid (sound-hard) sphere of radius `a_m` insonified by a unit
+        plane wave; sweep `ka_list`, report the far-field form function at `theta_deg`
+        angles. Gated against the rigid_sphere_scattering Mie oracle.
+      'mesh_solve': a 'radiation' solve on a REAL FreeCAD model (`model`/`handle`),
+        tessellated to a surface mesh here on the worker thread and fed to the BEM
+        engine — the path that consumes the actual exported geometry.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, ka, radiated_power_w, farfield_pressure_x_r, surface_pressure_abs_mean,
+    n_elements, wall_s} (radiation/mesh_solve) or {results:[{ka, form_function_abs{},
+    backscatter_abs}]} (scattering)."""
+    python_exe = _bempp_python()
+    if python_exe is None:
+        from driftpin import solvers
+        info = solvers.find_solver("bempp")
+        return {"ok": False, "solver": "bempp", "reason": "solver not installed",
+                "install": info.get("install_hint",
+                                    "python3 -m venv .venv-bempp && "
+                                    ".venv-bempp/bin/pip install bempp-cl gmsh 'meshio>=5'")}
+
+    from driftpin import jobs
+    kind = p.get("problem", "radiation")
+    if kind == "radiation":
+        problem = {
+            "problem": "radiation",
+            "a_m": float(p.get("a_m", 0.1)),
+            "freq_hz": float(p.get("freq_hz", 2000.0)),
+            "u_amp": float(p.get("u_amp", 1.0)),
+            "r_m": float(p.get("r_m", p.get("a_m", 0.1) * 10.0)),
+            "rho": float(p.get("rho", 1.204)),
+            "c": float(p.get("c", 343.0)),
+            "h": float(p.get("h", 0.25)),
+        }
+        meta = {"problem": kind}
+    elif kind == "scattering":
+        problem = {
+            "problem": "scattering",
+            "a_m": float(p.get("a_m", 1.0)),
+            "ka_list": [float(x) for x in p.get("ka_list", [1.0, 2.0, 3.0, 4.0])],
+            "theta_deg": [float(t) for t in p.get("theta_deg", [180.0])],
+            "h_per_wl": float(p.get("h_per_wl", 10.0)),
+        }
+        meta = {"problem": kind}
+    elif kind == "mesh_solve":
+        handle = p.get("model") or p.get("handle")
+        if not handle:
+            raise ValueError("acoustic_radiation_submit mesh_solve needs a `model` handle")
+        _, shape = _shape_of(handle)
+        # tessellate on the worker thread (FreeCAD lives here); units mm → m
+        verts, elems = _surface_mesh_arrays(
+            shape, linear_deflection=float(p.get("linear_deflection", 0.0)))
+        scale = float(p.get("scale_to_m", 1e-3))      # FreeCAD mm → SI metres
+        verts = [[x * scale for x in row] for row in verts]
+        problem = {
+            "problem": "mesh_solve",
+            "vertices": verts, "elements": elems,
+            "a_m": float(p.get("a_m", 0.1)),
+            "freq_hz": float(p.get("freq_hz", 2000.0)),
+            "u_amp": float(p.get("u_amp", 1.0)),
+            "r_m": float(p.get("r_m", p.get("a_m", 0.1) * 10.0)),
+            "rho": float(p.get("rho", 1.204)),
+            "c": float(p.get("c", 343.0)),
+        }
+        meta = {"problem": kind, "n_vertices": len(verts[0]), "n_faces": len(elems[0])}
+    else:
+        raise ValueError(f"unknown acoustic_radiation problem {kind!r} "
+                         "(want 'radiation', 'scattering' or 'mesh_solve')")
+
+    timeout = int(p.get("timeout", 900))
+    # mesh_solve carries the (large) vertex arrays in the cache key only by a hash
+    key = jobs.content_key("acoustic_bem", problem)
+
+    def _work():
+        out = _run_bempp(problem, python_exe, timeout=timeout)
+        out["backend"] = "bempp-cl (subprocess-isolated, MIT; meshio>=5 venv)"
+        return out
+
+    return jobs.submit("acoustic_bem", _work, key=key, meta=meta)
+
 
 
 # --- multibody dynamics / kinematics (family 8) -------------------------------

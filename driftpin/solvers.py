@@ -150,6 +150,59 @@ _SOLVERS: dict = {
         "install_hint": "pip install 'driftpin[optics_gpl]'  (pulls KrakenOS, GPL-3.0; "
                         "run out-of-process only), or: pip install KrakenOS 'setuptools<81'",
     },
+    # --- exterior acoustics: Bempp BEM (MIT, but meshio>=4 clashes with solidspy) ---
+    # Bempp is MIT — NOT a license boundary. The subprocess isolation is purely a
+    # DEPENDENCY clash: bempp needs meshio>=4 (cells_dict) while the shared venv pins
+    # meshio==3.0 for solidspy (driftpin/analysis/topology.py). So bempp lives in a
+    # DEDICATED venv (.venv-bempp) and is invoked out-of-process via
+    # driftpin/bempp_runner.py; the worker resolves that interpreter via
+    # _bempp_python() (the find_spec probe below merely reports installability).
+    "bempp": {
+        "kind": "wheel",
+        "family": "acoustics_bem",
+        "extra": "acoustics_bem",
+        "modules": ("bempp_cl",),
+        # MIT — no copyleft. The subprocess is for the meshio>=4 dependency clash.
+        "license": "MIT",
+        "isolation": "subprocess",
+        "install_hint": "Bempp needs meshio>=4 (cells_dict), which clashes with the "
+                        "shared venv's meshio==3 (solidspy). Install it in a DEDICATED "
+                        "venv and run out-of-process: python3 -m venv .venv-bempp && "
+                        ".venv-bempp/bin/pip install bempp-cl gmsh 'meshio>=5'  "
+                        "(scripts/install-solvers.sh acoustics_bem); then point "
+                        "DRIFTPIN_BEMPP_PYTHON at that venv's python.",
+    },
+    # --- granular DEM: YADE (GPL-3.0, source-built, NOT a pip wheel) ----------
+    # YADE is GPL-3.0 and ships no PyPI/conda-noble wheel, so it is source-built
+    # (scripts/install-solvers.sh dem_gpl) and driven ONLY out-of-process: the
+    # worker shells out to the `yade` EXECUTABLE running driftpin/dem_gpl_runner.py
+    # (sentinel-JSON over stdin/stdout). DriftPin never imports YADE in-process, so
+    # the copyleft does not link into the permissive code — the same arm's-length
+    # isolation used for the GPL Elmer/OpenFOAM binaries and the KrakenOS optics
+    # runner. Resolved as a BINARY (DRIFTPIN_YADE_PATH env → PATH → the documented
+    # ~/opt/yade/bin source-build prefix); the worker also honors a bare
+    # DRIFTPIN_YADE override.
+    "yade": {
+        "kind": "binary",
+        "family": "dem",
+        "extra": "dem_gpl",
+        # GPL-3.0: never imported in-process; run via dem_gpl_runner subprocess.
+        "license": "GPL-3.0",
+        "isolation": "subprocess",
+        "binaries": ("yade", "yade-batch"),
+        "dirs": {
+            "Linux":   (os.path.expanduser("~/opt/yade/bin"),
+                        "/usr/bin", "/usr/local/bin", "/opt/yade/bin"),
+            "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin"),
+            "Windows": (r"C:\Program Files\yade\bin",),
+        },
+        "install_hint": "source-build YADE (GPL-3.0; not on PyPI/conda-noble): "
+                        "scripts/install-solvers.sh dem_gpl  (cmake build into "
+                        "~/opt/yade), or your distro's 'yade'/'yade-dem' package; "
+                        "then ensure `yade` is on PATH or set DRIFTPIN_YADE / "
+                        "DRIFTPIN_YADE_PATH. Driven out-of-process only via "
+                        "driftpin/dem_gpl_runner.py.",
+    },
     # --- full-wave EM: openEMS FDTD (GPL-3.0, source-built, NOT a pip wheel) ---
     # Like KrakenOS, openEMS is GPL-3.0 and is therefore invoked ONLY out-of-process
     # via driftpin/em_fullwave_gpl_runner.py — DriftPin never imports openEMS/CSXCAD
