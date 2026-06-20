@@ -1576,9 +1576,9 @@ def test_fem_decomposed_cantilever():
             analysis=analysis["handle"],
             kind="force",
             refs=[{"handle": box["handle"], "tag": loaded_face[0]["tag"]}],
-            force=9_000_000.0,
+            force=9000.0,  # match fem_cantilever_demo's default (both N) for the
             direction={"handle": box["handle"], "edge": force_dir_edge["tag"]},
-            reversed=True,
+            reversed=True,  # baseline-vs-decomposed relative comparison below
         )
         mesh = w.call(
             "fem_mesh",

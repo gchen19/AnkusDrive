@@ -149,6 +149,10 @@ echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 
 echo
+echo "== Nonlinear structural FEM (plastic/elastica/Hertz oracles always; ccx gate when present) =="
+python3 tests/test_fem_nonlinear.py
+
+echo
 echo "== Golden fixtures (issue #19 real adapters) =="
 python3 tests/test_golden_issue19.py
 
