@@ -9603,6 +9603,21 @@ def _h_molding_screen(p):
     return molding.molding_screen(**p)
 
 
+@handler("moldability_screen")
+def _h_moldability_screen(p):
+    """Moldability DFx screen (NO solver, NO geometry) — pure-Python combiner of
+    the wall-thickness quality screen + the CTE shrinkage estimate. Pass
+    ``wall_samples`` (a list of local wall thicknesses, mm) and/or ``nominal_mm``,
+    plus ``material`` and the usual overrides (``alpha_per_k``, ``t_solidify_c``,
+    ``t_ambient_c``, ``sink_factor``, ``warn_ratio``, ``fail_ratio``). Degrades
+    gracefully when the material corpus lacks the (issue #106) recommended-wall /
+    mold-shrinkage / crystallinity fields. See driftpin.analysis.molding. Returns
+    {thickness:{…}, shrinkage:{…}, material, pass, score, fidelity, band_pct,
+    warnings, escalate_to='molding_solve'}."""
+    from driftpin.analysis import molding
+    return molding.moldability_screen(**p)
+
+
 @handler("drop_impact")
 def _h_drop_impact(p):
     """Drop/impact screen by exact energy balance: G_avg = h/d, pulse-shape peak
@@ -9895,6 +9910,67 @@ def _h_optics_moldability_check(p):
     else:
         res["wall_thickness_stats"] = {"min_mm": None, "mean_mm": None, "max_mm": None, "n": 0}
     res["n_faces"] = len(shape.Faces)
+    return res
+
+
+@handler("moldability_check")
+def _h_moldability_check(p):
+    """Geometry-aware moldability DFx screen — resolves the `model` handle's
+    solid, samples local wall thickness per face via inward chords (the same
+    machinery as optics_moldability_check), then grades it through the pure-Python
+    moldability screen (driftpin.analysis.molding): the wall-thickness quality
+    sub-screen (range / uniformity / sink risk, cooling tied to the thickest
+    wall) plus the CTE shrinkage estimate for the resin. Low-fidelity gate —
+    escalate_to='molding_solve'.
+
+    Args: model (handle), material (resin name; drives the recommended-wall band,
+    CTE shrinkage, cooling — degrades gracefully when the corpus lacks the issue
+    #106 fields), nominal_mm (optional; else the sampled-wall mean anchors the
+    range check), and the shrinkage/thickness overrides (alpha_per_k,
+    t_solidify_c, t_ambient_c, sink_factor, warn_ratio, fail_ratio). Returns the
+    moldability_screen verdict {thickness:{…}, shrinkage:{…}, pass, score,
+    fidelity, band_pct, warnings, escalate_to} augmented with
+    {n_faces, n_wall_samples}."""
+    from driftpin.analysis import molding
+    handle = p.get("model") or p.get("handle")
+    if not handle:
+        raise ValueError("moldability_check needs a `model` handle")
+    _, shape = _shape_of(handle)
+
+    bbox = shape.BoundBox
+    reach = bbox.DiagonalLength * 2.0 + 1.0
+    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)
+
+    # Inward-chord wall samples per face (reuse optics_moldability_check's chord).
+    walls = []
+    import Part
+    for face in shape.Faces:
+        n = _outward_normal(face)
+        if n.Length == 0:
+            continue
+        n = App.Vector(n).normalize()
+        c = face.CenterOfMass
+        in_pt = c - App.Vector(n).multiply(eps)
+        try:
+            chord = shape.common(Part.makeLine(in_pt, in_pt - App.Vector(n).multiply(reach)))
+            if chord.Length > 1e-6:
+                walls.append(round(chord.Length, 4))
+        except Exception:
+            pass
+
+    res = molding.moldability_screen(
+        wall_samples=(walls or None),
+        nominal_mm=p.get("nominal_mm"),
+        material=p.get("material"),
+        alpha_per_k=p.get("alpha_per_k"),
+        t_solidify_c=p.get("t_solidify_c"),
+        t_ambient_c=p.get("t_ambient_c", 23.0),
+        sink_factor=p.get("sink_factor", 1.5),
+        warn_ratio=p.get("warn_ratio", 2.0),
+        fail_ratio=p.get("fail_ratio", 3.0),
+    )
+    res["n_faces"] = len(shape.Faces)
+    res["n_wall_samples"] = len(walls)
     return res
 
 

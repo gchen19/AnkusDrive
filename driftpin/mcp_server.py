@@ -3671,6 +3671,45 @@ def molding_screen(
 
 
 @mcp.tool()
+def moldability_screen(
+    wall_samples: list[float] | None = None,
+    nominal_mm: float | None = None,
+    material: str | None = None,
+    alpha_per_k: float | None = None,
+    t_solidify_c: float | None = None,
+    t_ambient_c: float = 23.0,
+    sink_factor: float = 1.5,
+    warn_ratio: float = 2.0,
+    fail_ratio: float = 3.0,
+) -> dict:
+    """Moldability DFx screen (NO solver, NO geometry) — fast analytic gate
+    combining two checks molders reason about first: (1) WALL-THICKNESS QUALITY —
+    is the nominal wall in the resin's recommended moldable band, and is the
+    section uniform enough (uniformity_ratio = t_max/t_min; warn >2, fail >3) to
+    avoid sink/warp; thick-lobe samples (> sink_factor·nominal, k≈1.5) flagged;
+    cooling tied to the thickest wall (t ∝ s²). (2) SHRINKAGE — first-order from
+    the resin CTE: S_linear = alpha·ΔT, S_vol ≈ 3·S_linear, cavity_scale_factor =
+    1/(1−S_linear); semicrystalline resins (PP/PE/PA/POM/PLA/HDPE/LDPE) flag
+    model_underpredicts and carry a published_shrinkage_pct.
+
+    Pass ``wall_samples`` (local wall thicknesses, mm) and/or ``nominal_mm``, plus
+    ``material``. Degrades gracefully when the corpus lacks the (issue #106)
+    recommended-wall / mold-shrinkage / crystallinity fields. Low-fidelity gate:
+    escalate_to='molding_solve'.
+
+    Returns {thickness:{…}, shrinkage:{…}, material, pass, score, fidelity,
+    band_pct, warnings, escalate_to}."""
+    params: dict[str, Any] = {"t_ambient_c": t_ambient_c, "sink_factor": sink_factor,
+                              "warn_ratio": warn_ratio, "fail_ratio": fail_ratio}
+    for k, v in (("wall_samples", wall_samples), ("nominal_mm", nominal_mm),
+                 ("material", material), ("alpha_per_k", alpha_per_k),
+                 ("t_solidify_c", t_solidify_c)):
+        if v is not None:
+            params[k] = v
+    return _call("moldability_screen", **params)
+
+
+@mcp.tool()
 def drop_impact(
     drop_height_mm: float,
     crush_distance_mm: float | None = None,
@@ -4812,6 +4851,44 @@ def optics_moldability_check(
     if min_wall_mm is not None:
         params["min_wall_mm"] = min_wall_mm
     return _call("optics_moldability_check", **params)
+
+
+@mcp.tool()
+def moldability_check(
+    model: str,
+    material: str | None = None,
+    nominal_mm: float | None = None,
+    alpha_per_k: float | None = None,
+    t_solidify_c: float | None = None,
+    t_ambient_c: float = 23.0,
+    sink_factor: float = 1.5,
+    warn_ratio: float = 2.0,
+    fail_ratio: float = 3.0,
+) -> dict:
+    """Geometry-aware moldability DFx screen — resolves the `model` handle's
+    solid, samples local wall thickness per face via inward chords (the same
+    machinery as optics_moldability_check), then grades it through the pure-Python
+    moldability screen: WALL-THICKNESS QUALITY (recommended-band range /
+    uniformity / sink risk, cooling tied to the thickest wall) + the CTE
+    SHRINKAGE estimate for the resin. Low-fidelity gate — escalate_to=
+    'molding_solve'.
+
+    `material` drives the recommended-wall band, the CTE shrinkage, and cooling
+    (degrades gracefully when the corpus lacks the issue #106 fields).
+    `nominal_mm` anchors the range check (else the sampled-wall mean). The same
+    shrinkage/thickness overrides as moldability_screen apply.
+
+    Returns the moldability_screen verdict {thickness:{…}, shrinkage:{…}, pass,
+    score, fidelity, band_pct, warnings, escalate_to} plus {n_faces,
+    n_wall_samples}."""
+    params: dict[str, Any] = {"model": model, "t_ambient_c": t_ambient_c,
+                              "sink_factor": sink_factor, "warn_ratio": warn_ratio,
+                              "fail_ratio": fail_ratio}
+    for k, v in (("material", material), ("nominal_mm", nominal_mm),
+                 ("alpha_per_k", alpha_per_k), ("t_solidify_c", t_solidify_c)):
+        if v is not None:
+            params[k] = v
+    return _call("moldability_check", **params)
 
 
 @mcp.tool()
