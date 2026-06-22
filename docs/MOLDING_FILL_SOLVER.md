@@ -177,6 +177,8 @@ One physics caveat: keep `mold_temp_k` **above** the Cross-WLF singularity `D2 �
 near-adiabatic (`wall_h_w_m2k=1`) for a clean fill demo; raise it (with a safe mold
 temp) to model freeze-off short shots.
 
-**Out of scope** (separate follow-ups): end-to-end warpage / residual stress (hand
-the T/p history to CalculiX/Elmer), first-class weld-line/air-trap labels, the
-Cross-WLF + Tait material corpus (sibling of #99).
+**Out of scope here — tracked in #113** (the next step): the **packing/cooling**
+stage (the tutorial's `close_outlet` + pack phases — Tait-based volumetric shrinkage,
+sink risk, cooling time) and **warpage / residual stress** (hand the cooling T/p
+field to CalculiX/Elmer as a thermo-mechanical post-step). Also deferred: first-class
+weld-line / air-trap labels.
