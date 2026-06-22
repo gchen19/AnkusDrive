@@ -391,6 +391,434 @@ def write_cavity_case(case_dir: str, **kwargs) -> dict:
     }
 
 
+# --- openInjMoldSim (OF7-org) case generation --------------------------------
+#
+# The HEADLINE solver of issue #105: krebeljk/openInjMoldSim (GPL-3.0), a modified
+# compressibleInterFoam with **Cross-WLF** shear-thinning viscosity + a **2-domain
+# Tait** PVT equation of state and a real cooled-mold-wall heat-flux BC — i.e. the
+# packing/cooling physics the interFoam fallback (above) cannot reach. It targets
+# OpenFOAM **7 (.org)**, built from source on this host (see
+# tools/build_openinjmoldsim.sh; binary auto-resolved by
+# solvers.openinjmoldsim_bin()).
+#
+# Geometry — the same 2-D rectangular plaque as the fallback, but the case is
+# **pressure-driven** (an injection-pressure ramp imposed at the gate, the way a
+# real press is controlled) rather than fixed-velocity, and **non-isothermal**:
+# melt enters hot, the y=0/y=H mold walls draw heat out through an external
+# heat-transfer coefficient, and the Cross-WLF viscosity climbs as the melt cools —
+# so a thin/long/cold cavity freezes off mid-fill (a real short shot), not just a
+# kinematic one. The melt phase is ``alpha.poly`` (poly = the polymer); air is the
+# second phase.
+#
+# Two case-prep gotchas are baked in (the OSHA1stream SHA1 path is broken in this
+# toolchain — see docs/MOLDING_FILL_SOLVER.md): every ``#calc``/``#codeStream`` is
+# pre-evaluated to a literal, and **no** ``functions{}`` functionObject block is
+# emitted. The Cross-WLF + Tait coefficients come from the #106 materials corpus
+# (``materials.get(resin)['cross_wlf'|'tait_pvt']``), so this is the path that
+# actually consumes that corpus.
+
+# Tutorial-proven PS coefficients (krebeljk demo/fill_pack) — the fallback used
+# when the corpus lacks a resin's cross_wlf / tait_pvt cards.
+_PS_CROSS_WLF_FALLBACK = {
+    "n": 0.252, "Tau": 30800.0, "D1": 4.76e10, "D2": 373.15, "D3": 0.0,
+    "A1": 25.7, "A2": 61.06,
+}
+_PS_TAIT_FALLBACK = {
+    "b1m": 9.76e-4, "b2m": 5.8e-7, "b3m": 1.67e8, "b4m": 3.6e-3,
+    "b1s": 9.76e-4, "b2s": 2.3e-7, "b3s": 2.6e8, "b4s": 3.0e-3,
+    "b5": 373.0, "b6": 5.1e-7, "b7": 0.0, "b8": 0.0, "b9": 0.0,
+}
+# corpus key -> openInjMoldSim dict key
+_CROSS_WLF_MAP = {
+    "n": "n", "tau_star_pa": "Tau", "D1_pa_s": "D1", "D2_k": "D2",
+    "D3_k_per_pa": "D3", "A1": "A1", "A2_k": "A2",
+}
+_TAIT_MAP = {
+    "b1m_m3_kg": "b1m", "b2m_m3_kg_k": "b2m", "b3m_pa": "b3m", "b4m_per_k": "b4m",
+    "b1s_m3_kg": "b1s", "b2s_m3_kg_k": "b2s", "b3s_pa": "b3s", "b4s_per_k": "b4s",
+    "b5_k": "b5", "b6_k_per_pa": "b6", "b7_m3_kg": "b7", "b8_per_k": "b8",
+    "b9_per_pa": "b9",
+}
+
+
+def _resin_cross_wlf_tait(resin: str | None):
+    """Pull Cross-WLF + 2-domain Tait coefficients for ``resin`` from the #106
+    corpus, mapped to openInjMoldSim's dict keys; fall back to the tutorial-proven
+    PS coefficients when the corpus has no usable cards. Returns ``(cross_wlf,
+    tait)`` as float dicts."""
+    cw = dict(_PS_CROSS_WLF_FALLBACK)
+    tt = dict(_PS_TAIT_FALLBACK)
+    if not resin:
+        return cw, tt
+    try:
+        from driftpin.analysis import materials
+        card = materials.get(resin) or {}
+    except Exception:
+        return cw, tt
+    raw_cw = card.get("cross_wlf")
+    if isinstance(raw_cw, dict):
+        try:
+            cw = {dst: float(raw_cw[src]) for src, dst in _CROSS_WLF_MAP.items()
+                  if src in raw_cw}
+            for k, v in _PS_CROSS_WLF_FALLBACK.items():   # backfill any gaps
+                cw.setdefault(k, v)
+        except (TypeError, ValueError):
+            cw = dict(_PS_CROSS_WLF_FALLBACK)
+    raw_tt = card.get("tait_pvt")
+    if isinstance(raw_tt, dict):
+        try:
+            tt = {dst: float(raw_tt[src]) for src, dst in _TAIT_MAP.items()
+                  if src in raw_tt}
+            for k, v in _PS_TAIT_FALLBACK.items():
+                tt.setdefault(k, v)
+        except (TypeError, ValueError):
+            tt = dict(_PS_TAIT_FALLBACK)
+    return cw, tt
+
+
+def _plaque_blockmeshdict(*, length_m, height_m, depth_m, nx, ny, nz=1) -> str:
+    """blockMeshDict for the 2-D plaque: flow along x (``inlet`` at x=0, ``outlet``
+    at x=L), the cooled mold ``walls`` at y=0 and y=H, ``frontAndBack`` (the ±z
+    faces) ``empty`` (one cell deep). One hex block, ``nx``×``ny``×``nz`` cells."""
+    if min(length_m, height_m, depth_m) <= 0:
+        raise ValueError("all plaque dimensions must be > 0")
+    if nx < 4 or ny < 2:
+        raise ValueError("nx must be >= 4 and ny >= 2")
+    L, H, D = length_m, height_m, depth_m
+    verts = [
+        (0, 0, 0), (L, 0, 0), (L, H, 0), (0, H, 0),
+        (0, 0, D), (L, 0, D), (L, H, D), (0, H, D),
+    ]
+    vtxt = "\n".join(f"    ({x:.10g} {y:.10g} {z:.10g})" for x, y, z in verts)
+    boundary = (
+        "boundary\n(\n"
+        "    inlet  { type patch; faces ((0 3 7 4)); }\n"
+        "    outlet { type patch; faces ((1 5 6 2)); }\n"
+        "    walls  { type wall;  faces ((0 1 5 4) (3 2 6 7)); }\n"
+        "    frontAndBack { type empty; faces ((0 1 2 3) (4 5 6 7)); }\n"
+        ");\n"
+    )
+    return _header("dictionary", "blockMeshDict", "system") + f"""
+scale 1;
+vertices
+(
+{vtxt}
+);
+blocks
+(
+    hex (0 1 2 3 4 5 6 7) ({nx} {ny} {nz}) simpleGrading (1 1 1)
+);
+edges ();
+{boundary}
+mergePatchPairs ();
+"""
+
+
+def _pressure_ramp_table(peak_pa, ramp_s, end_s, base_pa=1.0e5, n=24) -> str:
+    """An OpenFOAM ``table`` of (time, gate pressure) pairs: a linear ramp from
+    ``base_pa`` to ``peak_pa`` over ``ramp_s``, held at ``peak_pa`` to ``end_s``.
+    Emitted inline (no ``#include`` of an external data file)."""
+    pts = []
+    for i in range(n + 1):                          # ramp
+        t = ramp_s * i / n
+        p = base_pa + (peak_pa - base_pa) * i / n
+        pts.append((t, p))
+    pts.append((end_s, peak_pa))                    # hold to the end
+    body = " ".join(f"({t:.8g} {p:.8g})" for t, p in pts)
+    return f"table ({body})"
+
+
+def openinjmoldsim_case_files(
+    *,
+    length_m: float = 0.02,
+    height_m: float = 1.0e-3,
+    depth_m: float = 1.0e-3,
+    nx: int = 60,
+    ny: int = 8,
+    nz: int = 1,
+    seed_len_m: float | None = None,
+    resin: str | None = "PS",
+    cross_wlf: dict | None = None,
+    tait: dict | None = None,
+    melt_temp_k: float = 493.15,
+    mold_temp_k: float = 333.15,
+    wall_h_w_m2k: float = 1.0,
+    peak_pressure_pa: float = 2.0e6,
+    ramp_time_s: float = 0.12,
+    end_time_s: float = 0.6,
+    write_interval_s: float | None = None,
+    deltaT_s: float = 1.0e-7,
+    max_deltaT_s: float = 3.0e-6,
+    max_co: float = 0.05,
+    max_solid_co: float = 0.005,
+    n_outer: int = 50,
+    p_rgh_relax: float = 0.3,
+    u_relax: float = 0.5,
+    cp_j_kgk: float = 1900.0,
+    kappa_w_mk: float = 0.18,
+    mol_weight: float = 104.15,
+    shear_modulus_pa: float = 907.0e6,
+    eta_max_pa_s: float = 1.0e7,
+    eta_min_pa_s: float = 5.0,
+    t_noflow_k: float = 373.15,
+    deltaT_interp_k: float = 5.0,
+    p_min_pa: float = 1.0e4,
+    sigma_n_m: float = 0.03,
+    air_mu_pa_s: float = 0.1,
+    air_cp_j_kgk: float = 1007.0,
+    air_mol_weight: float = 28.9,
+) -> dict:
+    """Every text file of a runnable **openInjMoldSim** (OF7-org) plaque-fill case
+    as ``{relpath: text}``.
+
+    Pressure-driven, non-isothermal fill of the 2-D plaque (``length_m`` × thin gap
+    ``height_m``, one cell deep): melt (``alpha.poly``) enters hot at the gate
+    against an imposed injection-pressure ramp (to ``peak_pressure_pa`` over
+    ``ramp_time_s``); the y=0/y=H mold walls pull heat out at ``wall_h_w_m2k`` toward
+    ``mold_temp_k``; the **Cross-WLF** viscosity (coeffs ``cross_wlf`` or the #106
+    corpus card for ``resin``) climbs as the melt cools, so a too-thin/too-long/
+    too-cold cavity freezes off mid-fill. The **2-domain Tait** EOS (``tait`` or the
+    corpus card) gives the compressible PVT behaviour the packing stage needs.
+
+    Both SHA1 gotchas of this toolchain are pre-handled: the elastic
+    ``viscLimEl``/``etaMax`` values are written as literals (no ``#calc``) and no
+    ``functions{}`` block is emitted. Constant ``cp_j_kgk``/``kappa_w_mk`` are used
+    (hPolynomial thermo + crossWLF transport) so no external cp/kappa tables are
+    needed. Run order: ``blockMesh`` → ``setFields`` → ``openInjMoldSim -fillEnd``
+    (with ``FOAM_SIGFPE`` **unset** — see the runner; this build's bashrc exports it
+    so the FPE trap is on by default, which aborts on transient ``exp`` infinities).
+
+    Stability (validated 2026-06-22, PS/20 mm × 1 mm plaque → 0.98 fill, no nan):
+    the advancing melt front excites a low-pressure region that pins to ``pMin`` and
+    makes the PIMPLE outer correctors oscillate. Three knobs keep it converged — a
+    **small ``max_deltaT_s``** (3 µs; a large cap lets ``deltaT`` grow during the
+    quiescent ramp, then the first fast-flow step is too big and diverges *within*
+    the step before ``adjustTimeStep`` can react), a **low ``max_co``** (0.05), and
+    **under-relaxed non-final PIMPLE iterations** (``p_rgh_relax``/``u_relax``). The
+    default wall is near-adiabatic (``wall_h_w_m2k=1``) for a clean fill demo; raise
+    it (with ``mold_temp_k`` kept **above** the Cross-WLF singularity ``D2-A2`` —
+    ~321 K for corpus PS) to model freeze-off short shots.
+
+    Returns the dict the caller writes under ``0/``, ``constant/``, ``system/``."""
+    L, H, D = length_m, height_m, depth_m
+    cw = cross_wlf or _resin_cross_wlf_tait(resin)[0]
+    tt = tait or _resin_cross_wlf_tait(resin)[1]
+    if cross_wlf is None and tait is None:
+        cw, tt = _resin_cross_wlf_tait(resin)
+    seed = seed_len_m if seed_len_m is not None else max(2.0 * L / nx, L * 0.04)
+    wi = write_interval_s if write_interval_s is not None else max(ramp_time_s / 8.0,
+                                                                   end_time_s / 40.0)
+    files: dict[str, str] = {}
+
+    # --- system/ -------------------------------------------------------------
+    files["system/blockMeshDict"] = _plaque_blockmeshdict(
+        length_m=L, height_m=H, depth_m=D, nx=nx, ny=ny, nz=nz)
+    files["system/controlDict"] = (
+        _header("dictionary", "controlDict", "system")
+        + "\napplication     openInjMoldSim;\nstartFrom       startTime;\n"
+        "startTime       0;\nstopAt          endTime;\n"
+        f"endTime         {end_time_s:.10g};\ndeltaT          {deltaT_s:.10g};\n"
+        "writeControl    adjustableRunTime;\n"
+        f"writeInterval   {wi:.10g};\npurgeWrite      0;\nwriteFormat     ascii;\n"
+        "writePrecision  8;\nwriteCompression off;\ntimeFormat      general;\n"
+        "timePrecision   10;\nrunTimeModifiable yes;\nadjustTimeStep  yes;\n"
+        f"maxCo           {max_co:.10g};\nmaxAlphaCo      {max_co:.10g};\n"
+        f"maxSolidCo      {max_solid_co:.10g};\nmaxDeltaT       {max_deltaT_s:.10g};\n"
+        "pAuxRlx 0.2;\n")
+    # NOTE: deliberately NO functions{} block (probes/libsampling.so) — its SHA1
+    # write aborts this toolchain at "Starting time loop".
+    files["system/fvSchemes"] = (
+        _header("dictionary", "fvSchemes", "system")
+        + "\nddtSchemes { default Euler; }\n"
+        "gradSchemes { default Gauss linear; }\n"
+        "divSchemes\n{\n"
+        "    div(phi,alpha)  Gauss vanLeer;\n"
+        "    div(phirb,alpha) Gauss linear;\n"
+        "    div(rhoPhi,U)  Gauss upwind;\n"
+        "    div(phi,thermo:rho.poly) Gauss upwind;\n"
+        "    div(phi,thermo:rho.air) Gauss upwind;\n"
+        "    div(rhoPhi,T)  Gauss upwind;\n"
+        "    div(rhoPhi,K)  Gauss upwind;\n"
+        "    div(phi,p)      Gauss upwind;\n"
+        "    div(phi,k)      Gauss upwind;\n"
+        "    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;\n"
+        "    div(phi,elSigDev) Gauss upwind;\n"
+        "    div(elSigDev) Gauss linear;\n}\n"
+        "laplacianSchemes { default Gauss linear uncorrected; }\n"
+        "interpolationSchemes { default linear; }\n"
+        "snGradSchemes { default uncorrected; }\n")
+    files["system/fvSolution"] = (
+        _header("dictionary", "fvSolution", "system")
+        + "\nsolvers\n{\n"
+        "    alpha.poly { nAlphaCorr 1; nAlphaSubCycles 1; cAlpha 1; }\n"
+        '    ".*(rho|rhoFinal)" { solver diagonal; }\n'
+        '    "(elSigDev|elSigDevFinal)" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-11; relTol 0; }\n'
+        "    pcorr { solver PCG; preconditioner DIC; tolerance 1e-10; relTol 0; maxIter 100; }\n"
+        "    p_rgh { solver GAMG; tolerance 1e-9; relTol 0.01; smoother DIC; nPreSweeps 0; nPostSweeps 2; nFinestSweeps 2; cacheAgglomeration true; nCellsInCoarsestLevel 10; agglomerator faceAreaPair; mergeLevels 1; }\n"
+        "    p_rghFinal { $p_rgh; relTol 0; }\n"
+        "    U { solver smoothSolver; smoother GaussSeidel; tolerance 1e-10; relTol 0.01; nSweeps 1; }\n"
+        '    "(T|k|B|nuTilda).*" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-10; relTol 0.01; }\n'
+        "}\n"
+        "PIMPLE\n{\n    momentumPredictor no;\n    transonic no;\n"
+        f"    nOuterCorrectors {n_outer};\n    nCorrectors 3;\n"
+        "    nNonOrthogonalCorrectors 0;\n"
+        "    outerCorrectorResidualControl\n    {\n"
+        "        p_rgh { tolerance 1e-4; relTol 0; }\n"
+        "        T     { tolerance 1e-4; relTol 0; }\n    }\n}\n"
+        "relaxationFactors\n{\n"
+        # Under-relax the NON-final PIMPLE iterations to damp the outer-corrector
+        # oscillation the advancing melt front excites against the pMin clamp; the
+        # *Final iterations stay 1.0 so the converged step is time-accurate.
+        f"    fields {{ p_rgh {p_rgh_relax:.4g}; p_rghFinal 1; T 1; TFinal 1; }}\n"
+        f'    equations {{ "U|T|elSigDev" {u_relax:.4g}; "(U|T|elSigDev)Final" 1; }}\n}}\n')
+    files["system/setFieldsDict"] = (
+        _header("dictionary", "setFieldsDict", "system")
+        + "\ndefaultFieldValues ( volScalarFieldValue alpha.poly 0 );\n"
+        "regions\n(\n    boxToCell\n    {\n"
+        f"        box (-1 -1 -1) ({seed:.10g} 1 1);\n"
+        "        fieldValues ( volScalarFieldValue alpha.poly 1 );\n    }\n);\n")
+
+    # --- constant/ -----------------------------------------------------------
+    files["constant/g"] = (
+        _header("uniformDimensionedVectorField", "g", "constant")
+        + "\ndimensions      [0 1 -2 0 0 0 0];\nvalue           (0 0 0);\n")
+    files["constant/turbulenceProperties"] = (
+        _header("dictionary", "turbulenceProperties", "constant")
+        + "\nsimulationType  laminar;\n")
+    files["constant/thermophysicalProperties"] = (
+        _header("dictionary", "thermophysicalProperties", "constant")
+        + "\nphases (poly air);\n"
+        f"pMin            [1 -1 -2 0 0 0 0] {p_min_pa:.10g};\n"
+        f"sigma           [1 0 -2 0 0 0 0] {sigma_n_m:.10g};\n")
+    eos = "\n".join(f"        {k}         {tt[k]:.10g};" for k in
+                    ("b1m", "b2m", "b3m", "b4m", "b1s", "b2s", "b3s", "b4s",
+                     "b5", "b6", "b7", "b8", "b9"))
+    files["constant/thermophysicalProperties.poly"] = (
+        _header("dictionary", "thermophysicalProperties", "constant")
+        + "\nthermoType\n{\n"
+        "    type            mojHeRhoThermo;\n    mixture         pureMixture;\n"
+        "    transport       crossWLF;\n    thermo          hPolynomial;\n"
+        "    equationOfState polymerPVT;\n    specie          specie;\n"
+        "    energy          sensibleInternalEnergy;\n}\n\n"
+        "mixture\n{\n"
+        f"    specie {{ nMoles 1; molWeight {mol_weight:.10g}; }}\n"
+        "    equationOfState\n    {\n" + eos + "\n    }\n"
+        "    thermodynamics\n    {\n        Hf 0;\n        Sf 0;\n"
+        f"        CpCoeffs<8> ({cp_j_kgk:.10g} 0 0 0 0 0 0 0);\n    }}\n"
+        "    transport\n    {\n"
+        f"        n          {cw['n']:.10g};\n        Tau        {cw['Tau']:.10g};\n"
+        f"        D1         {cw['D1']:.10g};\n        D2         {cw['D2']:.10g};\n"
+        f"        D3         {cw['D3']:.10g};\n        A1         {cw['A1']:.10g};\n"
+        f"        A2         {cw['A2']:.10g};\n"
+        f"        kappa      {kappa_w_mk:.10g};\n        etaMin     {eta_min_pa_s:.10g};\n"
+        f"        etaMax     {eta_max_pa_s:.10g};\n        TnoFlow    {t_noflow_k:.10g};\n"
+        f"        deltaTempInterp {deltaT_interp_k:.10g};\n    }}\n}}\n")
+    files["constant/thermophysicalProperties.air"] = (
+        _header("dictionary", "thermophysicalProperties", "constant")
+        + "\nthermoType\n{\n"
+        "    type            mojHeRhoThermo;\n    mixture         pureMixture;\n"
+        "    transport       mojConst;\n    thermo          hConst;\n"
+        "    equationOfState perfectGas;\n    specie          specie;\n"
+        "    energy          sensibleInternalEnergy;\n}\n\n"
+        "mixture\n{\n"
+        f"    specie {{ nMoles 1; molWeight {air_mol_weight:.10g}; }}\n"
+        f"    thermodynamics {{ Cp {air_cp_j_kgk:.10g}; Hf 0; }}\n"
+        f"    transport {{ mu {air_mu_pa_s:.10g}; Pr 1e6; }}\n}}\n")
+    # solidificationProperties — viscLimEl written as a LITERAL (the tutorial's
+    # `#calc "$etaMax*0.5"` SHA1-aborts this toolchain).
+    files["constant/solidificationProperties"] = (
+        _header("dictionary", "solidificationProperties", "constant")
+        + f"\nshearModulus {shear_modulus_pa:.10g};\n"
+        f"etaMax {eta_max_pa_s:.10g};\n"
+        f"viscLimEl {eta_max_pa_s * 0.5:.10g};\n")
+
+    # --- 0/ ------------------------------------------------------------------
+    empty = "    frontAndBack { type empty; }\n"
+    files["0/alpha.poly"] = (
+        _header("volScalarField", "alpha.poly", "0")
+        + "\ndimensions      [0 0 0 0 0 0 0];\ninternalField   uniform 0;\n"
+        "boundaryField\n{\n"
+        "    inlet  { type fixedValue; value uniform 1; }\n"
+        "    outlet { type zeroGradient; }\n"
+        "    walls  { type zeroGradient; }\n" + empty + "}\n")
+    files["0/U"] = (
+        _header("volVectorField", "U", "0")
+        + "\ndimensions      [0 1 -1 0 0 0 0];\ninternalField   uniform (0 0 0);\n"
+        "boundaryField\n{\n"
+        "    inlet  { type zeroGradient; }\n"
+        "    outlet { type zeroGradient; }\n"
+        "    walls  { type fixedValue; value uniform (0 0 0); }\n" + empty + "}\n")
+    files["0/p"] = (
+        _header("volScalarField", "p", "0")
+        + "\ndimensions      [1 -1 -2 0 0 0 0];\ninternalField   uniform 1e5;\n"
+        "boundaryField\n{\n"
+        "    inlet  { type calculated; value uniform 1e5; }\n"
+        "    outlet { type calculated; value uniform 1e5; }\n"
+        "    walls  { type calculated; value uniform 1e5; }\n" + empty + "}\n")
+    ramp = _pressure_ramp_table(peak_pressure_pa, ramp_time_s, end_time_s)
+    files["0/p_rgh"] = (
+        _header("volScalarField", "p_rgh", "0")
+        + "\ndimensions      [1 -1 -2 0 0 0 0];\ninternalField   uniform 1e5;\n"
+        "boundaryField\n{\n"
+        f"    inlet  {{ type uniformFixedValue; uniformValue {ramp}; }}\n"
+        "    outlet { type fixedValue; value uniform 1e5; }\n"
+        "    walls  { type fixedFluxPressure; value uniform 1e5; }\n" + empty + "}\n")
+    files["0/T"] = (
+        _header("volScalarField", "T", "0")
+        + "\ndimensions      [0 0 0 1 0 0 0];\n"
+        f"internalField   uniform {melt_temp_k:.10g};\n"
+        "boundaryField\n{\n"
+        f"    inlet  {{ type fixedValue; value uniform {melt_temp_k:.10g}; }}\n"
+        "    outlet { type externalWallHeatFluxTemperature; kappaMethod lookup; "
+        f"mode coefficient; Ta uniform {mold_temp_k:.10g}; h uniform 1; "
+        f"value uniform {melt_temp_k:.10g}; kappa mojKappaOut; Qr none; relaxation 1; }}\n"
+        "    walls  { type externalWallHeatFluxTemperature; kappaMethod lookup; "
+        f"mode coefficient; Ta uniform {mold_temp_k:.10g}; h uniform {wall_h_w_m2k:.10g}; "
+        f"value uniform {melt_temp_k:.10g}; kappa mojKappaOut; Qr none; relaxation 1; }}\n"
+        + empty + "}\n")
+    files["0/shrRate"] = (
+        _header("volScalarField", "shrRate", "0")
+        + "\ndimensions      [0 0 -1 0 0 0 0];\ninternalField   uniform 0;\n"
+        "boundaryField\n{\n"
+        "    inlet  { type calculated; value uniform 0; }\n"
+        "    outlet { type calculated; value uniform 0; }\n"
+        "    walls  { type calculated; value uniform 0; }\n" + empty + "}\n")
+    return files
+
+
+def write_openinjmoldsim_case(case_dir: str, **kwargs) -> dict:
+    """Write a complete, runnable openInjMoldSim (OF7-org) plaque-fill case under
+    ``case_dir``. Same knobs as ``openinjmoldsim_case_files``. Returns metadata for
+    the parser/gate: ``{case_dir, length_m, height_m, depth_m, nx, ny, resin,
+    peak_pressure_pa, end_time_s, expected_fill_time_s, flow_length_ratio,
+    backend}``. ``expected_fill_time_s`` is a coarse ramp-based estimate (the
+    pressure-driven fill has no fixed plug velocity); the real fill time comes from
+    the solved time directories."""
+    files = openinjmoldsim_case_files(**kwargs)
+    for rel, text in files.items():
+        path = os.path.join(case_dir, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+    L = kwargs.get("length_m", 0.02)
+    H = kwargs.get("height_m", 1.0e-3)
+    return {
+        "case_dir": case_dir,
+        "length_m": L,
+        "height_m": H,
+        "depth_m": kwargs.get("depth_m", 1.0e-3),
+        "nx": kwargs.get("nx", 60),
+        "ny": kwargs.get("ny", 8),
+        "resin": kwargs.get("resin", "PS"),
+        "peak_pressure_pa": kwargs.get("peak_pressure_pa", 2.0e6),
+        "ramp_time_s": kwargs.get("ramp_time_s", 0.12),
+        "end_time_s": kwargs.get("end_time_s", 0.6),
+        "expected_fill_time_s": kwargs.get("ramp_time_s", 0.12),
+        "flow_length_ratio": L / H if H else float("inf"),
+        "backend": "openInjMoldSim (GPL-3.0, OpenFOAM-7 .org)",
+    }
+
+
 # --- field parsing -----------------------------------------------------------
 
 def _time_dirs(case_dir: str) -> list:
@@ -431,7 +859,7 @@ def _read_internal_scalar_field(path: str):
 def _alpha_file(case_dir: str, time_dir: str) -> str | None:
     """Path to the melt phase-fraction field in ``time_dir`` (alpha.melt, or the
     tutorial's alpha.water), or None."""
-    for name in (_ALPHA_MELT, "alpha.water", "alpha.phase1"):
+    for name in (_ALPHA_MELT, "alpha.poly", "alpha.water", "alpha.phase1"):
         cand = os.path.join(case_dir, time_dir, name)
         if os.path.isfile(cand):
             return cand
