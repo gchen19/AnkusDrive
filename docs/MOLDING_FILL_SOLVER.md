@@ -9,7 +9,7 @@ peak injection-pressure proxy.
 
 | | headline solver | runnable today | physics | validation |
 |---|---|---|---|---|
-| **openInjMoldSim** | yes (issue target) | **no** — needs an OpenFOAM-7 (.org) build | compressibleInterFoam + Cross-WLF + Tait; fill+pack+cool | peer-reviewed (MDPI Fluids 5(2):84, 2020) |
+| **openInjMoldSim** | yes (issue target) | **binary built & validated** (2026-06-22; see below) — still needs OF7-org case-gen in the worker | compressibleInterFoam + Cross-WLF + Tait; fill+pack+cool | peer-reviewed (MDPI Fluids 5(2):84, 2020) |
 | **interFoam VOF** (fallback) | — | **yes**, on the existing OpenFOAM (.com/ESI) | incompressible VOF, Newtonian or BirdCarreau melt; fill only | we own the case + gate |
 
 `molding_fill_submit` **prefers openInjMoldSim** when its binary resolves
@@ -78,16 +78,50 @@ cavities and runs blockMesh + interFoam:
 
 Both ran on the host's OpenFOAM v2512 (`interFoam` resolves via the sourced bashrc).
 
-## Bringing openInjMoldSim live
+## openInjMoldSim — BUILT & VALIDATED (2026-06-22)
 
-1. `tools/build_openinjmoldsim.sh` — dry run prints the plan; `--build` executes it
-   (capped `-j8`, ccache; OpenFOAM-7 .org + the openInjMoldSim Allwmake).
-2. Export `DRIFTPIN_OPENINJMOLDSIM` (the binary) and
-   `DRIFTPIN_OPENINJMOLDSIM_BASHRC` (the OF7 env).
-3. `solvers.openinjmoldsim_bin()` then resolves; `molding_fill_submit` runs the GPL
-   solver against a prepared OF7-org `case_dir` instead of the interFoam fallback.
-4. Validate vs the MDPI rectangular-cavity-with-insert / dogbone tutorial (flow-front
-   + cavity pressure within published tolerance) before trusting the pack/cool stage.
+The parallel OpenFOAM-7 (.org) stack is built and the solver runs. Steps that worked
+on this host (Ubuntu 24.04, gcc 13.3):
+
+1. **OpenFOAM-7 (.org)** — `ThirdParty-7` (scotch) then `OpenFOAM-7` (`version-7`
+   branch) under `~/OpenFOAM/`. **Compiles clean on gcc-13** with no patching — the
+   `version-7` branch already absorbed the modern-toolchain fixes (~24 min at `-j8`).
+2. **openInjMoldSim v7.2** — cloned to `~/opt/openInjMoldSim`, built via
+   `applications/solvers/multiphase/openInjMoldSim/Allwmake` against the sourced OF7
+   `etc/bashrc`. Binaries `openInjMoldSim`/`openInjMoldSimF` land in `$FOAM_USER_APPBIN`.
+3. `solvers.openinjmoldsim_bin()` **auto-resolves** the binary via its
+   `~/OpenFOAM/*/platforms/*/bin` glob — `DRIFTPIN_OPENINJMOLDSIM*` env vars are
+   optional, not required.
+4. **Validated** on the bundled `tutorials/demo/fill_pack` (9600 cells), serial,
+   `-fillEnd 0.98` → *"Filled to 0.98005119 and terminating"* (~9.5 min). The full
+   Cross-WLF + Tait fill physics runs; `foamToVTK -latestTime -ascii` → meshio reads
+   the result (20434 pts) — the same extraction path the worker uses.
+
+> `tools/build_openinjmoldsim.sh --build` automates steps 1–2 (capped `-j8`, ccache).
+
+### Case-prep gotchas (REQUIRED for any openInjMoldSim case on this host)
+
+The OSHA1stream SHA1 path is broken in this toolchain (same breakage noted for the
+ESI build's functionObjects). Two consequences when preparing a case:
+
+- **Inline every `#calc` / `#codeStream` directive** — OpenFOAM's on-the-fly code
+  compilation SHA1-hashes the generated snippet and aborts. e.g. the tutorial's
+  `constant/solidificationProperties` had `viscLimEl #calc "$etaMax*0.5"`; replace
+  with the literal (`viscLimEl 5e6;`).
+- **Emit no `functions{}` functionObject block** in `controlDict` (the tutorial ships
+  a `probes`/`libsampling.so` sampler) — its SHA1 write aborts the run at *"Starting
+  time loop"*.
+
+The worker generates cases programmatically, so it simply emits neither.
+
+### Remaining: programmatic OF7 case generation
+
+`molding_fill.py` still only generates **ESI interFoam** cases. To actually invoke the
+now-built solver, the worker must generate an **OF7-org openInjMoldSim case** — the
+`moj*` thermo dicts, Cross-WLF coefficients (from the #106 corpus), Tait PVT, tabular
+cp/kappa, a time-tabulated inlet profile, and (per the gotchas) no `#calc` and no
+functionObjects. Until that case-gen lands, `molding_fill_submit` keeps running the
+interFoam fallback even though the binary is ready.
 
 **Out of scope** (separate follow-ups): end-to-end warpage / residual stress (hand
 the T/p history to CalculiX/Elmer), first-class weld-line/air-trap labels, the
