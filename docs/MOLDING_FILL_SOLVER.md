@@ -9,25 +9,28 @@ peak injection-pressure proxy.
 
 | | headline solver | runnable today | physics | validation |
 |---|---|---|---|---|
-| **openInjMoldSim** | yes (issue target) | **no** — needs an OpenFOAM-7 (.org) build | compressibleInterFoam + Cross-WLF + Tait; fill+pack+cool | peer-reviewed (MDPI Fluids 5(2):84, 2020) |
+| **openInjMoldSim** | yes (issue target) | **YES — built, case-gen + worker wired, validated** (2026-06-22; see below) | compressibleInterFoam + Cross-WLF + Tait; fill (pack/cool scaffolded) | peer-reviewed (MDPI Fluids 5(2):84, 2020) |
 | **interFoam VOF** (fallback) | — | **yes**, on the existing OpenFOAM (.com/ESI) | incompressible VOF, Newtonian or BirdCarreau melt; fill only | we own the case + gate |
 
-`molding_fill_submit` **prefers openInjMoldSim** when its binary resolves
-(`solvers.openinjmoldsim_bin()`) and a prepared OF7-org `case_dir` is supplied;
-otherwise it builds and runs the **interFoam** 2-D plaque-cavity fill case on the
-existing OpenFOAM. The GPL solver is held at the subprocess boundary — never
-imported into Python — the same arm's-length posture as the Elmer/OpenFOAM/YADE/
-openEMS/preCICE binaries.
+`molding_fill_submit` now **generates and runs openInjMoldSim** whenever its binary
+resolves (`solvers.openinjmoldsim_bin()`) — building the OF7-org case from the
+cavity + process params (or running a prepared `case_dir` if one is supplied). It
+falls back to building and running the **interFoam** 2-D plaque-cavity fill case on
+the existing OpenFOAM only when the OF7 build is absent (or an explicit `application`
+forces it). The GPL solver is held at the subprocess boundary — never imported into
+Python — the same arm's-length posture as the Elmer/OpenFOAM/YADE/openEMS/preCICE
+binaries.
 
-### Why the fallback is the primary deliverable
+### Why the fallback still exists
 
-openInjMoldSim targets **OpenFOAM 7 (.org / openfoam.org)**; this host builds
+openInjMoldSim targets **OpenFOAM 7 (.org / openfoam.org)**; this host also builds
 OpenFOAM **v19xx/v25xx (.com / ESI)**. The forks are not drop-in compatible, so the
-headline path needs a **parallel OpenFOAM-7 build** — a multi-hour, host-heavy
-compile (`tools/build_openinjmoldsim.sh`). The interFoam fallback needs **no new
-build**, runs on the existing solver in ~2 s for a coarse 2-D case, and answers the
-single most reliable molding question (short-shot). It loses the packing/cooling
-stage and the published IM validation; those ride on the OF7 path.
+headline path needs a **parallel OpenFOAM-7 build** (`tools/build_openinjmoldsim.sh`,
+a multi-hour host-heavy compile — now done on this host). Where that build is absent,
+the interFoam fallback needs **no new build**, runs on the existing solver in ~2 s
+for a coarse 2-D case, and still answers the single most reliable molding question
+(short-shot). It loses the packing/cooling stage and the published IM validation;
+those ride on the OF7 path, which is now the default wherever the build is present.
 
 ## The interFoam fill case (`driftpin/analysis/molding_fill.py`)
 
@@ -78,16 +81,101 @@ cavities and runs blockMesh + interFoam:
 
 Both ran on the host's OpenFOAM v2512 (`interFoam` resolves via the sourced bashrc).
 
-## Bringing openInjMoldSim live
+## openInjMoldSim — BUILT & VALIDATED (2026-06-22)
 
-1. `tools/build_openinjmoldsim.sh` — dry run prints the plan; `--build` executes it
-   (capped `-j8`, ccache; OpenFOAM-7 .org + the openInjMoldSim Allwmake).
-2. Export `DRIFTPIN_OPENINJMOLDSIM` (the binary) and
-   `DRIFTPIN_OPENINJMOLDSIM_BASHRC` (the OF7 env).
-3. `solvers.openinjmoldsim_bin()` then resolves; `molding_fill_submit` runs the GPL
-   solver against a prepared OF7-org `case_dir` instead of the interFoam fallback.
-4. Validate vs the MDPI rectangular-cavity-with-insert / dogbone tutorial (flow-front
-   + cavity pressure within published tolerance) before trusting the pack/cool stage.
+The parallel OpenFOAM-7 (.org) stack is built and the solver runs. Steps that worked
+on this host (Ubuntu 24.04, gcc 13.3):
+
+1. **OpenFOAM-7 (.org)** — `ThirdParty-7` (scotch) then `OpenFOAM-7` (`version-7`
+   branch) under `~/OpenFOAM/`. **Compiles clean on gcc-13** with no patching — the
+   `version-7` branch already absorbed the modern-toolchain fixes (~24 min at `-j8`).
+2. **openInjMoldSim v7.2** — cloned to `~/opt/openInjMoldSim`, built via
+   `applications/solvers/multiphase/openInjMoldSim/Allwmake` against the sourced OF7
+   `etc/bashrc`. Binaries `openInjMoldSim`/`openInjMoldSimF` land in `$FOAM_USER_APPBIN`.
+3. `solvers.openinjmoldsim_bin()` **auto-resolves** the binary via its
+   `~/OpenFOAM/*/platforms/*/bin` glob — `DRIFTPIN_OPENINJMOLDSIM*` env vars are
+   optional, not required.
+4. **Validated** on the bundled `tutorials/demo/fill_pack` (9600 cells), serial,
+   `-fillEnd 0.98` → *"Filled to 0.98005119 and terminating"* (~9.5 min). The full
+   Cross-WLF + Tait fill physics runs; `foamToVTK -latestTime -ascii` → meshio reads
+   the result (20434 pts) — the same extraction path the worker uses.
+
+> `tools/build_openinjmoldsim.sh --build` automates steps 1–2 (capped `-j8`, ccache).
+
+### Case-prep gotchas (REQUIRED for any openInjMoldSim case on this host)
+
+The OSHA1stream SHA1 path is broken in this toolchain (same breakage noted for the
+ESI build's functionObjects). Two consequences when preparing a case:
+
+- **Inline every `#calc` / `#codeStream` directive** — OpenFOAM's on-the-fly code
+  compilation SHA1-hashes the generated snippet and aborts. e.g. the tutorial's
+  `constant/solidificationProperties` had `viscLimEl #calc "$etaMax*0.5"`; replace
+  with the literal (`viscLimEl 5e6;`).
+- **Emit no `functions{}` functionObject block** in `controlDict` (the tutorial ships
+  a `probes`/`libsampling.so` sampler) — its SHA1 write aborts the run at *"Starting
+  time loop"*.
+
+The worker generates cases programmatically, so it simply emits neither.
+
+## Programmatic OF7 case generation — DONE & VALIDATED (2026-06-22)
+
+`molding_fill.py` now generates a complete, runnable **OF7-org openInjMoldSim** case
+(`openinjmoldsim_case_files` / `write_openinjmoldsim_case`), and `molding_fill_submit`
+**runs that headline GPL solver** whenever its binary resolves — no prepared
+`case_dir` needed. The interFoam path is now only the fallback for when the OF7 build
+is absent (or when an explicit `application` is passed).
+
+The generated case is a **pressure-driven, non-isothermal** 2-D plaque fill (the way
+a real press is controlled): melt enters hot at the gate against an injection-pressure
+ramp, the y=0/y=H mold walls draw heat out, and the **Cross-WLF** viscosity climbs as
+the melt cools — so a too-thin/long/cold cavity freezes off (a real short shot), not
+just a kinematic one. The melt phase is `alpha.poly`; the **2-domain Tait** EOS gives
+the compressible PVT behaviour. The Cross-WLF + Tait coefficients are pulled straight
+from the **#106 materials corpus** (`materials.get(resin)['cross_wlf'|'tait_pvt']`) —
+this is the path that actually consumes that corpus — falling back to tutorial-proven
+PS coefficients for resins the corpus does not card.
+
+### Toy validation (the green run)
+
+`tools/openinjmoldsim_toy.py` generates → runs → parses → renders end-to-end:
+
+```bash
+python3 tools/openinjmoldsim_toy.py        # → build/oims_toy/{case, fill.gif}
+```
+
+A PS, 20 mm × 1 mm plaque (60×8 cells) **filled to 0.98005 and terminated**
+(`-fillEnd 0.98`, ~3 min serial); the gate returns `pass=True, fidelity="solve"`,
+`front_x_frac=1.0`, peak ≈ the 2 MPa inlet. The melt front advancing gate→far-end:
+
+![openInjMoldSim fill](../artifacts/openinjmoldsim_fill.gif)
+
+(filmstrip: `artifacts/openinjmoldsim_fill_filmstrip.png` — 3.3 % → 27 % → 61 % →
+86 % → 98 %.) The same generate-and-run path is covered by
+`tests/test_molding_fill.py::test_openinjmoldsim_generated_case_fills` (skips unless
+the OF7 build is present).
+
+### Three more case-prep gotchas the generator handles
+
+Beyond the two SHA1 gotchas above, the **violent compressible fill** is numerically
+touchy. The advancing melt front opens a low-pressure region that pins to `pMin` and
+sets the PIMPLE outer correctors oscillating (U → 100s of m/s within a single step →
+`nan`). Three knobs, baked into the generator's defaults, keep it converged:
+
+1. **Small `maxDeltaT`** (3 µs). A large cap lets `deltaT` grow during the quiescent
+   pressure ramp; then the first fast-flow step is far too big and diverges *within*
+   the step before `adjustTimeStep` can react. This was *the* fix.
+2. **Low `maxCo`** (0.05) and **under-relaxed non-final PIMPLE iterations**
+   (`p_rgh` 0.3, `U` 0.5; the `*Final` iterations stay 1.0 for time-accuracy).
+3. **`FOAM_SIGFPE` unset before the run.** This build's `etc/bashrc` *exports*
+   `FOAM_SIGFPE` (and even an empty value counts as "set"), so the FPE trap is on by
+   default and aborts on the transient `exp` infinities the fill startup throws.
+   Unsetting it lets the `etaMax`/`pMin` clamps recover the step. The worker's
+   `_run_foam(..., unset_sigfpe=True)` and `tools/openinjmoldsim_toy.py` both do this.
+
+One physics caveat: keep `mold_temp_k` **above** the Cross-WLF singularity `D2 − A2`
+(~321 K / 48 °C for corpus PS) or near-wall cells cool through it. The default wall is
+near-adiabatic (`wall_h_w_m2k=1`) for a clean fill demo; raise it (with a safe mold
+temp) to model freeze-off short shots.
 
 **Out of scope** (separate follow-ups): end-to-end warpage / residual stress (hand
 the T/p history to CalculiX/Elmer), first-class weld-line/air-trap labels, the

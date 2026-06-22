@@ -12386,14 +12386,22 @@ def _h_em_induction_submit(p):
 
 # --- CFD (family 6 P2; OpenFOAM/SU2-backed) -----------------------------------
 
-def _run_foam(case_dir, argv_list, env_bashrc):
+def _run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False):
     """Run a sequence of OpenFOAM apps (each an argv list) in ``case_dir``, sourcing
     ``env_bashrc`` first so WM_PROJECT_DIR/FOAM_ETC are exported — without that the
     foam apps abort with "Could not find mandatory etc entry 'controlDict'". Apps run
-    left-to-right, stopping at the first failure. Returns (returncode, combined_tail)."""
+    left-to-right, stopping at the first failure. Returns (returncode, combined_tail).
+
+    ``unset_sigfpe`` unsets ``FOAM_SIGFPE`` after sourcing — the OF7-org bashrc
+    *exports* it (even empty counts as "set"), turning on the FPE trap that aborts
+    openInjMoldSim on the transient ``exp`` infinities thrown during the violent
+    fill startup; clamps (etaMax/pMin) recover the step once the trap is off."""
     import subprocess
     chain = " && ".join(" ".join(a) for a in argv_list)
-    script = (f"source '{env_bashrc}' >/dev/null 2>&1\n" if env_bashrc else "") + chain
+    script = (f"source '{env_bashrc}' >/dev/null 2>&1\n" if env_bashrc else "")
+    if unset_sigfpe:
+        script += "unset FOAM_SIGFPE\n"
+    script += chain
     proc = subprocess.run(["bash", "-c", script], cwd=case_dir,
                           capture_output=True, text=True)
     return proc.returncode, ((proc.stdout or "") + (proc.stderr or ""))[-2000:]
@@ -12962,28 +12970,100 @@ def _h_cfd_external_flow_submit(p):
 # driftpin/analysis/molding_fill.fill_gate).
 
 def _molding_openinjmoldsim_submit(p, of_bin):
-    """Run a prepared openInjMoldSim case (the OF7-org GPL solver) in `case_dir`.
-    Only reached when solvers.openinjmoldsim_bin() resolved; sources the OF7-org
-    bashrc, runs the solver, and reports the run. Field extraction reuses the
-    interFoam alpha parser (openInjMoldSim writes the same alpha.melt VOF field)."""
+    """Run a **prepared** openInjMoldSim case (the OF7-org GPL solver) in `case_dir`.
+    Reached when solvers.openinjmoldsim_bin() resolved AND the caller supplied a
+    ready OF7-org case tree; sources the OF7-org bashrc (FOAM_SIGFPE unset), runs the
+    solver, parses the fill via the molding_fill alpha parser (openInjMoldSim writes
+    alpha.poly), and gates it."""
     from driftpin import jobs, solvers
-    case_dir = p.get("case_dir")
-    if not case_dir or not os.path.isdir(case_dir):
-        raise ValueError(
-            "openInjMoldSim resolved but molding_fill_submit needs a prepared "
-            "`case_dir` (its OF7-org case tree) to run the GPL solver against")
+    case_dir = p["case_dir"]
     env_bashrc = solvers.openinjmoldsim_bashrc()
+    nx, ny = int(p.get("nx", 60)), int(p.get("ny", 8))
+    length_m = float(p.get("length_mm", 20.0)) / 1000.0
     key = jobs.content_key("molding_fill",
                            {"oims": os.path.abspath(case_dir), "bin": of_bin})
 
     def _work():
-        rc, tail = _run_foam(case_dir, [[of_bin]], env_bashrc)
-        return {"ok": rc == 0, "returncode": rc, "solver": "openInjMoldSim",
-                "backend": "openInjMoldSim (GPL-3.0, OpenFOAM-7 .org)",
-                "case_dir": case_dir, "stdout_tail": tail}
+        from driftpin.analysis import molding_fill as _mf
+        rc, tail = _run_foam(case_dir, [[of_bin, "-fillEnd",
+                                         str(p.get("fill_end", 0.98))]],
+                             env_bashrc, unset_sigfpe=True)
+        out = {"ok": rc == 0, "returncode": rc, "solver": "openInjMoldSim",
+               "backend": "openInjMoldSim (GPL-3.0, OpenFOAM-7 .org)",
+               "case_dir": case_dir, "stdout_tail": tail}
+        parsed = _mf.parse_fill(case_dir, nx=nx, ny=ny, length_m=length_m)
+        if parsed:
+            out["fill"] = parsed
+            out["gate"] = _mf.fill_gate(
+                parsed, expected_fill_time_s=float(p.get("ramp_time_s", 0.12)),
+                machine_max_pressure_pa=float(p.get("machine_max_pressure_pa", 1.8e8)),
+                fill_fraction_pass=float(p.get("fill_fraction_pass", 0.97)))
+        return out
 
     return jobs.submit("molding_fill", _work, key=key,
                        meta={"backend": "openInjMoldSim", "case_dir": case_dir})
+
+
+def _molding_openinjmoldsim_build_and_run(p, of_bin):
+    """**Generate** an OF7-org openInjMoldSim plaque-fill case from cavity + process
+    params (Cross-WLF + Tait from the #106 corpus for ``resin``), then run
+    blockMesh → setFields → openInjMoldSim -fillEnd on the from-source OF7 build and
+    gate the fill. This is the path that actually invokes the headline GPL solver —
+    no prepared case_dir needed. GPL stays at the subprocess boundary.
+
+    Params: ``length_mm``, ``wall_thickness_mm`` (gap), ``depth_mm``, ``nx``/``ny``;
+    ``resin`` (corpus key); ``melt_temp_c``/``mold_temp_c``/``wall_h_w_m2k``;
+    ``peak_pressure_mpa`` (gate ramp); ``fill_fraction_pass``, ``machine_max_pressure_pa``."""
+    from driftpin import jobs, solvers
+    env_bashrc = solvers.openinjmoldsim_bashrc()
+    length_m = float(p.get("length_mm", 20.0)) / 1000.0
+    height_m = float(p.get("wall_thickness_mm", 1.0)) / 1000.0
+    depth_m = float(p.get("depth_mm", p.get("wall_thickness_mm", 1.0))) / 1000.0
+    nx, ny = int(p.get("nx", 60)), int(p.get("ny", 8))
+    resin = p.get("resin", "PS")
+    peak_pa = float(p.get("peak_pressure_mpa", 2.0)) * 1e6
+    melt_k = float(p.get("melt_temp_c", 220.0)) + 273.15
+    mold_k = float(p.get("mold_temp_c", 60.0)) + 273.15
+    wall_h = float(p.get("wall_h_w_m2k", 1.0))
+    machine_pmax = float(p.get("machine_max_pressure_pa", 1.8e8))
+    fill_pass = float(p.get("fill_fraction_pass", 0.97))
+    key = jobs.content_key("molding_fill", {"oims_gen": {
+        "L": length_m, "H": height_m, "D": depth_m, "nx": nx, "ny": ny,
+        "resin": resin, "peak": peak_pa, "melt": melt_k, "mold": mold_k,
+        "h": wall_h}})
+
+    def _work():
+        import tempfile
+        from driftpin.analysis import molding_fill as _mf
+        cdir = tempfile.mkdtemp(prefix="oims_fill_")
+        built = _mf.write_openinjmoldsim_case(
+            cdir, resin=resin, length_m=length_m, height_m=height_m,
+            depth_m=depth_m, nx=nx, ny=ny, peak_pressure_pa=peak_pa,
+            melt_temp_k=melt_k, mold_temp_k=mold_k, wall_h_w_m2k=wall_h)
+        rc, tail = _run_foam(
+            cdir, [["blockMesh"], ["setFields"],
+                   [of_bin, "-fillEnd", str(p.get("fill_end", 0.98))]],
+            env_bashrc, unset_sigfpe=True)
+        out = {
+            "ok": rc == 0, "returncode": rc, "solver": "openInjMoldSim",
+            "backend": "openInjMoldSim (GPL-3.0, OpenFOAM-7 .org) — generated case",
+            "case_dir": cdir, "resin": resin,
+            "length_mm": length_m * 1000.0, "wall_thickness_mm": height_m * 1000.0,
+            "peak_pressure_mpa": peak_pa / 1e6,
+            "flow_length_ratio": round(built["flow_length_ratio"], 2),
+            "stdout_tail": tail,
+        }
+        parsed = _mf.parse_fill(cdir, nx=nx, ny=ny, length_m=length_m)
+        if parsed:
+            out["fill"] = parsed
+            out["gate"] = _mf.fill_gate(
+                parsed, expected_fill_time_s=built["expected_fill_time_s"],
+                machine_max_pressure_pa=machine_pmax, fill_fraction_pass=fill_pass)
+        return out
+
+    return jobs.submit("molding_fill", _work, key=key,
+                       meta={"backend": "openInjMoldSim (generated)",
+                             "resin": resin, "length_mm": length_m * 1000.0})
 
 
 @handler("molding_fill_submit")
@@ -13014,8 +13094,15 @@ def _h_molding_fill_submit(p):
     from driftpin import solvers
 
     oims = solvers.openinjmoldsim_bin()
-    if oims and p.get("case_dir"):
-        return _molding_openinjmoldsim_submit(p, oims)
+    if oims and not p.get("application"):
+        # Headline GPL solver is built and resolvable: run THAT (OF7-org). With a
+        # prepared OF7 case_dir, run it directly; otherwise generate the case from
+        # the cavity/process params and run blockMesh→setFields→openInjMoldSim.
+        # (An explicit `application` forces the interFoam-prepared path below.)
+        if p.get("case_dir") and os.path.isdir(p["case_dir"]):
+            return _molding_openinjmoldsim_submit(p, oims)
+        if not p.get("case_dir"):
+            return _molding_openinjmoldsim_build_and_run(p, oims)
 
     # OpenFOAM is reachable if the registry resolves a binary OR a sourceable
     # bashrc exists (interFoam/blockMesh are not on the bare PATH until the env is

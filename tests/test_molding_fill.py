@@ -154,6 +154,96 @@ def test_short_shot_cavity_stalls():
     assert gate["pass"] is False and gate["short_shot"] is True, (parsed, gate)
 
 
+# --- openInjMoldSim (OF7-org) case generation (no solver) --------------------
+
+def test_openinjmoldsim_case_files_structure():
+    """The generated OF7-org case has the right files, names openInjMoldSim, and
+    bakes in BOTH SHA1 gotchas: NO `#calc`/`#codeStream` anywhere and NO
+    `functions{}` functionObject block in controlDict."""
+    files = mf.openinjmoldsim_case_files(resin="PS", length_m=0.02, height_m=1e-3,
+                                         nx=60, ny=8)
+    for rel in ("system/blockMeshDict", "system/controlDict", "system/fvSchemes",
+                "system/fvSolution", "system/setFieldsDict",
+                "constant/thermophysicalProperties",
+                "constant/thermophysicalProperties.poly",
+                "constant/thermophysicalProperties.air",
+                "constant/solidificationProperties", "constant/turbulenceProperties",
+                "constant/g", "0/alpha.poly", "0/U", "0/p", "0/p_rgh", "0/T",
+                "0/shrRate"):
+        assert rel in files, rel
+    assert "application     openInjMoldSim" in files["system/controlDict"]
+    # GOTCHA 1: no on-the-fly compiled directives anywhere (SHA1-broken here)
+    for rel, text in files.items():
+        assert "#calc" not in text, rel
+        assert "#codeStream" not in text, rel
+    # GOTCHA 2: no functionObject block (probes/libsampling.so aborts the loop)
+    assert "functions" not in files["system/controlDict"]
+    assert "libsampling" not in files["system/controlDict"]
+    # the melt phase is alpha.poly; pressure-driven inlet (uniformFixedValue table)
+    assert "phases (poly air)" in files["constant/thermophysicalProperties"]
+    assert "uniformValue table" in files["0/p_rgh"]
+    assert "fixedValue; value uniform 1" in files["0/alpha.poly"]
+    # the two SHA1-prone values are written as LITERALS
+    sp = files["constant/solidificationProperties"]
+    assert "viscLimEl 5000000" in sp and "#calc" not in sp
+
+
+def test_openinjmoldsim_corpus_drives_cross_wlf_and_tait():
+    """The Cross-WLF + 2-domain Tait coefficients come from the #106 corpus: PS and
+    HDPE produce DIFFERENT viscosity/PVT cards, and an unknown resin falls back to
+    the tutorial-proven PS coefficients (never empty/broken)."""
+    ps = mf.openinjmoldsim_case_files(resin="PS")["constant/thermophysicalProperties.poly"]
+    hd = mf.openinjmoldsim_case_files(resin="HDPE")["constant/thermophysicalProperties.poly"]
+    assert ps != hd                                   # corpus actually consulted
+    assert "crossWLF" in ps and "polymerPVT" in ps
+    # PS corpus n=0.250, HDPE n=0.330 — the cards reflect the corpus
+    assert "n          0.25" in ps
+    assert "n          0.33" in hd
+    unknown = mf.openinjmoldsim_case_files(resin="not-a-resin-xyz")
+    poly = unknown["constant/thermophysicalProperties.poly"]
+    assert "D1" in poly and "b1m" in poly             # fell back, still complete
+
+
+def test_openinjmoldsim_blockmesh_patches_and_2d():
+    bm = mf.openinjmoldsim_case_files()["system/blockMeshDict"]
+    for patch in ("inlet", "outlet", "walls", "frontAndBack"):
+        assert patch in bm, patch
+    assert "empty" in bm                              # 2-D: ±z faces are empty
+
+
+# --- openInjMoldSim solver-backed fill (skips when the OF7 build is absent) ---
+
+def test_openinjmoldsim_generated_case_fills():
+    """The headline path end-to-end: generate an OF7-org openInjMoldSim case from
+    corpus PS, run blockMesh→setFields→openInjMoldSim -fillEnd (FOAM_SIGFPE unset),
+    and confirm the real Cross-WLF + Tait fill reaches the far end and the gate
+    passes. Skips unless the from-source OpenFOAM-7 build is present.
+
+    Slow (~3 min): the violent compressible fill needs a small maxDeltaT. Guarded
+    on the binary so it only runs where tools/build_openinjmoldsim.sh has run."""
+    binp = solvers.openinjmoldsim_bin()
+    bashrc = solvers.openinjmoldsim_bashrc()
+    if not binp or not bashrc:
+        print("    SKIP — openInjMoldSim (OF7-org) not built")
+        return
+    d = tempfile.mkdtemp(prefix="oims_fill_test_")
+    built = mf.write_openinjmoldsim_case(
+        d, resin="PS", length_m=0.02, height_m=1e-3, depth_m=1e-3, nx=60, ny=8,
+        peak_pressure_pa=2.0e6)
+    script = (f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n"
+              "blockMesh > log.bm 2>&1 && setFields > log.sf 2>&1 && "
+              f"'{binp}' -fillEnd 0.98 > log.oims 2>&1")
+    proc = subprocess.run(["bash", "-c", script], cwd=d, capture_output=True,
+                          text=True)
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    parsed = mf.parse_fill(d, nx=60, ny=8, length_m=0.02)
+    assert parsed is not None, "no converged alpha.poly field"
+    assert parsed["filled_fraction"] >= 0.9, parsed
+    assert parsed["front_x_frac"] >= 0.95, parsed
+    gate = mf.fill_gate(parsed, expected_fill_time_s=built["expected_fill_time_s"])
+    assert gate["pass"] is True and gate["fidelity"] == "solve", (parsed, gate)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
