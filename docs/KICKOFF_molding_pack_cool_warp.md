@@ -106,40 +106,65 @@ bash script `_run_foam` builds).
 
 ## 4. Implementation plan (Part A)
 
-Incremental, each step independently testable:
+Incremental, each step independently testable. **[x] = done (branch `feat/molding-pack-cool`).**
 
-- [ ] **Generator: `startFrom latestTime`.** Change the fill `controlDict` (or add a flag)
-      so pack continuation works. Verify fill still runs (regression).
-- [ ] **Pack controlDict rewrite + close_outlet helper.** Add to `molding_fill.py` a small
-      builder that returns the `foamDictionary` command list for (a) `time_extend` (endTime/
-      writeInterval/maxDeltaT) and (b) `close_outlet` (the three BC switches on the latest
-      time dir). Keep it pure (returns command argv lists) so it's unit-testable without a
-      solver.
-- [ ] **Worker: multi-phase run.** Extend `_molding_openinjmoldsim_build_and_run` (or add a
-      sibling `..._fill_pack`) to: run fill → (find latest time) → reset deltaT → close_outlet
-      → run pack1 → time_extend → pack2 → … . Use `_run_foam` with `unset_sigfpe=True` for
-      every phase. Gate behind a param like `stages="fill"|"fill_pack"` (default keep
-      `fill` so existing behavior is unchanged; opt into pack).
-- [ ] **Parser: density / shrinkage / cooling.** Add a `parse_pack` (or extend `parse_fill`)
-      that reads the final density field (`thermo:rho.poly` or `rho`) and `T`, computes
-      **volumetric shrinkage** = 1 − ρ_fill/ρ_final (or via Tait V(T,p)), the **min density**
-      (sink risk), and the **cooling time** (time for max(T) to drop below the eject temp
-      `T_eject`, or below `TnoFlow`). openInjMoldSim writes `rho`, `T`, `p`, `alpha.poly`,
-      `shrRate` each write interval — inspect a real pack run to confirm field names.
-- [ ] **Gate: `pack_gate`.** House verdict shape `{pass, score, fidelity:"solve", band_pct,
-      shrinkage_pct, min_density_kg_m3, sink_risk, cooling_time_s, residual_pressure_pa,
-      warnings}`. `pass` when shrinkage within band and no severe sink. Cross-check the
-      shrinkage is in-family with the #104 CTE screen / #106 `mold_shrinkage_pct` corpus card.
-- [ ] **Toy validation + artifact.** Extend `tools/openinjmoldsim_toy.py` with a `--pack`
-      mode that runs fill+pack and renders the cooling (T field over time, or density). Save
-      `artifacts/openinjmoldsim_pack.gif` (+ filmstrip), mirroring the fill artifacts.
-- [ ] **Tests.** Structural (close_outlet command list correct; controlDict `startFrom
-      latestTime`) always-on; a slow solver-backed `test_..._pack_shrinks` skip-guarded on the
-      binary (like `test_openinjmoldsim_generated_case_fills`).
-- [ ] **Docs.** New section in `docs/MOLDING_FILL_SOLVER.md` (or a sibling doc) describing the
-      pack stage, the gate, and any new gotchas found.
-- [ ] **MCP tool.** Surface the `stages` param (+ `eject_temp_c`, pack times) on
-      `molding_fill_submit` in `mcp_server.py`; keep the contract test green.
+- [x] **Generator: `startFrom latestTime`** — done; fill regression-verified.
+- [x] **Pack controlDict rewrite + close_outlet helpers** — `close_outlet_cmds`,
+      `time_extend_cmds`, `reset_restart_deltaT_cmd`, `set_walls_h_cmd`, `pack_phase_plan`
+      (all pure, unit-tested).
+- [x] **Worker: multi-phase run** — `_molding_openinjmoldsim_build_and_run` gained
+      `stages="fill"|"fill_pack"`; fill_pack runs reset → set-walls-cooling → close_outlet
+      → per-phase time_extend + re-run. Validated STABLE (nan=0).
+- [x] **Parser: `parse_pack`** — melt-masked `rho`/`T`; volumetric shrinkage (1 − ρ_fill/
+      ρ_final), min density (sink), frozen fraction, cooling time, residual pressure.
+      Field names confirmed (`rho`, `T`, `alpha.poly`, `p`).
+- [x] **Gate: `pack_gate`** — house verdict shape. ⚠️ band reference still open (see
+      "CONFIRMED pack findings" — raw PVT densification ≠ net mold shrinkage).
+- [x] **Generator `elastic` param** — default OFF (viscLimEl > etaMax) to dodge the
+      elSigDev cooling divergence; True reserved for Part B.
+- [ ] **Recalibrate the shrinkage gate band** (owner decision a/b/c in findings) — the one
+      substantive open item for a clean Part-A gate.
+- [ ] **Toy validation + artifact.** Add a `--pack` mode to `tools/openinjmoldsim_toy.py`
+      (fill+pack, render the cooling T or density field over time). Save
+      `artifacts/openinjmoldsim_pack.gif` (+ filmstrip). For a frozen demo use a thinner
+      wall (0.4–0.5 mm) and/or longer window.
+- [x] **Structural tests** — controlDict latestTime, close_outlet cmds, time_extend/plan/
+      walls_h, pack_gate band+sink, elastic toggle (all pass).
+- [ ] **Slow solver-backed test** — `test_..._fill_pack_cools` skip-guarded on the binary
+      (like the fill test). ~6 min; consider a short window / thin wall to bound runtime.
+- [ ] **Docs.** Section in `docs/MOLDING_FILL_SOLVER.md` describing the pack stage + gate
+      + the elastic/shrinkage gotchas.
+- [ ] **MCP tool.** Surface `stages`, `eject_temp_c`, `pack_wall_h_w_m2k`, `cool_window_s`,
+      `pack_phases` on `molding_fill_submit` in `mcp_server.py`; keep the contract test green.
+
+### CONFIRMED pack findings (2026-06-22 runs — read before iterating)
+
+- **Elastic-stress (elSigDev) divergence — FIXED.** As the part cools past `viscLimEl`,
+  openInjMoldSim's elastic shear-stress model activates and on this coarse,
+  constant-cp/kappa case it goes violently unstable (max(U) → 2.8e8, 5578 nan lines).
+  **Fix: disable it for Part A** — the generator now sets `viscLimEl` ABOVE `etaMax`
+  (param `elastic=False`, default) so elasticity never triggers. Shrinkage/cooling
+  don't need it. `elastic=True` (viscLimEl = etaMax·0.5, tutorial behaviour) is reserved
+  for the Part-B residual-stress/warpage path — it will need stabilisation work
+  (under-relax elSigDev, finer mesh, tabulated thermo) before it's usable.
+- **Fill-adiabatic → pack-cool design WORKS.** Fill with `wall_h≈1` completes to 0.98
+  (hot/fast); the pack transition switches walls to cooling (`set_walls_h_cmd`, default
+  1250) + `close_outlet`. Validated stable: nan=0, fill 967.9 → pack 1005.1 kg/m³,
+  residual pressure ~2 MPa, full 1 s cool window.
+- **Shrinkage metric is RAW PVT densification, not net "mold shrinkage" — gate band needs
+  recalibration.** `parse_pack`'s `volumetric_shrinkage_pct = 1 − ρ_fill/ρ_final` measures
+  how much the polymer densifies as it cools (3.70% in the 1 s toy, climbing toward the
+  full melt→solid PVT change ~6–7% as it fully cools). The corpus `mold_shrinkage_pct`
+  (PS 0.4–0.7% LINEAR) is the *net* part shrinkage AFTER packing feed compensates — a
+  different quantity, NOT 3× the linear value. **Decision needed (owner):** either (a)
+  report raw PVT densification and drop the corpus-band pass/fail (keep it informational),
+  or (b) derive an expected PVT densification from the Tait EOS at the melt/eject temps
+  and gate against THAT, or (c) model packing feed to get true net shrinkage (hard). The
+  parser/gate plumbing is correct; only the reference band is in question.
+- **1 mm wall cools slowly (conduction-limited, ~10 s).** In the 1 s toy `frozen_fraction`
+  is 0 and `cooling_time_s` is null (never reached eject temp). For a frozen toy use a
+  thinner wall (0.4–0.5 mm) and/or a longer window (tutorial runs to 6 s). The parser
+  already flags partial cooling as a lower bound.
 
 ### Likely-new pack gotchas to watch (predictions — confirm/expand as found)
 - **Stiffness at solidification.** As cells cross `TnoFlow`, viscosity jumps to `etaMax`

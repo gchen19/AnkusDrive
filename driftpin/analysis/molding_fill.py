@@ -558,6 +558,7 @@ def openinjmoldsim_case_files(
     kappa_w_mk: float = 0.18,
     mol_weight: float = 104.15,
     shear_modulus_pa: float = 907.0e6,
+    elastic: bool = False,
     eta_max_pa_s: float = 1.0e7,
     eta_min_pa_s: float = 5.0,
     t_noflow_k: float = 373.15,
@@ -729,11 +730,20 @@ def openinjmoldsim_case_files(
         f"    transport {{ mu {air_mu_pa_s:.10g}; Pr 1e6; }}\n}}\n")
     # solidificationProperties — viscLimEl written as a LITERAL (the tutorial's
     # `#calc "$etaMax*0.5"` SHA1-aborts this toolchain).
+    #
+    # The elastic shear-stress (elSigDev) model activates once the cooling melt's
+    # viscosity exceeds viscLimEl. On this coarse, constant-cp/kappa case that coupling
+    # is violently unstable during pack solidification (max(U)→1e8, nan). For Part A
+    # (shrinkage / sink / cooling time — none of which need elasticity) we DISABLE it
+    # by setting viscLimEl ABOVE etaMax (per the model: "viscLimEl should be less than
+    # etaMax to allow elastic behavior"). elastic=True restores the tutorial's
+    # behaviour (for a future residual-stress / warpage path, #113 Part B).
+    visc_lim_el = eta_max_pa_s * 0.5 if elastic else eta_max_pa_s * 2.0
     files["constant/solidificationProperties"] = (
         _header("dictionary", "solidificationProperties", "constant")
         + f"\nshearModulus {shear_modulus_pa:.10g};\n"
         f"etaMax {eta_max_pa_s:.10g};\n"
-        f"viscLimEl {eta_max_pa_s * 0.5:.10g};\n")
+        f"viscLimEl {visc_lim_el:.10g};\n")
 
     # --- 0/ ------------------------------------------------------------------
     empty = "    frontAndBack { type empty; }\n"

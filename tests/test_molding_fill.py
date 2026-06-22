@@ -183,9 +183,14 @@ def test_openinjmoldsim_case_files_structure():
     assert "phases (poly air)" in files["constant/thermophysicalProperties"]
     assert "uniformValue table" in files["0/p_rgh"]
     assert "fixedValue; value uniform 1" in files["0/alpha.poly"]
-    # the two SHA1-prone values are written as LITERALS
+    # the two SHA1-prone values are written as LITERALS (no #calc)
     sp = files["constant/solidificationProperties"]
-    assert "viscLimEl 5000000" in sp and "#calc" not in sp
+    assert "viscLimEl" in sp and "#calc" not in sp
+    # elastic stress OFF by default → viscLimEl ABOVE etaMax (no elSigDev divergence
+    # during cooling); elastic=True restores the tutorial's below-etaMax value
+    assert "viscLimEl 20000000" in sp                 # etaMax(1e7) * 2
+    sp_el = mf.openinjmoldsim_case_files(elastic=True)["constant/solidificationProperties"]
+    assert "viscLimEl 5000000" in sp_el               # etaMax(1e7) * 0.5
 
 
 def test_openinjmoldsim_corpus_drives_cross_wlf_and_tait():
