@@ -4499,8 +4499,14 @@ def molding_fill_submit(
     wall_h_w_m2k: float | None = None,
     fill_end: float | None = None,
     application: str | None = None,
+    stages: str | None = None,
+    pack_phases: int | None = None,
+    cool_window_s: float | None = None,
+    eject_temp_c: float | None = None,
+    pack_wall_h_w_m2k: float | None = None,
 ) -> dict:
-    """Injection-molding FILL solve, asynchronous — the higher-fidelity twin
+    """Injection-molding FILL (+ optional PACK/COOL) solve, asynchronous — the higher-
+    fidelity twin
     `molding_screen` escalates to. Answers *can this geometry actually be molded*:
     short-shot / fill ability (the strongest, most reliable gate), fill time, and a
     peak injection-pressure proxy — a real two-phase (melt + air) flow solve, not the
@@ -4522,6 +4528,16 @@ def molding_fill_submit(
     transfer coeff; default ~adiabatic for a clean fill — raise for freeze-off),
     `fill_end` (terminate fraction, default 0.98). Pass `application` to force the
     interFoam-prepared path.
+
+    **Packing/cooling** (openInjMoldSim only): set `stages="fill_pack"` to also run the
+    cooling continuation after fill (seal the gate, switch walls to cooling, hold). Knobs:
+    `pack_phases` (default 2), `cool_window_s` (cooling duration; default a few× the fill
+    time — note a 1 mm wall cools in ~seconds, so a short window gives partial cooling),
+    `eject_temp_c` (for cooling-time; default 80), `pack_wall_h_w_m2k` (cool-side wall
+    coeff; default 1250). The pack result adds `pack:{rho_mean_final, rho_min,
+    volumetric_shrinkage_pct, frozen_fraction, cooling_time_s, residual_pressure_pa}` and
+    `pack_gate:{pass (on sink risk), score, volumetric_shrinkage_pct,
+    expected_densification_pct (Tait-EOS), pvt_faithful, sink_risk, warnings}`.
 
     Drive the interFoam path with cavity + process params:
     - `length_mm` (flow length, default 100), `wall_thickness_mm` (cavity height,
@@ -4554,7 +4570,10 @@ def molding_fill_submit(
                  ("resin", resin), ("peak_pressure_mpa", peak_pressure_mpa),
                  ("melt_temp_c", melt_temp_c), ("mold_temp_c", mold_temp_c),
                  ("wall_h_w_m2k", wall_h_w_m2k), ("fill_end", fill_end),
-                 ("application", application)):
+                 ("application", application), ("stages", stages),
+                 ("pack_phases", pack_phases), ("cool_window_s", cool_window_s),
+                 ("eject_temp_c", eject_temp_c),
+                 ("pack_wall_h_w_m2k", pack_wall_h_w_m2k)):
         if v is not None:
             params[k] = v
     return _call("molding_fill_submit", **params)

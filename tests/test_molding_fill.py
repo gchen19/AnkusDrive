@@ -321,6 +321,54 @@ def test_openinjmoldsim_generated_case_fills():
     assert gate["pass"] is True and gate["fidelity"] == "solve", (parsed, gate)
 
 
+def test_openinjmoldsim_fill_pack_cools_and_densifies():
+    """The packing/cooling continuation (issue #113): fill (near-adiabatic, hot) → switch
+    walls to cooling + seal the gate → cool. Confirms it runs STABLE (no nan) and the
+    melt DENSIFIES on cooling, with the densification faithful to the resin's Tait EOS and
+    the gate passing (no sink). Skips unless the OF7 build is present. Slow (~5-6 min)."""
+    binp = solvers.openinjmoldsim_bin()
+    bashrc = solvers.openinjmoldsim_bashrc()
+    if not binp or not bashrc:
+        print("    SKIP — openInjMoldSim (OF7-org) not built")
+        return
+    d = tempfile.mkdtemp(prefix="oims_pack_test_")
+    mf.write_openinjmoldsim_case(
+        d, resin="PS", length_m=0.02, height_m=1e-3, depth_m=1e-3, nx=60, ny=8,
+        peak_pressure_pa=2.0e6, wall_h_w_m2k=1.0)        # fill near-adiabatic
+
+    def run(cmds, log):
+        chain = " && ".join(" ".join(a) for a in cmds)
+        script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
+        with open(os.path.join(d, log), "w") as f:
+            return subprocess.run(["bash", "-c", script], cwd=d, stdout=f,
+                                  stderr=subprocess.STDOUT).returncode
+
+    assert run([["blockMesh"], ["setFields"], [binp, "-fillEnd", "0.98"]],
+               "log.fill") == 0
+    fe = mf._latest_time_dir(d)
+    fstats = mf._melt_stats(d, fe)
+    # pack: reset → switch walls to cooling → close outlet → extend + re-run
+    cmds = ([mf.reset_restart_deltaT_cmd(fe), mf.set_walls_h_cmd(fe, 1250.0)]
+            + mf.close_outlet_cmds(fe))
+    for (e, w, m) in mf.pack_phase_plan(float(fe), n_phases=1, cool_window_s=0.6):
+        cmds += mf.time_extend_cmds(end_time_s=e, write_interval_s=w, max_deltaT_s=m)
+        cmds += [[binp]]
+    assert run(cmds, "log.pack") == 0
+    with open(os.path.join(d, "log.pack")) as f:
+        assert "nan" not in f.read().lower(), "pack diverged (nan in log)"
+
+    ppar = mf.parse_pack(d, fill_rho_mean=fstats["rho_mean"],
+                         fill_end_time_s=float(fe))
+    assert ppar is not None
+    assert ppar["rho_mean_final"] > fstats["rho_mean"]   # densified on cooling
+    assert ppar["T_mean_melt"] < fstats["T_mean"]        # cooled
+    tait = mf._resin_cross_wlf_tait("PS")[1]
+    pg = mf.pack_gate(ppar, tait=tait, fill_T_mean_k=fstats["T_mean"])
+    assert pg["fidelity"] == "solve"
+    assert pg["pass"] is True and pg["sink_risk"] is False
+    assert pg["pvt_faithful"] is True                    # solve tracks its own EOS
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

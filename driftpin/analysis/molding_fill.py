@@ -1097,7 +1097,7 @@ def tait_densification_pct(tait: dict, *, T_hot_k: float, T_cold_k: float,
     return 100.0 * (1.0 - rho_hot / rho_cold)
 
 
-def _melt_stats(case_dir: str, time_dir: str, *, alpha_melt_min: float = 0.9):
+def _melt_stats(case_dir: str, time_dir: str, *, alpha_melt_min: float = 0.99):
     """Mean/min density and max/mean temperature over the **melt** cells
     (alpha.poly >= alpha_melt_min) at ``time_dir``, plus the melt cell count and the
     max residual pressure. Returns a dict or None if fields are missing.
@@ -1134,7 +1134,7 @@ def _melt_stats(case_dir: str, time_dir: str, *, alpha_melt_min: float = 0.9):
 
 
 def cooling_time_s(case_dir: str, *, fill_end_time_s: float, eject_temp_k: float,
-                   alpha_melt_min: float = 0.9) -> float | None:
+                   alpha_melt_min: float = 0.99) -> float | None:
     """Time (from ``fill_end_time_s``) for the hottest **melt** cell to drop below
     ``eject_temp_k`` — the cooling/cycle-time driver. Scans the written time
     directories at/after the fill end. Returns None if the part never cools below the
@@ -1155,7 +1155,7 @@ def cooling_time_s(case_dir: str, *, fill_end_time_s: float, eject_temp_k: float
 def parse_pack(
     case_dir: str, *, fill_rho_mean: float | None = None,
     fill_end_time_s: float | None = None, eject_temp_k: float = 353.15,
-    t_noflow_k: float = 373.15, alpha_melt_min: float = 0.9,
+    t_noflow_k: float = 373.15, alpha_melt_min: float = 0.99,
     time_dir: str | None = None,
 ) -> dict | None:
     """Read the **final** (pack/cool) state and return the packing result.

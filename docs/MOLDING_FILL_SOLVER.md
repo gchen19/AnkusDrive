@@ -177,8 +177,56 @@ One physics caveat: keep `mold_temp_k` **above** the Cross-WLF singularity `D2 �
 near-adiabatic (`wall_h_w_m2k=1`) for a clean fill demo; raise it (with a safe mold
 temp) to model freeze-off short shots.
 
-**Out of scope here — tracked in #113** (the next step): the **packing/cooling**
-stage (the tutorial's `close_outlet` + pack phases — Tait-based volumetric shrinkage,
-sink risk, cooling time) and **warpage / residual stress** (hand the cooling T/p
-field to CalculiX/Elmer as a thermo-mechanical post-step). Also deferred: first-class
+## Packing / cooling stage (issue #113, Part A)
+
+Set `stages="fill_pack"` on `molding_fill_submit` (openInjMoldSim path) to run the
+**packing/cooling continuation** after the fill: once the cavity is full, the worker
+**seals the gate, switches the walls to cooling, and holds** while the part cools — the
+stage that gives volumetric shrinkage, sink risk, residual pressure, and cooling time.
+
+It is a *continuation* of the same case from the filled state (`startFrom latestTime`),
+mirroring the tutorial's `close_outlet` + pack phases but serial. Per the tutorial
+mechanics (`molding_fill.py` helpers): reset the restart `deltaT`, `set_walls_h_cmd`
+(switch on cooling — the fill runs ~isothermal/near-adiabatic so it completes hot/fast,
+then heat is extracted during the hold), `close_outlet_cmds` (seal: `p_rgh`→
+`fixedFluxPressure`, `U`→`fixedValue (0 0 0)`, `T` outlet `h`←walls), then per phase
+`time_extend_cmds` + re-run. Demo:
+
+```bash
+python3 tools/openinjmoldsim_toy.py --pack --cool-window-s 1.2   # → pack_cool.gif
+```
+
+![openInjMoldSim cooling](../artifacts/openinjmoldsim_pack_cool.gif)
+
+**Two pack-specific gotchas** (beyond the five fill ones):
+
+1. **Elastic-stress (`elSigDev`) divergence.** As the part cools past `viscLimEl` the
+   elastic shear-stress model activates and, on this coarse constant-cp/kappa case, goes
+   violently unstable (max U → 1e8, nan). Part A doesn't need elasticity, so the
+   generator's **`elastic=False`** default sets `viscLimEl` *above* `etaMax` to disable
+   it. `elastic=True` (the tutorial's behaviour) is reserved for the future
+   residual-stress / warpage path and will need its own stabilisation.
+2. **Conduction-limited cooling.** A 1 mm wall cools in ~10 s (Biot ≈ 7), so a short toy
+   window gives *partial* cooling — `frozen_fraction` low, `cooling_time_s` a lower bound
+   (the parser flags this). Use a thinner wall (0.4–0.5 mm) and/or a longer window
+   (the tutorial runs to 6 s) for a fully-frozen cycle.
+
+**The packing gate** (`pack_gate`) — verdict shape with `fidelity="solve"`:
+
+- **`pass` is driven by sink risk** — a local under-packed region
+  (`rho_min < 0.92 · rho_mean_final`, measured against the part's own mean). This is the
+  actionable moldability signal; no dubious external reference.
+- **shrinkage is a Tait-EOS faithfulness check, not a verdict.** The solved
+  `volumetric_shrinkage_pct` (= `1 − ρ_fill/ρ_final`) is *raw PVT densification on
+  cooling*, **not** the net "mold shrinkage" molders quote (which is
+  post-packing-feed-compensation — that needs feed modelling, deferred). The gate checks
+  it against the resin's own 2-domain Tait EOS (`tait_density` /
+  `tait_densification_pct`): a wild solved/expected ratio *warns* (likely a heterogeneous
+  fill-end state or too-coarse mesh) but does **not** fail. Validated: solved 3.70% vs
+  Tait-expected 4.03% (493.8 → 420 K @ 2 MPa) → `pvt_faithful=true`, `pass=true`.
+
+**Still out of scope — tracked in #113 Part B:** **warpage / residual stress** (hand the
+cooling T / differential-shrinkage field to CalculiX/Elmer as a thermo-mechanical
+post-step; needs `elastic=True` stabilised first), and **net mold shrinkage** (the
+cavity-sizing number — needs packing-feed modelling). Also deferred: first-class
 weld-line / air-trap labels.
