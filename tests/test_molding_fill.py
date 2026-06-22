@@ -211,6 +211,60 @@ def test_openinjmoldsim_blockmesh_patches_and_2d():
     assert "empty" in bm                              # 2-D: ±z faces are empty
 
 
+# --- packing / cooling helpers (no solver; issue #113) -----------------------
+
+def test_controldict_starts_from_latest_time():
+    """The pack stage resumes from the filled state, so the fill controlDict must use
+    `startFrom latestTime` (latestTime is 0 initially, so fill still starts at 0)."""
+    cd = mf.openinjmoldsim_case_files()["system/controlDict"]
+    assert "startFrom       latestTime" in cd
+
+
+def test_close_outlet_cmds_seal_and_cool():
+    """close_outlet emits the three BC switches that seal the gate and cool through the
+    former outlet: p_rgh→fixedFluxPressure, U→fixedValue (0 0 0), T outlet h←walls h."""
+    cmds = mf.close_outlet_cmds("0.22")
+    flat = [" ".join(c) for c in cmds]
+    assert any("0.22/p_rgh" in c and "fixedFluxPressure" in c for c in flat)
+    assert any("0.22/U" in c and "fixedValue" in c for c in flat)
+    assert any("0.22/U" in c and "(0 0 0)" in c for c in flat)
+    # T outlet h is set from the walls' h via a runtime foamDictionary substitution
+    assert any("0.22/T" in c and "boundaryField.outlet.h" in c
+               and "boundaryField.walls.h" in c for c in flat)
+
+
+def test_time_extend_and_plan_and_walls_h():
+    te = mf.time_extend_cmds(end_time_s=1.0, write_interval_s=0.05, max_deltaT_s=1e-4)
+    entries = {c[3] for c in te}
+    assert entries == {"endTime", "writeInterval", "maxDeltaT"}
+    plan = mf.pack_phase_plan(0.2, n_phases=2, cool_window_s=1.0)
+    assert len(plan) == 2
+    assert plan[0][0] < plan[1][0]                    # each phase extends further
+    assert plan[-1][0] == 0.2 + 1.0                   # spans the cool window
+    wh = mf.set_walls_h_cmd("0.22", 1250.0)
+    assert wh[1] == "0.22/T" and "walls.h" in wh[3] and wh[-1] == "1250"
+    rd = mf.reset_restart_deltaT_cmd("0.22")
+    assert "0.22/uniform/time" in rd and rd[3] == "deltaT"
+
+
+def test_pack_gate_shrinkage_band_and_sink():
+    # in-band shrinkage, no sink → pass
+    g = mf.pack_gate({"volumetric_shrinkage_pct": 1.6, "rho_min": 1000.0,
+                      "frozen_fraction": 0.8},
+                     shrinkage_band_pct=(1.2, 2.1))
+    assert g["pass"] is True and g["in_band"] is True and g["fidelity"] == "solve"
+    assert g["score"] > 0.8                           # near band centre
+    # out-of-band shrinkage → fail with a warning
+    g2 = mf.pack_gate({"volumetric_shrinkage_pct": 0.5, "rho_min": 1000.0,
+                       "frozen_fraction": 0.8}, shrinkage_band_pct=(1.2, 2.1))
+    assert g2["pass"] is False and g2["in_band"] is False and g2["warnings"]
+    # sink risk (a melt region below the density floor) → fail
+    g3 = mf.pack_gate({"volumetric_shrinkage_pct": 1.6, "rho_min": 850.0,
+                       "frozen_fraction": 0.8},
+                      shrinkage_band_pct=(1.2, 2.1), sink_density_floor_kg_m3=900.0)
+    assert g3["pass"] is False and g3["sink_risk"] is True
+
+
 # --- openInjMoldSim solver-backed fill (skips when the OF7 build is absent) ---
 
 def test_openinjmoldsim_generated_case_fills():
