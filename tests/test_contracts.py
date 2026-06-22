@@ -33,7 +33,10 @@ MCP = REPO / "driftpin" / "mcp_server.py"
 _NO_DISPATCH = {"restart_worker"}  # tears down / respawns the worker process itself
 
 # Tools whose function name intentionally differs from the handler they call.
-_NAME_DIFFERS_OK = {"render_view", "render_views"}  # both call "tessellate", rasterize host-side
+_NAME_DIFFERS_OK = {
+    "render_view", "render_views",   # both call "tessellate", rasterize host-side
+    "granular_screen",               # public DFx screen → closed-form "granular_oracle" handler
+}
 
 # Handlers intentionally NOT surfaced as an MCP tool (worker-internal only).
 _INTERNAL_HANDLERS = {"list_handles", "recompute_stress"}
