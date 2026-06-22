@@ -9603,6 +9603,21 @@ def _h_molding_screen(p):
     return molding.molding_screen(**p)
 
 
+@handler("moldability_screen")
+def _h_moldability_screen(p):
+    """Moldability DFx screen (NO solver, NO geometry) — pure-Python combiner of
+    the wall-thickness quality screen + the CTE shrinkage estimate. Pass
+    ``wall_samples`` (a list of local wall thicknesses, mm) and/or ``nominal_mm``,
+    plus ``material`` and the usual overrides (``alpha_per_k``, ``t_solidify_c``,
+    ``t_ambient_c``, ``sink_factor``, ``warn_ratio``, ``fail_ratio``). Degrades
+    gracefully when the material corpus lacks the (issue #106) recommended-wall /
+    mold-shrinkage / crystallinity fields. See driftpin.analysis.molding. Returns
+    {thickness:{…}, shrinkage:{…}, material, pass, score, fidelity, band_pct,
+    warnings, escalate_to='molding_fill_submit'}."""
+    from driftpin.analysis import molding
+    return molding.moldability_screen(**p)
+
+
 @handler("drop_impact")
 def _h_drop_impact(p):
     """Drop/impact screen by exact energy balance: G_avg = h/d, pulse-shape peak
@@ -9895,6 +9910,67 @@ def _h_optics_moldability_check(p):
     else:
         res["wall_thickness_stats"] = {"min_mm": None, "mean_mm": None, "max_mm": None, "n": 0}
     res["n_faces"] = len(shape.Faces)
+    return res
+
+
+@handler("moldability_check")
+def _h_moldability_check(p):
+    """Geometry-aware moldability DFx screen — resolves the `model` handle's
+    solid, samples local wall thickness per face via inward chords (the same
+    machinery as optics_moldability_check), then grades it through the pure-Python
+    moldability screen (driftpin.analysis.molding): the wall-thickness quality
+    sub-screen (range / uniformity / sink risk, cooling tied to the thickest
+    wall) plus the CTE shrinkage estimate for the resin. Low-fidelity gate —
+    escalate_to='molding_fill_submit'.
+
+    Args: model (handle), material (resin name; drives the recommended-wall band,
+    CTE shrinkage, cooling — degrades gracefully when the corpus lacks the issue
+    #106 fields), nominal_mm (optional; else the sampled-wall mean anchors the
+    range check), and the shrinkage/thickness overrides (alpha_per_k,
+    t_solidify_c, t_ambient_c, sink_factor, warn_ratio, fail_ratio). Returns the
+    moldability_screen verdict {thickness:{…}, shrinkage:{…}, pass, score,
+    fidelity, band_pct, warnings, escalate_to} augmented with
+    {n_faces, n_wall_samples}."""
+    from driftpin.analysis import molding
+    handle = p.get("model") or p.get("handle")
+    if not handle:
+        raise ValueError("moldability_check needs a `model` handle")
+    _, shape = _shape_of(handle)
+
+    bbox = shape.BoundBox
+    reach = bbox.DiagonalLength * 2.0 + 1.0
+    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)
+
+    # Inward-chord wall samples per face (reuse optics_moldability_check's chord).
+    walls = []
+    import Part
+    for face in shape.Faces:
+        n = _outward_normal(face)
+        if n.Length == 0:
+            continue
+        n = App.Vector(n).normalize()
+        c = face.CenterOfMass
+        in_pt = c - App.Vector(n).multiply(eps)
+        try:
+            chord = shape.common(Part.makeLine(in_pt, in_pt - App.Vector(n).multiply(reach)))
+            if chord.Length > 1e-6:
+                walls.append(round(chord.Length, 4))
+        except Exception:
+            pass
+
+    res = molding.moldability_screen(
+        wall_samples=(walls or None),
+        nominal_mm=p.get("nominal_mm"),
+        material=p.get("material"),
+        alpha_per_k=p.get("alpha_per_k"),
+        t_solidify_c=p.get("t_solidify_c"),
+        t_ambient_c=p.get("t_ambient_c", 23.0),
+        sink_factor=p.get("sink_factor", 1.5),
+        warn_ratio=p.get("warn_ratio", 2.0),
+        fail_ratio=p.get("fail_ratio", 3.0),
+    )
+    res["n_faces"] = len(shape.Faces)
+    res["n_wall_samples"] = len(walls)
     return res
 
 
@@ -12869,6 +12945,166 @@ def _h_cfd_external_flow_submit(p):
     raise ValueError(
         "provide a prepared `case_dir`, or the flat-plate params (velocity_m_s, and "
         "optionally plate_length_mm/fluid) to build the Blasius validation case")
+
+
+# --- injection-molding FILL (issue #105; interFoam VOF on the existing OpenFOAM,
+#     prefers openInjMoldSim on OF7-org if its binary is present) ---------------
+#
+# The higher-fidelity twin molding_screen escalates to. The headline solver is
+# openInjMoldSim (GPL-3.0, modified compressibleInterFoam, OpenFOAM-7 .org) — when
+# its binary resolves (solvers.openinjmoldsim_bin) the handler runs THAT in a
+# prepared case_dir. Until the OF7-org build lands (tools/build_openinjmoldsim.sh),
+# it runs the runnable fallback: a 2-D interFoam VOF cavity fill (melt + air,
+# Newtonian or BirdCarreau melt) on the EXISTING OpenFOAM (.com/ESI), which answers
+# the strongest molding gate — short-shot / fill ability — plus fill time and a
+# peak-pressure proxy. GPL stays at the subprocess boundary (we never import the
+# solver). Verdict shape: pass/score/fidelity:"solve"/band_pct (see
+# driftpin/analysis/molding_fill.fill_gate).
+
+def _molding_openinjmoldsim_submit(p, of_bin):
+    """Run a prepared openInjMoldSim case (the OF7-org GPL solver) in `case_dir`.
+    Only reached when solvers.openinjmoldsim_bin() resolved; sources the OF7-org
+    bashrc, runs the solver, and reports the run. Field extraction reuses the
+    interFoam alpha parser (openInjMoldSim writes the same alpha.melt VOF field)."""
+    from driftpin import jobs, solvers
+    case_dir = p.get("case_dir")
+    if not case_dir or not os.path.isdir(case_dir):
+        raise ValueError(
+            "openInjMoldSim resolved but molding_fill_submit needs a prepared "
+            "`case_dir` (its OF7-org case tree) to run the GPL solver against")
+    env_bashrc = solvers.openinjmoldsim_bashrc()
+    key = jobs.content_key("molding_fill",
+                           {"oims": os.path.abspath(case_dir), "bin": of_bin})
+
+    def _work():
+        rc, tail = _run_foam(case_dir, [[of_bin]], env_bashrc)
+        return {"ok": rc == 0, "returncode": rc, "solver": "openInjMoldSim",
+                "backend": "openInjMoldSim (GPL-3.0, OpenFOAM-7 .org)",
+                "case_dir": case_dir, "stdout_tail": tail}
+
+    return jobs.submit("molding_fill", _work, key=key,
+                       meta={"backend": "openInjMoldSim", "case_dir": case_dir})
+
+
+@handler("molding_fill_submit")
+def _h_molding_fill_submit(p):
+    """Injection-molding FILL solve via VOF (interFoam) — the higher-fidelity twin
+    molding_screen escalates to, OFF the MCP channel. Answers *can this be molded*:
+    short-shot / fill ability (the strongest gate), fill time, and a peak-pressure
+    proxy. Degrades to {ok:false, reason, install} when no OpenFOAM resolves.
+
+    Prefers **openInjMoldSim** (GPL-3.0, OpenFOAM-7 .org) when its binary resolves
+    (run as a subprocess against a prepared `case_dir`); otherwise builds and runs a
+    2-D rectangular plaque-cavity **interFoam** case (melt + air) on the existing
+    OpenFOAM. Drive the interFoam path with cavity + process params:
+      * `length_mm`, `wall_thickness_mm` (cavity height), `depth_mm`, mesh `nx`/`ny`;
+      * `inject_velocity_m_s` OR `flow_rate_cm3_s` (with gate area) — the melt mean
+        inlet speed;
+      * melt: `melt_rho_kg_m3`, `melt_nu_m2_s` (kinematic) or a `carreau`
+        {nu0,nuInf,k,n} BirdCarreau dict (Cross-WLF stand-in); air defaults built in;
+      * `end_time_s` (run bound), `machine_max_pressure_pa` (gate limit, default
+        180 MPa), `fill_fraction_pass` (default 0.97).
+    Or pass a prepared `case_dir` to run the resolved solver directly.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result.
+    The interFoam result: {ok, returncode, backend, case_dir, fill:{filled_fraction,
+    filled_cell_fraction, front_x_frac, last_to_fill_x_frac, max_pressure_pa,...},
+    gate:{pass, score, fidelity:"solve", band_pct, short_shot, fill_time_s,
+    max_pressure_pa, pressure_ok, warnings}, expected_fill_time_s, stdout_tail}."""
+    from driftpin import solvers
+
+    oims = solvers.openinjmoldsim_bin()
+    if oims and p.get("case_dir"):
+        return _molding_openinjmoldsim_submit(p, oims)
+
+    # OpenFOAM is reachable if the registry resolves a binary OR a sourceable
+    # bashrc exists (interFoam/blockMesh are not on the bare PATH until the env is
+    # sourced, so the bashrc is the true runnability signal for this build).
+    env_bashrc = solvers.openfoam_bashrc()
+    info = _require_solver("openfoam")
+    if not info["ok"] and env_bashrc is None:            # graceful degradation
+        return info
+    from driftpin import jobs
+
+    # prepared case_dir with the ESI interFoam (no openInjMoldSim): run the app
+    # against the prepared tree (sourcing the OpenFOAM env), reusing _run_foam.
+    if p.get("case_dir"):
+        case_dir = p["case_dir"]
+        if not os.path.isdir(case_dir):
+            raise ValueError(f"molding_fill_submit case_dir not found: {case_dir}")
+        app = p.get("application", "interFoam")
+        key = jobs.content_key("molding_fill",
+                               {"prepared": os.path.abspath(case_dir), "app": app})
+
+        def _work_prepared():
+            rc, tail = _run_foam(case_dir, [[app]], env_bashrc)
+            return {"ok": rc == 0, "returncode": rc, "solver": "openfoam",
+                    "backend": f"interFoam VOF (prepared case, {app})",
+                    "application": app, "case_dir": case_dir, "stdout_tail": tail}
+
+        return jobs.submit("molding_fill", _work_prepared, key=key,
+                           meta={"backend": "interFoam", "case_dir": case_dir})
+
+    # --- build the 2-D interFoam cavity-fill validation case -----------------
+    length_m = float(p.get("length_mm", 100.0)) / 1000.0
+    height_m = float(p.get("wall_thickness_mm", 2.0)) / 1000.0
+    depth_m = float(p.get("depth_mm", 1.0)) / 1000.0
+    nx = int(p.get("nx", 120))
+    ny = int(p.get("ny", 8))
+    U = p.get("inject_velocity_m_s")
+    if U is None:
+        q = p.get("flow_rate_cm3_s")
+        if q is not None:
+            gate_area_m2 = (p.get("gate_height_mm", height_m * 1000.0) / 1000.0) * depth_m
+            U = (float(q) * 1e-6) / gate_area_m2 if gate_area_m2 > 0 else 0.5
+        else:
+            U = 0.5
+    U = float(U)
+    end_time_s = float(p.get("end_time_s", max(4.0 * length_m / U, 0.05)))
+    melt_rho = float(p.get("melt_rho_kg_m3", 900.0))
+    melt_nu = float(p.get("melt_nu_m2_s", 1.0e-3))
+    carreau = p.get("carreau")
+    machine_pmax = float(p.get("machine_max_pressure_pa", 1.8e8))
+    fill_pass = float(p.get("fill_fraction_pass", 0.97))
+
+    key = jobs.content_key("molding_fill", {"cavity": {
+        "L": length_m, "H": height_m, "D": depth_m, "nx": nx, "ny": ny, "U": U,
+        "et": end_time_s, "rho": melt_rho, "nu": melt_nu, "carreau": carreau}})
+
+    def _work():
+        import tempfile
+        from driftpin.analysis import molding_fill as _mf
+        cdir = tempfile.mkdtemp(prefix="foam_mold_fill_")
+        built = _mf.write_cavity_case(
+            cdir, length_m=length_m, height_m=height_m, depth_m=depth_m,
+            nx=nx, ny=ny, inject_velocity_m_s=U, end_time_s=end_time_s,
+            melt_rho_kg_m3=melt_rho, melt_nu_m2_s=melt_nu, carreau=carreau)
+        rc, tail = _run_foam(cdir, [["blockMesh"], ["interFoam"]], env_bashrc)
+        out = {
+            "ok": rc == 0,
+            "returncode": rc,
+            "solver": "openfoam",
+            "backend": "interFoam VOF (melt+air, OpenFOAM .com/ESI fallback)",
+            "case_dir": cdir,
+            "length_mm": length_m * 1000.0,
+            "wall_thickness_mm": height_m * 1000.0,
+            "inject_velocity_m_s": U,
+            "expected_fill_time_s": round(built["expected_fill_time_s"], 5),
+            "flow_length_ratio": round(built["flow_length_ratio"], 2),
+            "stdout_tail": tail,
+        }
+        parsed = _mf.parse_fill(cdir, nx=nx, ny=ny, length_m=length_m,
+                                melt_rho_kg_m3=melt_rho)
+        if parsed:
+            out["fill"] = parsed
+            out["gate"] = _mf.fill_gate(
+                parsed, expected_fill_time_s=built["expected_fill_time_s"],
+                machine_max_pressure_pa=machine_pmax, fill_fraction_pass=fill_pass)
+        return out
+
+    return jobs.submit("molding_fill", _work, key=key,
+                       meta={"backend": "interFoam", "length_mm": length_m * 1000.0,
+                             "wall_thickness_mm": height_m * 1000.0})
 
 
 # --- generic async jobs (driftpin.jobs) ---------------------------------------

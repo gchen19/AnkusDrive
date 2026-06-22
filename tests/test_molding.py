@@ -92,6 +92,99 @@ def test_input_validation():
             raise AssertionError("expected ValueError")
 
 
+# --- moldability DFx screen (issue #104) --------------------------------------
+# thickness_screen (range / uniformity / sink), shrinkage_estimate (CTE-driven),
+# and the moldability_screen combiner — all pure-Python, no FreeCAD.
+
+
+def test_shrinkage_scales_linearly_with_alpha_and_dt():
+    # S_linear = alpha * dT — exact linearity in both factors.
+    base = mo.shrinkage_estimate(alpha_per_k=50e-6, t_solidify_c=100, t_ambient_c=20)
+    twice_alpha = mo.shrinkage_estimate(alpha_per_k=100e-6, t_solidify_c=100, t_ambient_c=20)
+    twice_dt = mo.shrinkage_estimate(alpha_per_k=50e-6, t_solidify_c=180, t_ambient_c=20)
+    assert abs(twice_alpha["linear_shrinkage_pct"] / base["linear_shrinkage_pct"] - 2.0) < 1e-9
+    assert abs(twice_dt["linear_shrinkage_pct"] / base["linear_shrinkage_pct"] - 2.0) < 1e-9
+    # S_volumetric ~= 3*S_linear
+    assert abs(base["volumetric_shrinkage_pct"] - 3 * base["linear_shrinkage_pct"]) < 1e-9
+
+
+def test_cavity_scale_factor_inverts_shrink():
+    # cavity_scale_factor * (1 - S_linear) ~= 1, by construction csf = 1/(1-S).
+    r = mo.shrinkage_estimate(alpha_per_k=80e-6, t_solidify_c=120, t_ambient_c=23)
+    S = r["linear_shrinkage_pct"] / 100.0
+    assert abs(r["cavity_scale_factor"] * (1.0 - S) - 1.0) < 1e-6
+    # predicted final dim shrinks: L_final = L*(1-S)
+    d = mo.shrinkage_estimate(material="ABS", nominal_mm=100.0)
+    assert d["predicted_final_mm"] < 100.0
+
+
+def test_semicrystalline_underprediction_flag():
+    # model_underpredicts fires for a semicrystalline resin (PP), not amorphous.
+    pp = mo.shrinkage_estimate(material="PP")
+    abs_ = mo.shrinkage_estimate(material="ABS")
+    pc = mo.shrinkage_estimate(material="PC")
+    assert pp["model_underpredicts"] is True and pp["escalate_to"] == "molding_fill_submit", pp
+    assert abs_["model_underpredicts"] is False and abs_["escalate_to"] is None, abs_
+    assert pc["model_underpredicts"] is False, pc
+    # a published linear mold-shrinkage rides alongside the CTE estimate.
+    assert pp["published_shrinkage_pct"] is not None, pp
+    assert pp["fidelity"] == "correlation" and pp["band_pct"] == 50.0, pp
+
+
+def test_thickness_uniformity_and_sink():
+    # uniformity_ratio = max/min, exact.
+    r = mo.thickness_screen(wall_samples=[2.0, 2.0, 4.0], nominal_mm=2.0, material="ABS")
+    assert r["uniformity_ratio"] == 2.0, r
+    # a uniform box in-band passes.
+    uniform = mo.thickness_screen(wall_samples=[2.0, 2.05, 1.95, 2.0], material="ABS")
+    assert uniform["pass"] is True and uniform["in_range"] is True, uniform
+    # a thick lobe flags sink_risk and fails (6 mm > 1.5*2 mm, uniformity 3:1).
+    lobe = mo.thickness_screen(wall_samples=[2.0, 2.0, 6.0], nominal_mm=2.0, material="ABS")
+    assert lobe["sink_risk_samples"] == [6.0] and lobe["pass"] is False, lobe
+    # cooling tied to the thickest wall (t_max=6) — matches molding_screen(6).
+    assert lobe["cooling_time_s"] == mo.molding_screen(6.0, material="ABS")["cooling_time_s"]
+
+
+def test_thickness_out_of_band_nominal():
+    # an out-of-band nominal flags in_range=False (6 mm too thick for ABS).
+    r = mo.thickness_screen(nominal_mm=6.0, material="ABS")
+    assert r["in_range"] is False and r["pass"] is False, r
+    # graceful fallback: unknown resin still screens against the global default band.
+    g = mo.thickness_screen(nominal_mm=2.0, material="unobtanium")
+    assert g["wall_band_source"] == "default" and g["in_range"] is True, g
+
+
+def test_moldability_screen_combined():
+    # combined pass true only when both sub-tests pass.
+    good = mo.moldability_screen(wall_samples=[2.0, 2.05, 1.95], nominal_mm=2.0, material="ABS")
+    assert good["pass"] is True, good
+    # carries the house verdict shape.
+    assert good["fidelity"] == "correlation" and good["band_pct"] == 50.0
+    assert good["escalate_to"] == "molding_fill_submit"
+    assert "thickness" in good and "shrinkage" in good and isinstance(good["warnings"], list)
+    # thickness failure (thick lobe) sinks the combined pass.
+    bad_wall = mo.moldability_screen(wall_samples=[2.0, 2.0, 6.0], nominal_mm=2.0, material="ABS")
+    assert bad_wall["pass"] is False, bad_wall
+    # a semicrystalline resin (PP) also fails the combined gate (underprediction).
+    pp = mo.moldability_screen(wall_samples=[2.0, 2.0, 2.0], nominal_mm=2.0, material="PP")
+    assert pp["pass"] is False, pp
+
+
+def test_moldability_input_validation():
+    for bad in (
+        lambda: mo.thickness_screen(),                                  # no samples/nominal
+        lambda: mo.thickness_screen(wall_samples=[2.0, -1.0]),          # bad sample
+        lambda: mo.shrinkage_estimate(t_solidify_c=100),               # no alpha resolvable
+        lambda: mo.shrinkage_estimate(alpha_per_k=80e-6, t_solidify_c=10, t_ambient_c=23),  # dT<=0
+    ):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

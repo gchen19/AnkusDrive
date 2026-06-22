@@ -49,6 +49,20 @@ _NUMERIC = {
     "cost_usd_kg":           ("rough_cost", 1.0, "USD/kg"),
     "refractive_index":      ("refractive_index", 1.0, ""),
     "abbe":                  ("abbe_number", 1.0, ""),
+    # --- process / rheology layer (injection molding, issue #106) ---
+    "melt_temp_c":           ("melt_temp_c", 1.0, "C"),
+    "mold_temp_c":           ("mold_temp_c", 1.0, "C"),
+    "eject_temp_c":          ("eject_temp_c", 1.0, "C"),
+}
+
+# Range-valued accessors: name -> (card_field, end, scale, target_unit) where the
+# card value is a two-token "lo hi" string (e.g. recommended_wall_mm "0.8 3.5").
+# end ∈ {"min","max"} selects which token. numeric() resolves these too.
+_NUMERIC_RANGE = {
+    "recommended_wall_min_mm": ("recommended_wall_mm", "min", 1.0, "mm"),
+    "recommended_wall_max_mm": ("recommended_wall_mm", "max", 1.0, "mm"),
+    "mold_shrinkage_min_pct":  ("mold_shrinkage_pct", "min", 1.0, "%"),
+    "mold_shrinkage_max_pct":  ("mold_shrinkage_pct", "max", 1.0, "%"),
 }
 
 # rank_by -> (numeric-key expression, descending?). "specific_*" are computed.
@@ -125,10 +139,35 @@ def parse_quantity(s) -> tuple[float, str]:
     return value, unit
 
 
+def parse_range(s) -> tuple[float, float]:
+    """Split a two-token range string ``"0.8 3.5"`` -> (0.8, 3.5). A single token
+    is treated as a degenerate range (lo == hi). Returns (lo, hi) floats with
+    lo <= hi. Raises ValueError if unparseable or if lo > hi (a likely typo)."""
+    if s is None:
+        raise ValueError("cannot parse range from None")
+    toks = str(s).strip().split()
+    try:
+        nums = [float(t) for t in toks[:2]]
+    except (ValueError, IndexError) as e:
+        raise ValueError(f"unparseable range: {s!r}") from e
+    if not nums:
+        raise ValueError(f"empty range: {s!r}")
+    lo, hi = (nums[0], nums[1]) if len(nums) > 1 else (nums[0], nums[0])
+    if lo > hi:
+        raise ValueError(f"range lo>hi: {s!r}")
+    return lo, hi
+
+
 def numeric(card: dict, key: str):
-    """Return a card property as a single float in canonical units (see _NUMERIC),
-    or None if the card lacks that property. Returns a float or None. Raises
-    KeyError if key is not a known canonical accessor."""
+    """Return a card property as a single float in canonical units (see _NUMERIC /
+    _NUMERIC_RANGE), or None if the card lacks that property. Returns a float or
+    None. Raises KeyError if key is not a known canonical accessor."""
+    if key in _NUMERIC_RANGE:
+        field, end, scale, _unit = _NUMERIC_RANGE[key]
+        if field not in card:
+            return None
+        lo, hi = parse_range(card[field])
+        return (lo if end == "min" else hi) * scale
     if key not in _NUMERIC:
         raise KeyError(f"unknown numeric accessor: {key!r}")
     field, scale, _unit = _NUMERIC[key]
@@ -193,7 +232,7 @@ def select(criteria: dict | None = None, rank_by: str = "specific_strength") -> 
         if not (raw_key.startswith("min_") or raw_key.startswith("max_")):
             raise KeyError(f"criterion must start with min_/max_: {raw_key!r}")
         kind, acc = raw_key.split("_", 1)
-        if acc not in _NUMERIC:
+        if acc not in _NUMERIC and acc not in _NUMERIC_RANGE:
             raise KeyError(f"unknown criterion accessor: {acc!r}")
         parsed.append((kind, acc, float(bound)))
 

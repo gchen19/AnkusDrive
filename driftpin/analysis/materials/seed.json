@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Seed engineering-material corpus. SI quantity strings match the FreeCAD FCMat / fem_set_material convention so material_get output drops straight into a FEM material card. Values are typical/handbook references for screening, NOT certified design allowables — cite MMPDS/ASM and set 'basis' before using for qualification. See docs/SIMULATION_EXAMPLES.md.",
+  "note": "Seed engineering-material corpus. SI quantity strings match the FreeCAD FCMat / fem_set_material convention so material_get output drops straight into a FEM material card. Values are typical/handbook references for screening, NOT certified design allowables — cite MMPDS/ASM and set 'basis' before using for qualification. Polymer cards also carry a process/rheology layer for injection molding (issue #106): screen-tier crystallinity, recommended_wall_mm, mold_shrinkage_pct (published linear range), and melt/mold/eject_temp_c — each with process_source/process_basis; and for HDPE/PS a solver-tier cross_wlf + tait_pvt block for the openInjMoldSim fill solver (#105), seeded with representative literature coefficients (NOT specific resin grades — see each block's source). These card fields are the authoritative source of truth; molding.molding_screen._POLYMERS mirrors the melt/mold/eject/flow-ratio defaults for now. See docs/SIMULATION_EXAMPLES.md.",
   "materials": [
     {
       "name": "AL6061-T6", "category": "aluminum",
@@ -88,7 +88,13 @@
       "yield_strength": "40 MPa", "ultimate_strength": "40 MPa",
       "thermal_conductivity": "0.17 W/m/K", "specific_heat": "1300 J/kg/K",
       "cte": "90e-6 1/K", "max_service_temp": "85 C", "rough_cost": "3.0 USD/kg",
-      "basis": "typical", "source": "MatWeb generic ABS"
+      "basis": "typical", "source": "MatWeb generic ABS",
+      "crystallinity": "amorphous",
+      "recommended_wall_mm": "0.8 3.0",
+      "mold_shrinkage_pct": "0.4 0.7",
+      "melt_temp_c": "240", "mold_temp_c": "60", "eject_temp_c": "95",
+      "process_source": "DuPont/RTP Co. molding guides; Protolabs/Xometry DFM wall & shrinkage tables (generic ABS)",
+      "process_basis": "typical"
     },
     {
       "name": "PLA", "category": "polymer",
@@ -100,11 +106,18 @@
     },
     {
       "name": "Nylon-6/6", "category": "polymer",
+      "aliases": ["PA66", "PA-66", "Nylon66"],
       "YoungsModulus": "2000 MPa", "PoissonRatio": "0.39", "Density": "1140 kg/m^3",
       "yield_strength": "82 MPa", "ultimate_strength": "82 MPa",
       "thermal_conductivity": "0.25 W/m/K", "specific_heat": "1670 J/kg/K",
       "cte": "80e-6 1/K", "max_service_temp": "95 C", "rough_cost": "3.5 USD/kg",
-      "basis": "typical", "source": "MatWeb generic Nylon 6/6 (dry)"
+      "basis": "typical", "source": "MatWeb generic Nylon 6/6 (dry)",
+      "crystallinity": "semicrystalline",
+      "recommended_wall_mm": "0.8 3.0",
+      "mold_shrinkage_pct": "0.7 1.8",
+      "melt_temp_c": "280", "mold_temp_c": "80", "eject_temp_c": "170",
+      "process_source": "DuPont Zytel molding guide; BASF Ultramid PA66 processing data; Protolabs DFM shrinkage table",
+      "process_basis": "typical"
     },
     {
       "name": "PMMA", "category": "polymer",
@@ -113,7 +126,148 @@
       "thermal_conductivity": "0.19 W/m/K", "specific_heat": "1450 J/kg/K",
       "cte": "70e-6 1/K", "max_service_temp": "80 C", "rough_cost": "3.0 USD/kg",
       "refractive_index": "1.49", "abbe_number": "57.4",
-      "basis": "typical", "source": "MatWeb acrylic / refractiveindex.info PMMA (n_d)"
+      "basis": "typical", "source": "MatWeb acrylic / refractiveindex.info PMMA (n_d)",
+      "crystallinity": "amorphous",
+      "recommended_wall_mm": "0.8 4.0",
+      "mold_shrinkage_pct": "0.2 0.6",
+      "melt_temp_c": "230", "mold_temp_c": "60", "eject_temp_c": "90",
+      "process_source": "Plexiglas/Arkema & Evonik PLEXIGLAS molding guides; Protolabs DFM acrylic shrinkage table",
+      "process_basis": "typical"
+    },
+    {
+      "name": "PC", "category": "polymer",
+      "aliases": ["Polycarbonate"],
+      "YoungsModulus": "2300 MPa", "PoissonRatio": "0.37", "Density": "1200 kg/m^3",
+      "yield_strength": "62 MPa", "ultimate_strength": "65 MPa",
+      "thermal_conductivity": "0.20 W/m/K", "specific_heat": "1200 J/kg/K",
+      "cte": "68e-6 1/K", "max_service_temp": "120 C", "rough_cost": "4.0 USD/kg",
+      "basis": "typical", "source": "MatWeb generic polycarbonate; SABIC Lexan datasheet",
+      "crystallinity": "amorphous",
+      "recommended_wall_mm": "1.0 4.0",
+      "mold_shrinkage_pct": "0.5 0.7",
+      "melt_temp_c": "300", "mold_temp_c": "90", "eject_temp_c": "130",
+      "process_source": "SABIC Lexan / Covestro Makrolon molding guides; Protolabs DFM PC shrinkage table",
+      "process_basis": "typical"
+    },
+    {
+      "name": "POM", "category": "polymer",
+      "aliases": ["Acetal", "Delrin", "Polyoxymethylene"],
+      "YoungsModulus": "3100 MPa", "PoissonRatio": "0.35", "Density": "1410 kg/m^3",
+      "yield_strength": "65 MPa", "ultimate_strength": "70 MPa",
+      "thermal_conductivity": "0.31 W/m/K", "specific_heat": "1470 J/kg/K",
+      "cte": "110e-6 1/K", "max_service_temp": "90 C", "rough_cost": "3.5 USD/kg",
+      "basis": "typical", "source": "MatWeb generic acetal (POM homopolymer); DuPont Delrin datasheet",
+      "crystallinity": "semicrystalline",
+      "recommended_wall_mm": "0.8 3.0",
+      "mold_shrinkage_pct": "1.8 2.5",
+      "melt_temp_c": "205", "mold_temp_c": "90", "eject_temp_c": "120",
+      "process_source": "DuPont Delrin molding guide; Celanese Hostaform POM processing data; Protolabs DFM acetal shrinkage table",
+      "process_basis": "typical"
+    },
+    {
+      "name": "PP", "category": "polymer",
+      "aliases": ["Polypropylene"],
+      "YoungsModulus": "1400 MPa", "PoissonRatio": "0.42", "Density": "905 kg/m^3",
+      "yield_strength": "33 MPa", "ultimate_strength": "35 MPa",
+      "thermal_conductivity": "0.17 W/m/K", "specific_heat": "1920 J/kg/K",
+      "cte": "100e-6 1/K", "max_service_temp": "100 C", "rough_cost": "1.5 USD/kg",
+      "basis": "typical", "source": "MatWeb generic polypropylene homopolymer",
+      "crystallinity": "semicrystalline",
+      "recommended_wall_mm": "0.8 3.0",
+      "mold_shrinkage_pct": "1.0 2.5",
+      "melt_temp_c": "230", "mold_temp_c": "40", "eject_temp_c": "90",
+      "process_source": "LyondellBasell / Borealis PP processing guides; Protolabs DFM PP shrinkage table",
+      "process_basis": "typical"
+    },
+    {
+      "name": "HDPE", "category": "polymer",
+      "aliases": ["High-Density-Polyethylene"],
+      "YoungsModulus": "1070 MPa", "PoissonRatio": "0.42", "Density": "960 kg/m^3",
+      "yield_strength": "26 MPa", "ultimate_strength": "31 MPa",
+      "thermal_conductivity": "0.45 W/m/K", "specific_heat": "1900 J/kg/K",
+      "cte": "120e-6 1/K", "max_service_temp": "80 C", "rough_cost": "1.3 USD/kg",
+      "basis": "typical", "source": "MatWeb generic HDPE (injection grade)",
+      "crystallinity": "semicrystalline",
+      "recommended_wall_mm": "0.9 4.0",
+      "mold_shrinkage_pct": "1.5 4.0",
+      "melt_temp_c": "220", "mold_temp_c": "30", "eject_temp_c": "80",
+      "process_source": "Dow / ExxonMobil PE processing guides; Protolabs DFM HDPE shrinkage table",
+      "process_basis": "typical",
+      "cross_wlf": {
+        "n": "0.330", "tau_star_pa": "1.0e5",
+        "D1_pa_s": "3.32e16", "D2_k": "153.15", "D3_k_per_pa": "0.0",
+        "A1": "30.40", "A2_k": "51.6",
+        "source": "Generic HDPE Cross-WLF fit, Moldflow/Autodesk-style material card form; representative literature coefficients (e.g. Osswald & Menges, Materials Science of Polymers for Engineers; Chang & Yang, Int. Polym. Process.). NOT a specific resin grade — order-of-magnitude/validation use only.",
+        "basis": "nominal"
+      },
+      "tait_pvt": {
+        "model": "2-domain Tait",
+        "b1m_m3_kg": "1.180e-3", "b2m_m3_kg_k": "9.0e-7", "b3m_pa": "9.0e7", "b4m_per_k": "4.5e-3",
+        "b1s_m3_kg": "1.140e-3", "b2s_m3_kg_k": "4.0e-7", "b3s_pa": "1.6e8", "b4s_per_k": "3.0e-3",
+        "b5_k": "418.15", "b6_k_per_pa": "2.5e-7", "b7_m3_kg": "0.0", "b8_per_k": "0.0", "b9_per_pa": "0.0",
+        "source": "Generic semicrystalline HDPE 2-domain Tait PVT, representative literature coefficients (Wang et al.; Moldflow material database form). NOT a specific grade — for solver wiring/validation only.",
+        "basis": "nominal"
+      }
+    },
+    {
+      "name": "LDPE", "category": "polymer",
+      "aliases": ["Low-Density-Polyethylene"],
+      "YoungsModulus": "250 MPa", "PoissonRatio": "0.45", "Density": "920 kg/m^3",
+      "yield_strength": "11 MPa", "ultimate_strength": "13 MPa",
+      "thermal_conductivity": "0.33 W/m/K", "specific_heat": "2300 J/kg/K",
+      "cte": "200e-6 1/K", "max_service_temp": "70 C", "rough_cost": "1.2 USD/kg",
+      "basis": "typical", "source": "MatWeb generic LDPE",
+      "crystallinity": "semicrystalline",
+      "recommended_wall_mm": "0.9 4.0",
+      "mold_shrinkage_pct": "1.5 3.5",
+      "melt_temp_c": "210", "mold_temp_c": "30", "eject_temp_c": "75",
+      "process_source": "Dow / LyondellBasell LDPE processing guides; Protolabs DFM PE shrinkage table",
+      "process_basis": "typical"
+    },
+    {
+      "name": "PS", "category": "polymer",
+      "aliases": ["Polystyrene", "GPPS"],
+      "YoungsModulus": "3200 MPa", "PoissonRatio": "0.34", "Density": "1050 kg/m^3",
+      "yield_strength": "45 MPa", "ultimate_strength": "48 MPa",
+      "thermal_conductivity": "0.14 W/m/K", "specific_heat": "1300 J/kg/K",
+      "cte": "80e-6 1/K", "max_service_temp": "70 C", "rough_cost": "1.6 USD/kg",
+      "basis": "typical", "source": "MatWeb generic general-purpose polystyrene (GPPS)",
+      "crystallinity": "amorphous",
+      "recommended_wall_mm": "0.8 3.5",
+      "mold_shrinkage_pct": "0.4 0.7",
+      "melt_temp_c": "220", "mold_temp_c": "40", "eject_temp_c": "80",
+      "process_source": "INEOS Styrolution / Trinseo PS processing guides; Protolabs DFM PS shrinkage table",
+      "process_basis": "typical",
+      "cross_wlf": {
+        "n": "0.250", "tau_star_pa": "3.0e4",
+        "D1_pa_s": "2.59e11", "D2_k": "373.15", "D3_k_per_pa": "0.0",
+        "A1": "27.17", "A2_k": "51.6",
+        "source": "Generic polystyrene Cross-WLF fit, Moldflow/Autodesk-style material card form; representative literature coefficients (Osswald & Menges; Chang & Yang, Int. Polym. Process.). NOT a specific resin grade — order-of-magnitude/validation use only.",
+        "basis": "nominal"
+      },
+      "tait_pvt": {
+        "model": "2-domain Tait (amorphous: solid domain meets at Tg)",
+        "b1m_m3_kg": "9.65e-4", "b2m_m3_kg_k": "5.7e-7", "b3m_pa": "1.6e8", "b4m_per_k": "4.1e-3",
+        "b1s_m3_kg": "9.65e-4", "b2s_m3_kg_k": "2.3e-7", "b3s_pa": "2.5e8", "b4s_per_k": "2.6e-3",
+        "b5_k": "373.15", "b6_k_per_pa": "3.0e-7", "b7_m3_kg": "0.0", "b8_per_k": "0.0", "b9_per_pa": "0.0",
+        "source": "Generic amorphous PS 2-domain Tait PVT, representative literature coefficients (Zoller & Walsh, Standard PVT Data for Polymers; Moldflow material database form). NOT a specific grade — for solver wiring/validation only.",
+        "basis": "nominal"
+      }
+    },
+    {
+      "name": "PEEK", "category": "polymer",
+      "aliases": ["Polyetheretherketone"],
+      "YoungsModulus": "3600 MPa", "PoissonRatio": "0.38", "Density": "1320 kg/m^3",
+      "yield_strength": "97 MPa", "ultimate_strength": "100 MPa",
+      "thermal_conductivity": "0.25 W/m/K", "specific_heat": "1340 J/kg/K",
+      "cte": "47e-6 1/K", "max_service_temp": "250 C", "rough_cost": "90.0 USD/kg",
+      "basis": "typical", "source": "Victrex PEEK 450G datasheet; MatWeb generic PEEK (unfilled)",
+      "crystallinity": "semicrystalline",
+      "recommended_wall_mm": "1.0 5.0",
+      "mold_shrinkage_pct": "1.0 1.5",
+      "melt_temp_c": "380", "mold_temp_c": "190", "eject_temp_c": "270",
+      "process_source": "Victrex PEEK 450G processing guide; Solvay KetaSpire PEEK injection-molding data",
+      "process_basis": "typical"
     },
     {
       "name": "N-BK7", "category": "glass",
