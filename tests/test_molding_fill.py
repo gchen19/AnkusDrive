@@ -252,22 +252,40 @@ def test_time_extend_and_plan_and_walls_h():
     assert "0.22/uniform/time" in rd and rd[3] == "deltaT"
 
 
-def test_pack_gate_shrinkage_band_and_sink():
-    # in-band shrinkage, no sink → pass
-    g = mf.pack_gate({"volumetric_shrinkage_pct": 1.6, "rho_min": 1000.0,
-                      "frozen_fraction": 0.8},
-                     shrinkage_band_pct=(1.2, 2.1))
-    assert g["pass"] is True and g["in_band"] is True and g["fidelity"] == "solve"
-    assert g["score"] > 0.8                           # near band centre
-    # out-of-band shrinkage → fail with a warning
-    g2 = mf.pack_gate({"volumetric_shrinkage_pct": 0.5, "rho_min": 1000.0,
-                       "frozen_fraction": 0.8}, shrinkage_band_pct=(1.2, 2.1))
-    assert g2["pass"] is False and g2["in_band"] is False and g2["warnings"]
-    # sink risk (a melt region below the density floor) → fail
-    g3 = mf.pack_gate({"volumetric_shrinkage_pct": 1.6, "rho_min": 850.0,
-                       "frozen_fraction": 0.8},
-                      shrinkage_band_pct=(1.2, 2.1), sink_density_floor_kg_m3=900.0)
-    assert g3["pass"] is False and g3["sink_risk"] is True
+def test_tait_density_and_densification():
+    """The 2-domain Tait EOS gives physical PS densities (~970 melt, denser cold) and a
+    positive densification on cooling."""
+    tait = mf._resin_cross_wlf_tait("PS")[1]
+    rho_hot = mf.tait_density(tait, 493.15, 2.0e6)    # 220 C melt
+    rho_cold = mf.tait_density(tait, 423.15, 2.0e6)   # 150 C
+    assert 900 < rho_hot < 1050 and rho_cold > rho_hot
+    d = mf.tait_densification_pct(tait, T_hot_k=493.15, T_cold_k=423.15, p_pa=2.0e6)
+    assert 0.3 < d < 6.0                              # a few % volumetric
+
+
+def test_pack_gate_sink_drives_pass_and_pvt_faithfulness():
+    tait = mf._resin_cross_wlf_tait("PS")[1]
+    # well-packed (rho_min close to mean) → pass; faithful densification → no warning
+    g = mf.pack_gate({"volumetric_shrinkage_pct": 2.0, "rho_mean_final": 1005.0,
+                      "rho_min": 990.0, "T_mean_melt": 423.15, "frozen_fraction": 0.8,
+                      "residual_pressure_pa": 2.0e6},
+                     tait=tait, fill_T_mean_k=493.15)
+    assert g["pass"] is True and g["fidelity"] == "solve"
+    assert g["score"] > 0.95 and g["sink_risk"] is False
+    assert g["expected_densification_pct"] is not None and g["pvt_faithful"] is True
+    # a strongly under-packed region (>8% below mean) → sink risk → FAIL
+    g2 = mf.pack_gate({"volumetric_shrinkage_pct": 2.0, "rho_mean_final": 1005.0,
+                       "rho_min": 880.0, "T_mean_melt": 423.15,
+                       "frozen_fraction": 0.8, "residual_pressure_pa": 2.0e6},
+                      tait=tait, fill_T_mean_k=493.15)
+    assert g2["pass"] is False and g2["sink_risk"] is True and g2["warnings"]
+    # solved densification wildly off the EOS → unfaithful warning (but NOT a fail)
+    g3 = mf.pack_gate({"volumetric_shrinkage_pct": 9.0, "rho_mean_final": 1005.0,
+                       "rho_min": 990.0, "T_mean_melt": 423.15,
+                       "frozen_fraction": 0.8, "residual_pressure_pa": 2.0e6},
+                      tait=tait, fill_T_mean_k=493.15)
+    assert g3["pass"] is True and g3["pvt_faithful"] is False
+    assert any("Tait-EOS" in w for w in g3["warnings"])
 
 
 # --- openInjMoldSim solver-backed fill (skips when the OF7 build is absent) ---

@@ -41,6 +41,7 @@ case-structure gate and the solver-backed fill / short-shot gate.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 
@@ -1053,6 +1054,49 @@ def parse_fill(
 
 # --- packing / cooling parse + gate (issue #113, Part A) ---------------------
 
+# Universal Tait constant (Moldflow/Autodesk 2-domain Tait-PVT form).
+_TAIT_C = 0.0894
+
+
+def tait_density(tait: dict, T_k: float, p_pa: float) -> float:
+    """Specific density [kg/m^3] from the **2-domain Tait** PVT law (the same EOS
+    openInjMoldSim integrates), given the corpus ``tait`` coefficient dict (keys
+    ``b1m..b9`` — see ``_resin_cross_wlf_tait``), temperature ``T_k`` and pressure
+    ``p_pa``.
+
+    V(T,p) = V0(T)·[1 − C·ln(1 + p/B(T))] + Vt;  ρ = 1/V. The melt branch (T > the
+    transition Tt = b5 + b6·p) uses the ``*m`` coefficients with Vt = 0; the solid
+    branch uses ``*s`` plus the solid-state correction Vt. Used to predict the
+    expected cooling densification so the gate can check the solve is faithful to its
+    own EOS (the 'validate the artifact, not a model' discipline)."""
+    b = tait
+    b5, b6 = b["b5"], b["b6"]
+    Tt = b5 + b6 * p_pa
+    dT = T_k - b5
+    if T_k > Tt:                                   # melt / liquid domain
+        V0 = b["b1m"] + b["b2m"] * dT
+        B = b["b3m"] * math.exp(-b["b4m"] * dT)
+        Vt = 0.0
+    else:                                          # solid domain
+        V0 = b["b1s"] + b["b2s"] * dT
+        B = b["b3s"] * math.exp(-b["b4s"] * dT)
+        Vt = b["b7"] * math.exp(b["b8"] * dT - b["b9"] * p_pa)
+    V = V0 * (1.0 - _TAIT_C * math.log(1.0 + p_pa / B)) + Vt
+    return 1.0 / V if V > 0 else float("nan")
+
+
+def tait_densification_pct(tait: dict, *, T_hot_k: float, T_cold_k: float,
+                           p_pa: float) -> float:
+    """Expected volumetric densification (%) from the Tait EOS as the melt cools from
+    ``T_hot_k`` to ``T_cold_k`` at pressure ``p_pa``: ``100·(1 − ρ_hot/ρ_cold)``.
+    The physical yardstick the solved cooling shrinkage is checked against."""
+    rho_hot = tait_density(tait, T_hot_k, p_pa)
+    rho_cold = tait_density(tait, T_cold_k, p_pa)
+    if not (rho_hot > 0 and rho_cold > 0):
+        return float("nan")
+    return 100.0 * (1.0 - rho_hot / rho_cold)
+
+
 def _melt_stats(case_dir: str, time_dir: str, *, alpha_melt_min: float = 0.9):
     """Mean/min density and max/mean temperature over the **melt** cells
     (alpha.poly >= alpha_melt_min) at ``time_dir``, plus the melt cell count and the
@@ -1165,60 +1209,86 @@ def parse_pack(
 
 
 def pack_gate(
-    parsed: dict, *, shrinkage_band_pct: tuple | None = None,
-    sink_density_floor_kg_m3: float | None = None,
+    parsed: dict, *, tait: dict | None = None, fill_T_mean_k: float | None = None,
+    sink_rel: float = 0.92, faithfulness_tol: float = 2.0,
 ) -> dict:
     """Turn a ``parse_pack`` result into the house verdict shape for the **packing**
-    stage. ``pass`` is true when the solved volumetric shrinkage lands in
-    ``shrinkage_band_pct`` (e.g. ~3× the resin's #106 linear ``mold_shrinkage_pct``
-    card) **and** no sink (min melt density above ``sink_density_floor_kg_m3``, when
-    given). ``score`` rewards being inside the band. ``fidelity="solve"`` (a real
-    Tait-PVT cooling solve). Returns ``{pass, score, fidelity, band_pct,
-    volumetric_shrinkage_pct, in_band, rho_min, sink_risk, frozen_fraction,
-    cooling_time_s, residual_pressure_pa, warnings}``."""
-    shr = parsed.get("volumetric_shrinkage_pct")
+    stage.
+
+    Design note (issue #113): the solved ``volumetric_shrinkage_pct`` is the **raw
+    PVT densification on cooling**, NOT the net "mold shrinkage" molders quote (which
+    is post-packing-feed compensation — out of scope without modelling the feed). So
+    the gate does **not** pass/fail on a net-shrinkage band. Instead:
+
+    - **pass/fail = sink risk** (the actionable moldability signal): a local
+      under-packed region, ``rho_min < sink_rel · rho_mean_final`` — measured against
+      the part's OWN mean density, so no dubious external reference.
+    - **shrinkage is checked for FAITHFULNESS** against the resin's own 2-domain Tait
+      EOS (when ``tait`` + ``fill_T_mean_k`` are given): the solved densification
+      should track ``tait_densification_pct`` between the fill and final mean melt
+      temperatures at the hold pressure. A solved/expected ratio outside
+      ``[1/faithfulness_tol, faithfulness_tol]`` raises a warning that the solve may be
+      unfaithful (heterogeneous fill-end state, too-coarse mesh) — it does NOT fail the
+      gate (it's a sanity check, not a moldability verdict).
+
+    ``score`` is the packing uniformity ``rho_min/rho_mean_final`` (1.0 = perfectly
+    uniform, no sink). ``fidelity="solve"``. Returns ``{pass, score, fidelity,
+    band_pct, volumetric_shrinkage_pct, expected_densification_pct, pvt_faithful,
+    rho_min, rho_mean_final, sink_risk, frozen_fraction, cooling_time_s,
+    residual_pressure_pa, warnings}``."""
     warnings: list[str] = []
-    in_band = None
-    if shrinkage_band_pct and shr is not None:
-        lo, hi = float(shrinkage_band_pct[0]), float(shrinkage_band_pct[1])
-        in_band = lo <= shr <= hi
-        if not in_band:
-            warnings.append(
-                f"volumetric shrinkage {shr:.2f}% is outside the expected band "
-                f"[{lo:.2f}, {hi:.2f}]% — packing pressure/time or melt/mold temps "
-                "likely need tuning")
-    sink_risk = False
+    shr = parsed.get("volumetric_shrinkage_pct")
     rho_min = parsed.get("rho_min")
-    if sink_density_floor_kg_m3 and rho_min is not None:
-        sink_risk = rho_min < sink_density_floor_kg_m3
+    rho_mean = parsed.get("rho_mean_final")
+
+    # --- sink risk (the pass/fail signal) ---
+    sink_risk = False
+    if rho_min is not None and rho_mean:
+        sink_risk = rho_min < sink_rel * rho_mean
         if sink_risk:
             warnings.append(
-                f"sink-mark risk — a melt region is only {rho_min:.0f} kg/m^3 "
-                f"(below the {sink_density_floor_kg_m3:.0f} floor): under-packed, "
-                "expect a surface sink/void there")
+                f"sink-mark risk — a melt region is only {rho_min:.0f} kg/m^3, "
+                f"{(1 - rho_min/rho_mean)*100:.0f}% below the part mean "
+                f"{rho_mean:.0f} kg/m^3: under-packed, expect a surface sink/void there")
+
+    # --- Tait-EOS faithfulness of the solved densification (informational) ---
+    expected = None
+    pvt_faithful = None
+    if tait and fill_T_mean_k and parsed.get("T_mean_melt") is not None:
+        p_pa = parsed.get("residual_pressure_pa") or 1.0e5
+        expected = tait_densification_pct(
+            tait, T_hot_k=fill_T_mean_k, T_cold_k=parsed["T_mean_melt"], p_pa=p_pa)
+        if (shr is not None and expected and expected == expected   # not nan
+                and expected > 1e-6):
+            ratio = shr / expected
+            pvt_faithful = (1.0 / faithfulness_tol) <= ratio <= faithfulness_tol
+            if not pvt_faithful:
+                warnings.append(
+                    f"solved cooling densification {shr:.2f}% is {ratio:.1f}x the "
+                    f"Tait-EOS expectation {expected:.2f}% (T {fill_T_mean_k:.0f}->"
+                    f"{parsed['T_mean_melt']:.0f} K @ {p_pa/1e6:.1f} MPa) — likely a "
+                    "heterogeneous fill-end state or too-coarse mesh, treat the "
+                    "shrinkage number with caution")
+
     frozen = parsed.get("frozen_fraction")
     if frozen is not None and frozen < 0.5:
         warnings.append(
             f"only {frozen*100:.0f}% of the melt has frozen in the cooling window — "
-            "cooling_time_s may be a lower bound; extend the pack window for a true "
-            "cycle time")
-    passed = ((in_band is None) or in_band) and (not sink_risk)
-    # score: 1.0 dead-centre of the band (or by frozen fraction if no band given)
-    if shrinkage_band_pct and shr is not None:
-        lo, hi = float(shrinkage_band_pct[0]), float(shrinkage_band_pct[1])
-        mid = 0.5 * (lo + hi)
-        half = max(1e-6, 0.5 * (hi - lo))
-        score = max(0.0, 1.0 - abs(shr - mid) / half)
-    else:
-        score = frozen if frozen is not None else 0.5
+            "cooling_time_s is a lower bound; extend the pack window (or thin the "
+            "wall) for a true cycle time")
+
+    score = (rho_min / rho_mean) if (rho_min is not None and rho_mean) else 0.5
     return {
-        "pass": bool(passed),
-        "score": round(float(score), 4),
+        "pass": not sink_risk,
+        "score": round(float(min(1.0, score)), 4),
         "fidelity": "solve",
         "band_pct": 25.0,
         "volumetric_shrinkage_pct": shr,
-        "in_band": in_band,
+        "expected_densification_pct": (round(expected, 4)
+                                       if expected and expected == expected else None),
+        "pvt_faithful": pvt_faithful,
         "rho_min": rho_min,
+        "rho_mean_final": rho_mean,
         "sink_risk": sink_risk,
         "frozen_fraction": frozen,
         "cooling_time_s": parsed.get("cooling_time_s"),

@@ -13039,16 +13039,14 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
     # switched on at the pack transition. pack_wall_h is the heat-transfer coeff used
     # for the cool/hold (real mold ~1e3-2e3 W/m^2K).
     pack_wall_h = float(p.get("pack_wall_h_w_m2k", 1250.0))
-    # volumetric shrinkage band ≈ 3× the resin's LINEAR #106 mold_shrinkage_pct card
-    shrink_band = None
+    # Tait coefficients for the pack gate's PVT-faithfulness check (the solved cooling
+    # densification is checked against the resin's own EOS, not a net-shrinkage band —
+    # see molding_fill.pack_gate / issue #113).
     try:
-        from driftpin.analysis import materials as _materials
-        _raw = (_materials.get(resin) or {}).get("mold_shrinkage_pct")
-        if _raw:
-            _lo, _hi = _materials.parse_range(_raw)
-            shrink_band = (3.0 * _lo, 3.0 * _hi)
+        from driftpin.analysis import molding_fill as _mf0
+        _tait = _mf0._resin_cross_wlf_tait(resin)[1]
     except Exception:
-        shrink_band = None
+        _tait = None
     key = jobs.content_key("molding_fill", {"oims_gen": {
         "L": length_m, "H": height_m, "D": depth_m, "nx": nx, "ny": ny,
         "resin": resin, "peak": peak_pa, "melt": melt_k, "mold": mold_k,
@@ -13088,6 +13086,7 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
             fe_t = float(fe_td)
             fstats = _mf._melt_stats(cdir, fe_td)
             fill_rho_mean = fstats["rho_mean"] if fstats else None
+            fill_T_mean = fstats["T_mean"] if fstats else None
             plan = _mf.pack_phase_plan(fe_t, n_phases=n_pack,
                                        cool_window_s=cool_window_s)
             # once: ease the restart step, switch the walls to cooling (the fill ran
@@ -13110,7 +13109,7 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
             if ppar:
                 out["pack"] = ppar
                 out["pack_gate"] = _mf.pack_gate(
-                    ppar, shrinkage_band_pct=shrink_band)
+                    ppar, tait=_tait, fill_T_mean_k=fill_T_mean)
         return out
 
     return jobs.submit("molding_fill", _work, key=key,

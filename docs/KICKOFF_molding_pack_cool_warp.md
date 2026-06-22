@@ -122,8 +122,9 @@ Incremental, each step independently testable. **[x] = done (branch `feat/moldin
       "CONFIRMED pack findings" — raw PVT densification ≠ net mold shrinkage).
 - [x] **Generator `elastic` param** — default OFF (viscLimEl > etaMax) to dodge the
       elSigDev cooling divergence; True reserved for Part B.
-- [ ] **Recalibrate the shrinkage gate band** (owner decision a/b/c in findings) — the one
-      substantive open item for a clean Part-A gate.
+- [x] **Shrinkage gate band recalibrated** — pass/fail on sink risk; shrinkage checked for
+      Tait-EOS faithfulness (`tait_density`/`tait_densification_pct`). Validated on real
+      run (solved 3.70% vs EOS 4.03%, faithful, pass). See findings above.
 - [ ] **Toy validation + artifact.** Add a `--pack` mode to `tools/openinjmoldsim_toy.py`
       (fill+pack, render the cooling T or density field over time). Save
       `artifacts/openinjmoldsim_pack.gif` (+ filmstrip). For a frozen demo use a thinner
@@ -151,16 +152,17 @@ Incremental, each step independently testable. **[x] = done (branch `feat/moldin
   (hot/fast); the pack transition switches walls to cooling (`set_walls_h_cmd`, default
   1250) + `close_outlet`. Validated stable: nan=0, fill 967.9 → pack 1005.1 kg/m³,
   residual pressure ~2 MPa, full 1 s cool window.
-- **Shrinkage metric is RAW PVT densification, not net "mold shrinkage" — gate band needs
-  recalibration.** `parse_pack`'s `volumetric_shrinkage_pct = 1 − ρ_fill/ρ_final` measures
-  how much the polymer densifies as it cools (3.70% in the 1 s toy, climbing toward the
-  full melt→solid PVT change ~6–7% as it fully cools). The corpus `mold_shrinkage_pct`
-  (PS 0.4–0.7% LINEAR) is the *net* part shrinkage AFTER packing feed compensates — a
-  different quantity, NOT 3× the linear value. **Decision needed (owner):** either (a)
-  report raw PVT densification and drop the corpus-band pass/fail (keep it informational),
-  or (b) derive an expected PVT densification from the Tait EOS at the melt/eject temps
-  and gate against THAT, or (c) model packing feed to get true net shrinkage (hard). The
-  parser/gate plumbing is correct; only the reference band is in question.
+- **Shrinkage gate band — DECIDED & IMPLEMENTED (option a+b hybrid).** The solved
+  `volumetric_shrinkage_pct = 1 − ρ_fill/ρ_final` is RAW PVT densification on cooling, NOT
+  the net "mold shrinkage" the corpus card quotes (post-packing-feed compensation — out of
+  scope without modelling the feed). So `pack_gate` no longer pass/fails on a net-shrinkage
+  band. Instead: **pass/fail = sink risk** (`rho_min < sink_rel·rho_mean_final`, default
+  0.92 — measured against the part's OWN mean, no external reference); **shrinkage is
+  checked for FAITHFULNESS** against the resin's own 2-domain Tait EOS
+  (`tait_density`/`tait_densification_pct`). Validated on the real run: solved 3.70% vs
+  Tait-EOS-expected **4.03%** (493.8→420 K @ 2 MPa) → ratio 0.92, `pvt_faithful=true`,
+  gate **pass=true** (score 0.925, no sink). The number is trustworthy AND honest. (Net
+  mold shrinkage — the cavity-sizing number — still needs packing-feed modelling; deferred.)
 - **1 mm wall cools slowly (conduction-limited, ~10 s).** In the 1 s toy `frozen_fraction`
   is 0 and `cooling_time_s` is null (never reached eject temp). For a frozen toy use a
   thinner wall (0.4–0.5 mm) and/or a longer window (tutorial runs to 6 s). The parser
