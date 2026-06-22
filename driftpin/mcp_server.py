@@ -4620,6 +4620,7 @@ def optics_solid_trace(
     n_refractive: float | None = None,
     wavelength_um: float = 0.55,
     solid: dict | None = None,
+    want_paths: bool = False,
 ) -> dict:
     """NON-SEQUENTIAL ray trace through a real solid (STL mesh) with a refractive
     index — the lane for molded optical parts (light-pipes, prisms, lenses). Backed
@@ -4632,15 +4633,21 @@ def optics_solid_trace(
     index). `rays`: [{origin:[x,y,z], dir:[l,m,n]}]; each ray's turn_deg is its
     input->exit bend (~90 for a TIR corner prism, ~0 for a straight pass). `solid`:
     {diameter, thickness, axis_move} placement. `wavelength_um` default 0.55.
+    `want_paths` (default False): also return each valid ray's polyline as
+    `paths` — the per-surface hit points [[x,y,z], ...] in the traced frame.
+    The LAST point of each path is the ray's EXIT LOCATION on the solid, so the
+    spatial exit/leakage map a diffuser needs can be reconstructed from it.
 
     Returns the degradation dict, or {ok, backend:'KrakenOS (subprocess-isolated,
     GPL-3.0)', n_launched, n_valid, valid_fraction, mean_turn_deg, max_turn_deg,
-    rays:[{valid, exit_dir, turn_deg}], stl_path}."""
+    rays:[{valid, exit_dir, turn_deg}], stl_path, paths?:[[[x,y,z],...],...]}."""
     params: dict = {"rays": rays, "wavelength_um": wavelength_um}
     for k, v in (("model", model), ("stl_path", stl_path), ("glass", glass),
                  ("n_refractive", n_refractive), ("solid", solid)):
         if v is not None:
             params[k] = v
+    if want_paths:
+        params["want_paths"] = True
     return _call("optics_solid_trace", **params)
 
 
