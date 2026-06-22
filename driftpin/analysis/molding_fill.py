@@ -41,7 +41,6 @@ case-structure gate and the solver-backed fill / short-shot gate.
 """
 from __future__ import annotations
 
-import math
 import os
 import re
 
@@ -116,7 +115,6 @@ def cavity_blockmeshdict(
 
     # y-cell distribution proportional to band height (keeps cells near-square)
     ny_band = []
-    rem = ny
     for i, (y0, y1) in enumerate(bands):
         n = max(1, round(ny * (y1 - y0) / H))
         ny_band.append(n)
@@ -290,7 +288,7 @@ def cavity_case_files(
         + "\ndimensions      [0 0 0 0 0 0 0];\n"
         "internalField   uniform 0;\n"
         "boundaryField\n{\n"
-        f"    inlet  {{ type fixedValue; value uniform 1; }}\n"
+        "    inlet  { type fixedValue; value uniform 1; }\n"
         "    vent   { type inletOutlet; inletValue uniform 0; value uniform 0; }\n"
         "    walls  { type zeroGradient; }\n"
         "    frontAndBack { type empty; }\n}\n")
