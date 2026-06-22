@@ -25,6 +25,15 @@ import math
 # (t_melt_c, t_mold_c, t_eject_c, alpha_mm2_s, flow_ratio_limit) — typical
 # datasheet midpoints for unfilled grades; rough by design (a screen, not a
 # datasheet), and each is individually overridable.
+#
+# SOURCE OF TRUTH: the melt/mold/eject temperatures here mirror the
+# melt_temp_c/mold_temp_c/eject_temp_c fields now carried (cited) on the polymer
+# cards in driftpin/analysis/materials/seed.json (issue #106), which are the
+# authoritative process-data layer. This table is kept in place for now so the
+# existing molding_screen API/tests are unchanged; α and flow_ratio_limit are
+# screen-only chart values that don't live on the cards. PA66 == the Nylon-6/6
+# card. When this estimator is rewired to read materials.numeric(card,
+# "melt_temp_c"/...) the cards win; keep the two consistent until then.
 _POLYMERS = {
     "ABS":  (240.0, 60.0,  95.0, 0.09, 175.0),
     "PP":   (230.0, 40.0,  90.0, 0.07, 280.0),

@@ -152,6 +152,140 @@ def test_bad_criterion_raises():
             raise AssertionError(f"expected KeyError for {bad}")
 
 
+# --- process / rheology corpus (injection molding, issue #106) ----------------
+
+# Resins that must carry the screen-tier process layer.
+_MOLDING_RESINS = ["ABS", "PC", "Nylon-6/6", "POM", "PP", "HDPE", "LDPE", "PS",
+                   "PMMA", "PEEK"]
+_AMORPHOUS = {"ABS", "PC", "PMMA", "PS"}
+_SEMICRYSTALLINE = {"PP", "Nylon-6/6", "POM", "HDPE", "LDPE", "PEEK"}
+
+
+def test_range_parsing():
+    assert materials.parse_range("0.8 3.5") == (0.8, 3.5)
+    assert materials.parse_range("1.8") == (1.8, 1.8)  # degenerate
+    for bad in ("not a range", "5 1"):  # unparseable / lo>hi typo
+        try:
+            materials.parse_range(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError on {bad!r}")
+
+
+def test_process_fields_present_and_cited():
+    """Every molding resin carries the screen-tier process layer with provenance."""
+    for name in _MOLDING_RESINS:
+        c = materials.get(name)
+        for f in ("crystallinity", "recommended_wall_mm", "mold_shrinkage_pct",
+                  "melt_temp_c", "mold_temp_c", "eject_temp_c"):
+            assert f in c, f"{name} missing {f}"
+        assert c.get("process_source"), f"{name} missing process_source"
+        assert c.get("process_basis") in (
+            "typical", "nominal", "min", "max", "A-basis", "B-basis"), name
+        # every new value must parse
+        assert materials.numeric(c, "recommended_wall_min_mm") is not None, name
+        assert materials.numeric(c, "mold_shrinkage_min_pct") is not None, name
+        assert materials.numeric(c, "melt_temp_c") is not None, name
+
+
+def test_process_sanity_bounds():
+    for name in _MOLDING_RESINS:
+        c = materials.get(name)
+        wmin = materials.numeric(c, "recommended_wall_min_mm")
+        wmax = materials.numeric(c, "recommended_wall_max_mm")
+        assert 0.2 <= wmin <= wmax <= 12.0, (name, wmin, wmax)
+        smin = materials.numeric(c, "mold_shrinkage_min_pct")
+        smax = materials.numeric(c, "mold_shrinkage_max_pct")
+        assert 0.0 < smin <= smax < 5.0, (name, smin, smax)
+        assert c["crystallinity"] in ("amorphous", "semicrystalline"), name
+        tmold = materials.numeric(c, "mold_temp_c")
+        teject = materials.numeric(c, "eject_temp_c")
+        tmelt = materials.numeric(c, "melt_temp_c")
+        # the same ordering molding_screen enforces: mold < eject < melt
+        assert tmold < teject < tmelt, (name, tmold, teject, tmelt)
+
+
+def test_crystallinity_classification():
+    for name in _AMORPHOUS:
+        assert materials.get(name)["crystallinity"] == "amorphous", name
+    for name in _SEMICRYSTALLINE:
+        assert materials.get(name)["crystallinity"] == "semicrystalline", name
+
+
+def test_amorphous_shrink_less_than_semicrystalline():
+    """Cross-consistency (#104's model_underpredicts key): amorphous resins shrink
+    less than semicrystalline ones. Compare the max of each amorphous resin against
+    the min of each semicrystalline resin — the bands must not invert."""
+    amax = max(materials.numeric(materials.get(n), "mold_shrinkage_max_pct")
+               for n in _AMORPHOUS)
+    smin = min(materials.numeric(materials.get(n), "mold_shrinkage_min_pct")
+               for n in _SEMICRYSTALLINE)
+    assert amax <= smin, (amax, smin)
+    # and on a per-card basis the amorphous mean stays below the semicrystalline mean
+    def mean_shrink(n):
+        c = materials.get(n)
+        return 0.5 * (materials.numeric(c, "mold_shrinkage_min_pct")
+                      + materials.numeric(c, "mold_shrinkage_max_pct"))
+    amean = sum(map(mean_shrink, _AMORPHOUS)) / len(_AMORPHOUS)
+    smean = sum(map(mean_shrink, _SEMICRYSTALLINE)) / len(_SEMICRYSTALLINE)
+    assert amean < smean, (amean, smean)
+
+
+def test_golden_shrinkage_anchors():
+    """Published linear shrinkage ranges for the headline resins."""
+    def band(n):
+        c = materials.get(n)
+        return (materials.numeric(c, "mold_shrinkage_min_pct"),
+                materials.numeric(c, "mold_shrinkage_max_pct"))
+    assert band("ABS") == (0.4, 0.7), band("ABS")
+    assert band("PP") == (1.0, 2.5), band("PP")
+    assert band("POM") == (1.8, 2.5), band("POM")
+
+
+def test_molding_screen_temps_match_cards():
+    """The card melt/mold/eject temps are the source of truth; molding_screen's
+    _POLYMERS mirror them (consolidation check, issue #106)."""
+    from driftpin.analysis import molding
+    name_map = {"ABS": "ABS", "PP": "PP", "PC": "PC", "PA66": "Nylon-6/6",
+                "POM": "POM", "HDPE": "HDPE", "PS": "PS"}
+    for poly, card_name in name_map.items():
+        t_melt, t_mold, t_eject = molding._POLYMERS[poly][:3]
+        c = materials.get(card_name)
+        assert materials.numeric(c, "melt_temp_c") == t_melt, (poly, t_melt)
+        assert materials.numeric(c, "mold_temp_c") == t_mold, (poly, t_mold)
+        assert materials.numeric(c, "eject_temp_c") == t_eject, (poly, t_eject)
+
+
+def test_solver_tier_cross_wlf_and_tait():
+    """At least one fully-specified resin for the openInjMoldSim solver (#105):
+    Cross-WLF (n, tau*, D1, D2, A1, A2) + Tait PVT, every value cited, and within
+    physical magnitude bands (unit/typo guardrail)."""
+    have = [n for n in _MOLDING_RESINS
+            if "cross_wlf" in materials.get(n) and "tait_pvt" in materials.get(n)]
+    assert len(have) >= 1, have
+    for name in have:
+        c = materials.get(name)
+        cw = c["cross_wlf"]
+        for k in ("n", "tau_star_pa", "D1_pa_s", "D2_k", "A1", "A2_k"):
+            assert k in cw, (name, k)
+        assert cw.get("source") and cw.get("basis"), name
+        n = float(cw["n"]); tau = float(cw["tau_star_pa"])
+        d1 = float(cw["D1_pa_s"]); d2 = float(cw["D2_k"]); a1 = float(cw["A1"])
+        assert 0.1 < n < 1.0, (name, n)              # power-law index
+        assert 1e3 < tau < 1e7, (name, tau)         # Pa
+        assert 1e8 < d1 < 1e20, (name, d1)          # Pa.s zero-shear ref
+        assert 100.0 < d2 < 600.0, (name, d2)       # reference temp ~ Tg/Tm, K
+        assert 5.0 < a1 < 60.0, (name, a1)          # WLF A1
+        tt = c["tait_pvt"]
+        assert tt.get("source") and tt.get("basis"), name
+        for k in ("b1m_m3_kg", "b3m_pa", "b5_k"):
+            assert k in tt, (name, k)
+        assert 5e-4 < float(tt["b1m_m3_kg"]) < 2e-3, name   # specific volume m^3/kg
+        assert 1e7 < float(tt["b3m_pa"]) < 1e9, name        # pressure sensitivity Pa
+        assert 200.0 < float(tt["b5_k"]) < 600.0, name      # transition temp K
+
+
 # --- runner (mirrors tests/test_contracts.py) ---------------------------------
 
 def _discover():
