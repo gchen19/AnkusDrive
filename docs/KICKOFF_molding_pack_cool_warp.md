@@ -125,18 +125,23 @@ Incremental, each step independently testable. **[x] = done (branch `feat/moldin
 - [x] **Shrinkage gate band recalibrated** — pass/fail on sink risk; shrinkage checked for
       Tait-EOS faithfulness (`tait_density`/`tait_densification_pct`). Validated on real
       run (solved 3.70% vs EOS 4.03%, faithful, pass). See findings above.
-- [ ] **Toy validation + artifact.** Add a `--pack` mode to `tools/openinjmoldsim_toy.py`
-      (fill+pack, render the cooling T or density field over time). Save
-      `artifacts/openinjmoldsim_pack.gif` (+ filmstrip). For a frozen demo use a thinner
-      wall (0.4–0.5 mm) and/or longer window.
+- [x] **Toy validation + artifact** — `tools/openinjmoldsim_toy.py --pack` runs fill+pack
+      and renders an air-masked cooling-T GIF. `artifacts/openinjmoldsim_pack_cool.gif`
+      (+ filmstrip) shows the textbook frozen-skin/molten-core profile (walls cool first).
 - [x] **Structural tests** — controlDict latestTime, close_outlet cmds, time_extend/plan/
-      walls_h, pack_gate band+sink, elastic toggle (all pass).
-- [ ] **Slow solver-backed test** — `test_..._fill_pack_cools` skip-guarded on the binary
-      (like the fill test). ~6 min; consider a short window / thin wall to bound runtime.
-- [ ] **Docs.** Section in `docs/MOLDING_FILL_SOLVER.md` describing the pack stage + gate
-      + the elastic/shrinkage gotchas.
-- [ ] **MCP tool.** Surface `stages`, `eject_temp_c`, `pack_wall_h_w_m2k`, `cool_window_s`,
-      `pack_phases` on `molding_fill_submit` in `mcp_server.py`; keep the contract test green.
+      walls_h, Tait density, pack_gate sink+faithfulness, elastic toggle (all pass).
+- [x] **Slow solver-backed test** — `test_openinjmoldsim_fill_pack_cools_and_densifies`
+      (skip-guarded; asserts stable/no-nan, densifies, cools, gate passes, pvt_faithful).
+- [x] **Docs** — packing/cooling section in `docs/MOLDING_FILL_SOLVER.md` (mechanics, the
+      two pack gotchas, gate design).
+- [x] **MCP tool** — `stages`/`pack_phases`/`cool_window_s`/`eject_temp_c`/
+      `pack_wall_h_w_m2k` surfaced on `molding_fill_submit`; contracts 10/10.
+- [x] **Sink false-positive fix** — melt mask 0.9→0.99 (packed core; 0.9 caught air-diluted
+      interface cells → false sink). rho_min 978.8, no sink, shrinkage matches EOS (4.43 vs
+      4.44%).
+
+**Part A is COMPLETE.** Remaining for the issue = Part B (warpage; its own lift — needs
+`elastic=True` stabilised) and net mold shrinkage (packing-feed modelling).
 
 ### CONFIRMED pack findings (2026-06-22 runs — read before iterating)
 
