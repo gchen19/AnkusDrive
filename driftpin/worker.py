@@ -10165,9 +10165,12 @@ def _h_optics_solid_trace(p):
     input->exit bend (~90 for a TIR corner prism, ~0 for a straight pass). Solid
     placement knobs: solid:{diameter, thickness, axis_move}, wavelength_um.
 
+    Set want_paths=True to also return `paths` — each valid ray's polyline of
+    per-surface hit points; the last point is the ray's exit location on the solid.
+
     Returns the degradation dict, or {ok, backend:'KrakenOS' (subprocess),
     n_launched, n_valid, valid_fraction, mean_turn_deg, max_turn_deg, rays:[{valid,
-    exit_dir, turn_deg}], stl_path}."""
+    exit_dir, turn_deg}], stl_path, paths?}."""
     # Gate on a Python that can actually import KrakenOS (a .venv subprocess), NOT this
     # freecadcmd worker — KrakenOS is GPL-3.0 and is only ever run out-of-process.
     python_exe = _optics_gpl_python()
@@ -10210,6 +10213,8 @@ def _h_optics_solid_trace(p):
         problem["obj_thickness"] = float(p["obj_thickness"])
     if "ima_diameter" in p:
         problem["ima_diameter"] = float(p["ima_diameter"])
+    if p.get("want_paths"):
+        problem["want_paths"] = True            # per-surface hit points -> exit locations
 
     try:
         result = _run_optics_gpl(problem, python_exe, timeout=int(p.get("timeout", 120)))
