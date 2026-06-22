@@ -9613,7 +9613,7 @@ def _h_moldability_screen(p):
     gracefully when the material corpus lacks the (issue #106) recommended-wall /
     mold-shrinkage / crystallinity fields. See driftpin.analysis.molding. Returns
     {thickness:{…}, shrinkage:{…}, material, pass, score, fidelity, band_pct,
-    warnings, escalate_to='molding_solve'}."""
+    warnings, escalate_to='molding_fill_submit'}."""
     from driftpin.analysis import molding
     return molding.moldability_screen(**p)
 
@@ -9921,7 +9921,7 @@ def _h_moldability_check(p):
     moldability screen (driftpin.analysis.molding): the wall-thickness quality
     sub-screen (range / uniformity / sink risk, cooling tied to the thickest
     wall) plus the CTE shrinkage estimate for the resin. Low-fidelity gate —
-    escalate_to='molding_solve'.
+    escalate_to='molding_fill_submit'.
 
     Args: model (handle), material (resin name; drives the recommended-wall band,
     CTE shrinkage, cooling — degrades gracefully when the corpus lacks the issue

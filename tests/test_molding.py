@@ -123,7 +123,7 @@ def test_semicrystalline_underprediction_flag():
     pp = mo.shrinkage_estimate(material="PP")
     abs_ = mo.shrinkage_estimate(material="ABS")
     pc = mo.shrinkage_estimate(material="PC")
-    assert pp["model_underpredicts"] is True and pp["escalate_to"] == "molding_solve", pp
+    assert pp["model_underpredicts"] is True and pp["escalate_to"] == "molding_fill_submit", pp
     assert abs_["model_underpredicts"] is False and abs_["escalate_to"] is None, abs_
     assert pc["model_underpredicts"] is False, pc
     # a published linear mold-shrinkage rides alongside the CTE estimate.
@@ -160,7 +160,7 @@ def test_moldability_screen_combined():
     assert good["pass"] is True, good
     # carries the house verdict shape.
     assert good["fidelity"] == "correlation" and good["band_pct"] == 50.0
-    assert good["escalate_to"] == "molding_solve"
+    assert good["escalate_to"] == "molding_fill_submit"
     assert "thickness" in good and "shrinkage" in good and isinstance(good["warnings"], list)
     # thickness failure (thick lobe) sinks the combined pass.
     bad_wall = mo.moldability_screen(wall_samples=[2.0, 2.0, 6.0], nominal_mm=2.0, material="ABS")

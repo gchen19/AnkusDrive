@@ -3695,7 +3695,7 @@ def moldability_screen(
     Pass ``wall_samples`` (local wall thicknesses, mm) and/or ``nominal_mm``, plus
     ``material``. Degrades gracefully when the corpus lacks the (issue #106)
     recommended-wall / mold-shrinkage / crystallinity fields. Low-fidelity gate:
-    escalate_to='molding_solve'.
+    escalate_to='molding_fill_submit'.
 
     Returns {thickness:{…}, shrinkage:{…}, material, pass, score, fidelity,
     band_pct, warnings, escalate_to}."""
@@ -4937,7 +4937,7 @@ def moldability_check(
     moldability screen: WALL-THICKNESS QUALITY (recommended-band range /
     uniformity / sink risk, cooling tied to the thickest wall) + the CTE
     SHRINKAGE estimate for the resin. Low-fidelity gate — escalate_to=
-    'molding_solve'.
+    'molding_fill_submit'.
 
     `material` drives the recommended-wall band, the CTE shrinkage, and cooling
     (degrades gracefully when the corpus lacks the issue #106 fields).

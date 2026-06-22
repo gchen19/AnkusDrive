@@ -10,10 +10,14 @@ too-viscous / too-short-time one (the front stalls, gate flags a short shot).
 import math
 import os
 import subprocess
+import sys
 import tempfile
+from pathlib import Path
 
-from driftpin import solvers
-from driftpin.analysis import molding_fill as mf
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from driftpin import solvers  # noqa: E402
+from driftpin.analysis import molding_fill as mf  # noqa: E402
 
 
 # --- case structure (no solver) ----------------------------------------------

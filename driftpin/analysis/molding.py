@@ -275,9 +275,12 @@ def _recommended_wall_band(material, card) -> tuple[float, float, str]:
         raw = card["recommended_wall_mm"]
         if isinstance(raw, (list, tuple)) and len(raw) == 2:
             lo, hi = float(raw[0]), float(raw[1])
-        else:  # a single quantity string/number → treat as the band midpoint ±40%
-            v = materials.parse_quantity(raw)[0]
-            lo, hi = 0.6 * v, 1.4 * v
+        else:
+            try:  # "lo hi" range string, the form issue #106 stores
+                lo, hi = materials.parse_range(raw)
+            except Exception:  # a single quantity → band midpoint ±40%
+                v = materials.parse_quantity(raw)[0]
+                lo, hi = 0.6 * v, 1.4 * v
         return lo, hi, "card"
     band = _GENERIC_WALL_MM.get(_resin_key(material))
     if band is not None:
@@ -404,7 +407,7 @@ def thickness_screen(
         "fidelity": "correlation",
         "band_pct": 30.0,
         "warnings": warnings,
-        "escalate_to": ("molding_solve" if not passed else None),
+        "escalate_to": ("molding_fill_submit" if not passed else None),
     }
 
 
@@ -477,7 +480,7 @@ def shrinkage_estimate(
       = L, ``predicted_final_mm`` = ``L·(1−S_linear)``.
     - **Semicrystalline caveat** — for PP/PE/PA/POM/PLA/HDPE/LDPE (or a card
       ``crystallinity`` flag) the crystallization shrink ≫ this CTE estimate, so
-      ``model_underpredicts=True`` and ``escalate_to='molding_solve'``. When the
+      ``model_underpredicts=True`` and ``escalate_to='molding_fill_submit'``. When the
       card (or the generic table) carries a published linear mold-shrinkage, it
       is returned as ``published_shrinkage_pct`` alongside the CTE estimate.
     - **warpage_risk** — passed in directly, or inferred True when
@@ -535,7 +538,11 @@ def shrinkage_estimate(
     # published linear mold-shrinkage: card field (issue #106) > generic table.
     published = None
     if card is not None and card.get("mold_shrinkage_pct") is not None:
-        published = float(materials.parse_quantity(card["mold_shrinkage_pct"])[0])
+        try:  # "lo hi" range string (#106) → midpoint
+            lo_s, hi_s = materials.parse_range(card["mold_shrinkage_pct"])
+            published = round(0.5 * (lo_s + hi_s), 4)
+        except Exception:
+            published = float(materials.parse_quantity(card["mold_shrinkage_pct"])[0])
     if published is None:
         published = _GENERIC_MOLD_SHRINK_PCT.get(_resin_key(material))
 
@@ -561,7 +568,7 @@ def shrinkage_estimate(
         "fidelity": "correlation",
         "band_pct": 50.0,
         "warnings": warnings,
-        "escalate_to": ("molding_solve" if model_underpredicts else None),
+        "escalate_to": ("molding_fill_submit" if model_underpredicts else None),
     }
 
 
@@ -585,7 +592,7 @@ def moldability_screen(
     The combined ``pass`` is true only when the thickness sub-screen passes *and*
     the shrinkage model does not flag a warp risk or underprediction; ``score``
     is the mean of the sub-scores (thickness ``score`` and a shrinkage proxy).
-    This is the low-fidelity gate — ``escalate_to='molding_solve'`` always points
+    This is the low-fidelity gate — ``escalate_to='molding_fill_submit'`` always points
     at the higher-fidelity fill/warp solve.
 
     Returns {thickness:{…}, shrinkage:{…}, material, pass, score, fidelity,
@@ -618,5 +625,5 @@ def moldability_screen(
         "fidelity": "correlation",
         "band_pct": 50.0,
         "warnings": warnings,
-        "escalate_to": "molding_solve",
+        "escalate_to": "molding_fill_submit",
     }
