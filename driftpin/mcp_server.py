@@ -3407,6 +3407,9 @@ def acoustic_radiation_submit(
         if v is not None:
             params[k] = v
     return _call("acoustic_radiation_submit", **params)
+
+
+@mcp.tool()
 def waveguide_cutoff(
     a_mm: float,
     b_mm: float | None = None,
