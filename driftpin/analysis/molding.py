@@ -14,9 +14,12 @@ Pure-Python, FreeCAD-free. A Tier-A screening estimator from
   injection pressure, melt temperature, and gate design).
 
 Per-polymer defaults (melt/mold/eject temperatures, α, L/t) are typical
-datasheet midpoints; every one is overridable. No mold-filling solver is
-shipped, so there is no higher-order twin to escalate to yet (a fill solve is
-horizon scope). Lengths mm, temperatures °C, diffusivity mm²/s.
+datasheet midpoints; every one is overridable. The higher-fidelity twin is the
+VOF fill solve (``molding_fill_submit`` — interFoam melt+air, escalating to
+openInjMoldSim when its OF7 build is present): the screen escalates to it when the
+fill check runs, so a flagged short shot can be confirmed on the real flow front
+rather than the spiral-flow correlation. Lengths mm, temperatures °C,
+diffusivity mm²/s.
 """
 from __future__ import annotations
 
@@ -69,8 +72,9 @@ def molding_screen(
     α, so a cooling-only call returns ``fidelity="exact"``; adding the fill
     check makes the headline answer chart-based — ``fidelity="correlation"``,
     ``band_pct=30`` (the cooling number stays exact either way). t ∝ s² is the
-    design lever: halve the wall, quarter the cooling. No higher-order
-    mold-filling solve is shipped (``escalate_to=None``).
+    design lever: halve the wall, quarter the cooling. When the fill check runs,
+    ``escalate_to="molding_fill_submit"`` (the VOF fill solve) — a flagged short
+    shot can be confirmed on the real flow front.
 
     Returns {material, wall_thickness_mm, t_melt_c, t_mold_c, t_eject_c,
     alpha_mm2_s, cooling_time_s, flow_length_mm, flow_ratio, flow_ratio_limit,
@@ -141,7 +145,11 @@ def molding_screen(
         "band_pct": band,
         "valid_range_ok": not warnings,
         "warnings": warnings,
-        "escalate_to": None,
+        # the VOF fill solve is the higher-fidelity twin — escalate when the
+        # (correlation) fill check is in play so a short shot can be confirmed on
+        # the real flow front; cooling-only stays exact with nothing to escalate to.
+        "escalate_to": ("molding_fill_submit" if flow_length_mm is not None
+                        else None),
     }
 
 

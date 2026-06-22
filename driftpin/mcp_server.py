@@ -4476,6 +4476,72 @@ def cfd_external_flow_submit(
 
 
 @mcp.tool()
+def molding_fill_submit(
+    length_mm: float | None = None,
+    wall_thickness_mm: float | None = None,
+    depth_mm: float | None = None,
+    nx: int | None = None,
+    ny: int | None = None,
+    inject_velocity_m_s: float | None = None,
+    flow_rate_cm3_s: float | None = None,
+    gate_height_mm: float | None = None,
+    melt_rho_kg_m3: float | None = None,
+    melt_nu_m2_s: float | None = None,
+    carreau: dict | None = None,
+    end_time_s: float | None = None,
+    machine_max_pressure_pa: float | None = None,
+    fill_fraction_pass: float | None = None,
+    case_dir: str | None = None,
+) -> dict:
+    """Injection-molding FILL solve via VOF, asynchronous — the higher-fidelity twin
+    `molding_screen` escalates to. Answers *can this geometry actually be molded*:
+    short-shot / fill ability (the strongest, most reliable gate), fill time, and a
+    peak injection-pressure proxy — a real two-phase (melt + air) flow solve, not the
+    spiral-flow correlation. Requires an OpenFOAM binary; when none resolves this
+    returns {ok:false, reason, install} rather than raising.
+
+    Backend: prefers **openInjMoldSim** (GPL-3.0, a modified compressibleInterFoam on
+    OpenFOAM-7 .org — Cross-WLF + Tait, covers filling+packing+cooling) when its
+    binary resolves (run as a subprocess against a prepared `case_dir`); otherwise it
+    builds and runs a 2-D rectangular plaque-cavity **interFoam** VOF case on the
+    existing OpenFOAM (.com/ESI), the same physics family openInjMoldSim was forked
+    from — answers fill/short-shot/flow-front but not the packing stage. The GPL solver
+    is held at the subprocess boundary (never imported).
+
+    Drive the interFoam path with cavity + process params:
+    - `length_mm` (flow length, default 100), `wall_thickness_mm` (cavity height,
+      default 2), `depth_mm` (out-of-plane, default 1), mesh `nx`/`ny`.
+    - `inject_velocity_m_s` OR `flow_rate_cm3_s` (+ optional `gate_height_mm` for the
+      gate area) — the melt mean inlet speed.
+    - melt rheology: `melt_rho_kg_m3` (default 900), `melt_nu_m2_s` (kinematic, default
+      1e-3) for Newtonian, or a `carreau` {nu0,nuInf,k,n} BirdCarreau dict (the
+      shear-thinning Cross-WLF stand-in).
+    - `end_time_s` (run bound; default ≈4× the plug-flow fill time),
+      `machine_max_pressure_pa` (press limit, default 180 MPa), `fill_fraction_pass`
+      (full-fill threshold, default 0.97).
+    Or pass a prepared `case_dir` to run the resolved solver directly.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result.
+    interFoam result: {ok, returncode, backend, case_dir, expected_fill_time_s,
+    flow_length_ratio, fill:{filled_fraction, filled_cell_fraction, front_x_frac,
+    last_to_fill_x_frac, max_pressure_pa}, gate:{pass, score, fidelity:"solve",
+    band_pct, short_shot, fill_time_s, max_pressure_pa, pressure_ok, warnings}}."""
+    params: dict = {}
+    for k, v in (("length_mm", length_mm), ("wall_thickness_mm", wall_thickness_mm),
+                 ("depth_mm", depth_mm), ("nx", nx), ("ny", ny),
+                 ("inject_velocity_m_s", inject_velocity_m_s),
+                 ("flow_rate_cm3_s", flow_rate_cm3_s),
+                 ("gate_height_mm", gate_height_mm),
+                 ("melt_rho_kg_m3", melt_rho_kg_m3), ("melt_nu_m2_s", melt_nu_m2_s),
+                 ("carreau", carreau), ("end_time_s", end_time_s),
+                 ("machine_max_pressure_pa", machine_max_pressure_pa),
+                 ("fill_fraction_pass", fill_fraction_pass), ("case_dir", case_dir)):
+        if v is not None:
+            params[k] = v
+    return _call("molding_fill_submit", **params)
+
+
+@mcp.tool()
 def random_vibration(
     psd_profile: list,
     analysis: str | None = None,

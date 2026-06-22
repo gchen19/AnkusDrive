@@ -524,6 +524,54 @@ def fsi_stack_status() -> dict:
     }
 
 
+def openinjmoldsim_bin() -> str | None:
+    """Locate the ``openInjMoldSim`` executable (the GPL-3.0 injection-molding solver,
+    a modified compressibleInterFoam built against OpenFOAM 7 .org).
+
+    This is the higher-fidelity twin the molding-fill family prefers when present;
+    when it is absent the family degrades to ``interFoam`` on the existing
+    OpenFOAM (.com/ESI) — see ``driftpin/analysis/molding_fill.py`` and
+    ``tools/build_openinjmoldsim.sh``. Side-effect-free resolution:
+    ``DRIFTPIN_OPENINJMOLDSIM`` / ``DRIFTPIN_OPENINJMOLDSIM_PATH`` env -> PATH
+    (``shutil.which``) -> the documented source-build prefix
+    (``~/opt/openInjMoldSim/...``). Returns the path, or None when it does not
+    resolve (the common case until the OF7-org build lands)."""
+    for var in ("DRIFTPIN_OPENINJMOLDSIM", "DRIFTPIN_OPENINJMOLDSIM_PATH"):
+        env = os.environ.get(var)
+        if env and os.path.isfile(env):
+            return env
+    found = shutil.which("openInjMoldSim")
+    if found:
+        return found
+    import glob as _glob
+    for pat in (os.path.expanduser("~/opt/openInjMoldSim/*/bin/openInjMoldSim"),
+                os.path.expanduser("~/OpenFOAM/*/platforms/*/bin/openInjMoldSim"),
+                "/opt/openInjMoldSim/*/bin/openInjMoldSim"):
+        hits = sorted(_glob.glob(pat))
+        if hits:
+            return hits[-1]
+    return None
+
+
+def openinjmoldsim_bashrc() -> str | None:
+    """The OpenFOAM-7 (.org) environment file to source before running
+    ``openInjMoldSim`` — distinct from ``openfoam_bashrc()`` (which resolves the
+    ESI v19xx/v25xx build). ``DRIFTPIN_OPENINJMOLDSIM_BASHRC`` env -> the OF7-org
+    source-build / apt layouts. Returns the path or None."""
+    env = os.environ.get("DRIFTPIN_OPENINJMOLDSIM_BASHRC")
+    if env and os.path.isfile(env):
+        return env
+    import glob as _glob
+    for pat in (os.path.expanduser("~/OpenFOAM/OpenFOAM-7/etc/bashrc"),
+                os.path.expanduser("~/opt/OpenFOAM-7/etc/bashrc"),
+                "/opt/openfoam7/etc/bashrc",
+                "/usr/lib/openfoam/openfoam7/etc/bashrc"):
+        hits = sorted(_glob.glob(pat))
+        if hits:
+            return hits[-1]
+    return None
+
+
 def capabilities() -> dict:
     """Report which P2 solvers (and which families) are usable *right now* —
     the ``solve_capabilities`` tool's payload, the solver twin of
