@@ -11479,6 +11479,191 @@ def _thermal_body_submit(p, info):
                        meta={"mode": "body", "duration_s": duration_s, "tets": tets})
 
 
+# --- injection-molding warpage (issue #113 Part B; CalculiX thermo-elastic) ---
+
+# Solidified-thermoplastic fallbacks (room-T) when the corpus card / params omit the
+# structural props — a typical amorphous resin. Surfaced as a warning when used, so
+# the absolute warp is read as order-of-magnitude, not calibrated.
+_WARPAGE_PROP_DEFAULTS = {"youngs_mpa": 2500.0, "poisson": 0.35, "cte_per_k": 8.0e-5}
+
+
+def _resolve_warpage_props(p):
+    """Resolve (youngs_mpa, poisson, cte_per_k, used_defaults) for the warpage solve
+    from explicit params, then a ``material`` corpus card, then solidified-resin
+    defaults. ``used_defaults`` lists which props fell back (the caller warns)."""
+    from driftpin.analysis import materials as _materials
+    card = _materials.get(p["material"]) if p.get("material") else {}
+
+    def _num(key):
+        v = card.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    E = p.get("youngs_mpa")
+    if E is None:
+        gpa = _num("youngs_gpa")
+        E = gpa * 1000.0 if gpa else None
+    nu = p.get("poisson") if p.get("poisson") is not None else _num("poisson")
+    cte = p.get("cte_per_k") if p.get("cte_per_k") is not None else _num("cte_per_k")
+    used = []
+    if E is None:
+        E = _WARPAGE_PROP_DEFAULTS["youngs_mpa"]; used.append("youngs_mpa")
+    if nu is None:
+        nu = _WARPAGE_PROP_DEFAULTS["poisson"]; used.append("poisson")
+    if cte is None:
+        cte = _WARPAGE_PROP_DEFAULTS["cte_per_k"]; used.append("cte_per_k")
+    return float(E), float(nu), float(cte), used
+
+
+def _molding_warpage_submit(p, info):
+    """Thermo-elastic warpage post-step (#113 Part B). Gmsh-meshes a FreeCAD solid on
+    the MAIN thread (FemMesh + CalculiX ABAQUS export; the jobs.py contract keeps all
+    FreeCAD work out of the background fn), then writes a thermo-elastic ccx deck and
+    runs ``ccx`` in the background.
+
+    Drives the part's free distortion from the frozen-in differential cooling: a
+    linear through-thickness temperature differential ``dT_through_k`` (``T`` at the
+    thin-face minimum minus the maximum) imposed as a thermal eigenstrain, with a 3-2-1
+    rigid-body constraint, so a balanced field warps ~0 and an asymmetric one bows to
+    the analytic curvature. Degrades to ``{ok:false, reason, install}`` upstream when
+    ccx is absent."""
+    import tempfile
+
+    from femmesh.gmshtools import GmshTools
+
+    from driftpin import jobs
+    from driftpin.analysis import warpage as _warp
+
+    ccx_bin = info["path"]
+    doc = _active_doc()
+    obj = _shape_handle_to_obj(p["body"])
+    dT = p.get("dT_through_k")
+    if dT is None:
+        raise ValueError(
+            "dT_through_k (the through-thickness temperature differential at ejection, "
+            "K — the asymmetric frozen-in cooling that drives warp) is required")
+    dT = float(dT)
+    E, nu, cte, used_defaults = _resolve_warpage_props(p)
+    ref_temp_c = p.get("ref_temp_c")
+    char_length = float(p.get("char_length_mm", 0.0))
+    axis = p.get("thickness_axis")
+    if axis is not None:
+        axis = {"x": 0, "y": 1, "z": 2}.get(axis, axis)
+        axis = int(axis)
+
+    # mesh + export on the MAIN thread; the temp FemMesh never outlives this call
+    mesh = ObjectsFem.makeMeshGmsh(doc, "WarpMesh")
+    mesh.Shape = obj
+    if char_length > 0:
+        mesh.CharacteristicLengthMax = char_length
+    mesh.ElementOrder = "2nd"          # C3D10 quadratic tets bend without locking
+    doc.recompute()
+    case_dir = tempfile.mkdtemp(prefix="warpage_ccx_")
+    # Serial meshing for reproducibility (the parallel-Gmsh nondeterminism the thermal
+    # bridge documents — a degenerate coarse mesh would mis-state the bending stiffness).
+    with _gmsh_serial_meshing():
+        try:
+            err = GmshTools(mesh).create_mesh()
+            nodes_n, tets = mesh.FemMesh.NodeCount, mesh.FemMesh.TetraCount
+            if not tets:
+                raise RuntimeError(f"Gmsh produced no volume mesh ({err or 'no detail'})")
+            mesh.FemMesh.writeABAQUS(os.path.join(case_dir, "mesh.inp"), 2, False)
+            nodes = {int(k): (v.x, v.y, v.z) for k, v in mesh.FemMesh.Nodes.items()}
+        finally:
+            doc.removeObject(mesh.Name)
+            doc.recompute()
+
+    built = _warp.write_warpage_case(
+        case_dir, nodes=nodes, youngs_mpa=E, poisson=nu, cte_per_k=cte,
+        dT_through_k=dT, ref_temp_c=ref_temp_c, axis=axis)
+    span_mm = built["span_mm"]
+    thick_mm = built["thickness_mm"]
+    flatness_tol_mm = p.get("flatness_tol_mm")
+    flatness_tol_frac = float(p.get("flatness_tol_frac", 0.002))
+    twin = _warp.free_plate_thermal_bow(
+        span_mm=span_mm, thickness_mm=thick_mm, dT_through_k=dT, cte_per_k=cte)
+
+    bb = obj.Shape.BoundBox
+    key = jobs.content_key("molding_warpage", {"body": {
+        "volume": round(obj.Shape.Volume, 6), "area": round(obj.Shape.Area, 6),
+        "bbox": [round(v, 6) for v in (bb.XLength, bb.YLength, bb.ZLength)],
+        "char": char_length, "E": E, "nu": nu, "cte": cte, "dT": dT,
+        "ref": ref_temp_c, "axis": built["axis_index"],
+        "ftol": flatness_tol_mm, "ffrac": flatness_tol_frac}})
+
+    def _work():
+        import subprocess
+        argv = [ccx_bin] + built["argv"][1:]
+        proc = subprocess.run(argv, cwd=case_dir, capture_output=True, text=True)
+        parsed = _warp.parse_warp_frd(
+            os.path.join(case_dir, built["job_name"] + ".frd"),
+            axis_index=built["axis_index"])
+        out = {
+            "ok": proc.returncode == 0 and parsed is not None,
+            "returncode": proc.returncode,
+            "solver": "calculix",
+            "case_dir": case_dir,
+            "nodes": nodes_n,
+            "tets": tets,
+            "warp_axis": built["axis"],
+            "span_mm": span_mm,
+            "thickness_mm": thick_mm,
+            "analytic_bow_mm": round(twin["bow_mm"], 6),
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        if parsed is None:
+            out["reason"] = ("ccx produced no displacement field — the thermo-elastic "
+                             "solve failed (see stdout_tail)")
+            return out
+        gate = _warp.warpage_gate(
+            parsed, span_mm=span_mm, flatness_tol_mm=flatness_tol_mm,
+            flatness_tol_frac=flatness_tol_frac, analytic_bow_mm=twin["bow_mm"])
+        if used_defaults:
+            gate["warnings"].append(
+                "used solidified-resin default(s) for " + ", ".join(used_defaults) +
+                " (no corpus/explicit value) — treat the absolute warp as "
+                "order-of-magnitude; pass youngs_mpa/poisson/cte_per_k to calibrate")
+        out["gate"] = gate
+        return out
+
+    return jobs.submit("molding_warpage", _work, key=key,
+                       meta={"dT_through_k": dT, "span_mm": span_mm, "tets": tets})
+
+
+@handler("molding_warpage_submit")
+def _h_molding_warpage_submit(p):
+    """Injection-molding **warpage / residual distortion** via a CalculiX thermo-
+    elastic post-step (issue #113 Part B), OFF the MCP channel. Degrades to
+    ``{ok:false, reason, install}`` when ``ccx`` is absent (never raises on a miss).
+
+    Hand it the part (`body` handle) and the frozen-in differential cooling as a
+    through-thickness temperature differential `dT_through_k` (K, ``T`` at the
+    thin-face minimum minus the maximum — the asymmetric component that drives bow;
+    the higher-fidelity warp twin of the #104 CTE shrinkage screen). Optional:
+    `material` or explicit `youngs_mpa`/`poisson`/`cte_per_k` (solidified-resin
+    defaults with a warning otherwise), `ref_temp_c` (stress-free / solidification
+    temperature; warp is invariant to it, it only sets the reported residual stress),
+    `char_length_mm` mesh size, `thickness_axis` ('x'|'y'|'z' override),
+    `flatness_tol_mm` or `flatness_tol_frac` (default 0.2 % of span).
+
+    Gmsh meshes the solid on the main thread (2nd-order tets); ccx runs in the
+    background. Poll job_result for `{ok, returncode, solver, case_dir, nodes, tets,
+    warp_axis, span_mm, thickness_mm, analytic_bow_mm, gate}` where `gate` is the
+    house verdict `{pass, score, fidelity:'solve', band_pct, max_warp_mm,
+    flatness_tol_mm, warp_per_span, warp_faithful, warnings}`. The one-way linear-
+    elastic loose coupling (no viscoelastic relaxation / flow anisotropy) is honest in
+    `band_pct`; a balanced field warps ~0, an asymmetric one bows to the analytic
+    curvature."""
+    info = _require_solver("calculix")
+    if not info["ok"]:                               # graceful degradation
+        return info
+    if not p.get("body"):
+        raise ValueError("body (a shape handle) is required for the warpage solve")
+    return _molding_warpage_submit(p, info)
+
+
 @handler("thermal_transient_submit")
 def _h_thermal_transient_submit(p):
     """Transient thermal FEM via Elmer, OFF the MCP channel. Degrades to

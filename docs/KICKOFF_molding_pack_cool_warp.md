@@ -140,8 +140,43 @@ Incremental, each step independently testable. **[x] = done (branch `feat/moldin
       interface cells → false sink). rho_min 978.8, no sink, shrinkage matches EOS (4.43 vs
       4.44%).
 
-**Part A is COMPLETE.** Remaining for the issue = Part B (warpage; its own lift — needs
-`elastic=True` stabilised) and net mold shrinkage (packing-feed modelling).
+**Part A is COMPLETE.** **Part B (warpage) is also COMPLETE** — see "Part B (warpage) —
+DONE" below. Remaining for the issue = net mold shrinkage (packing-feed modelling) and a
+*coupled* field hand-off (auto-derive `dT_through_k` from the Part-A cooling cell-centre
+temperatures).
+
+### Part B (warpage) — DONE (branch `feat/molding-warpage`)
+
+**Decision: CalculiX, NOT the openInjMoldSim `elastic=True` path.** No OSS IM warpage
+solver exists; the realistic loose-coupling is a thermo-elastic FEM post-step. CalculiX
+beat Elmer here because a per-node `*TEMPERATURE` maps the frozen-in field directly and
+node-level `*BOUNDARY` gives an exact 3-2-1 (the openInjMoldSim `elSigDev` elastic path
+stays disabled — it was never needed for warpage).
+
+- **Module:** `driftpin/analysis/warpage.py` — `free_plate_thermal_bow` (analytic twin
+  κ=α·ΔT/h, δ=κL²/8), `pick_321_nodes` + `thickness_axis`, `linear_through_thickness_temps`,
+  `warpage_inp_text`/`write_warpage_case` (the ccx deck), `parse_warp_frd`, `warpage_gate`.
+- **Solver resolver:** `solvers.ccx_bin()` + a `calculix` registry entry (family `warpage`,
+  binary `ccx`, `DRIFTPIN_CALCULIX_PATH`). Distinct from `ccx_precice_bin`.
+- **Worker:** `_molding_warpage_submit` / handler `_h_molding_warpage_submit` — mirrors
+  `_thermal_body_submit` (Gmsh mesh main thread → C3D10 `writeABAQUS(path, 2, False)` →
+  ccx in background → parse → gate). `_resolve_warpage_props` (E/ν/CTE from corpus or
+  solidified-resin defaults + a warning).
+- **MCP tool:** `molding_warpage_submit(body, dT_through_k, material?/youngs_mpa?/poisson?/
+  cte_per_k?, ref_temp_c?, char_length_mm?, thickness_axis?, flatness_tol_mm?/_frac?)`.
+- **Validated:** worker end-to-end on a real FreeCAD-meshed 40×10×1 plate → warp 1.488 mm
+  vs analytic 1.4 mm (`warp_faithful`); balanced ΔT=0 → exactly 0. Toy
+  `tools/warpage_toy.py` → `artifacts/molding_warpage_bow.png` (asym bow tracks the twin,
+  balanced flat). Tests `tests/test_warpage.py` (pure + ccx-backed, skip-guarded).
+  Contracts 10/10.
+- **3 gotchas:** (1) `writeABAQUS(path, elemParam=2, groupParam=False)` — needs the
+  highest-dim-only + bool-group args, else it raises; gives `*Node,NSET=Nall` +
+  `*Element,TYPE=C3D10,ELSET=Evolumes`. (2) Through-thickness resolution: a strong linear
+  gradient needs ≳4 element layers (coarse 2-layer hex under-predicts curvature ~20 %;
+  C3D10 tets are forgiving). (3) The 3-2-1 pins the out-of-plane dof at *both* span-end
+  corners, so the bow is a chord-referenced sagitta (κL²/8 at mid-span), not a cantilever
+  arc — the artifact's analytic overlay reflects that. **Warp is invariant to `ref_temp_c`**
+  (a uniform shift is pure isotropic shrink); it only scales reported residual stress.
 
 ### CONFIRMED pack findings (2026-06-22 runs — read before iterating)
 
