@@ -183,9 +183,14 @@ def test_openinjmoldsim_case_files_structure():
     assert "phases (poly air)" in files["constant/thermophysicalProperties"]
     assert "uniformValue table" in files["0/p_rgh"]
     assert "fixedValue; value uniform 1" in files["0/alpha.poly"]
-    # the two SHA1-prone values are written as LITERALS
+    # the two SHA1-prone values are written as LITERALS (no #calc)
     sp = files["constant/solidificationProperties"]
-    assert "viscLimEl 5000000" in sp and "#calc" not in sp
+    assert "viscLimEl" in sp and "#calc" not in sp
+    # elastic stress OFF by default → viscLimEl ABOVE etaMax (no elSigDev divergence
+    # during cooling); elastic=True restores the tutorial's below-etaMax value
+    assert "viscLimEl 20000000" in sp                 # etaMax(1e7) * 2
+    sp_el = mf.openinjmoldsim_case_files(elastic=True)["constant/solidificationProperties"]
+    assert "viscLimEl 5000000" in sp_el               # etaMax(1e7) * 0.5
 
 
 def test_openinjmoldsim_corpus_drives_cross_wlf_and_tait():
@@ -209,6 +214,78 @@ def test_openinjmoldsim_blockmesh_patches_and_2d():
     for patch in ("inlet", "outlet", "walls", "frontAndBack"):
         assert patch in bm, patch
     assert "empty" in bm                              # 2-D: ±z faces are empty
+
+
+# --- packing / cooling helpers (no solver; issue #113) -----------------------
+
+def test_controldict_starts_from_latest_time():
+    """The pack stage resumes from the filled state, so the fill controlDict must use
+    `startFrom latestTime` (latestTime is 0 initially, so fill still starts at 0)."""
+    cd = mf.openinjmoldsim_case_files()["system/controlDict"]
+    assert "startFrom       latestTime" in cd
+
+
+def test_close_outlet_cmds_seal_and_cool():
+    """close_outlet emits the three BC switches that seal the gate and cool through the
+    former outlet: p_rgh→fixedFluxPressure, U→fixedValue (0 0 0), T outlet h←walls h."""
+    cmds = mf.close_outlet_cmds("0.22")
+    flat = [" ".join(c) for c in cmds]
+    assert any("0.22/p_rgh" in c and "fixedFluxPressure" in c for c in flat)
+    assert any("0.22/U" in c and "fixedValue" in c for c in flat)
+    assert any("0.22/U" in c and "(0 0 0)" in c for c in flat)
+    # T outlet h is set from the walls' h via a runtime foamDictionary substitution
+    assert any("0.22/T" in c and "boundaryField.outlet.h" in c
+               and "boundaryField.walls.h" in c for c in flat)
+
+
+def test_time_extend_and_plan_and_walls_h():
+    te = mf.time_extend_cmds(end_time_s=1.0, write_interval_s=0.05, max_deltaT_s=1e-4)
+    entries = {c[3] for c in te}
+    assert entries == {"endTime", "writeInterval", "maxDeltaT"}
+    plan = mf.pack_phase_plan(0.2, n_phases=2, cool_window_s=1.0)
+    assert len(plan) == 2
+    assert plan[0][0] < plan[1][0]                    # each phase extends further
+    assert plan[-1][0] == 0.2 + 1.0                   # spans the cool window
+    wh = mf.set_walls_h_cmd("0.22", 1250.0)
+    assert wh[1] == "0.22/T" and "walls.h" in wh[3] and wh[-1] == "1250"
+    rd = mf.reset_restart_deltaT_cmd("0.22")
+    assert "0.22/uniform/time" in rd and rd[3] == "deltaT"
+
+
+def test_tait_density_and_densification():
+    """The 2-domain Tait EOS gives physical PS densities (~970 melt, denser cold) and a
+    positive densification on cooling."""
+    tait = mf._resin_cross_wlf_tait("PS")[1]
+    rho_hot = mf.tait_density(tait, 493.15, 2.0e6)    # 220 C melt
+    rho_cold = mf.tait_density(tait, 423.15, 2.0e6)   # 150 C
+    assert 900 < rho_hot < 1050 and rho_cold > rho_hot
+    d = mf.tait_densification_pct(tait, T_hot_k=493.15, T_cold_k=423.15, p_pa=2.0e6)
+    assert 0.3 < d < 6.0                              # a few % volumetric
+
+
+def test_pack_gate_sink_drives_pass_and_pvt_faithfulness():
+    tait = mf._resin_cross_wlf_tait("PS")[1]
+    # well-packed (rho_min close to mean) → pass; faithful densification → no warning
+    g = mf.pack_gate({"volumetric_shrinkage_pct": 2.0, "rho_mean_final": 1005.0,
+                      "rho_min": 990.0, "T_mean_melt": 423.15, "frozen_fraction": 0.8,
+                      "residual_pressure_pa": 2.0e6},
+                     tait=tait, fill_T_mean_k=493.15)
+    assert g["pass"] is True and g["fidelity"] == "solve"
+    assert g["score"] > 0.95 and g["sink_risk"] is False
+    assert g["expected_densification_pct"] is not None and g["pvt_faithful"] is True
+    # a strongly under-packed region (>8% below mean) → sink risk → FAIL
+    g2 = mf.pack_gate({"volumetric_shrinkage_pct": 2.0, "rho_mean_final": 1005.0,
+                       "rho_min": 880.0, "T_mean_melt": 423.15,
+                       "frozen_fraction": 0.8, "residual_pressure_pa": 2.0e6},
+                      tait=tait, fill_T_mean_k=493.15)
+    assert g2["pass"] is False and g2["sink_risk"] is True and g2["warnings"]
+    # solved densification wildly off the EOS → unfaithful warning (but NOT a fail)
+    g3 = mf.pack_gate({"volumetric_shrinkage_pct": 9.0, "rho_mean_final": 1005.0,
+                       "rho_min": 990.0, "T_mean_melt": 423.15,
+                       "frozen_fraction": 0.8, "residual_pressure_pa": 2.0e6},
+                      tait=tait, fill_T_mean_k=493.15)
+    assert g3["pass"] is True and g3["pvt_faithful"] is False
+    assert any("Tait-EOS" in w for w in g3["warnings"])
 
 
 # --- openInjMoldSim solver-backed fill (skips when the OF7 build is absent) ---
@@ -242,6 +319,54 @@ def test_openinjmoldsim_generated_case_fills():
     assert parsed["front_x_frac"] >= 0.95, parsed
     gate = mf.fill_gate(parsed, expected_fill_time_s=built["expected_fill_time_s"])
     assert gate["pass"] is True and gate["fidelity"] == "solve", (parsed, gate)
+
+
+def test_openinjmoldsim_fill_pack_cools_and_densifies():
+    """The packing/cooling continuation (issue #113): fill (near-adiabatic, hot) → switch
+    walls to cooling + seal the gate → cool. Confirms it runs STABLE (no nan) and the
+    melt DENSIFIES on cooling, with the densification faithful to the resin's Tait EOS and
+    the gate passing (no sink). Skips unless the OF7 build is present. Slow (~5-6 min)."""
+    binp = solvers.openinjmoldsim_bin()
+    bashrc = solvers.openinjmoldsim_bashrc()
+    if not binp or not bashrc:
+        print("    SKIP — openInjMoldSim (OF7-org) not built")
+        return
+    d = tempfile.mkdtemp(prefix="oims_pack_test_")
+    mf.write_openinjmoldsim_case(
+        d, resin="PS", length_m=0.02, height_m=1e-3, depth_m=1e-3, nx=60, ny=8,
+        peak_pressure_pa=2.0e6, wall_h_w_m2k=1.0)        # fill near-adiabatic
+
+    def run(cmds, log):
+        chain = " && ".join(" ".join(a) for a in cmds)
+        script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
+        with open(os.path.join(d, log), "w") as f:
+            return subprocess.run(["bash", "-c", script], cwd=d, stdout=f,
+                                  stderr=subprocess.STDOUT).returncode
+
+    assert run([["blockMesh"], ["setFields"], [binp, "-fillEnd", "0.98"]],
+               "log.fill") == 0
+    fe = mf._latest_time_dir(d)
+    fstats = mf._melt_stats(d, fe)
+    # pack: reset → switch walls to cooling → close outlet → extend + re-run
+    cmds = ([mf.reset_restart_deltaT_cmd(fe), mf.set_walls_h_cmd(fe, 1250.0)]
+            + mf.close_outlet_cmds(fe))
+    for (e, w, m) in mf.pack_phase_plan(float(fe), n_phases=1, cool_window_s=0.6):
+        cmds += mf.time_extend_cmds(end_time_s=e, write_interval_s=w, max_deltaT_s=m)
+        cmds += [[binp]]
+    assert run(cmds, "log.pack") == 0
+    with open(os.path.join(d, "log.pack")) as f:
+        assert "nan" not in f.read().lower(), "pack diverged (nan in log)"
+
+    ppar = mf.parse_pack(d, fill_rho_mean=fstats["rho_mean"],
+                         fill_end_time_s=float(fe))
+    assert ppar is not None
+    assert ppar["rho_mean_final"] > fstats["rho_mean"]   # densified on cooling
+    assert ppar["T_mean_melt"] < fstats["T_mean"]        # cooled
+    tait = mf._resin_cross_wlf_tait("PS")[1]
+    pg = mf.pack_gate(ppar, tait=tait, fill_T_mean_k=fstats["T_mean"])
+    assert pg["fidelity"] == "solve"
+    assert pg["pass"] is True and pg["sink_risk"] is False
+    assert pg["pvt_faithful"] is True                    # solve tracks its own EOS
 
 
 if __name__ == "__main__":

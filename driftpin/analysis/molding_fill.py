@@ -41,6 +41,7 @@ case-structure gate and the solver-backed fill / short-shot gate.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 
@@ -558,6 +559,7 @@ def openinjmoldsim_case_files(
     kappa_w_mk: float = 0.18,
     mol_weight: float = 104.15,
     shear_modulus_pa: float = 907.0e6,
+    elastic: bool = False,
     eta_max_pa_s: float = 1.0e7,
     eta_min_pa_s: float = 5.0,
     t_noflow_k: float = 373.15,
@@ -615,7 +617,10 @@ def openinjmoldsim_case_files(
         length_m=L, height_m=H, depth_m=D, nx=nx, ny=ny, nz=nz)
     files["system/controlDict"] = (
         _header("dictionary", "controlDict", "system")
-        + "\napplication     openInjMoldSim;\nstartFrom       startTime;\n"
+        # startFrom latestTime (not startTime): latestTime is 0 initially so the FILL
+        # phase still starts at 0, but it lets the PACK phases resume from the filled
+        # state (the tutorial's controlDict0 does the same — see pack continuation).
+        + "\napplication     openInjMoldSim;\nstartFrom       latestTime;\n"
         "startTime       0;\nstopAt          endTime;\n"
         f"endTime         {end_time_s:.10g};\ndeltaT          {deltaT_s:.10g};\n"
         "writeControl    adjustableRunTime;\n"
@@ -726,11 +731,20 @@ def openinjmoldsim_case_files(
         f"    transport {{ mu {air_mu_pa_s:.10g}; Pr 1e6; }}\n}}\n")
     # solidificationProperties — viscLimEl written as a LITERAL (the tutorial's
     # `#calc "$etaMax*0.5"` SHA1-aborts this toolchain).
+    #
+    # The elastic shear-stress (elSigDev) model activates once the cooling melt's
+    # viscosity exceeds viscLimEl. On this coarse, constant-cp/kappa case that coupling
+    # is violently unstable during pack solidification (max(U)→1e8, nan). For Part A
+    # (shrinkage / sink / cooling time — none of which need elasticity) we DISABLE it
+    # by setting viscLimEl ABOVE etaMax (per the model: "viscLimEl should be less than
+    # etaMax to allow elastic behavior"). elastic=True restores the tutorial's
+    # behaviour (for a future residual-stress / warpage path, #113 Part B).
+    visc_lim_el = eta_max_pa_s * 0.5 if elastic else eta_max_pa_s * 2.0
     files["constant/solidificationProperties"] = (
         _header("dictionary", "solidificationProperties", "constant")
         + f"\nshearModulus {shear_modulus_pa:.10g};\n"
         f"etaMax {eta_max_pa_s:.10g};\n"
-        f"viscLimEl {eta_max_pa_s * 0.5:.10g};\n")
+        f"viscLimEl {visc_lim_el:.10g};\n")
 
     # --- 0/ ------------------------------------------------------------------
     empty = "    frontAndBack { type empty; }\n"
@@ -784,6 +798,106 @@ def openinjmoldsim_case_files(
         "    outlet { type calculated; value uniform 0; }\n"
         "    walls  { type calculated; value uniform 0; }\n" + empty + "}\n")
     return files
+
+
+# --- openInjMoldSim packing / cooling continuation (issue #113, Part A) -------
+#
+# After the cavity FILLS, a real cycle SEALS the gate/outlet and HOLDS while the part
+# cools — the stage that gives volumetric shrinkage (real Tait PVT, not the #104 CTE
+# estimate), residual pressure, sink risk, and cooling time. openInjMoldSim runs this
+# as a *continuation* of the same case from the filled state (startFrom latestTime).
+#
+# The mechanics mirror the tutorial's AllRun (translated to SERIAL — driftpin runs no
+# decomposePar/reconstructPar): per pack phase, reset the restart deltaT so the
+# continuation eases in, switch the outlet BCs to "closed + cooling", rewrite
+# controlDict's time controls, and re-run the solver (NO -fillEnd). The BC switches
+# are emitted as `foamDictionary ... -set ...` argv lists (the env is sourced in
+# `_run_foam`), exactly as the tutorial's close_outlet does.
+
+
+def foamdict_set(target: str, entry: str, value: str) -> list:
+    """One ``foamDictionary <target> -entry <entry> -set <value>`` argv list. Quote
+    the value yourself if it contains spaces (e.g. a vector ``"(0 0 0)"``)."""
+    return ["foamDictionary", target, "-entry", entry, "-set", value]
+
+
+def close_outlet_cmds(time_dir: str, *, walls_h_entry: str = "boundaryField.walls.h"
+                      ) -> list:
+    """The argv lists that **seal the gate and let the part cool through the former
+    outlet** on time directory ``time_dir`` — the serial equivalent of the tutorial's
+    ``close_outlet``:
+
+    - ``p_rgh`` outlet ``type`` → ``fixedFluxPressure`` (no more driving pressure),
+    - ``U``     outlet ``type`` → ``fixedValue``, ``value`` → ``uniform (0 0 0)`` (sealed),
+    - ``T``     outlet ``h``    → the walls' coefficient (cool through it like a wall).
+
+    The walls' ``h`` is read at run time with ``$(foamDictionary ... -value)`` and
+    substituted, so this returns a list where the ``T`` command embeds that shell
+    substitution. Run inside the sourced-env bash script `_run_foam` builds."""
+    p_rgh = f"{time_dir}/p_rgh"
+    u = f"{time_dir}/U"
+    t = f"{time_dir}/T"
+    h_sub = f"$(foamDictionary {t} -entry {walls_h_entry} -value)"
+    return [
+        foamdict_set(p_rgh, "boundaryField.outlet.type", "fixedFluxPressure"),
+        foamdict_set(u, "boundaryField.outlet.type", "fixedValue"),
+        foamdict_set(u, "boundaryField.outlet.value", '"uniform (0 0 0)"'),
+        foamdict_set(t, "boundaryField.outlet.h", f'"{h_sub}"'),
+    ]
+
+
+def set_walls_h_cmd(time_dir: str, h_w_m2k: float) -> list:
+    """Set the mold-wall heat-transfer coefficient on ``<time_dir>/T`` — used at the
+    pack transition to **switch on cooling** when the fill ran near-adiabatic
+    (``wall_h_w_m2k≈1``). Real fill is fast enough to be ~isothermal, so we fill hot
+    (clean, completes) then extract heat during the pack/hold — and `close_outlet`
+    (run after this) copies this same ``h`` onto the sealed outlet."""
+    return foamdict_set(f"{time_dir}/T", "boundaryField.walls.h", f"{h_w_m2k:.10g}")
+
+
+def reset_restart_deltaT_cmd(time_dir: str, deltaT: float = 1e-10) -> list:
+    """Reset the restart ``deltaT`` in ``<time_dir>/uniform/time`` so the pack
+    continuation eases in (the serial equivalent of the tutorial's ``new_deltaT`` —
+    without it the stiff restart diverges immediately, same class as the fill
+    ``maxDeltaT`` lesson)."""
+    return foamdict_set(f"{time_dir}/uniform/time", "deltaT", f"{deltaT:.10g}")
+
+
+def time_extend_cmds(*, end_time_s: float, write_interval_s: float,
+                     max_deltaT_s: float) -> list:
+    """Rewrite ``system/controlDict``'s time controls for a pack phase (the
+    tutorial's ``time_extend <endTime> <writeInterval> <maxDeltaT>``). Returns the
+    argv lists."""
+    cd = "system/controlDict"
+    return [
+        foamdict_set(cd, "endTime", f"{end_time_s:.10g}"),
+        foamdict_set(cd, "writeInterval", f"{write_interval_s:.10g}"),
+        foamdict_set(cd, "maxDeltaT", f"{max_deltaT_s:.10g}"),
+    ]
+
+
+def pack_phase_plan(fill_end_time_s: float, *, n_phases: int = 2,
+                    cool_window_s: float | None = None) -> list:
+    """A list of ``(end_time_s, write_interval_s, max_deltaT_s)`` for the pack phases,
+    each extending the run further and coarsening the step as the dynamics slow (the
+    tutorial uses 3 phases out to t=6 s for full cooling).
+
+    For the driftpin TOY/gate we keep it short: ``cool_window_s`` (default a few× the
+    fill time) bounds the total cooling so CI stays fast — cool until the gate freezes,
+    not the full realistic cycle. Returns ``n_phases`` tuples spanning
+    ``[fill_end, fill_end + cool_window]``."""
+    cool = cool_window_s if cool_window_s is not None else max(3.0 * fill_end_time_s,
+                                                               0.3)
+    plan = []
+    t0 = fill_end_time_s
+    for i in range(n_phases):
+        frac = (i + 1) / n_phases
+        end = t0 + cool * frac
+        wi = cool / (n_phases * 8)
+        # coarsen maxDeltaT as we go (pack1 tightest, later phases looser)
+        mdt = 1e-4 * (i + 1)
+        plan.append((round(end, 8), round(wi, 8), mdt))
+    return plan
 
 
 def write_openinjmoldsim_case(case_dir: str, **kwargs) -> dict:
@@ -936,6 +1050,251 @@ def parse_fill(
                 out["pressure_field"] = pname
                 break
     return out
+
+
+# --- packing / cooling parse + gate (issue #113, Part A) ---------------------
+
+# Universal Tait constant (Moldflow/Autodesk 2-domain Tait-PVT form).
+_TAIT_C = 0.0894
+
+
+def tait_density(tait: dict, T_k: float, p_pa: float) -> float:
+    """Specific density [kg/m^3] from the **2-domain Tait** PVT law (the same EOS
+    openInjMoldSim integrates), given the corpus ``tait`` coefficient dict (keys
+    ``b1m..b9`` — see ``_resin_cross_wlf_tait``), temperature ``T_k`` and pressure
+    ``p_pa``.
+
+    V(T,p) = V0(T)·[1 − C·ln(1 + p/B(T))] + Vt;  ρ = 1/V. The melt branch (T > the
+    transition Tt = b5 + b6·p) uses the ``*m`` coefficients with Vt = 0; the solid
+    branch uses ``*s`` plus the solid-state correction Vt. Used to predict the
+    expected cooling densification so the gate can check the solve is faithful to its
+    own EOS (the 'validate the artifact, not a model' discipline)."""
+    b = tait
+    b5, b6 = b["b5"], b["b6"]
+    Tt = b5 + b6 * p_pa
+    dT = T_k - b5
+    if T_k > Tt:                                   # melt / liquid domain
+        V0 = b["b1m"] + b["b2m"] * dT
+        B = b["b3m"] * math.exp(-b["b4m"] * dT)
+        Vt = 0.0
+    else:                                          # solid domain
+        V0 = b["b1s"] + b["b2s"] * dT
+        B = b["b3s"] * math.exp(-b["b4s"] * dT)
+        Vt = b["b7"] * math.exp(b["b8"] * dT - b["b9"] * p_pa)
+    V = V0 * (1.0 - _TAIT_C * math.log(1.0 + p_pa / B)) + Vt
+    return 1.0 / V if V > 0 else float("nan")
+
+
+def tait_densification_pct(tait: dict, *, T_hot_k: float, T_cold_k: float,
+                           p_pa: float) -> float:
+    """Expected volumetric densification (%) from the Tait EOS as the melt cools from
+    ``T_hot_k`` to ``T_cold_k`` at pressure ``p_pa``: ``100·(1 − ρ_hot/ρ_cold)``.
+    The physical yardstick the solved cooling shrinkage is checked against."""
+    rho_hot = tait_density(tait, T_hot_k, p_pa)
+    rho_cold = tait_density(tait, T_cold_k, p_pa)
+    if not (rho_hot > 0 and rho_cold > 0):
+        return float("nan")
+    return 100.0 * (1.0 - rho_hot / rho_cold)
+
+
+def _melt_stats(case_dir: str, time_dir: str, *, alpha_melt_min: float = 0.99):
+    """Mean/min density and max/mean temperature over the **melt** cells
+    (alpha.poly >= alpha_melt_min) at ``time_dir``, plus the melt cell count and the
+    max residual pressure. Returns a dict or None if fields are missing.
+
+    Masking to melt cells matters: the residual **air** pocket compresses and heats to
+    unphysical values (T up to ~800 K, rho < 1) that would swamp an unmasked mean."""
+    af = _alpha_file(case_dir, time_dir)
+    if af is None:
+        return None
+    a = _read_internal_scalar_field(af)
+    rho = _read_internal_scalar_field(os.path.join(case_dir, time_dir, "rho"))
+    T = _read_internal_scalar_field(os.path.join(case_dir, time_dir, "T"))
+    if not a or not rho or not T:
+        return None
+    melt = [i for i, v in enumerate(a) if v >= alpha_melt_min and i < len(rho)
+            and i < len(T)]
+    if not melt:
+        return None
+    rho_m = [rho[i] for i in melt]
+    T_m = [T[i] for i in melt]
+    out = {
+        "n_melt_cells": len(melt),
+        "rho_mean": sum(rho_m) / len(rho_m),
+        "rho_min": min(rho_m),
+        "T_max": max(T_m),
+        "T_mean": sum(T_m) / len(T_m),
+    }
+    for pname in ("p", "p_rgh"):
+        pv = _read_internal_scalar_field(os.path.join(case_dir, time_dir, pname))
+        if pv:
+            out["residual_pressure_pa"] = max(pv)
+            break
+    return out
+
+
+def cooling_time_s(case_dir: str, *, fill_end_time_s: float, eject_temp_k: float,
+                   alpha_melt_min: float = 0.99) -> float | None:
+    """Time (from ``fill_end_time_s``) for the hottest **melt** cell to drop below
+    ``eject_temp_k`` — the cooling/cycle-time driver. Scans the written time
+    directories at/after the fill end. Returns None if the part never cools below the
+    eject temp within the run (the cooling window was too short)."""
+    for name in _time_dirs(case_dir):
+        try:
+            t = float(name)
+        except ValueError:
+            continue
+        if t < fill_end_time_s:
+            continue
+        st = _melt_stats(case_dir, name, alpha_melt_min=alpha_melt_min)
+        if st and st["T_max"] <= eject_temp_k:
+            return round(t - fill_end_time_s, 6)
+    return None
+
+
+def parse_pack(
+    case_dir: str, *, fill_rho_mean: float | None = None,
+    fill_end_time_s: float | None = None, eject_temp_k: float = 353.15,
+    t_noflow_k: float = 373.15, alpha_melt_min: float = 0.99,
+    time_dir: str | None = None,
+) -> dict | None:
+    """Read the **final** (pack/cool) state and return the packing result.
+
+    ``rho_mean_final`` is the cavity-mean melt density after cooling; with
+    ``fill_rho_mean`` (the melt density at fill end) the **volumetric shrinkage** is
+    ``1 - rho_fill/rho_final`` (densification on cooling — the real Tait-PVT twin of
+    the #104 CTE estimate). ``rho_min`` flags **sink risk** (a local under-packed,
+    low-density region). ``frozen_fraction`` is the share of melt cells already below
+    ``t_noflow_k`` (solidified). ``residual_pressure_pa`` is the holding pressure left
+    in the field. ``cooling_time_s`` (needs ``fill_end_time_s``) is the time for the
+    hottest melt cell to fall below ``eject_temp_k``.
+
+    Returns None if no melt fields are present (the pack solve failed)."""
+    td = time_dir or _latest_time_dir(case_dir)
+    if td is None:
+        return None
+    st = _melt_stats(case_dir, td, alpha_melt_min=alpha_melt_min)
+    if st is None:
+        return None
+    # frozen fraction (recompute over the melt mask at this time)
+    af = _alpha_file(case_dir, td)
+    a = _read_internal_scalar_field(af) if af else None
+    T = _read_internal_scalar_field(os.path.join(case_dir, td, "T"))
+    frozen_fraction = None
+    if a and T:
+        melt = [i for i, v in enumerate(a) if v >= alpha_melt_min and i < len(T)]
+        if melt:
+            frozen_fraction = round(
+                sum(1 for i in melt if T[i] < t_noflow_k) / len(melt), 4)
+    out = {
+        "time": td,
+        "n_melt_cells": st["n_melt_cells"],
+        "rho_mean_final": round(st["rho_mean"], 3),
+        "rho_min": round(st["rho_min"], 3),
+        "T_max_melt": round(st["T_max"], 3),
+        "T_mean_melt": round(st["T_mean"], 3),
+        "frozen_fraction": frozen_fraction,
+    }
+    if "residual_pressure_pa" in st:
+        out["residual_pressure_pa"] = round(st["residual_pressure_pa"], 3)
+    if fill_rho_mean:
+        shr = 1.0 - (fill_rho_mean / st["rho_mean"]) if st["rho_mean"] else 0.0
+        out["fill_rho_mean"] = round(fill_rho_mean, 3)
+        out["volumetric_shrinkage_pct"] = round(100.0 * shr, 4)
+    if fill_end_time_s is not None:
+        out["cooling_time_s"] = cooling_time_s(
+            case_dir, fill_end_time_s=fill_end_time_s, eject_temp_k=eject_temp_k,
+            alpha_melt_min=alpha_melt_min)
+    return out
+
+
+def pack_gate(
+    parsed: dict, *, tait: dict | None = None, fill_T_mean_k: float | None = None,
+    sink_rel: float = 0.92, faithfulness_tol: float = 2.0,
+) -> dict:
+    """Turn a ``parse_pack`` result into the house verdict shape for the **packing**
+    stage.
+
+    Design note (issue #113): the solved ``volumetric_shrinkage_pct`` is the **raw
+    PVT densification on cooling**, NOT the net "mold shrinkage" molders quote (which
+    is post-packing-feed compensation — out of scope without modelling the feed). So
+    the gate does **not** pass/fail on a net-shrinkage band. Instead:
+
+    - **pass/fail = sink risk** (the actionable moldability signal): a local
+      under-packed region, ``rho_min < sink_rel · rho_mean_final`` — measured against
+      the part's OWN mean density, so no dubious external reference.
+    - **shrinkage is checked for FAITHFULNESS** against the resin's own 2-domain Tait
+      EOS (when ``tait`` + ``fill_T_mean_k`` are given): the solved densification
+      should track ``tait_densification_pct`` between the fill and final mean melt
+      temperatures at the hold pressure. A solved/expected ratio outside
+      ``[1/faithfulness_tol, faithfulness_tol]`` raises a warning that the solve may be
+      unfaithful (heterogeneous fill-end state, too-coarse mesh) — it does NOT fail the
+      gate (it's a sanity check, not a moldability verdict).
+
+    ``score`` is the packing uniformity ``rho_min/rho_mean_final`` (1.0 = perfectly
+    uniform, no sink). ``fidelity="solve"``. Returns ``{pass, score, fidelity,
+    band_pct, volumetric_shrinkage_pct, expected_densification_pct, pvt_faithful,
+    rho_min, rho_mean_final, sink_risk, frozen_fraction, cooling_time_s,
+    residual_pressure_pa, warnings}``."""
+    warnings: list[str] = []
+    shr = parsed.get("volumetric_shrinkage_pct")
+    rho_min = parsed.get("rho_min")
+    rho_mean = parsed.get("rho_mean_final")
+
+    # --- sink risk (the pass/fail signal) ---
+    sink_risk = False
+    if rho_min is not None and rho_mean:
+        sink_risk = rho_min < sink_rel * rho_mean
+        if sink_risk:
+            warnings.append(
+                f"sink-mark risk — a melt region is only {rho_min:.0f} kg/m^3, "
+                f"{(1 - rho_min/rho_mean)*100:.0f}% below the part mean "
+                f"{rho_mean:.0f} kg/m^3: under-packed, expect a surface sink/void there")
+
+    # --- Tait-EOS faithfulness of the solved densification (informational) ---
+    expected = None
+    pvt_faithful = None
+    if tait and fill_T_mean_k and parsed.get("T_mean_melt") is not None:
+        p_pa = parsed.get("residual_pressure_pa") or 1.0e5
+        expected = tait_densification_pct(
+            tait, T_hot_k=fill_T_mean_k, T_cold_k=parsed["T_mean_melt"], p_pa=p_pa)
+        if (shr is not None and expected and expected == expected   # not nan
+                and expected > 1e-6):
+            ratio = shr / expected
+            pvt_faithful = (1.0 / faithfulness_tol) <= ratio <= faithfulness_tol
+            if not pvt_faithful:
+                warnings.append(
+                    f"solved cooling densification {shr:.2f}% is {ratio:.1f}x the "
+                    f"Tait-EOS expectation {expected:.2f}% (T {fill_T_mean_k:.0f}->"
+                    f"{parsed['T_mean_melt']:.0f} K @ {p_pa/1e6:.1f} MPa) — likely a "
+                    "heterogeneous fill-end state or too-coarse mesh, treat the "
+                    "shrinkage number with caution")
+
+    frozen = parsed.get("frozen_fraction")
+    if frozen is not None and frozen < 0.5:
+        warnings.append(
+            f"only {frozen*100:.0f}% of the melt has frozen in the cooling window — "
+            "cooling_time_s is a lower bound; extend the pack window (or thin the "
+            "wall) for a true cycle time")
+
+    score = (rho_min / rho_mean) if (rho_min is not None and rho_mean) else 0.5
+    return {
+        "pass": not sink_risk,
+        "score": round(float(min(1.0, score)), 4),
+        "fidelity": "solve",
+        "band_pct": 25.0,
+        "volumetric_shrinkage_pct": shr,
+        "expected_densification_pct": (round(expected, 4)
+                                       if expected and expected == expected else None),
+        "pvt_faithful": pvt_faithful,
+        "rho_min": rho_min,
+        "rho_mean_final": rho_mean,
+        "sink_risk": sink_risk,
+        "frozen_fraction": frozen,
+        "cooling_time_s": parsed.get("cooling_time_s"),
+        "residual_pressure_pa": parsed.get("residual_pressure_pa"),
+        "warnings": warnings,
+    }
 
 
 # --- the moldability gate ----------------------------------------------------

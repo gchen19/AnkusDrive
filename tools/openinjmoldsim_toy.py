@@ -62,6 +62,22 @@ def _cell_grid(case_dir: str, time_dir: str, nx: int, ny: int):
     return a.reshape(ny, nx)
 
 
+def _masked_temp_grid(case_dir: str, time_dir: str, nx: int, ny: int):
+    """Temperature (°C) over the **melt** cells at ``time_dir`` as an (ny, nx) grid,
+    with non-melt (air) cells set to NaN so the part reads cleanly against the
+    background. Returns None if fields are missing."""
+    af = mf._alpha_file(case_dir, time_dir)
+    T = mf._read_internal_scalar_field(os.path.join(case_dir, time_dir, "T"))
+    a = mf._read_internal_scalar_field(af) if af else None
+    if not T or not a or len(T) < nx * ny:
+        return None
+    import numpy as np
+    Tg = np.array(T[: nx * ny], dtype=float) - 273.15
+    ag = np.array(a[: nx * ny], dtype=float)
+    Tg[ag < 0.5] = np.nan
+    return Tg.reshape(ny, nx)
+
+
 def render_gif(case_dir: str, *, nx: int, ny: int, length_m: float,
                height_m: float, out_path: str, resin: str) -> str | None:
     """Render the melt front (alpha.poly) over all written time directories into an
@@ -109,6 +125,84 @@ def render_gif(case_dir: str, *, nx: int, ny: int, length_m: float,
     return out_path
 
 
+def render_cooling_gif(case_dir: str, *, nx: int, ny: int, length_m: float,
+                       height_m: float, out_path: str, resin: str,
+                       fill_end_time_s: float, vmin_c: float = 40.0,
+                       vmax_c: float = 230.0) -> str | None:
+    """Render the part **cooling** (melt temperature, °C) over the PACK time
+    directories (t ≥ fill end) into an animated GIF. Air cells are masked out.
+    Returns the path, or None if matplotlib/PIL are unavailable."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib import cm
+        from PIL import Image
+    except Exception as exc:                       # pragma: no cover
+        print(f"[gif] skipped (no matplotlib/PIL): {exc}")
+        return None
+    Lmm, Hmm = length_m * 1000.0, height_m * 1000.0
+    frames = []
+    for t in mf._time_dirs(case_dir):
+        try:
+            if float(t) < fill_end_time_s:
+                continue
+        except ValueError:
+            continue
+        grid = _masked_temp_grid(case_dir, t, nx, ny)
+        if grid is None:
+            continue
+        import numpy as np
+        fig, ax = plt.subplots(figsize=(7.0, max(1.4, 7.0 * Hmm / Lmm + 0.9)))
+        cmap = cm.inferno.copy()
+        cmap.set_bad("0.85")                       # air = light grey
+        im = ax.imshow(grid, origin="lower", aspect="auto", cmap=cmap,
+                       vmin=vmin_c, vmax=vmax_c, extent=[0, Lmm, 0, Hmm])
+        tmax = float(np.nanmax(grid)) if np.isfinite(np.nanmax(grid)) else float("nan")
+        ax.set_title(f"openInjMoldSim — {resin} PACK/COOL   "
+                     f"t = {float(t)*1e3:6.0f} ms   hottest melt {tmax:5.0f} °C",
+                     fontsize=11)
+        ax.set_xlabel("flow length x  [mm]   (gate sealed at left)")
+        ax.set_ylabel("gap y [mm]")
+        fig.colorbar(im, ax=ax, fraction=0.025, pad=0.01, label="T [°C]")
+        fig.tight_layout()
+        fig.canvas.draw()
+        frames.append(Image.frombytes("RGB", fig.canvas.get_width_height(),
+                                       fig.canvas.tostring_rgb()))
+        plt.close(fig)
+    if not frames:
+        print("[gif] no pack frames (no T field found)")
+        return None
+    durations = [220] * (len(frames) - 1) + [1400]
+    frames[0].save(out_path, save_all=True, append_images=frames[1:],
+                   duration=durations, loop=0, optimize=True)
+    print(f"[gif] wrote {out_path}  ({len(frames)} cooling frames)")
+    return out_path
+
+
+def run_pack(case_dir: str, bashrc: str, binp: str, *, n_phases: int,
+             cool_window_s: float, pack_wall_h: float) -> tuple:
+    """Run the packing/cooling continuation in a filled ``case_dir`` (the same
+    sequence the worker uses): reset the restart step, switch the walls to cooling,
+    seal the gate/outlet, then per pack phase extend the time controls and re-run
+    openInjMoldSim. Returns (returncode, fill_end_time_s)."""
+    fe = mf._latest_time_dir(case_dir)
+    fe_t = float(fe)
+    plan = mf.pack_phase_plan(fe_t, n_phases=n_phases, cool_window_s=cool_window_s)
+    cmds = ([mf.reset_restart_deltaT_cmd(fe), mf.set_walls_h_cmd(fe, pack_wall_h)]
+            + mf.close_outlet_cmds(fe))
+    for (end_s, wi_s, mdt_s) in plan:
+        cmds += mf.time_extend_cmds(end_time_s=end_s, write_interval_s=wi_s,
+                                    max_deltaT_s=mdt_s)
+        cmds += [[binp]]
+    chain = " && ".join(" ".join(a) for a in cmds)
+    script = (f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}")
+    proc = subprocess.run(["bash", "-c", script], cwd=case_dir,
+                          stdout=open(os.path.join(case_dir, "log.pack"), "w"),
+                          stderr=subprocess.STDOUT)
+    return proc.returncode, fe_t
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--case-dir", default=os.path.join("build", "oims_toy"))
@@ -121,6 +215,10 @@ def main() -> int:
     ap.add_argument("--gif", default=None, help="GIF output path (default: <case>/fill.gif)")
     ap.add_argument("--no-run", action="store_true", help="generate the case only")
     ap.add_argument("--no-gif", action="store_true")
+    ap.add_argument("--pack", action="store_true",
+                    help="also run the packing/cooling continuation + a cooling GIF")
+    ap.add_argument("--cool-window-s", type=float, default=1.0)
+    ap.add_argument("--pack-wall-h", type=float, default=1250.0)
     args = ap.parse_args()
 
     case_dir = os.path.abspath(args.case_dir)
@@ -175,7 +273,37 @@ def main() -> int:
         render_gif(case_dir, nx=args.nx, ny=args.ny, length_m=L, height_m=H,
                    out_path=gif, resin=args.resin)
 
-    ok = bool(parsed) and parsed.get("filled_fraction", 0) >= 0.9
+    fill_ok = bool(parsed) and parsed.get("filled_fraction", 0) >= 0.9
+
+    # --- packing / cooling continuation (issue #113) -------------------------
+    if args.pack and fill_ok:
+        print(f"[pack] running cooling continuation (window {args.cool_window_s}s, "
+              f"walls h={args.pack_wall_h})…")
+        fstats = mf._melt_stats(case_dir, mf._latest_time_dir(case_dir))
+        prc, fe_t = run_pack(case_dir, bashrc, binp, n_phases=2,
+                             cool_window_s=args.cool_window_s,
+                             pack_wall_h=args.pack_wall_h)
+        print(f"[pack] returncode={prc}  fill_end={fe_t:.4f}s")
+        tait = mf._resin_cross_wlf_tait(args.resin)[1]
+        ppar = mf.parse_pack(case_dir, fill_rho_mean=fstats["rho_mean"],
+                             fill_end_time_s=fe_t)
+        if ppar:
+            pg = mf.pack_gate(ppar, tait=tait, fill_T_mean_k=fstats["T_mean"])
+            print(f"[pack-gate] pass={pg['pass']}  score={pg['score']}  "
+                  f"shrinkage={pg['volumetric_shrinkage_pct']}%  "
+                  f"(Tait expects {pg['expected_densification_pct']}%, "
+                  f"faithful={pg['pvt_faithful']})  sink_risk={pg['sink_risk']}  "
+                  f"rho {ppar['rho_min']:.0f}…{ppar['rho_mean_final']:.0f} kg/m³")
+            for w in pg["warnings"]:
+                print(f"           ! {w}")
+        if not args.no_gif:
+            cgif = os.path.join(case_dir, "pack_cool.gif")
+            render_cooling_gif(case_dir, nx=args.nx, ny=args.ny, length_m=L,
+                               height_m=H, out_path=cgif, resin=args.resin,
+                               fill_end_time_s=fe_t)
+
+    ok = fill_ok and (not args.pack or os.path.isfile(
+        os.path.join(case_dir, "log.pack")))
     return 0 if ok else 3
 
 

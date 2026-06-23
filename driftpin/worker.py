@@ -13027,10 +13027,30 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
     wall_h = float(p.get("wall_h_w_m2k", 1.0))
     machine_pmax = float(p.get("machine_max_pressure_pa", 1.8e8))
     fill_pass = float(p.get("fill_fraction_pass", 0.97))
+    fill_end = float(p.get("fill_end", 0.98))
+    # stages: "fill" (default — short-shot/fill gate only) or "fill_pack" (also run the
+    # packing/cooling continuation for shrinkage / sink / cooling time — issue #113).
+    stages = p.get("stages", "fill")
+    n_pack = int(p.get("pack_phases", 2))
+    cool_window_s = p.get("cool_window_s")
+    eject_k = float(p.get("eject_temp_c", 80.0)) + 273.15
+    t_noflow_k = float(p.get("t_noflow_c", 100.0)) + 273.15
+    # fill runs ~isothermal (near-adiabatic walls so it completes hot/fast); cooling is
+    # switched on at the pack transition. pack_wall_h is the heat-transfer coeff used
+    # for the cool/hold (real mold ~1e3-2e3 W/m^2K).
+    pack_wall_h = float(p.get("pack_wall_h_w_m2k", 1250.0))
+    # Tait coefficients for the pack gate's PVT-faithfulness check (the solved cooling
+    # densification is checked against the resin's own EOS, not a net-shrinkage band —
+    # see molding_fill.pack_gate / issue #113).
+    try:
+        from driftpin.analysis import molding_fill as _mf0
+        _tait = _mf0._resin_cross_wlf_tait(resin)[1]
+    except Exception:
+        _tait = None
     key = jobs.content_key("molding_fill", {"oims_gen": {
         "L": length_m, "H": height_m, "D": depth_m, "nx": nx, "ny": ny,
         "resin": resin, "peak": peak_pa, "melt": melt_k, "mold": mold_k,
-        "h": wall_h}})
+        "h": wall_h, "stages": stages, "npack": n_pack, "cool": cool_window_s}})
 
     def _work():
         import tempfile
@@ -13042,12 +13062,12 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
             melt_temp_k=melt_k, mold_temp_k=mold_k, wall_h_w_m2k=wall_h)
         rc, tail = _run_foam(
             cdir, [["blockMesh"], ["setFields"],
-                   [of_bin, "-fillEnd", str(p.get("fill_end", 0.98))]],
+                   [of_bin, "-fillEnd", str(fill_end)]],
             env_bashrc, unset_sigfpe=True)
         out = {
             "ok": rc == 0, "returncode": rc, "solver": "openInjMoldSim",
             "backend": "openInjMoldSim (GPL-3.0, OpenFOAM-7 .org) — generated case",
-            "case_dir": cdir, "resin": resin,
+            "stages": stages, "case_dir": cdir, "resin": resin,
             "length_mm": length_m * 1000.0, "wall_thickness_mm": height_m * 1000.0,
             "peak_pressure_mpa": peak_pa / 1e6,
             "flow_length_ratio": round(built["flow_length_ratio"], 2),
@@ -13059,11 +13079,43 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
             out["gate"] = _mf.fill_gate(
                 parsed, expected_fill_time_s=built["expected_fill_time_s"],
                 machine_max_pressure_pa=machine_pmax, fill_fraction_pass=fill_pass)
+
+        # --- packing / cooling continuation (issue #113) ---------------------
+        fe_td = _mf._latest_time_dir(cdir)
+        if stages == "fill_pack" and rc == 0 and fe_td:
+            fe_t = float(fe_td)
+            fstats = _mf._melt_stats(cdir, fe_td)
+            fill_rho_mean = fstats["rho_mean"] if fstats else None
+            fill_T_mean = fstats["T_mean"] if fstats else None
+            plan = _mf.pack_phase_plan(fe_t, n_phases=n_pack,
+                                       cool_window_s=cool_window_s)
+            # once: ease the restart step, switch the walls to cooling (the fill ran
+            # ~isothermal), then seal the gate/outlet (which cools through the now-cooled
+            # walls); then per phase: extend the time controls + re-run (no -fillEnd).
+            cmds = ([_mf.reset_restart_deltaT_cmd(fe_td),
+                     _mf.set_walls_h_cmd(fe_td, pack_wall_h)]
+                    + _mf.close_outlet_cmds(fe_td))
+            for (end_s, wi_s, mdt_s) in plan:
+                cmds += _mf.time_extend_cmds(end_time_s=end_s, write_interval_s=wi_s,
+                                             max_deltaT_s=mdt_s)
+                cmds += [[of_bin]]
+            prc, ptail = _run_foam(cdir, cmds, env_bashrc, unset_sigfpe=True)
+            out["pack_returncode"] = prc
+            out["pack_stdout_tail"] = ptail
+            out["backend"] += " + pack/cool"
+            ppar = _mf.parse_pack(
+                cdir, fill_rho_mean=fill_rho_mean, fill_end_time_s=fe_t,
+                eject_temp_k=eject_k, t_noflow_k=t_noflow_k)
+            if ppar:
+                out["pack"] = ppar
+                out["pack_gate"] = _mf.pack_gate(
+                    ppar, tait=_tait, fill_T_mean_k=fill_T_mean)
         return out
 
     return jobs.submit("molding_fill", _work, key=key,
                        meta={"backend": "openInjMoldSim (generated)",
-                             "resin": resin, "length_mm": length_m * 1000.0})
+                             "resin": resin, "length_mm": length_m * 1000.0,
+                             "stages": stages})
 
 
 @handler("molding_fill_submit")
