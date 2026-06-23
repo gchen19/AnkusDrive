@@ -50,7 +50,6 @@ and the gate are all testable on the no-solver CI lane; only the *solve* needs
 from __future__ import annotations
 
 import os
-import re
 
 # Mid-span sagitta of a free strip bent to uniform curvature κ over a chord L is
 # κ·L²/8 — the analytic oracle the ccx warp solve is gated against.
