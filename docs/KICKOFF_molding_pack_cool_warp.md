@@ -1,11 +1,14 @@
 # Kickoff — injection-molding packing/cooling + warpage (issue #113)
 
-**Status:** STARTED 2026-06-22 on branch `feat/molding-pack-cool`. This doc is the
-handoff so any session can continue without the prior context. Read it top-to-bottom;
-everything needed to resume is here.
+**Status:** **CLOSED / COMPLETE (2026-06-23).** Both headline stages are merged to
+`main`: **Part A — packing/cooling** via PR #114 (branch `feat/molding-pack-cool`),
+**Part B — warpage** via PR #115 (branch `feat/molding-warpage`). **Issue #113 is
+closed.** Remaining follow-ups (net mold shrinkage via packing-feed modelling; the
+coupled cooling→warpage field hand-off) are split out into **issue #116**. This doc is
+kept as the design/decision record for both stages.
 
-GitHub: **issue #113**. Builds directly on **#105 / PR #112** (the *fill* stage,
-merged to `main`).
+GitHub: **issue #113 (closed)** → follow-ons in **#116**. Builds directly on **#105 /
+PR #112** (the *fill* stage, merged to `main`).
 
 ---
 
