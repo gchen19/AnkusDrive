@@ -293,6 +293,28 @@ _SOLVERS: dict = {
                         "— then ensure prusa-slicer is on PATH or set "
                         "DRIFTPIN_PRUSASLICER_PATH",
     },
+    # --- structural CalculiX (plain ccx; the warpage thermo-elastic post-step) -
+    # The bare `ccx` binary (GPL, invoked out-of-process only — never imported),
+    # distinct from the preCICE-patched `ccx_preCICE` above. The molding warpage
+    # path (#113 Part B) writes a thermo-elastic .inp deck and runs it directly.
+    # FreeCAD ships a bundled ccx too; PATH / the apt `calculix-ccx` cover the rest.
+    "calculix": {
+        "kind": "binary",
+        "family": "warpage",
+        "extra": None,
+        "license": "GPL-2.0",
+        "isolation": "subprocess",
+        "binaries": ("ccx", "ccx_2.21", "ccx_2.20", "ccx_2.19", "CalculiX"),
+        "dirs": {
+            "Linux":   ("/usr/bin", "/usr/local/bin",
+                        os.path.expanduser("~/opt/CalculiX/bin")),
+            "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin"),
+            "Windows": (r"C:\Program Files\CalculiX\bin",),
+        },
+        "install_hint": "'apt install calculix-ccx' (Linux), 'brew install calculix' "
+                        "(macOS), or the bundled FreeCAD ccx — then ensure ccx is on "
+                        "PATH or set DRIFTPIN_CALCULIX_PATH",
+    },
 }
 
 
@@ -522,6 +544,18 @@ def fsi_stack_status() -> dict:
         "openfoam_bashrc": of,
         "missing": missing,
     }
+
+
+def ccx_bin() -> str | None:
+    """Locate the plain ``ccx`` (CalculiX) executable for a direct subprocess solve —
+    the molding warpage thermo-elastic post-step (#113 Part B) writes its own ``.inp``
+    deck and runs ccx itself (the GPL solver stays out-of-process, never imported).
+
+    Distinct from :func:`ccx_precice_bin` (the preCICE-patched ``ccx_preCICE``).
+    Resolution is the registry's standard order — ``DRIFTPIN_CALCULIX_PATH`` env ->
+    PATH (``shutil.which``) -> common install dirs — via the ``calculix`` spec.
+    Returns the path or None."""
+    return _binary_path("calculix", _SOLVERS["calculix"])
 
 
 def openinjmoldsim_bin() -> str | None:

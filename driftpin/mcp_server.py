@@ -4580,6 +4580,73 @@ def molding_fill_submit(
 
 
 @mcp.tool()
+def molding_warpage_submit(
+    body: str,
+    dT_through_k: float,
+    material: str | None = None,
+    youngs_mpa: float | None = None,
+    poisson: float | None = None,
+    cte_per_k: float | None = None,
+    ref_temp_c: float | None = None,
+    char_length_mm: float | None = None,
+    thickness_axis: str | None = None,
+    flatness_tol_mm: float | None = None,
+    flatness_tol_frac: float | None = None,
+) -> dict:
+    """Injection-molding **WARPAGE / residual distortion**, asynchronous — the FEM
+    thermo-elastic post-step of the cooling solve (GitHub issue #113 Part B; the
+    higher-fidelity twin of the #104 CTE shrinkage screen). Answers *will the part bow
+    out of flat once it cools and is ejected*. Requires the `ccx` (CalculiX) binary;
+    when none resolves this returns {ok:false, reason, install} rather than raising.
+
+    The physics: a moulding shrinks as it cools (CTE); **uniform** shrinkage just makes
+    it smaller, but **differential** shrinkage warps it. The dominant driver is the
+    asymmetric frozen-in through-thickness temperature field at ejection (an unbalanced
+    cooling layout, one mould half hotter, a rib on one face). Pass that as
+    `dT_through_k` (K, the through-thickness differential: T at the thin-face minimum
+    minus the maximum). The worker meshes `body`, imposes the field as a thermal
+    eigenstrain, pins a statically-determinate 3-2-1 constraint, and solves the free
+    linear-elastic distortion in ccx. A balanced field (`dT_through_k≈0`) warps ~0; an
+    asymmetric one bows to the analytic plate curvature (κ=α·ΔT/h), directionally
+    correct.
+
+    Backend: CalculiX (`ccx`), driven by a deck the worker writes directly (the GPL
+    solver is held at the subprocess boundary, never imported). Units mm / MPa / 1/K /
+    °C, so warp comes back in **mm**.
+
+    Params: `body` (a shape handle — the part), `dT_through_k` (required). Material
+    elastic props from `material` (corpus card) or explicit `youngs_mpa`/`poisson`/
+    `cte_per_k` — solidified-resin defaults are used with a warning otherwise (the
+    corpus rheology cards don't carry structural props). `ref_temp_c` is the stress-
+    free / solidification temperature (warp is invariant to it — it only scales the
+    reported residual stress). `char_length_mm` sets the mesh size; `thickness_axis`
+    ('x'|'y'|'z') overrides the auto-detected through-thickness axis; `flatness_tol_mm`
+    or `flatness_tol_frac` (default 0.2 % of span) set the gate tolerance.
+
+    Fidelity caveat: a one-way, linear-elastic, loose coupling — it ignores
+    viscoelastic stress relaxation, flow-induced anisotropy, and the packing-pressure
+    residual; it captures the dominant differential-shrinkage warp and its direction,
+    not a calibrated absolute. `fidelity="solve"` with a conservative `band_pct`; read
+    the band.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, case_dir, nodes, tets, warp_axis, span_mm, thickness_mm,
+    analytic_bow_mm, gate} where gate is {pass (on flatness), score, fidelity:"solve",
+    band_pct, max_warp_mm, flatness_tol_mm, warp_per_span, max_disp_mm, warp_faithful,
+    analytic_bow_mm, warnings}."""
+    params: dict = {"body": body, "dT_through_k": dT_through_k}
+    for k, v in (("material", material), ("youngs_mpa", youngs_mpa),
+                 ("poisson", poisson), ("cte_per_k", cte_per_k),
+                 ("ref_temp_c", ref_temp_c), ("char_length_mm", char_length_mm),
+                 ("thickness_axis", thickness_axis),
+                 ("flatness_tol_mm", flatness_tol_mm),
+                 ("flatness_tol_frac", flatness_tol_frac)):
+        if v is not None:
+            params[k] = v
+    return _call("molding_warpage_submit", **params)
+
+
+@mcp.tool()
 def random_vibration(
     psd_profile: list,
     analysis: str | None = None,

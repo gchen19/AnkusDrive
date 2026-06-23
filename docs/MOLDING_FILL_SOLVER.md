@@ -225,8 +225,68 @@ python3 tools/openinjmoldsim_toy.py --pack --cool-window-s 1.2   # → pack_cool
   fill-end state or too-coarse mesh) but does **not** fail. Validated: solved 3.70% vs
   Tait-expected 4.03% (493.8 → 420 K @ 2 MPa) → `pvt_faithful=true`, `pass=true`.
 
-**Still out of scope — tracked in #113 Part B:** **warpage / residual stress** (hand the
-cooling T / differential-shrinkage field to CalculiX/Elmer as a thermo-mechanical
-post-step; needs `elastic=True` stabilised first), and **net mold shrinkage** (the
-cavity-sizing number — needs packing-feed modelling). Also deferred: first-class
-weld-line / air-trap labels.
+## Warpage / residual distortion — `molding_warpage_submit` (issue #113 Part B)
+
+There is no purpose-built open-source injection-molding warpage solver, so we take the
+realistic loose-coupling path the issue scopes (mirroring the preCICE OpenFOAM↔CalculiX
+FSI pattern): hand the **frozen-in differential cooling** from the part to **CalculiX
+(`ccx`)** as a **thermo-elastic free-distortion** solve. Lives in
+`driftpin/analysis/warpage.py`; surfaced as the async MCP tool `molding_warpage_submit`
+(worker `_molding_warpage_submit`); the GPL `ccx` is held at the subprocess boundary
+(its own deck is written and run — never imported), like every other heavy solver here.
+
+**The physics.** A moulding shrinks as it cools (CTE α). *Uniform* shrinkage only makes
+the part smaller; **differential** shrinkage warps it. The dominant driver is an
+**asymmetric through-thickness** temperature field at ejection (an unbalanced cooling
+layout, one mould half hotter, a rib on one face). That free thermal strain
+`ε_th = α·(T − T_ref)` is non-uniform across the part; solving the *free* (rigid-body-
+constrained only) linear-elastic problem with that eigenstrain gives the out-of-plane
+distortion. A balanced part returns ~0; that contrast is the gate.
+
+**How it runs.** Gmsh meshes the FreeCAD `body` on the main thread (2nd-order C3D10
+tets, serial for reproducibility) and exports CalculiX cards; the worker writes a flat
+`.inp` deck — `*ELASTIC` + `*EXPANSION,ZERO=T_ref`, a per-node `*TEMPERATURE` field (the
+frozen-in cooling, here a linear through-thickness `dT_through_k`), a statically-
+determinate **3-2-1** `*BOUNDARY` (three corner nodes remove the six rigid-body modes
+while leaving the part free to expand and warp), `*STATIC`, `*NODE FILE U` — and runs
+`ccx`. The `.frd` displacement field is reduced to the peak out-of-plane warp.
+
+**The analytic twin (the oracle).** `free_plate_thermal_bow` gives the closed-form free-
+plate result: a linear through-thickness ΔT bends a plate to uniform curvature
+`κ = α·ΔT/h`, sagitta `δ = κ·L²/8`. The solve is gated against it (`warp_faithful`): a
+thin-plate idealisation, so a few-percent-to-~50 % spread is expected; an order-of-
+magnitude miss flags a bad mesh/field. Validated `artifacts/molding_warpage_bow.png`
+(`tools/warpage_toy.py`): a 60×12×1.2 mm plate at ΔT=120 K bows to **3.07 mm vs the
+3.15 mm twin** and tracks the curve along the whole span, while ΔT=0 stays **dead flat
+(0.000 mm)**.
+
+**The warpage gate** (`warpage_gate`) — verdict shape, `fidelity="solve"`:
+
+- **`pass` is driven by flatness** — `max_warp_mm` vs `flatness_tol_mm` (or
+  `flatness_tol_frac·span`, default 0.2 % of span, a typical plastic-part flatness call-
+  out). `score = 1 − warp/tol` clamped.
+- **`warp_faithful`** cross-checks the solved warp against the analytic twin (a warning,
+  not a verdict).
+- **Honest `band_pct` (40 %).** This is a **one-way, linear-elastic, loose coupling**: it
+  ignores viscoelastic stress relaxation during cooling, flow-induced anisotropy / fibre
+  orientation, the packing-pressure residual, and solidification path dependence. It
+  captures the *dominant* differential-shrinkage warp **and its direction**, not a
+  calibrated absolute. The corpus rheology cards carry no structural props, so E/ν/CTE
+  fall back to solidified-resin defaults (with a warning) unless given — another reason
+  to read the band.
+
+**Two warpage gotchas:**
+1. **Through-thickness resolution.** A strong linear gradient needs ≳4 element layers
+   through the wall to bend correctly — a coarse 2-layer hex under-predicts the curvature
+   ~20 % (C3D8I), 4 layers land within ~3 %. The worker's 2nd-order C3D10 tets are
+   forgiving; the toy's hex mesh uses `nz=4`.
+2. **The 3-2-1 pins the out-of-plane dof at *both* span-end corners** (A fully, B in
+   thickness), so the solved bow is referenced to that chord — a sagitta peaking at
+   mid-span (κ·L²/8), not a cantilever arc from one end. The artifact's analytic overlay
+   matches that chord reference.
+
+**Still out of scope — tracked in #113:** **net mold shrinkage** (the cavity-sizing
+number — needs packing-feed modelling) and a *coupled* field hand-off (auto-deriving
+`dT_through_k` from the Part-A openInjMoldSim cooling field's cell-centre temperatures,
+rather than passing the differential in). Also deferred: first-class weld-line / air-trap
+labels, and the viscoelastic residual-stress path (`elastic=True` stabilised).
