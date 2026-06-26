@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import math
 
-# (dynamic viscosity μ [Pa·s], density ρ [kg/m³]) at ~20 °C, 1 atm.
+# (dynamic viscosity μ [Pa·s], density ρ [kg/m³]) at ~20 °C, 1 atm. Constant
+# fallback used when CoolProp (the DEFAULT source, issue #100) is unavailable.
 _FLUIDS = {
     "water-20c": (1.002e-3, 998.2),
     "air-20c": (1.81e-5, 1.204),
@@ -28,11 +29,32 @@ _FLUIDS = {
     "glycerin-20c": (1.41, 1261.0),
 }
 
+# Named fluids CoolProp resolves f(T,P) for → (CoolProp name, T_K) at 1 atm. The
+# others (oil/glycerin) stay table-only — CoolProp ships no model for them.
+_FLUID_COOLPROP = {
+    "water-20c": ("water", 293.15),
+    "air-20c": ("air", 293.15),
+}
+
 
 def _fluid_props(fluid, mu_pa_s, rho_kg_m3):
-    """Resolve (μ, ρ) from explicit values, else the named fluid table."""
+    """Resolve (μ, ρ): CoolProp's EOS by default for the named fluid, the constant
+    table when CoolProp is absent, and caller-supplied ``mu_pa_s``/``rho_kg_m3``
+    always win (explicit overrides applied last)."""
     m = r = None
-    if fluid in _FLUIDS:
+    # DEFAULT: CoolProp EOS, but only when the caller gave no explicit overrides
+    # (an override means the caller wants its own number, not a looked-up one).
+    if fluid in _FLUID_COOLPROP and mu_pa_s is None and rho_kg_m3 is None:
+        try:
+            from driftpin.analysis import fluids
+            cp_name, t_k = _FLUID_COOLPROP[fluid]
+            fp = fluids.fluid_props(cp_name, t_k, 101325.0)
+            if (fp.get("ok") and fp.get("coolprop_available")
+                    and fp.get("valid_range_ok")):
+                m, r = fp["viscosity"], fp["density"]
+        except Exception:
+            pass  # fall through to the constant table
+    if (m is None or r is None) and fluid in _FLUIDS:
         m, r = _FLUIDS[fluid]
     if mu_pa_s is not None:
         m = float(mu_pa_s)

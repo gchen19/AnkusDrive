@@ -2726,6 +2726,21 @@ def material_list(category: str | None = None) -> dict:
 
 
 @mcp.tool()
+def fluid_props(name: str, T_K: float, P_Pa: float = 101325.0) -> dict:
+    """Thermophysical properties of a fluid at (T, P) from CoolProp's equation of
+    state (issue #100). ``name`` is a fluid (e.g. 'water', 'air', 'R134a', 'CO2',
+    'nitrogen'), ``T_K`` absolute temperature [K], ``P_Pa`` pressure [Pa, default
+    1 atm). Returns {ok, density [kg/m³], viscosity [Pa·s], cp [J/kg·K],
+    conductivity [W/m·K], prandtl, kinematic_viscosity [m²/s], fidelity,
+    valid_range_ok, source, warnings, coolprop_available}. This is the DEFAULT
+    fluid-property source behind the convection/CFD screens; explicit caller props
+    still override. Degrades cleanly when the (opt-in) CoolProp extra is absent:
+    air/water return ≈20 °C constants (fidelity='constant_fallback'); other fluids
+    return {ok:false, reason, install}. CoolProp (BSD-3) is cited as the source."""
+    return _call("fluid_props", name=name, T_K=T_K, P_Pa=P_Pa)
+
+
+@mcp.tool()
 def bolted_joint_check(
     bolt_dia_mm: float,
     pitch_mm: float | None = None,
