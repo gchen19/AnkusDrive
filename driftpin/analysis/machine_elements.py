@@ -60,7 +60,7 @@ def tensile_stress_area_mm2(dia_mm: float, pitch_mm: float | None = None) -> flo
 # --- ratings ------------------------------------------------------------------
 
 def bolted_joint_check(
-    bolt_dia_mm: float,
+    bolt_dia_mm: float | None = None,
     pitch_mm: float | None = None,
     torque_nm: float | None = None,
     preload_n: float | None = None,
@@ -70,18 +70,42 @@ def bolted_joint_check(
     material: str = "Steel-4140-QT",
     proof_strength_mpa: float | None = None,
     preload_target_pct: float = 0.75,
+    bolt_size: str | None = None,
+    property_class: str | None = None,
 ) -> dict:
     """Rate a bolted joint (VDI 2230-lite).
 
-    Preload from torque via T = K*F*d (give torque_nm OR preload_n directly).
-    The external tensile load splits by joint_stiffness_ratio C: the bolt sees
-    C*P, and the joint separates at P_sep = F_preload/(1-C). proof_strength_mpa
-    defaults to ~0.9*yield from the Materials DB, else 640 MPa (~class 8.8).
+    Geometry: give bolt_dia_mm (+ optional pitch_mm), OR name a standard thread
+    via bolt_size (e.g. "M8"/"M8x1.0") to pull nominal diameter, pitch and the
+    standards-table tensile stress area. preload from torque via T = K*F*d (give
+    torque_nm OR preload_n directly). The external tensile load splits by
+    joint_stiffness_ratio C: the bolt sees C*P, and the joint separates at
+    P_sep = F_preload/(1-C). proof_strength_mpa is taken from the ISO 898-1
+    property_class (e.g. "8.8") when given, else ~0.9*yield from the Materials DB,
+    else 640 MPa (~class 8.8).
 
     Returns {preload_n, tensile_stress_area_mm2, bolt_stress_mpa, proof_load_n,
     preload_pct_proof, bolt_stress_with_load_mpa, separation_load_n,
     separation_margin, pass, governing}."""
-    at = tensile_stress_area_mm2(bolt_dia_mm, pitch_mm)
+    at = None
+    if bolt_size is not None:
+        from . import standards
+        card = standards.thread(bolt_size)
+        if bolt_dia_mm is None:
+            bolt_dia_mm = card["nominal_dia_mm"]
+        if pitch_mm is None:
+            pitch_mm = standards.thread_pitch(bolt_size)
+        at = standards.tensile_stress_area(bolt_size)  # tabulated At
+        if property_class is not None and proof_strength_mpa is None:
+            proof_strength_mpa = standards.proof_strength_mpa(bolt_size, property_class)
+    if bolt_dia_mm is None:
+        raise ValueError("provide bolt_dia_mm or bolt_size")
+    if property_class is not None and proof_strength_mpa is None:
+        from . import standards
+        # property class without a named size: derive Sp ignoring the >M16 split
+        proof_strength_mpa = standards.thread_property_class(property_class)["proof_strength_mpa"]
+    if at is None:
+        at = tensile_stress_area_mm2(bolt_dia_mm, pitch_mm)
     if preload_n is None:
         if torque_nm is None:
             raise ValueError("provide torque_nm or preload_n")
@@ -124,30 +148,61 @@ def bolted_joint_check(
 
 
 def bearing_life(
-    dynamic_load_c_n: float,
-    equivalent_load_p_n: float,
-    speed_rpm: float,
+    dynamic_load_c_n: float | None = None,
+    equivalent_load_p_n: float | None = None,
+    speed_rpm: float | None = None,
+    designation: str | None = None,
     kind: str = "ball",
     target_hours: float | None = None,
 ) -> dict:
     """Basic rating life L10 (ISO 281): L10 = (C/P)^p revolutions, p=3 for ball,
     10/3 for roller. L10h = L10*1e6 / (60*n).
 
-    Returns {l10_million_rev, l10_hours, load_ratio, exponent, pass}. `pass` is
-    True when target_hours is None, else L10h >= target_hours."""
-    if equivalent_load_p_n <= 0:
+    Supply the dynamic load rating C directly (dynamic_load_c_n) or pull it from
+    the deep-groove ball-bearing catalog by `designation` (e.g. "6205" -> C=14.0 kN).
+    An explicit dynamic_load_c_n overrides the catalog value. A catalog lookup also
+    reports the bearing's bore/OD/width and static rating C0 plus the static safety
+    factor s0 = C0/P.
+
+    Returns {l10_million_rev, l10_hours, load_ratio, dynamic_load_c_n, exponent,
+    pass} plus {designation, bore_mm, od_mm, width_mm, static_load_c0_n,
+    static_safety_factor} when a designation is used. `pass` is True when
+    target_hours is None, else L10h >= target_hours. Raises ValueError if neither C
+    nor a designation is given (or P/speed missing), standards.StandardNotFound for
+    an unknown designation."""
+    if equivalent_load_p_n is None or equivalent_load_p_n <= 0:
         raise ValueError("equivalent_load_p_n must be > 0")
+    if speed_rpm is None or speed_rpm <= 0:
+        raise ValueError("speed_rpm must be > 0")
+    card = None
+    if designation is not None:
+        from . import standards
+        card = standards.bearing(designation)
+        if dynamic_load_c_n is None:
+            dynamic_load_c_n = card["dynamic_c_n"]
+    if dynamic_load_c_n is None:
+        raise ValueError("provide dynamic_load_c_n or designation")
     p = 3.0 if kind == "ball" else 10.0 / 3.0
     l10_mrev = (dynamic_load_c_n / equivalent_load_p_n) ** p
     l10_hours = l10_mrev * 1e6 / (60.0 * speed_rpm)
     ok = True if target_hours is None else l10_hours >= target_hours
-    return {
+    out = {
         "l10_million_rev": round(l10_mrev, 2),
         "l10_hours": round(l10_hours, 1),
         "load_ratio": round(dynamic_load_c_n / equivalent_load_p_n, 3),
+        "dynamic_load_c_n": round(dynamic_load_c_n, 1),
         "exponent": p,
         "pass": ok,
     }
+    if card is not None:
+        out.update({
+            "designation": card["designation"],
+            "bore_mm": card["bore_mm"], "od_mm": card["od_mm"],
+            "width_mm": card["width_mm"],
+            "static_load_c0_n": round(card["static_c0_n"], 1),
+            "static_safety_factor": round(card["static_c0_n"] / equivalent_load_p_n, 2),
+        })
+    return out
 
 
 def spring_check(

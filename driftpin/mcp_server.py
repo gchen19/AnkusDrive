@@ -2727,7 +2727,7 @@ def material_list(category: str | None = None) -> dict:
 
 @mcp.tool()
 def bolted_joint_check(
-    bolt_dia_mm: float,
+    bolt_dia_mm: float | None = None,
     pitch_mm: float | None = None,
     torque_nm: float | None = None,
     preload_n: float | None = None,
@@ -2736,16 +2736,22 @@ def bolted_joint_check(
     joint_stiffness_ratio: float = 0.3,
     material: str = "Steel-4140-QT",
     proof_strength_mpa: float | None = None,
+    bolt_size: str | None = None,
+    property_class: str | None = None,
 ) -> dict:
-    """Rate a bolted joint (VDI 2230-lite). Preload from torque via T=K*F*d (pass
+    """Rate a bolted joint (VDI 2230-lite). Geometry from bolt_dia_mm (+pitch_mm) OR
+    a standard thread named via bolt_size ("M8"/"M8x1.0") that pulls dia/pitch and
+    the standards-table tensile stress area; proof strength from the ISO 898-1
+    property_class ("8.8") when given. Preload from torque via T=K*F*d (pass
     torque_nm OR preload_n). Returns {preload_n, tensile_stress_area_mm2,
     bolt_stress_mpa, preload_pct_proof, bolt_stress_with_load_mpa,
     separation_load_n, separation_margin, pass, governing}."""
-    params = {"bolt_dia_mm": bolt_dia_mm, "k_factor": k_factor,
-              "external_load_n": external_load_n,
+    params = {"k_factor": k_factor, "external_load_n": external_load_n,
               "joint_stiffness_ratio": joint_stiffness_ratio, "material": material}
-    for k, v in (("pitch_mm", pitch_mm), ("torque_nm", torque_nm),
-                 ("preload_n", preload_n), ("proof_strength_mpa", proof_strength_mpa)):
+    for k, v in (("bolt_dia_mm", bolt_dia_mm), ("pitch_mm", pitch_mm),
+                 ("torque_nm", torque_nm), ("preload_n", preload_n),
+                 ("proof_strength_mpa", proof_strength_mpa),
+                 ("bolt_size", bolt_size), ("property_class", property_class)):
         if v is not None:
             params[k] = v
     return _call("bolted_joint_check", **params)
@@ -2753,20 +2759,25 @@ def bolted_joint_check(
 
 @mcp.tool()
 def bearing_life(
-    dynamic_load_c_n: float,
     equivalent_load_p_n: float,
     speed_rpm: float,
+    dynamic_load_c_n: float | None = None,
+    designation: str | None = None,
     kind: str = "ball",
     target_hours: float | None = None,
 ) -> dict:
     """Basic rating life L10 (ISO 281): L10=(C/P)^p rev (p=3 ball, 10/3 roller),
-    L10h=L10*1e6/(60n). Returns {l10_million_rev, l10_hours, load_ratio, exponent,
-    pass} (pass vs target_hours when given)."""
-    params = {"dynamic_load_c_n": dynamic_load_c_n,
-              "equivalent_load_p_n": equivalent_load_p_n,
+    L10h=L10*1e6/(60n). Supply the dynamic rating C as dynamic_load_c_n, or pull it
+    from the deep-groove ball catalog by designation (e.g. "6205" -> C=14.0 kN, also
+    reporting bore/OD/width, C0 and static safety factor). Returns {l10_million_rev,
+    l10_hours, load_ratio, dynamic_load_c_n, exponent, pass, ...} (pass vs
+    target_hours when given)."""
+    params = {"equivalent_load_p_n": equivalent_load_p_n,
               "speed_rpm": speed_rpm, "kind": kind}
-    if target_hours is not None:
-        params["target_hours"] = target_hours
+    for k, v in (("dynamic_load_c_n", dynamic_load_c_n),
+                 ("designation", designation), ("target_hours", target_hours)):
+        if v is not None:
+            params[k] = v
     return _call("bearing_life", **params)
 
 
