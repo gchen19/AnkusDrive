@@ -1,0 +1,48 @@
+{
+  "_meta": {
+    "source": "Pipe schedules: ASME B36.10M welded/seamless wrought-steel pipe (dimensional facts). Sheet gauges: Manufacturers' Standard Gauge for steel sheet. Bar stock: preferred metric sizes (ISO/Renard-style). All dimensions are facts transcribed from public engineering references; standard documents are not reproduced.",
+    "units": "mm unless noted"
+  },
+  "pipe_schedules": {
+    "_meta": "ASME B36.10M carbon-steel pipe. Outside diameter (od_mm) is fixed per NPS; wall thickness varies by schedule. NPS = nominal pipe size (inch label), DN = metric nominal.",
+    "pipes": [
+      {"nps": "1/8",   "dn": 6,   "od_mm": 10.29, "walls_mm": {"sch10": 1.24, "sch40": 1.73, "sch80": 2.41}},
+      {"nps": "1/4",   "dn": 8,   "od_mm": 13.72, "walls_mm": {"sch10": 1.65, "sch40": 2.24, "sch80": 3.02}},
+      {"nps": "3/8",   "dn": 10,  "od_mm": 17.15, "walls_mm": {"sch10": 1.65, "sch40": 2.31, "sch80": 3.20}},
+      {"nps": "1/2",   "dn": 15,  "od_mm": 21.34, "walls_mm": {"sch10": 2.11, "sch40": 2.77, "sch80": 3.73}},
+      {"nps": "3/4",   "dn": 20,  "od_mm": 26.67, "walls_mm": {"sch10": 2.11, "sch40": 2.87, "sch80": 3.91}},
+      {"nps": "1",     "dn": 25,  "od_mm": 33.40, "walls_mm": {"sch10": 2.77, "sch40": 3.38, "sch80": 4.55}},
+      {"nps": "1-1/4", "dn": 32,  "od_mm": 42.16, "walls_mm": {"sch10": 2.77, "sch40": 3.56, "sch80": 4.85}},
+      {"nps": "1-1/2", "dn": 40,  "od_mm": 48.26, "walls_mm": {"sch10": 2.77, "sch40": 3.68, "sch80": 5.08}},
+      {"nps": "2",     "dn": 50,  "od_mm": 60.33, "walls_mm": {"sch10": 2.77, "sch40": 3.91, "sch80": 5.54}},
+      {"nps": "2-1/2", "dn": 65,  "od_mm": 73.03, "walls_mm": {"sch10": 3.05, "sch40": 5.16, "sch80": 7.01}},
+      {"nps": "3",     "dn": 80,  "od_mm": 88.90, "walls_mm": {"sch10": 3.05, "sch40": 5.49, "sch80": 7.62}},
+      {"nps": "4",     "dn": 100, "od_mm": 114.30, "walls_mm": {"sch10": 3.05, "sch40": 6.02, "sch80": 8.56}},
+      {"nps": "6",     "dn": 150, "od_mm": 168.28, "walls_mm": {"sch10": 3.40, "sch40": 7.11, "sch80": 10.97}}
+    ]
+  },
+  "sheet_gauge_steel": {
+    "_meta": "Manufacturers' Standard Gauge for uncoated hot/cold-rolled steel sheet. thickness_mm per gauge number.",
+    "gauges": [
+      {"gauge": 7,  "thickness_mm": 4.55},
+      {"gauge": 8,  "thickness_mm": 4.18},
+      {"gauge": 10, "thickness_mm": 3.42},
+      {"gauge": 11, "thickness_mm": 3.04},
+      {"gauge": 12, "thickness_mm": 2.66},
+      {"gauge": 14, "thickness_mm": 1.90},
+      {"gauge": 16, "thickness_mm": 1.52},
+      {"gauge": 18, "thickness_mm": 1.21},
+      {"gauge": 20, "thickness_mm": 0.91},
+      {"gauge": 22, "thickness_mm": 0.76},
+      {"gauge": 24, "thickness_mm": 0.61}
+    ]
+  },
+  "round_bar_metric_mm": {
+    "_meta": "Preferred metric round-bar diameters commonly stocked (mm).",
+    "diameters_mm": [3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 32, 35, 40, 45, 50, 60, 70, 80, 90, 100]
+  },
+  "hex_bar_metric_af_mm": {
+    "_meta": "Preferred metric hexagon-bar across-flats (A/F) sizes commonly stocked (mm).",
+    "across_flats_mm": [5, 5.5, 6, 7, 8, 10, 12, 13, 14, 17, 18, 19, 22, 24, 27, 30, 32, 36, 41, 46, 50]
+  }
+}

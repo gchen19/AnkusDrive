@@ -1,0 +1,44 @@
+{
+  "_meta": {
+    "standard": "ISO 261 (general purpose metric screw threads), ISO 262 (selected sizes), ISO 724 (basic dimensions), ISO 898-1 (mechanical property classes)",
+    "source": "Values transcribed from public/secondary engineering references (Machinery's Handbook 30th ed. tables; Shigley's Mechanical Engineering Design Table 8-1; Oberg et al.). Dimensional values are facts; standard documents themselves are not reproduced.",
+    "tensile_stress_area_formula": "At = (pi/4) * (d - 0.9382*p)^2, mm^2 (d = nominal major dia, p = pitch); tabulated At values match this to rounding.",
+    "notes": "coarse = ISO 261 coarse pitch series. tensile_stress_area_mm2 uses the coarse pitch. proof/tensile strengths live in property_classes (ISO 898-1)."
+  },
+  "threads": [
+    {"designation": "M1.6", "nominal_dia_mm": 1.6, "coarse_pitch_mm": 0.35, "fine_pitches_mm": [0.2], "tensile_stress_area_mm2": 1.27, "minor_dia_mm": 1.171, "preferred": true},
+    {"designation": "M2", "nominal_dia_mm": 2.0, "coarse_pitch_mm": 0.4, "fine_pitches_mm": [0.25], "tensile_stress_area_mm2": 2.07, "minor_dia_mm": 1.509, "preferred": true},
+    {"designation": "M2.5", "nominal_dia_mm": 2.5, "coarse_pitch_mm": 0.45, "fine_pitches_mm": [0.35], "tensile_stress_area_mm2": 3.39, "minor_dia_mm": 1.948, "preferred": true},
+    {"designation": "M3", "nominal_dia_mm": 3.0, "coarse_pitch_mm": 0.5, "fine_pitches_mm": [0.35], "tensile_stress_area_mm2": 5.03, "minor_dia_mm": 2.387, "preferred": true},
+    {"designation": "M4", "nominal_dia_mm": 4.0, "coarse_pitch_mm": 0.7, "fine_pitches_mm": [0.5], "tensile_stress_area_mm2": 8.78, "minor_dia_mm": 3.141, "preferred": true},
+    {"designation": "M5", "nominal_dia_mm": 5.0, "coarse_pitch_mm": 0.8, "fine_pitches_mm": [0.5], "tensile_stress_area_mm2": 14.2, "minor_dia_mm": 4.019, "preferred": true},
+    {"designation": "M6", "nominal_dia_mm": 6.0, "coarse_pitch_mm": 1.0, "fine_pitches_mm": [0.75], "tensile_stress_area_mm2": 20.1, "minor_dia_mm": 4.773, "preferred": true},
+    {"designation": "M8", "nominal_dia_mm": 8.0, "coarse_pitch_mm": 1.25, "fine_pitches_mm": [1.0, 0.75], "tensile_stress_area_mm2": 36.6, "minor_dia_mm": 6.466, "preferred": true},
+    {"designation": "M10", "nominal_dia_mm": 10.0, "coarse_pitch_mm": 1.5, "fine_pitches_mm": [1.25, 1.0, 0.75], "tensile_stress_area_mm2": 58.0, "minor_dia_mm": 8.160, "preferred": true},
+    {"designation": "M12", "nominal_dia_mm": 12.0, "coarse_pitch_mm": 1.75, "fine_pitches_mm": [1.5, 1.25, 1.0], "tensile_stress_area_mm2": 84.3, "minor_dia_mm": 9.853, "preferred": true},
+    {"designation": "M14", "nominal_dia_mm": 14.0, "coarse_pitch_mm": 2.0, "fine_pitches_mm": [1.5, 1.0], "tensile_stress_area_mm2": 115.0, "minor_dia_mm": 11.546, "preferred": false},
+    {"designation": "M16", "nominal_dia_mm": 16.0, "coarse_pitch_mm": 2.0, "fine_pitches_mm": [1.5, 1.0], "tensile_stress_area_mm2": 157.0, "minor_dia_mm": 13.546, "preferred": true},
+    {"designation": "M20", "nominal_dia_mm": 20.0, "coarse_pitch_mm": 2.5, "fine_pitches_mm": [2.0, 1.5, 1.0], "tensile_stress_area_mm2": 245.0, "minor_dia_mm": 16.933, "preferred": true},
+    {"designation": "M24", "nominal_dia_mm": 24.0, "coarse_pitch_mm": 3.0, "fine_pitches_mm": [2.0, 1.5, 1.0], "tensile_stress_area_mm2": 353.0, "minor_dia_mm": 20.319, "preferred": true},
+    {"designation": "M30", "nominal_dia_mm": 30.0, "coarse_pitch_mm": 3.5, "fine_pitches_mm": [2.0, 1.5, 1.0], "tensile_stress_area_mm2": 561.0, "minor_dia_mm": 25.706, "preferred": true},
+    {"designation": "M36", "nominal_dia_mm": 36.0, "coarse_pitch_mm": 4.0, "fine_pitches_mm": [3.0, 2.0, 1.5], "tensile_stress_area_mm2": 817.0, "minor_dia_mm": 30.679, "preferred": true}
+  ],
+  "property_classes": {
+    "_meta": "ISO 898-1 steel bolt property classes: proof_strength_mpa (Sp), tensile_strength_mpa (Su), yield_strength_mpa (Sy). 8.8 has two proof values: <=M16 uses 580, >M16 uses 600 (use_above_m16_proof_mpa).",
+    "4.6": {"proof_strength_mpa": 225, "yield_strength_mpa": 240, "tensile_strength_mpa": 400},
+    "4.8": {"proof_strength_mpa": 310, "yield_strength_mpa": 340, "tensile_strength_mpa": 420},
+    "5.8": {"proof_strength_mpa": 380, "yield_strength_mpa": 420, "tensile_strength_mpa": 520},
+    "8.8": {"proof_strength_mpa": 580, "use_above_m16_proof_mpa": 600, "yield_strength_mpa": 640, "tensile_strength_mpa": 800},
+    "9.8": {"proof_strength_mpa": 650, "yield_strength_mpa": 720, "tensile_strength_mpa": 900},
+    "10.9": {"proof_strength_mpa": 830, "yield_strength_mpa": 940, "tensile_strength_mpa": 1040},
+    "12.9": {"proof_strength_mpa": 970, "yield_strength_mpa": 1100, "tensile_strength_mpa": 1220}
+  },
+  "torque_k_factors": {
+    "_meta": "Nut-factor K for T = K*F*d (Shigley Table 8-15). Used by recommended_torque().",
+    "dry": 0.20,
+    "lubricated": 0.18,
+    "zinc_plated": 0.20,
+    "cadmium_plated": 0.16,
+    "waxed": 0.12
+  }
+}

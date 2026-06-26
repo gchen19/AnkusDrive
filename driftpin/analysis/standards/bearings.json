@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "type": "single-row deep-groove ball bearings (ISO 15:2017 boundary dimensions; ISO 281 rating life uses C / C0)",
+    "source": "Boundary dimensions are ISO 15 standard facts. Dynamic (C) and static (C0) basic load ratings are representative published series values consistent with major-manufacturer open-bearing catalogs (SKF / NSK / NTN general catalogs, which publish near-identical ratings for these standardized envelopes). Ratings in kN.",
+    "fields": "designation -> bore_mm / od_mm / width_mm / dynamic_c_kn (C) / static_c0_kn (C0)"
+  },
+  "bearings": [
+    {"designation": "6000", "bore_mm": 10, "od_mm": 26, "width_mm": 8,  "dynamic_c_kn": 4.75, "static_c0_kn": 1.96, "series": "6000"},
+    {"designation": "6001", "bore_mm": 12, "od_mm": 28, "width_mm": 8,  "dynamic_c_kn": 5.10, "static_c0_kn": 2.36, "series": "6000"},
+    {"designation": "6002", "bore_mm": 15, "od_mm": 32, "width_mm": 9,  "dynamic_c_kn": 5.59, "static_c0_kn": 2.85, "series": "6000"},
+    {"designation": "6003", "bore_mm": 17, "od_mm": 35, "width_mm": 10, "dynamic_c_kn": 6.05, "static_c0_kn": 3.25, "series": "6000"},
+    {"designation": "6004", "bore_mm": 20, "od_mm": 42, "width_mm": 12, "dynamic_c_kn": 9.36, "static_c0_kn": 5.00, "series": "6000"},
+    {"designation": "6005", "bore_mm": 25, "od_mm": 47, "width_mm": 12, "dynamic_c_kn": 11.2, "static_c0_kn": 6.55, "series": "6000"},
+    {"designation": "6006", "bore_mm": 30, "od_mm": 55, "width_mm": 13, "dynamic_c_kn": 13.3, "static_c0_kn": 8.30, "series": "6000"},
+    {"designation": "6007", "bore_mm": 35, "od_mm": 62, "width_mm": 14, "dynamic_c_kn": 16.0, "static_c0_kn": 10.4, "series": "6000"},
+    {"designation": "6008", "bore_mm": 40, "od_mm": 68, "width_mm": 15, "dynamic_c_kn": 17.0, "static_c0_kn": 11.6, "series": "6000"},
+
+    {"designation": "6200", "bore_mm": 10, "od_mm": 30, "width_mm": 9,  "dynamic_c_kn": 5.07, "static_c0_kn": 2.36, "series": "6200"},
+    {"designation": "6201", "bore_mm": 12, "od_mm": 32, "width_mm": 10, "dynamic_c_kn": 6.89, "static_c0_kn": 3.10, "series": "6200"},
+    {"designation": "6202", "bore_mm": 15, "od_mm": 35, "width_mm": 11, "dynamic_c_kn": 7.80, "static_c0_kn": 3.75, "series": "6200"},
+    {"designation": "6203", "bore_mm": 17, "od_mm": 40, "width_mm": 12, "dynamic_c_kn": 9.56, "static_c0_kn": 4.75, "series": "6200"},
+    {"designation": "6204", "bore_mm": 20, "od_mm": 47, "width_mm": 14, "dynamic_c_kn": 12.7, "static_c0_kn": 6.55, "series": "6200"},
+    {"designation": "6205", "bore_mm": 25, "od_mm": 52, "width_mm": 15, "dynamic_c_kn": 14.0, "static_c0_kn": 7.80, "series": "6200"},
+    {"designation": "6206", "bore_mm": 30, "od_mm": 62, "width_mm": 16, "dynamic_c_kn": 19.5, "static_c0_kn": 11.2, "series": "6200"},
+    {"designation": "6207", "bore_mm": 35, "od_mm": 72, "width_mm": 17, "dynamic_c_kn": 25.5, "static_c0_kn": 15.3, "series": "6200"},
+    {"designation": "6208", "bore_mm": 40, "od_mm": 80, "width_mm": 18, "dynamic_c_kn": 30.7, "static_c0_kn": 19.0, "series": "6200"},
+
+    {"designation": "6300", "bore_mm": 10, "od_mm": 35, "width_mm": 11, "dynamic_c_kn": 8.06, "static_c0_kn": 3.40, "series": "6300"},
+    {"designation": "6301", "bore_mm": 12, "od_mm": 37, "width_mm": 12, "dynamic_c_kn": 9.75, "static_c0_kn": 4.15, "series": "6300"},
+    {"designation": "6302", "bore_mm": 15, "od_mm": 42, "width_mm": 13, "dynamic_c_kn": 11.4, "static_c0_kn": 5.40, "series": "6300"},
+    {"designation": "6303", "bore_mm": 17, "od_mm": 47, "width_mm": 14, "dynamic_c_kn": 14.3, "static_c0_kn": 6.55, "series": "6300"},
+    {"designation": "6304", "bore_mm": 20, "od_mm": 52, "width_mm": 15, "dynamic_c_kn": 16.8, "static_c0_kn": 7.80, "series": "6300"},
+    {"designation": "6305", "bore_mm": 25, "od_mm": 62, "width_mm": 17, "dynamic_c_kn": 23.4, "static_c0_kn": 11.6, "series": "6300"},
+    {"designation": "6306", "bore_mm": 30, "od_mm": 72, "width_mm": 19, "dynamic_c_kn": 28.1, "static_c0_kn": 16.0, "series": "6300"},
+    {"designation": "6307", "bore_mm": 35, "od_mm": 80, "width_mm": 21, "dynamic_c_kn": 33.2, "static_c0_kn": 19.0, "series": "6300"},
+    {"designation": "6308", "bore_mm": 40, "od_mm": 90, "width_mm": 23, "dynamic_c_kn": 42.3, "static_c0_kn": 24.0, "series": "6300"}
+  ]
+}
