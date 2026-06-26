@@ -40,6 +40,7 @@
       "thermal_conductivity": "51 W/m/K", "specific_heat": "486 J/kg/K",
       "cte": "11.7e-6 1/K", "max_service_temp": "400 C", "rough_cost": "0.8 USD/kg",
       "hardness_hb": "130", "elongation": "20",
+      "aliases": ["Steel", "Mild-Steel", "Carbon-Steel", "Structural-Steel", "ASTM-A36", "A36"],
       "basis": "typical", "source": "ASTM A36; ASM Carbon Steel; Machinery's Handbook 30th (hardness/elong)"
     },
     {
