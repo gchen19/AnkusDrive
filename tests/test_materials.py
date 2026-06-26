@@ -388,10 +388,14 @@ def test_fcmat_vendored_first_class():
     assert payload["materials"], "fcmat.json has no cards"
     assert len(payload["materials"]) >= 100, len(payload["materials"])
     corpus = _all_cards()
-    # vendored cards (FreeCAD's own names) are in the live corpus
-    for nm in ("Aluminum 6061-T6", "CalculiX-Steel"):
+    # vendored FCMat-only cards (no seed counterpart) keep FreeCAD's name+source
+    for nm in ("Steel-Generic", "CalculiX-Steel"):
         assert nm in corpus, nm
         assert corpus[nm]["source"].startswith("FreeCAD FCMat"), nm
+    # a vendored card that DOES duplicate a seed material is absorbed (de-duped):
+    # 'Aluminum 6061-T6' is no longer its own key, but still resolves via alias
+    assert "Aluminum 6061-T6" not in corpus
+    assert materials.get("Aluminum 6061-T6")["name"] == "AL6061-T6"
     # attribution header present (LGPL/CC-BY vendoring discipline)
     assert "FreeCAD" in payload.get("attribution", "")
 
@@ -460,6 +464,67 @@ def test_new_handbook_families_present_and_cited():
     # specific golden: 2024-T3 yield ~345 MPa; ductile iron elongation ~12%
     assert abs(_num(materials.get("AL2024-T3"), "yield_mpa") - 345) < 5
     assert abs(_num(materials.get("CastIron-Ductile-65-45-12"), "elongation_pct") - 12) < 1
+
+
+def test_no_duplicate_materials():
+    """No two cards may describe the same physical material. Each card claims an
+    identity key-set (its normalized name + aliases); the de-dup at load is
+    correct iff every key is owned by exactly one card. This is the regression
+    guard for the 'AL6061-T6 vs Aluminum 6061-T6' class of duplicate — adding a
+    new card that collides with an existing one (or its alias) fails here until
+    it's merged/aliased."""
+    corpus = _all_cards()
+    owner = {}
+    for name, card in corpus.items():
+        for key in materials._claimed_keys(card):
+            assert key not in owner, (
+                f"duplicate material: {name!r} and {owner[key]!r} both claim {key!r}")
+            owner[key] = name
+
+
+def test_known_fcmat_duplicates_absorbed():
+    """The specific seed/FCMat collisions found in the audit are merged into one
+    canonical card, not left as two — for metals AND polymers."""
+    corpus = _all_cards()
+    # (canonical seed name, the FCMat duplicate name that must be absorbed)
+    for canonical, fcmat_dup in [
+        ("AL6061-T6", "Aluminum 6061-T6"),
+        ("AL7075-T6", "Aluminum 7075-T6"),
+        ("Ti-6Al-4V", "Ti-6Al-4V (Grade 5)"),
+        ("PC", "Polycarbonate"),
+        ("PP", "Polypropylene"),
+        ("PS", "Polystyrene"),
+    ]:
+        assert fcmat_dup not in corpus, f"{fcmat_dup!r} should be absorbed into {canonical!r}"
+        assert canonical in corpus, canonical
+        # the dup name still resolves — to the canonical card
+        assert materials.get(fcmat_dup)["name"] == canonical
+
+
+def test_aliases_resolve_to_canonical_card():
+    """A registered alias resolves to its canonical card (the aliases were dead
+    metadata before the de-dup wiring)."""
+    for alias, canonical in [
+        ("Delrin", "POM"), ("Acetal", "POM"),
+        ("PA66", "Nylon-6/6"), ("Polycarbonate", "PC"),
+        ("Aluminum 6061-T6", "AL6061-T6"),
+        ("Gray-Cast-Iron", "CastIron-GrayClass40"),
+        ("Ti-6Al-4V (Grade 5)", "Ti-6Al-4V"),
+    ]:
+        assert materials.get(alias)["name"] == canonical, alias
+
+
+def test_dedup_preserves_seed_values_and_inherits_fcmat_fields():
+    """When a seed card absorbs its FCMat twin, seed values win on conflict but
+    the merged card may inherit FCMat-only fields — the field-wise merge."""
+    al = materials.get("AL6061-T6")
+    # seed value wins (276 MPa), not whatever FreeCAD's 6061 card lists
+    assert abs(_num(al, "yield_mpa") - 276) < 5, al
+    assert al["source"].startswith("ASM"), al["source"]
+    # selection no longer returns the duplicate alongside the canonical card
+    names = [c["name"] for c in materials.select({}, rank_by="specific_strength")["candidates"]]
+    assert names.count("AL6061-T6") <= 1
+    assert "Aluminum 6061-T6" not in names
 
 
 # --- runner (mirrors tests/test_contracts.py) ---------------------------------

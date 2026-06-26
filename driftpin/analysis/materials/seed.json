@@ -10,6 +10,7 @@
       "thermal_conductivity": "167 W/m/K", "specific_heat": "896 J/kg/K",
       "cte": "23.6e-6 1/K", "max_service_temp": "170 C", "rough_cost": "4.5 USD/kg",
       "hardness_hb": "95", "elongation": "12",
+      "aliases": ["Aluminum 6061-T6", "AA6061-T6"],
       "basis": "typical", "source": "ASM Aluminum 6061-T6; MMPDS Rev N (allowables); Machinery's Handbook 30th (hardness/elong)"
     },
     {
@@ -20,6 +21,7 @@
       "thermal_conductivity": "130 W/m/K", "specific_heat": "960 J/kg/K",
       "cte": "23.4e-6 1/K", "max_service_temp": "120 C", "rough_cost": "6.0 USD/kg",
       "hardness_hb": "150", "elongation": "11",
+      "aliases": ["Aluminum 7075-T6", "AA7075-T6"],
       "basis": "typical", "source": "ASM Aluminum 7075-T6; Machinery's Handbook 30th (hardness/elong)"
     },
     {
@@ -78,6 +80,7 @@
       "thermal_conductivity": "6.7 W/m/K", "specific_heat": "526 J/kg/K",
       "cte": "8.6e-6 1/K", "max_service_temp": "400 C", "rough_cost": "30.0 USD/kg",
       "hardness_hb": "334", "hardness_hv": "349", "elongation": "14",
+      "aliases": ["Ti-6Al-4V (Grade 5)", "Ti6Al4V", "TC4", "Grade-5-Titanium"],
       "basis": "typical", "source": "ASM Ti-6Al-4V (Grade 5, annealed); MMPDS (hardness/elong)"
     },
     {

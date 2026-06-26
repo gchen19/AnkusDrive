@@ -100,35 +100,91 @@ def _merge_card(base: dict, overlay: dict) -> dict:
     return out
 
 
+def _claimed_keys(card: dict) -> set[str]:
+    """The normalized identity keys a card occupies: its own name plus every
+    declared alias. Two cards that share any key are the SAME physical material
+    under different names (e.g. 'AL6061-T6' and FCMat 'Aluminum 6061-T6')."""
+    keys = {_norm(card["name"])}
+    keys.update(_norm(a) for a in card.get("aliases", []) or [])
+    return keys
+
+
+def _build_corpus(layers: list[tuple[int, dict]]) -> dict:
+    """Collapse ranked material cards into one canonical card per physical
+    material. `layers` is (rank, card) pairs, low rank = base; cards are grouped
+    by overlapping identity keys (name + aliases, transitively chained), then
+    merged within a group in ascending rank so a higher-rank card's values win.
+    The canonical name is the highest-ranked card's name (the curated seed name
+    beats the FCMat/optical name). One card per material — never two."""
+    groups: list[dict] = []
+    for rank, card in layers:
+        keys = _claimed_keys(card)
+        hits = [g for g in groups if g["keys"] & keys]
+        if not hits:
+            groups.append({"keys": set(keys), "cards": [(rank, card)]})
+            continue
+        g = hits[0]
+        for other in hits[1:]:               # keys can chain two groups into one
+            g["keys"] |= other["keys"]
+            g["cards"] += other["cards"]
+            groups.remove(other)
+        g["keys"] |= keys
+        g["cards"].append((rank, card))
+
+    corpus: dict[str, dict] = {}
+    for g in groups:
+        ordered = sorted(g["cards"], key=lambda rc: rc[0])  # base .. winner
+        merged: dict = {}
+        for _, c in ordered:
+            merged = _merge_card(merged, c)
+        merged["name"] = ordered[-1][1]["name"]             # top rank names it
+        # union the alias lists so every claimed name still resolves
+        aliases = {a for _, c in ordered for a in (c.get("aliases") or [])}
+        aliases |= {c["name"] for _, c in ordered if c["name"] != merged["name"]}
+        if aliases:
+            merged["aliases"] = sorted(aliases)
+        corpus[merged["name"]] = merged
+    return corpus
+
+
 def _load_corpus() -> dict:
     global _CACHE
     if _CACHE is None:
-        # Vendored FreeCAD FCMat library is the base layer (always shipped);
-        # the hand-curated seed overlays it field-wise so the seed wins on a
-        # name clash but a seed card can still inherit FCMat fields it omits.
-        cards: dict[str, dict] = {}
+        # Ranked layers, low=base: vendored FreeCAD FCMat library (always
+        # shipped, rank 0) < vendor-extracted optical (rank 1, fills optical-only
+        # props) < hand-curated seed (rank 2, the curated source of truth).
+        # Same physical material across layers (by name or alias) collapses to
+        # ONE card named by the seed; the seed's values win, FCMat/optical fill
+        # gaps. So 'AL6061-T6' subsumes FCMat 'Aluminum 6061-T6' and seed 'PC'
+        # subsumes optical 'Polycarbonate' — never two cards for one material.
+        layers: list[tuple[int, dict]] = []
         if _FCMAT_PATH.is_file():
-            cards = {m["name"]: m for m in json.loads(_FCMAT_PATH.read_text())["materials"]}
-        for m in json.loads(_SEED_PATH.read_text())["materials"]:
-            cards[m["name"]] = _merge_card(cards.get(m["name"], {}), m)
-        # Optional vendor-extracted optical layer (tools/extract_optical_corpus.py),
-        # merged field-wise so it augments rather than replaces existing cards.
+            layers += [(0, m) for m in json.loads(_FCMAT_PATH.read_text())["materials"]]
         if _OPTICAL_PATH.is_file():
-            for m in json.loads(_OPTICAL_PATH.read_text())["materials"]:
-                cards[m["name"]] = _merge_card(cards.get(m["name"], {}), m)
-        _CACHE = cards
+            layers += [(1, m) for m in json.loads(_OPTICAL_PATH.read_text())["materials"]]
+        layers += [(2, m) for m in json.loads(_SEED_PATH.read_text())["materials"]]
+        _CACHE = _build_corpus(layers)
     return _CACHE
 
 
 def reload_corpus(extra_cards: list[dict] | None = None) -> int:
     """Reset the in-memory corpus from seed.json + optical.json, optionally
-    merging extra_cards field-wise (e.g. from fcmat.load_fcmat_cards()). Returns
-    the total card count. Later sources augment earlier ones by name."""
+    merging extra_cards (e.g. from fcmat.load_fcmat_cards()). Returns the total
+    card count. An extra card whose name/alias already names a canonical card is
+    merged INTO it (the existing/seed card wins) rather than added as a duplicate;
+    a genuinely new card is appended."""
     global _CACHE
     _CACHE = None
     cards = dict(_load_corpus())
+    keyindex = {k: nm for nm, card in cards.items() for k in _claimed_keys(card)}
     for c in extra_cards or []:
-        cards[c["name"]] = _merge_card(cards.get(c["name"], {}), c)
+        target = next((keyindex[k] for k in _claimed_keys(c) if k in keyindex), None)
+        if target is not None:
+            cards[target] = _merge_card(c, cards[target])  # existing/seed wins
+        else:
+            cards[c["name"]] = c
+            for k in _claimed_keys(c):
+                keyindex[k] = c["name"]
     _CACHE = cards
     return len(_CACHE)
 
@@ -194,14 +250,19 @@ def numeric(card: dict, key: str):
 
 def get(name: str) -> dict:
     """Return the full material card for `name` (case-insensitive, hyphen/space
-    insensitive). Returns the card dict. Raises MaterialNotFound (with a
-    'did_you_mean' suggestion list) when nothing matches."""
+    insensitive). A registered alias (e.g. 'Delrin' -> POM, 'Aluminum 6061-T6'
+    -> AL6061-T6) resolves to its canonical card. Returns the card dict. Raises
+    MaterialNotFound (with a 'did_you_mean' suggestion list) when nothing
+    matches."""
     corpus = _load_corpus()
     if name in corpus:
         return dict(corpus[name])
     norm = _norm(name)
     for k, v in corpus.items():
         if _norm(k) == norm:
+            return dict(v)
+    for v in corpus.values():            # resolve a declared alias to its card
+        if any(_norm(a) == norm for a in v.get("aliases", []) or []):
             return dict(v)
     suggestions = [k for k in corpus if norm in _norm(k) or _norm(k) in norm]
     raise MaterialNotFound(
