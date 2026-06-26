@@ -324,10 +324,15 @@ def test_stokes_cd_re_product_is_24():
 
 def test_pipe_regime_thresholds_are_sharp():
     # Behavioural envelope: the regime classification flips exactly at Re=2300 and
-    # Re=4000 (set the velocity to straddle each threshold for water).
-    mu, rho, d = 1.002e-3, 998.2, 0.01                      # water-20c, 10 mm
+    # Re=4000 (set the velocity to straddle each threshold for water). Derive the
+    # straddle velocity from the solver's OWN effective properties (Re is linear
+    # in velocity for a fixed fluid) rather than assuming a viscosity, so the test
+    # stays exact whether the props come from CoolProp or the fallback constants.
+    ref = cfd.pipe_pressure_drop(diameter_mm=10, length_mm=1000,
+                                 velocity_m_s=1.0, fluid="water-20c")
+    re_per_unit_v = ref["reynolds"]                         # Re = re_per_unit_v * v
     def regime_at(re):
-        v = re * mu / (rho * d)
+        v = re / re_per_unit_v
         return cfd.pipe_pressure_drop(diameter_mm=10, length_mm=1000,
                                       velocity_m_s=v, fluid="water-20c")["regime"]
     assert regime_at(2299.0) == "laminar"
