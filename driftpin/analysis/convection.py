@@ -52,9 +52,26 @@ _HILPERT_ROWS = (
 
 
 def _air_film_properties(t_film_k: float) -> dict:
-    """Dry air at 1 atm and the film temperature: Sutherland viscosity/conductivity
-    fits + ideal-gas density. Within ~2 % of table air over 250–600 K — well inside
-    every correlation band here."""
+    """Dry air at 1 atm and the film temperature.
+
+    The DEFAULT source is CoolProp's air EOS (``analysis/fluids``, issue #100) when
+    the ``fluids`` extra is installed; it falls back transparently to the Sutherland
+    viscosity/conductivity fits + ideal-gas density when CoolProp is absent (within
+    ~2 % of table air over 250–600 K — well inside every correlation band here).
+    β = 1/T (ideal gas) regardless of source."""
+    try:
+        from driftpin.analysis import fluids
+        fp = fluids.fluid_props("air", t_film_k, 101325.0)
+        if (fp.get("ok") and fp.get("coolprop_available")
+                and fp.get("valid_range_ok")):
+            return {
+                "k_w_mk": fp["conductivity"],
+                "nu_m2_s": fp["kinematic_viscosity"],
+                "pr": fp["prandtl"],
+                "beta_per_k": 1.0 / t_film_k,  # ideal gas
+            }
+    except Exception:
+        pass  # any CoolProp hiccup → deterministic Sutherland fallback below
     rho = 101325.0 / (287.05 * t_film_k)
     mu = 1.716e-5 * (t_film_k / 273.15) ** 1.5 * (273.15 + 110.4) / (t_film_k + 110.4)
     k = 0.0241 * (t_film_k / 273.15) ** 1.5 * (273.15 + 194.0) / (t_film_k + 194.0)

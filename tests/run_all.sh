@@ -59,6 +59,10 @@ echo "== Convection-coefficient screening toys (pure-Python; no FreeCAD) =="
 python3 tests/test_convection.py
 
 echo
+echo "== Fluid thermophysical corpus — CoolProp (oracle always; EOS leg gated) =="
+python3 tests/test_fluids.py
+
+echo
 echo "== Tier A screening toys (acoustics · plates · buckling · molding · impact) =="
 python3 tests/test_acoustics.py
 python3 tests/test_plates.py

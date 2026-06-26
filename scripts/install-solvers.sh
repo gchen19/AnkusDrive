@@ -7,9 +7,11 @@
 # WHAT IT DOES
 #   Two solver shapes, two install paths:
 #     * pip-wheel solvers (MBD: PyBullet/MuJoCo; topology: solidspy/topopt; optics:
-#       rayoptics + optiland for sequential lens design/optimize) — a thin
-#       `pip install '.[<extra>]'` into the worker's Python env. Clean, no system
-#       package; this script automates it.
+#       rayoptics + optiland for sequential lens design/optimize; fluids: CoolProp
+#       for thermophysical f(T,P) props — the DEFAULT source behind the convection/
+#       CFD screens, issue #100) — a thin `pip install '.[<extra>]'` into the worker's
+#       Python env. Clean, no system package; this script automates it. BSD-3, in-
+#       process (like optiland); when absent the screens fall back to constants.
 #     * GPL opt-in wheel (optics_gpl: KrakenOS, for non-sequential tracing through STL
 #       solids) — GPL-3.0, so it is NOT installed by the default (no-arg) run; request
 #       it explicitly (`install-solvers.sh optics_gpl`). DriftPin only ever runs it
@@ -81,7 +83,7 @@ FORCE="${FORCE:-0}"
 # install this script automates. Keep in lockstep with pyproject.toml. WHEEL_EXTRAS
 # are permissive-licensed and run by default; GPL_EXTRAS are GPL-3.0 and install ONLY
 # when named explicitly (never in the no-arg run).
-WHEEL_EXTRAS="mbd topology optics"
+WHEEL_EXTRAS="mbd topology optics fluids"
 GPL_EXTRAS="optics_gpl"
 
 # --- logging (matches install-renderers.sh) -----------------------------------
@@ -358,7 +360,7 @@ main() {
       --list|-l) do_list; exit 0 ;;
       --optics-gallery) build_optics_gallery; exit 0 ;;
       -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
-      mbd|topology|optics|optics_gpl) extras+=("$1"); do_all=0 ;;
+      mbd|topology|optics|fluids|optics_gpl) extras+=("$1"); do_all=0 ;;
       acoustics_bem|bempp) build_bempp; exit 0 ;;
       dem_gpl|dem|yade)  build_dem_gpl; exit 0 ;;   # GPL-3.0 source build, never default
       em_gpl|openems)    build_openems; exit 0 ;;

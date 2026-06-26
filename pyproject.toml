@@ -71,6 +71,13 @@ optics = [
     "rayoptics",            # sequential flat-interface trace (gated by analysis/optics)
     "optiland",             # sequential lens design + optimization (MIT, in-process)
 ]
+# Fluid / thermophysical property corpus (analysis/fluids.py, issue #100). CoolProp
+# is BSD-3-Clause and a pure wheel → imported IN-PROCESS (like optiland), no copyleft
+# subprocess boundary. It is the DEFAULT f(T,P) source behind the convection/CFD
+# screens; when absent those paths fall back to constants so nothing hard-breaks.
+fluids = [
+    "CoolProp",             # ρ, μ, cp, k, Pr f(T,P) for air/water/refrigerants (BSD-3)
+]
 # Non-sequential STL solid tracing runs on KrakenOS, which is GPL-3.0. It is a
 # SEPARATE, opt-in extra because DriftPin invokes it only out-of-process (via
 # driftpin/optics_gpl_runner.py) to keep the copyleft boundary clean — installing it

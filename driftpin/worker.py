@@ -9323,6 +9323,13 @@ def _h_material_list(p):
     return materials.list_materials(p.get("category"))
 
 
+@handler("fluid_props")
+def _h_fluid_props(p):
+    from driftpin.analysis import fluids
+    return fluids.fluid_props(p["name"], float(p["T_K"]),
+                              float(p.get("P_Pa", 101325.0)))
+
+
 @handler("bolted_joint_check")
 def _h_bolted_joint_check(p):
     from driftpin.analysis import machine_elements as me
