@@ -510,8 +510,21 @@ def test_aliases_resolve_to_canonical_card():
         ("Aluminum 6061-T6", "AL6061-T6"),
         ("Gray-Cast-Iron", "CastIron-GrayClass40"),
         ("Ti-6Al-4V (Grade 5)", "Ti-6Al-4V"),
+        # the bare generic name resolves to the complete mild-steel card
+        ("Steel", "Steel-A36"), ("Mild-Steel", "Steel-A36"), ("A36", "Steel-A36"),
     ]:
         assert materials.get(alias)["name"] == canonical, alias
+
+
+def test_bare_steel_resolves_to_complete_mild_steel_card():
+    """`get("Steel")` resolves to A36 (E=200 GPa, yield=250) rather than missing
+    or hitting the FCMat generic-steel card that carries no yield strength."""
+    c = materials.get("Steel")
+    assert c["name"] == "Steel-A36"
+    assert abs(_num(c, "youngs_gpa") - 200) < 10
+    assert _num(c, "yield_mpa") == 250.0          # generic FCMat steel has no yield
+    # the distinct FCMat generic-steel card is untouched and still its own card
+    assert materials.get("Steel-Generic")["name"] == "Steel-Generic"
 
 
 def test_dedup_preserves_seed_values_and_inherits_fcmat_fields():
