@@ -25,6 +25,9 @@ from pathlib import Path
 
 _SEED_PATH = Path(__file__).with_name("seed.json")
 _OPTICAL_PATH = Path(__file__).with_name("optical.json")
+# Vendored FreeCAD FCMat library (tools/build_material_corpus.py). Always
+# shipped, so the ~100+ FCMat cards are present without a runtime FreeCAD path.
+_FCMAT_PATH = Path(__file__).with_name("fcmat.json")
 
 # FEM material card keys consumed directly by fem_set_material.
 _FEM_KEYS = ("YoungsModulus", "PoissonRatio", "Density")
@@ -47,6 +50,9 @@ _NUMERIC = {
     "cte_per_k":             ("cte", 1.0, "1/K"),
     "service_temp_c":        ("max_service_temp", 1.0, "C"),
     "cost_usd_kg":           ("rough_cost", 1.0, "USD/kg"),
+    "hardness_hb":           ("hardness_hb", 1.0, "HB"),
+    "hardness_hv":           ("hardness_hv", 1.0, "HV"),
+    "elongation_pct":        ("elongation", 1.0, "%"),
     "refractive_index":      ("refractive_index", 1.0, ""),
     "abbe":                  ("abbe_number", 1.0, ""),
     # --- process / rheology layer (injection molding, issue #106) ---
@@ -97,9 +103,16 @@ def _merge_card(base: dict, overlay: dict) -> dict:
 def _load_corpus() -> dict:
     global _CACHE
     if _CACHE is None:
-        cards = {m["name"]: m for m in json.loads(_SEED_PATH.read_text())["materials"]}
+        # Vendored FreeCAD FCMat library is the base layer (always shipped);
+        # the hand-curated seed overlays it field-wise so the seed wins on a
+        # name clash but a seed card can still inherit FCMat fields it omits.
+        cards: dict[str, dict] = {}
+        if _FCMAT_PATH.is_file():
+            cards = {m["name"]: m for m in json.loads(_FCMAT_PATH.read_text())["materials"]}
+        for m in json.loads(_SEED_PATH.read_text())["materials"]:
+            cards[m["name"]] = _merge_card(cards.get(m["name"], {}), m)
         # Optional vendor-extracted optical layer (tools/extract_optical_corpus.py),
-        # merged field-wise so it augments rather than replaces seed cards.
+        # merged field-wise so it augments rather than replaces existing cards.
         if _OPTICAL_PATH.is_file():
             for m in json.loads(_OPTICAL_PATH.read_text())["materials"]:
                 cards[m["name"]] = _merge_card(cards.get(m["name"], {}), m)

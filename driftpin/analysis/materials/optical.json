@@ -22,7 +22,8 @@
       "Density": "3599 kg/m^3",
       "cte": "8.2e-06 1/K",
       "basis": "vendor",
-      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/F2.yml (CC0)"
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/F2.yml (CC0)",
+      "source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/F2.yml (CC0)"
     },
     {
       "name": "Fused-Silica",
@@ -40,7 +41,8 @@
       ],
       "wavelength_range_um": "0.21 6.7",
       "basis": "vendor",
-      "optical_source": "refractiveindex.info-database v2026-05-24: data/main/SiO2/nk/Malitson.yml (CC0)"
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/main/SiO2/nk/Malitson.yml (CC0)",
+      "source": "refractiveindex.info-database v2026-05-24: data/main/SiO2/nk/Malitson.yml (CC0)"
     },
     {
       "name": "N-BK7",
@@ -61,7 +63,8 @@
       "Density": "2510 kg/m^3",
       "cte": "7.1e-06 1/K",
       "basis": "vendor",
-      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/N-BK7.yml (CC0)"
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/N-BK7.yml (CC0)",
+      "source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/N-BK7.yml (CC0)"
     },
     {
       "name": "N-SF11",
@@ -82,7 +85,8 @@
       "Density": "3224 kg/m^3",
       "cte": "8.52e-06 1/K",
       "basis": "vendor",
-      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/N-SF11.yml (CC0)"
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/N-SF11.yml (CC0)",
+      "source": "refractiveindex.info-database v2026-05-24: data/specs/schott/optical/N-SF11.yml (CC0)"
     },
     {
       "name": "PMMA",
@@ -96,7 +100,8 @@
       ],
       "wavelength_range_um": "0.4368 1.052",
       "basis": "vendor",
-      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C5H8O2)n - poly(methyl methacrylate)/nk/Sultanova.yml (CC0)"
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C5H8O2)n - poly(methyl methacrylate)/nk/Sultanova.yml (CC0)",
+      "source": "refractiveindex.info-database v2026-05-24: data/organic/(C5H8O2)n - poly(methyl methacrylate)/nk/Sultanova.yml (CC0)"
     },
     {
       "name": "Polycarbonate",
@@ -110,7 +115,8 @@
       ],
       "wavelength_range_um": "0.4368 1.052",
       "basis": "vendor",
-      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C16H14O3)n - polycarbonate/nk/Sultanova.yml (CC0)"
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C16H14O3)n - polycarbonate/nk/Sultanova.yml (CC0)",
+      "source": "refractiveindex.info-database v2026-05-24: data/organic/(C16H14O3)n - polycarbonate/nk/Sultanova.yml (CC0)"
     },
     {
       "name": "Polystyrene",
@@ -124,7 +130,8 @@
       ],
       "wavelength_range_um": "0.4368 1.052",
       "basis": "vendor",
-      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C8H8)n - polystyrene/nk/Sultanova.yml (CC0)"
+      "optical_source": "refractiveindex.info-database v2026-05-24: data/organic/(C8H8)n - polystyrene/nk/Sultanova.yml (CC0)",
+      "source": "refractiveindex.info-database v2026-05-24: data/organic/(C8H8)n - polystyrene/nk/Sultanova.yml (CC0)"
     }
   ]
 }

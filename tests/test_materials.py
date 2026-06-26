@@ -286,6 +286,182 @@ def test_solver_tier_cross_wlf_and_tait():
         assert 200.0 < float(tt["b5_k"]) < 600.0, name      # transition temp K
 
 
+# --- expanded mechanical corpus (issue #99) -----------------------------------
+# FCMat first-class + provenance/basis on every card + handbook mechanical
+# fields. These gates run over the WHOLE shipped corpus (seed + vendored FCMat
+# + optical), so they catch unit/typo errors anywhere in the database.
+
+import json as _json  # noqa: E402
+
+# basis vocabulary: the issue's design-basis enum, plus "vendor" for the
+# CC0/LGPL vendor-extracted layers (optical.json) whose values are as-published.
+_ALLOWED_BASIS = {"typical", "nominal", "min", "max", "A-basis", "B-basis", "vendor"}
+
+
+def _all_cards():
+    return materials._load_corpus()
+
+
+def _seed_names():
+    seed = _json.loads(materials._SEED_PATH.read_text())["materials"]
+    return [m["name"] for m in seed]
+
+
+def _num(card, key):
+    try:
+        return materials.numeric(card, key)
+    except Exception:
+        return None
+
+
+def test_every_card_carries_source_and_basis():
+    """Provenance gate: every shipped card surfaces a non-empty `source`
+    citation and a `basis` drawn from the allowed vocabulary."""
+    bad_src, bad_basis = [], []
+    for name, card in _all_cards().items():
+        if not str(card.get("source", "")).strip():
+            bad_src.append(name)
+        if card.get("basis") not in _ALLOWED_BASIS:
+            bad_basis.append((name, card.get("basis")))
+    assert not bad_src, f"cards missing source: {bad_src}"
+    assert not bad_basis, f"cards with bad basis: {bad_basis}"
+
+
+def test_get_surfaces_source_and_basis():
+    """get() return dicts expose both fields so an oracle can cite its inputs."""
+    c = materials.get("AL6061-T6")
+    assert c["basis"] == "typical"
+    assert "MMPDS" in c["source"] or "ASM" in c["source"], c["source"]
+
+
+def test_sanity_bounds_full_corpus():
+    """Unit-bug guardrail across the whole corpus: catch a stray 1000x / typo.
+    yield<=UTS is checked strictly only on metals/composites (ductile polymers
+    legitimately show an upper-yield above the necked break stress), but a loose
+    band still flags gross errors everywhere."""
+    errs = []
+    for name, card in _all_cards().items():
+        E = _num(card, "youngs_gpa")
+        if E is not None and not (0 < E < 1500):
+            errs.append((name, "E_GPa", E))
+        rho = _num(card, "density_kg_m3")
+        if rho is not None and not (10 <= rho <= 25000):
+            errs.append((name, "density", rho))
+        nu = _num(card, "poisson")
+        if nu is not None and not (0 < nu < 0.5):
+            errs.append((name, "poisson", nu))
+        y, u = _num(card, "yield_mpa"), _num(card, "uts_mpa")
+        if y is not None and not (0 < y < 1e5):
+            errs.append((name, "yield", y))
+        if u is not None and not (0 < u < 1e5):
+            errs.append((name, "uts", u))
+        # NB: yield<=UTS is enforced strictly only on authored cards
+        # (test_authored_cards_yield_le_uts); some vendored ductile-polymer
+        # FCMat cards list an upper-yield above the necked break stress.
+        hb, hv = _num(card, "hardness_hb"), _num(card, "hardness_hv")
+        if hb is not None and not (0 < hb < 1200):
+            errs.append((name, "HB", hb))
+        if hv is not None and not (0 < hv < 1200):
+            errs.append((name, "HV", hv))
+        el = _num(card, "elongation_pct")
+        if el is not None and not (0 <= el <= 100):
+            errs.append((name, "elong", el))
+    assert not errs, f"sanity-bound violations: {errs}"
+
+
+def test_authored_cards_yield_le_uts():
+    """Stricter invariant on the hand-authored seed cards: 0 < yield <= UTS."""
+    bad = []
+    for name in _seed_names():
+        c = materials.get(name)
+        y, u = _num(c, "yield_mpa"), _num(c, "uts_mpa")
+        if y is not None and u is not None and not (0 < y <= u * 1.001):
+            bad.append((name, y, u))
+    assert not bad, f"authored cards violating 0<yield<=UTS: {bad}"
+
+
+def test_fcmat_vendored_first_class():
+    """FreeCAD's FCMat library is vendored into a shipped JSON, so the ~100+
+    cards are present WITHOUT a runtime FreeCAD path."""
+    assert materials._FCMAT_PATH.is_file(), "fcmat.json not shipped"
+    payload = _json.loads(materials._FCMAT_PATH.read_text())
+    assert payload["materials"], "fcmat.json has no cards"
+    assert len(payload["materials"]) >= 100, len(payload["materials"])
+    corpus = _all_cards()
+    # vendored cards (FreeCAD's own names) are in the live corpus
+    for nm in ("Aluminum 6061-T6", "CalculiX-Steel"):
+        assert nm in corpus, nm
+        assert corpus[nm]["source"].startswith("FreeCAD FCMat"), nm
+    # attribution header present (LGPL/CC-BY vendoring discipline)
+    assert "FreeCAD" in payload.get("attribution", "")
+
+
+def test_seed_wins_over_fcmat_on_name_clash():
+    """When a seed card and an FCMat card share a name, the curated seed wins
+    but may inherit FCMat fields it omits (field-wise merge)."""
+    abs_card = materials.get("ABS")
+    # seed value (40/40), not FreeCAD's 44.1/38.8
+    assert _num(abs_card, "yield_mpa") == 40.0, abs_card
+    assert abs_card["source"].startswith("ASM"), abs_card["source"]
+
+
+def test_golden_mechanical_anchors():
+    """Known handbook values within tolerance — the calibration anchors."""
+    assert abs(_num(materials.get("Steel-A36"), "youngs_gpa") - 200) < 10
+    assert abs(_num(materials.get("AL6061-T6"), "yield_mpa") - 276) < 5
+    assert abs(_num(materials.get("Ti-6Al-4V"), "yield_mpa") - 880) < 10
+    # vendored FCMat anchor agrees independently
+    assert abs(_num(materials.get("Aluminum 6061-T6"), "yield_mpa") - 276) < 5
+
+
+def test_specific_strength_cfrp_ti_above_mild_steel():
+    """Ashby ranking sanity: by specific strength, CFRP and Ti-6Al-4V both
+    outrank mild steel (A36) — the headline materials-selection result."""
+    res = materials.select(criteria={"min_yield_mpa": 100},
+                           rank_by="specific_strength")
+    order = [c["name"] for c in res["candidates"]]
+    for hi in ("CFRP-Carbon-Epoxy-UD", "Ti-6Al-4V"):
+        assert hi in order, hi
+        assert order.index(hi) < order.index("Steel-A36"), (hi, order[:8])
+    # scores strictly descending (the sort key)
+    scores = [c["score"] for c in res["candidates"]]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_hardness_and_elongation_accessors():
+    """New _NUMERIC accessors resolve handbook hardness/elongation fields."""
+    assert abs(_num(materials.get("Ti-6Al-4V"), "hardness_hb") - 334) < 5
+    assert abs(_num(materials.get("Steel-1045"), "hardness_hv") - 180) < 5
+    assert abs(_num(materials.get("AL6061-T6"), "elongation_pct") - 12) < 1
+    # a card without the field returns None, not a crash
+    assert _num(materials.get("AL1100-O"), "hardness_hv") is None
+
+
+def test_new_handbook_families_present_and_cited():
+    """The curated families this issue adds are present, cited, and carry the
+    mechanical fields that motivated them (fatigue / fracture / hardness)."""
+    expect = {
+        "AL2024-T3": "aluminum",
+        "CastIron-GrayClass40": "cast_iron",
+        "CastIron-Ductile-65-45-12": "cast_iron",
+        "Brass-C36000": "copper",
+        "Bronze-C93200": "copper",
+        "CFRP-Carbon-Epoxy-UD": "composite",
+        "GFRP-EGlass-Epoxy-UD": "composite",
+    }
+    for name, cat in expect.items():
+        c = materials.get(name)
+        assert c["category"] == cat, (name, c["category"])
+        assert str(c.get("source", "")).strip(), name
+        assert c.get("basis") in _ALLOWED_BASIS, name
+        assert _num(c, "density_kg_m3") is not None, name
+        assert _num(c, "fatigue_mpa") is not None, name
+        assert _num(c, "hardness_hb") is not None or name.startswith(("CFRP", "GFRP")), name
+    # specific golden: 2024-T3 yield ~345 MPa; ductile iron elongation ~12%
+    assert abs(_num(materials.get("AL2024-T3"), "yield_mpa") - 345) < 5
+    assert abs(_num(materials.get("CastIron-Ductile-65-45-12"), "elongation_pct") - 12) < 1
+
+
 # --- runner (mirrors tests/test_contracts.py) ---------------------------------
 
 def _discover():

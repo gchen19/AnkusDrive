@@ -99,6 +99,9 @@ def extract_one(path: Path, name: str, category: str, tag: str, rel: str) -> dic
     card["optical_source"] = (
         f"refractiveindex.info-database {tag}: data/{rel} (CC0)"
     )
+    # Mirror provenance into the common `source` field so every corpus card
+    # carries source+basis (the materials gate in tests/test_materials.py).
+    card["source"] = card["optical_source"]
     return card
 
 

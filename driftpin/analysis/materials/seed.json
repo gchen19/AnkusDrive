@@ -9,7 +9,8 @@
       "fatigue_endurance": "96 MPa", "fracture_toughness": "29 MPa*m^0.5",
       "thermal_conductivity": "167 W/m/K", "specific_heat": "896 J/kg/K",
       "cte": "23.6e-6 1/K", "max_service_temp": "170 C", "rough_cost": "4.5 USD/kg",
-      "basis": "typical", "source": "ASM Aluminum 6061-T6; MMPDS Rev N (allowables)"
+      "hardness_hb": "95", "elongation": "12",
+      "basis": "typical", "source": "ASM Aluminum 6061-T6; MMPDS Rev N (allowables); Machinery's Handbook 30th (hardness/elong)"
     },
     {
       "name": "AL7075-T6", "category": "aluminum",
@@ -18,7 +19,8 @@
       "fatigue_endurance": "159 MPa", "fracture_toughness": "23 MPa*m^0.5",
       "thermal_conductivity": "130 W/m/K", "specific_heat": "960 J/kg/K",
       "cte": "23.4e-6 1/K", "max_service_temp": "120 C", "rough_cost": "6.0 USD/kg",
-      "basis": "typical", "source": "ASM Aluminum 7075-T6"
+      "hardness_hb": "150", "elongation": "11",
+      "basis": "typical", "source": "ASM Aluminum 7075-T6; Machinery's Handbook 30th (hardness/elong)"
     },
     {
       "name": "AL1100-O", "category": "aluminum",
@@ -35,7 +37,8 @@
       "fatigue_endurance": "200 MPa", "fracture_toughness": "50 MPa*m^0.5",
       "thermal_conductivity": "51 W/m/K", "specific_heat": "486 J/kg/K",
       "cte": "11.7e-6 1/K", "max_service_temp": "400 C", "rough_cost": "0.8 USD/kg",
-      "basis": "typical", "source": "ASTM A36; ASM Carbon Steel"
+      "hardness_hb": "130", "elongation": "20",
+      "basis": "typical", "source": "ASTM A36; ASM Carbon Steel; Machinery's Handbook 30th (hardness/elong)"
     },
     {
       "name": "Steel-1045", "category": "steel",
@@ -44,7 +47,8 @@
       "fatigue_endurance": "275 MPa", "fracture_toughness": "50 MPa*m^0.5",
       "thermal_conductivity": "49.8 W/m/K", "specific_heat": "486 J/kg/K",
       "cte": "11.5e-6 1/K", "max_service_temp": "400 C", "rough_cost": "0.9 USD/kg",
-      "basis": "typical", "source": "ASM AISI 1045 (normalized)"
+      "hardness_hb": "170", "hardness_hv": "180", "elongation": "16",
+      "basis": "typical", "source": "ASM AISI 1045 (normalized); Machinery's Handbook 30th (hardness/elong)"
     },
     {
       "name": "Steel-4140-QT", "category": "steel",
@@ -53,7 +57,8 @@
       "fatigue_endurance": "470 MPa", "fracture_toughness": "60 MPa*m^0.5",
       "thermal_conductivity": "42.6 W/m/K", "specific_heat": "473 J/kg/K",
       "cte": "12.3e-6 1/K", "max_service_temp": "425 C", "rough_cost": "1.2 USD/kg",
-      "basis": "typical", "source": "ASM AISI 4140 quenched & tempered"
+      "hardness_hb": "302", "hardness_hv": "318", "elongation": "18",
+      "basis": "typical", "source": "ASM AISI 4140 quenched & tempered; Machinery's Handbook 30th (hardness/elong)"
     },
     {
       "name": "SS304", "category": "steel",
@@ -62,7 +67,8 @@
       "fatigue_endurance": "240 MPa", "fracture_toughness": "150 MPa*m^0.5",
       "thermal_conductivity": "16.2 W/m/K", "specific_heat": "500 J/kg/K",
       "cte": "17.3e-6 1/K", "max_service_temp": "800 C", "rough_cost": "3.5 USD/kg",
-      "basis": "typical", "source": "ASM AISI 304 stainless (annealed)"
+      "hardness_hb": "123", "hardness_hv": "129", "elongation": "60",
+      "basis": "typical", "source": "ASM AISI 304 stainless (annealed); Machinery's Handbook 30th (hardness/elong)"
     },
     {
       "name": "Ti-6Al-4V", "category": "titanium",
@@ -71,7 +77,8 @@
       "fatigue_endurance": "510 MPa", "fracture_toughness": "75 MPa*m^0.5",
       "thermal_conductivity": "6.7 W/m/K", "specific_heat": "526 J/kg/K",
       "cte": "8.6e-6 1/K", "max_service_temp": "400 C", "rough_cost": "30.0 USD/kg",
-      "basis": "typical", "source": "ASM Ti-6Al-4V (Grade 5, annealed)"
+      "hardness_hb": "334", "hardness_hv": "349", "elongation": "14",
+      "basis": "typical", "source": "ASM Ti-6Al-4V (Grade 5, annealed); MMPDS (hardness/elong)"
     },
     {
       "name": "Mg-AZ31B", "category": "magnesium",
@@ -88,7 +95,7 @@
       "yield_strength": "40 MPa", "ultimate_strength": "40 MPa",
       "thermal_conductivity": "0.17 W/m/K", "specific_heat": "1300 J/kg/K",
       "cte": "90e-6 1/K", "max_service_temp": "85 C", "rough_cost": "3.0 USD/kg",
-      "basis": "typical", "source": "MatWeb generic ABS",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2 (Engineering Plastics); generic ABS",
       "crystallinity": "amorphous",
       "recommended_wall_mm": "0.8 3.0",
       "mold_shrinkage_pct": "0.4 0.7",
@@ -102,7 +109,7 @@
       "yield_strength": "50 MPa", "ultimate_strength": "50 MPa",
       "thermal_conductivity": "0.13 W/m/K", "specific_heat": "1800 J/kg/K",
       "cte": "68e-6 1/K", "max_service_temp": "55 C", "rough_cost": "2.5 USD/kg",
-      "basis": "typical", "source": "MatWeb generic PLA"
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; NatureWorks Ingeo PLA datasheet (generic)"
     },
     {
       "name": "Nylon-6/6", "category": "polymer",
@@ -111,7 +118,7 @@
       "yield_strength": "82 MPa", "ultimate_strength": "82 MPa",
       "thermal_conductivity": "0.25 W/m/K", "specific_heat": "1670 J/kg/K",
       "cte": "80e-6 1/K", "max_service_temp": "95 C", "rough_cost": "3.5 USD/kg",
-      "basis": "typical", "source": "MatWeb generic Nylon 6/6 (dry)",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; DuPont Zytel 101 datasheet (dry, generic PA66)",
       "crystallinity": "semicrystalline",
       "recommended_wall_mm": "0.8 3.0",
       "mold_shrinkage_pct": "0.7 1.8",
@@ -126,7 +133,7 @@
       "thermal_conductivity": "0.19 W/m/K", "specific_heat": "1450 J/kg/K",
       "cte": "70e-6 1/K", "max_service_temp": "80 C", "rough_cost": "3.0 USD/kg",
       "refractive_index": "1.49", "abbe_number": "57.4",
-      "basis": "typical", "source": "MatWeb acrylic / refractiveindex.info PMMA (n_d)",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; Evonik PLEXIGLAS datasheet; refractiveindex.info (n_d)",
       "crystallinity": "amorphous",
       "recommended_wall_mm": "0.8 4.0",
       "mold_shrinkage_pct": "0.2 0.6",
@@ -141,7 +148,7 @@
       "yield_strength": "62 MPa", "ultimate_strength": "65 MPa",
       "thermal_conductivity": "0.20 W/m/K", "specific_heat": "1200 J/kg/K",
       "cte": "68e-6 1/K", "max_service_temp": "120 C", "rough_cost": "4.0 USD/kg",
-      "basis": "typical", "source": "MatWeb generic polycarbonate; SABIC Lexan datasheet",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; SABIC Lexan datasheet (generic PC)",
       "crystallinity": "amorphous",
       "recommended_wall_mm": "1.0 4.0",
       "mold_shrinkage_pct": "0.5 0.7",
@@ -156,7 +163,7 @@
       "yield_strength": "65 MPa", "ultimate_strength": "70 MPa",
       "thermal_conductivity": "0.31 W/m/K", "specific_heat": "1470 J/kg/K",
       "cte": "110e-6 1/K", "max_service_temp": "90 C", "rough_cost": "3.5 USD/kg",
-      "basis": "typical", "source": "MatWeb generic acetal (POM homopolymer); DuPont Delrin datasheet",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; DuPont Delrin datasheet (POM homopolymer)",
       "crystallinity": "semicrystalline",
       "recommended_wall_mm": "0.8 3.0",
       "mold_shrinkage_pct": "1.8 2.5",
@@ -171,7 +178,7 @@
       "yield_strength": "33 MPa", "ultimate_strength": "35 MPa",
       "thermal_conductivity": "0.17 W/m/K", "specific_heat": "1920 J/kg/K",
       "cte": "100e-6 1/K", "max_service_temp": "100 C", "rough_cost": "1.5 USD/kg",
-      "basis": "typical", "source": "MatWeb generic polypropylene homopolymer",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; generic PP homopolymer",
       "crystallinity": "semicrystalline",
       "recommended_wall_mm": "0.8 3.0",
       "mold_shrinkage_pct": "1.0 2.5",
@@ -186,7 +193,7 @@
       "yield_strength": "26 MPa", "ultimate_strength": "31 MPa",
       "thermal_conductivity": "0.45 W/m/K", "specific_heat": "1900 J/kg/K",
       "cte": "120e-6 1/K", "max_service_temp": "80 C", "rough_cost": "1.3 USD/kg",
-      "basis": "typical", "source": "MatWeb generic HDPE (injection grade)",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; generic injection-grade HDPE",
       "crystallinity": "semicrystalline",
       "recommended_wall_mm": "0.9 4.0",
       "mold_shrinkage_pct": "1.5 4.0",
@@ -216,7 +223,7 @@
       "yield_strength": "11 MPa", "ultimate_strength": "13 MPa",
       "thermal_conductivity": "0.33 W/m/K", "specific_heat": "2300 J/kg/K",
       "cte": "200e-6 1/K", "max_service_temp": "70 C", "rough_cost": "1.2 USD/kg",
-      "basis": "typical", "source": "MatWeb generic LDPE",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; generic LDPE",
       "crystallinity": "semicrystalline",
       "recommended_wall_mm": "0.9 4.0",
       "mold_shrinkage_pct": "1.5 3.5",
@@ -231,7 +238,7 @@
       "yield_strength": "45 MPa", "ultimate_strength": "48 MPa",
       "thermal_conductivity": "0.14 W/m/K", "specific_heat": "1300 J/kg/K",
       "cte": "80e-6 1/K", "max_service_temp": "70 C", "rough_cost": "1.6 USD/kg",
-      "basis": "typical", "source": "MatWeb generic general-purpose polystyrene (GPPS)",
+      "basis": "typical", "source": "ASM Engineered Materials Handbook Vol.2; generic GPPS",
       "crystallinity": "amorphous",
       "recommended_wall_mm": "0.8 3.5",
       "mold_shrinkage_pct": "0.4 0.7",
@@ -261,7 +268,7 @@
       "yield_strength": "97 MPa", "ultimate_strength": "100 MPa",
       "thermal_conductivity": "0.25 W/m/K", "specific_heat": "1340 J/kg/K",
       "cte": "47e-6 1/K", "max_service_temp": "250 C", "rough_cost": "90.0 USD/kg",
-      "basis": "typical", "source": "Victrex PEEK 450G datasheet; MatWeb generic PEEK (unfilled)",
+      "basis": "typical", "source": "Victrex PEEK 450G datasheet; ASM Engineered Materials Handbook Vol.2 (generic unfilled PEEK)",
       "crystallinity": "semicrystalline",
       "recommended_wall_mm": "1.0 5.0",
       "mold_shrinkage_pct": "1.0 1.5",
@@ -276,6 +283,82 @@
       "cte": "7.1e-6 1/K", "max_service_temp": "500 C", "rough_cost": "20.0 USD/kg",
       "refractive_index": "1.5168", "abbe_number": "64.17",
       "basis": "typical", "source": "SCHOTT N-BK7 datasheet / refractiveindex.info (n_d)"
+    },
+    {
+      "name": "AL2024-T3", "category": "aluminum",
+      "YoungsModulus": "73100 MPa", "PoissonRatio": "0.33", "Density": "2780 kg/m^3",
+      "yield_strength": "345 MPa", "ultimate_strength": "483 MPa",
+      "fatigue_endurance": "138 MPa", "fracture_toughness": "34 MPa*m^0.5",
+      "thermal_conductivity": "121 W/m/K", "specific_heat": "875 J/kg/K",
+      "cte": "23.2e-6 1/K", "max_service_temp": "150 C", "rough_cost": "6.5 USD/kg",
+      "hardness_hb": "120", "elongation": "18",
+      "basis": "typical", "source": "MMPDS Rev N (2024-T3 sheet); ASM Aluminum 2024-T3; Machinery's Handbook 30th"
+    },
+    {
+      "name": "CastIron-GrayClass40", "category": "cast_iron",
+      "aliases": ["Gray-Cast-Iron", "ASTM-A48-Class40", "Class40-Gray-Iron"],
+      "YoungsModulus": "124000 MPa", "PoissonRatio": "0.26", "Density": "7150 kg/m^3",
+      "ultimate_strength": "293 MPa",
+      "fatigue_endurance": "128 MPa", "fracture_toughness": "18 MPa*m^0.5",
+      "thermal_conductivity": "46 W/m/K", "specific_heat": "490 J/kg/K",
+      "cte": "11.4e-6 1/K", "max_service_temp": "400 C", "rough_cost": "0.7 USD/kg",
+      "hardness_hb": "235", "elongation": "0.5",
+      "basis": "typical", "source": "ASTM A48 Class 40 gray iron; ASM Metals Handbook Vol.1 (Cast Irons); Machinery's Handbook 30th. Note: gray iron has no distinct yield point (yield_strength omitted)."
+    },
+    {
+      "name": "CastIron-Ductile-65-45-12", "category": "cast_iron",
+      "aliases": ["Ductile-Iron", "Nodular-Iron", "ASTM-A536-65-45-12"],
+      "YoungsModulus": "169000 MPa", "PoissonRatio": "0.29", "Density": "7100 kg/m^3",
+      "yield_strength": "310 MPa", "ultimate_strength": "448 MPa",
+      "fatigue_endurance": "200 MPa", "fracture_toughness": "31 MPa*m^0.5",
+      "thermal_conductivity": "33 W/m/K", "specific_heat": "461 J/kg/K",
+      "cte": "11.6e-6 1/K", "max_service_temp": "425 C", "rough_cost": "0.9 USD/kg",
+      "hardness_hb": "167", "elongation": "12",
+      "basis": "typical", "source": "ASTM A536 grade 65-45-12 ductile (nodular) iron; ASM Metals Handbook Vol.1; Machinery's Handbook 30th"
+    },
+    {
+      "name": "Brass-C36000", "category": "copper",
+      "aliases": ["Free-Cutting-Brass", "C360", "CuZn36Pb3"],
+      "YoungsModulus": "97000 MPa", "PoissonRatio": "0.31", "Density": "8500 kg/m^3",
+      "yield_strength": "310 MPa", "ultimate_strength": "385 MPa",
+      "fatigue_endurance": "138 MPa",
+      "thermal_conductivity": "115 W/m/K", "specific_heat": "380 J/kg/K",
+      "cte": "20.5e-6 1/K", "max_service_temp": "200 C", "rough_cost": "6.0 USD/kg",
+      "hardness_hb": "120", "elongation": "18",
+      "basis": "typical", "source": "ASTM B16 / CDA C36000 free-cutting brass (H02); ASM Metals Handbook Vol.2 (Copper Alloys); Machinery's Handbook 30th"
+    },
+    {
+      "name": "Bronze-C93200", "category": "copper",
+      "aliases": ["Bearing-Bronze", "SAE-660", "C932", "Phosphor-Bearing-Bronze"],
+      "YoungsModulus": "100000 MPa", "PoissonRatio": "0.34", "Density": "8930 kg/m^3",
+      "yield_strength": "125 MPa", "ultimate_strength": "240 MPa",
+      "fatigue_endurance": "76 MPa",
+      "thermal_conductivity": "59 W/m/K", "specific_heat": "377 J/kg/K",
+      "cte": "18.0e-6 1/K", "max_service_temp": "260 C", "rough_cost": "8.0 USD/kg",
+      "hardness_hb": "65", "elongation": "20",
+      "basis": "typical", "source": "ASTM B584 / CDA C93200 bearing bronze (SAE 660); ASM Metals Handbook Vol.2 (Copper Alloys)"
+    },
+    {
+      "name": "CFRP-Carbon-Epoxy-UD", "category": "composite",
+      "aliases": ["CFRP", "Carbon-Fiber-Epoxy", "AS4-3501-6-UD"],
+      "YoungsModulus": "135000 MPa", "PoissonRatio": "0.30", "Density": "1600 kg/m^3",
+      "yield_strength": "1500 MPa", "ultimate_strength": "1500 MPa",
+      "fatigue_endurance": "600 MPa",
+      "thermal_conductivity": "5.0 W/m/K", "specific_heat": "900 J/kg/K",
+      "cte": "1.0e-6 1/K", "max_service_temp": "120 C", "rough_cost": "40.0 USD/kg",
+      "elongation": "1.2",
+      "basis": "typical", "source": "MIL-HDBK-17 / CMH-17 unidirectional carbon/epoxy (AS4/3501-6 class), 0-deg (longitudinal) properties; Hull & Clyne, An Introduction to Composite Materials. Brittle laminate: ultimate first-ply strength reported as yield_strength for screening; longitudinal-only, not laminate-averaged."
+    },
+    {
+      "name": "GFRP-EGlass-Epoxy-UD", "category": "composite",
+      "aliases": ["GFRP", "Glass-Fiber-Epoxy", "E-Glass-Epoxy-UD"],
+      "YoungsModulus": "45000 MPa", "PoissonRatio": "0.28", "Density": "2000 kg/m^3",
+      "yield_strength": "1000 MPa", "ultimate_strength": "1000 MPa",
+      "fatigue_endurance": "250 MPa",
+      "thermal_conductivity": "0.35 W/m/K", "specific_heat": "1000 J/kg/K",
+      "cte": "7.0e-6 1/K", "max_service_temp": "130 C", "rough_cost": "12.0 USD/kg",
+      "elongation": "2.5",
+      "basis": "typical", "source": "MIL-HDBK-17 / CMH-17 unidirectional E-glass/epoxy, 0-deg (longitudinal) properties; Hull & Clyne, An Introduction to Composite Materials. Brittle laminate: ultimate strength reported as yield_strength for screening; longitudinal-only."
     }
   ]
 }
