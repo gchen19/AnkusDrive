@@ -266,6 +266,10 @@ echo "== Part recipes (issue #136 — declared-input build templates: contract +
 $VENV_PY tests/test_recipes.py
 
 echo
+echo "== Revision + lifecycle state machine + F3 predicate (C2, #141 — state machine, immutability, rename-vs-revise; no key, no FreeCAD) =="
+python3 tests/test_lifecycle.py
+
+echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="
 $VENV_PY -m orchestration.selftest
 $VENV_PY -m orchestration.dryrun

@@ -14135,6 +14135,88 @@ def _h_items_check_manifest(p):
     return {"ok": not problems, "problems": problems}
 
 
+# Append-only registration of the revision + lifecycle state machine (issue #141 /
+# C2). All logic lives in the owned, pure-Python module driftpin/lifecycle.py (no
+# FreeCAD); these handlers are thin wrappers over it, exactly like the items.json
+# (C1) handlers above. Read-only handlers (editable / classify) do not write back;
+# mutating handlers (transition / apply_change) persist the registry.
+
+@handler("lifecycle_editable")
+def _h_lifecycle_editable(p):
+    """The cheap "is this editable?" check a builder runs before writing (issue
+    #141 / C2): an item is editable only in lifecycle state in_work; in_review,
+    released and obsolete are frozen. params: registry (path), item (id). Returns
+    {ok, editable, state}."""
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    reg = _items.load_registry(p["registry"])
+    return {"ok": True, "editable": _lc.item_editable(reg, p["item"]),
+            "state": _lc.item_state(reg, p["item"])}
+
+
+@handler("lifecycle_transition")
+def _h_lifecycle_transition(p):
+    """Move an item to a new lifecycle state, guarded by the transition table
+    (issue #141 / C2): an illegal edge (e.g. skip review in_work->released) is
+    rejected loudly; releasing stamps the first revision and freezes the item.
+    params: registry (path), item (id), to (state), actor?, note?. Persists the
+    registry. Returns {ok, state, rev} or {ok:false, problems}."""
+    import json as _json
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    path = p["registry"]
+    reg = _items.load_registry(path)
+    try:
+        _lc.transition(reg, p["item"], p["to"], actor=p.get("actor"),
+                       note=p.get("note"))
+    except (_lc.LifecycleError, KeyError) as e:
+        return {"ok": False, "problems": [str(e)]}
+    with open(path, "w") as f:
+        _json.dump(reg, f, indent=2, sort_keys=True)
+    rec = reg["items"][p["item"]]
+    return {"ok": True, "state": rec["lifecycle"], "rev": rec.get("rev", "-")}
+
+
+@handler("lifecycle_classify_change")
+def _h_lifecycle_classify_change(p):
+    """The deterministic Form/Fit/Function predicate (issue #141 / C2): compare an
+    item's before/after interface-defining + internal attributes and decide
+    rename-vs-revise. An F3-preserving change -> "revise" (bump revision, same part
+    number); an F3-breaking change -> "new_part_number". params: before (object),
+    after (object), extra_f3? (object). Returns the verdict dict {disposition, f3,
+    changed, f3_changed, categories, reason}."""
+    from driftpin import lifecycle as _lc
+    return _lc.form_fit_function(p["before"], p["after"],
+                                 extra_f3=p.get("extra_f3"))
+
+
+@handler("lifecycle_apply_change")
+def _h_lifecycle_apply_change(p):
+    """Apply a change to a RELEASED item, dispatching on the F3 predicate (issue
+    #141 / C2): F3-preserving -> open a new revision on the same part number;
+    F3-breaking -> allocate a new part number (a new item, new_item required). The
+    original released item is never silently mutated. params: registry (path),
+    item (id), after (metadata object), new_item? (id), extra_f3?, actor?, note?.
+    Persists the registry. Returns {ok, disposition, item, part_number, rev, ...}
+    or {ok:false, problems}."""
+    import json as _json
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    path = p["registry"]
+    reg = _items.load_registry(path)
+    try:
+        res = _lc.apply_change(reg, p["item"], p["after"],
+                               new_item_id=p.get("new_item"),
+                               extra_f3=p.get("extra_f3"),
+                               actor=p.get("actor"), note=p.get("note"))
+    except (_lc.LifecycleError, KeyError, ValueError) as e:
+        return {"ok": False, "problems": [str(e)]}
+    with open(path, "w") as f:
+        _json.dump(reg, f, indent=2, sort_keys=True)
+    res["ok"] = True
+    return res
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:
