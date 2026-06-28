@@ -14135,6 +14135,54 @@ def _h_items_check_manifest(p):
     return {"ok": not problems, "problems": problems}
 
 
+# --- design tables / variant families (issue #138, B1, append-only) -----------
+# A FAMILY is a row x column design table (row = a variant, column = a parameter /
+# feature-flag / material). All logic lives in the owned, pure-Python module
+# driftpin/families.py — table parsing, the column split, the recipe door, and the
+# item/part-number allocation. Importing it also registers the standard-part
+# CATALOG recipes (ball_bearing) into the recipe registry (subsumes #101). These
+# handlers are thin wrappers, exactly like the recipe handlers above.
+from driftpin import families as _families_register  # noqa: E402,F401  (registers catalog recipes)
+
+
+@handler("family_validate")
+def _h_family_validate(p):
+    """Validate a family design table (issue #138): load CSV/JSON, then check the
+    recipe, mode, key column, duplicate/missing size keys, and every per-row recipe-
+    door value — each problem names the row+column. Returns {ok, problems}."""
+    from driftpin import families as _fam
+    table = _fam.load_table(p["table"])
+    problems = _fam.validate_table(table)
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("family_materialize")
+def _h_family_materialize(p):
+    """Materialize a whole variant family from one design table (issue #138): for
+    each row, in table order, build the part with its recipe and allocate one item +
+    one sequential part number. params: table (path), registry? (path, created if
+    absent and written back), mode? (instances|configurations override). Builds into
+    the active document. Returns {schema, family, recipe, mode, key, count, rows,
+    registry}."""
+    import json as _json
+    import os as _os
+    from driftpin import families as _fam
+    from driftpin import items as _items
+    table = _fam.load_table(p["table"])
+    reg_path = p.get("registry")
+    if reg_path and _os.path.exists(reg_path):
+        registry = _items.load_registry(reg_path)
+    else:
+        registry = _items.empty_registry()
+
+    def _call(_tool, **kw):
+        return HANDLERS[_tool](kw)
+
+    result = _fam.materialize(table, _call, registry=registry, mode=p.get("mode"))
+    if reg_path:
+        with open(reg_path, "w") as f:
+            _json.dump(registry, f, indent=2, sort_keys=True)
+    return result
 # --- Liskov-substitutability gate (issue #147, T1; DESIGN_HIERARCHY §7.1) -----
 # Append-only registration of the Form/Fit/Function-as-code swap gate. All logic
 # lives in the owned, FreeCAD-free module driftpin/gates/substitutability.py; this

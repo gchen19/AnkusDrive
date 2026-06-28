@@ -5667,6 +5667,38 @@ def items_check_manifest(manifest: str, registry: str) -> dict:
     return _call("items_check_manifest", manifest=manifest, registry=registry)
 
 
+# --- design tables / variant families (issue #138, B1, append-only) -----------
+
+@mcp.tool()
+def family_validate(table: str) -> dict:
+    """Validate a variant-family design table (issue #138, B1) — a row x column
+    table where row = a variant (keyed by a size designator) and column = a recipe
+    parameter / feature-flag / material. Loads CSV or JSON and checks the recipe,
+    mode, key column, duplicate/missing size keys, and every per-row recipe-door
+    value; each problem names the row+column. Returns {ok, problems}.
+
+    table: path to the family table (.csv or .json)."""
+    return _call("family_validate", table=table)
+
+
+@mcp.tool()
+def family_materialize(table: str, registry: str | None = None,
+                       mode: str | None = None) -> dict:
+    """Materialize a whole variant family from ONE design table (issue #138, B1) —
+    "make all the gears" becomes a table, not a loop. For each row, in table order,
+    builds the part with its recipe (A1, #136) and allocates one item + one
+    sequential part number (C1, #140). Subsumes standard-part catalogs: a bearing
+    catalog is a family table keyed by designation, sourced from the ISO corpus.
+
+    Two modes (both supported): "instances" (each variant its own released file +
+    part number) and "configurations" (variants share one artifact). Builds into the
+    active document. Returns {schema, family, recipe, mode, key, count, rows,
+    registry}.
+
+    table:    path to the family table (.csv or .json).
+    registry: optional items.json path (created if absent, written back).
+    mode:     optional override of the table's mode (instances|configurations)."""
+    return _call("family_materialize", table=table, registry=registry, mode=mode)
 # --- Liskov-substitutability gate (issue #147, T1; §7.1) — append-only exposure -
 
 @mcp.tool()
