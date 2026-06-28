@@ -46,6 +46,7 @@ import math
 _SIZE_TOL = 0.05      # mm — a dim value matches a feature size within this
 _POS_TOL = 0.20       # mm — a dim endpoint sits on a feature/datum within this
 _AGREE_TOL = 0.05     # mm — two dims on one slot agree within this (else conflict)
+_ANGLE_TOL = 0.5      # deg — an angle dim matches a cone half/included angle within this
 
 # A turned part declared with prismatic location dims (or vice-versa) is a
 # process-scheme error, surfaced rather than silently mapped.
@@ -80,6 +81,17 @@ def _axis_index(axis):
 #   {"id":"H1.cb","kind":"counterbore","parent":"H1","dia":11.0,"depth":4.0}
 #   {"id":"S1","kind":"cyl_step","dia":20.0,"length":30.0,"z0":0.0,"z1":30.0}   (turned)
 #   {"id":"B1","kind":"bore","dia":8.0,"depth":12.0}                            (turned)
+#   {"id":"CONE1","kind":"cone","semi_angle":45.0,"radius":6.0}   (conical face — issue #108)
+#   {"id":"FREEFORM1","kind":"freeform","faces":20}              (BSpline/Bezier walls — #108)
+#   {"id":"PAT1","kind":"pattern","count":80,"pitch":2.0,"depth":1.0,
+#    "facet_angle":30.0,"draft_angle":3.0}                       (periodic micro-features — #108)
+#
+# Curved/periodic features (#108) are SURFACE-based, not edge-based, so a part can
+# look fully dimensioned to the prismatic enumeration above while the defining
+# geometry — a cone's half-angle, a freeform wall's profile, a tooth pattern's pitch
+# — is never required. Their slots may be satisfied by a dimension OR an explicit
+# NOTE (a "per CAD model / profile table" callout); a freeform/detail slot has no
+# numeric value, so only a note (or a controlling section) can close it.
 #
 # Dimension descriptors (built by the worker off each DrawViewDimension):
 #   {"name":"Dim1","type":"Diameter","value":6.0,
@@ -97,9 +109,14 @@ def required_slots(features, process):
     dimension can be checked for agreement (conflict detection) — not just presence."""
     slots = []
 
-    def add(fid, kind, axis, nominal, desc):
+    def add(fid, kind, axis, nominal, desc, *, note_ok=False, note_only=False):
+        # note_ok: an explicit feature note may satisfy this slot (curved/periodic
+        # geometry a number alone can't capture); note_only: ONLY a note (or a
+        # controlling section) closes it — it carries no dimensionable numeric value.
         slots.append({"id": f"{fid}.{axis}", "feature": fid, "kind": kind,
-                      "axis": axis, "nominal": float(nominal), "desc": desc})
+                      "axis": axis, "nominal": float(nominal), "desc": desc,
+                      "note_ok": bool(note_ok or note_only),
+                      "note_only": bool(note_only)})
 
     for f in features:
         k = f["kind"]
@@ -145,6 +162,38 @@ def required_slots(features, process):
             # a chamfer leg — matched by a linear dimension (the "L×45°" convention
             # is future work; v1 dimensions the leg)
             add(fid, "size", "size", f.get("size", 0.0), f"{fid} chamfer size")
+        elif k == "cone":
+            # a conical face (chamfer cone, countersink, taper): the curved angle a
+            # machinist sets is the half-angle (or its 2× included angle) — matched by
+            # an angle dimension, or documented by a note.
+            add(fid, "size", "angle", f.get("semi_angle", 0.0),
+                f"{fid} cone half-angle", note_ok=True)
+        elif k == "freeform":
+            # a BSpline/Bezier/freeform wall: no single number defines it. Require a
+            # controlling section/profile or an explicit "per CAD model / profile
+            # table" note — never silently ignored.
+            nf = int(f.get("faces", 1))
+            add(fid, "size", "profile", 0.0,
+                f"{fid} freeform/BSpline surface ({nf} face{'s' if nf != 1 else ''}) "
+                f"needs a controlling section/profile or a 'per CAD model' note",
+                note_only=True)
+        elif k == "pattern":
+            # ONE periodic pattern (not N per-instance callouts): a complete drawing
+            # gives pitch + count + depth + facet angle + draft angle and a detail
+            # view — each satisfiable by a dim or by a single pattern-table note.
+            cnt = int(f.get("count", 0))
+            add(fid, "size", "pitch", f.get("pitch", 0.0),
+                f"{fid} pattern pitch ({cnt}×)", note_ok=True)
+            add(fid, "size", "count", cnt, f"{fid} pattern instance count",
+                note_ok=True)
+            add(fid, "size", "depth", f.get("depth", 0.0),
+                f"{fid} pattern feature depth", note_ok=True)
+            add(fid, "size", "facet_angle", f.get("facet_angle", 0.0),
+                f"{fid} pattern facet angle", note_ok=True)
+            add(fid, "size", "draft_angle", f.get("draft_angle", 0.0),
+                f"{fid} pattern draft angle", note_ok=True)
+            add(fid, "detail", "view", 0.0, f"{fid} pattern detail/section view",
+                note_only=True)
     return slots
 
 
@@ -183,6 +232,14 @@ def _covers_size(slot, dim, features_by_id):
         # dimension is a fillet callout (R3 == Ø6 numerically) — don't credit it to
         # a hole diameter, or a fillet would satisfy a hole's size slot.
         return dt == "Diameter"
+    if axis == "angle":
+        # a cone half-angle is sized by an Angle dimension, in degrees; accept either
+        # the half-angle or its 2× included angle (both are valid conventions).
+        if dt != "Angle":
+            return False
+        v = abs(float(dim.get("value", 0.0)))
+        nom = slot["nominal"]
+        return abs(v - nom) <= _ANGLE_TOL or abs(v - 2.0 * nom) <= _ANGLE_TOL
     if axis == "radius":
         # a fillet radius: an R dimension whose value is the radius (or a linear
         # callout of the same value)
@@ -190,7 +247,7 @@ def _covers_size(slot, dim, features_by_id):
             return False
         return abs(abs(float(dim.get("value", 0.0))) - slot["nominal"]) <= _SIZE_TOL
     # linear sizes: overall extents, lengths, depths — match value to nominal
-    if dt in ("Diameter", "Radius"):
+    if dt in ("Diameter", "Radius", "Angle"):
         return False
     return abs(abs(float(dim.get("value", 0.0))) - slot["nominal"]) <= _SIZE_TOL
 
@@ -217,10 +274,12 @@ def _covers_location(slot, dim, features_by_id):
     return near_feat
 
 
-def assign_dimensions(features, slots, dims):
+def assign_dimensions(features, slots, dims, notes=None):
     """Map each dimension onto the slot(s) it satisfies. Returns
-    ``(coverage, leftover)`` where ``coverage[slot_id] = [dim,...]`` and ``leftover``
-    is the dims that pinned nothing (candidate over-dimensioning).
+    ``(coverage, leftover, note_covered)`` where ``coverage[slot_id] = [dim,...]``,
+    ``leftover`` is the dims that pinned nothing (candidate over-dimensioning), and
+    ``note_covered`` is the set of slot ids closed by an explicit feature ``note``
+    rather than a dimension.
 
     A dim binds to a slot one of two ways. When the worker has resolved the dim's
     references to a feature degree of freedom it stamps an explicit ``slot`` hint
@@ -228,10 +287,18 @@ def assign_dimensions(features, slots, dims):
     targets the width but reads a wrong number still lands on the width slot — which
     is exactly what makes CONFLICT detectable (two dims, one slot, disagreeing
     values). Without a hint (hand-authored dims) we fall back to geometric matching:
-    a value/reference match against the feature."""
+    a value/reference match against the feature.
+
+    ``notes`` is a list of ``{"feature": fid, ...}``; a note targeting feature *F*
+    closes every ``note_ok`` slot of *F* (a cone half-angle, a freeform profile, a
+    whole pattern's pitch/count/.../detail-view) — the "per CAD model / profile
+    table" escape hatch the curved/periodic gate (#108) allows."""
     by_id = {f["id"]: f for f in features}
     valid = {s["id"] for s in slots}
     coverage = {s["id"]: [] for s in slots}
+    noted_feats = {nt.get("feature") for nt in (notes or []) if nt.get("feature")}
+    note_covered = {s["id"] for s in slots
+                    if s.get("note_ok") and s["feature"] in noted_feats}
     used = set()
     for dim in dims:
         hint = dim.get("slot")
@@ -241,6 +308,8 @@ def assign_dimensions(features, slots, dims):
             continue
         matched = False
         for s in slots:
+            if s.get("note_only"):
+                continue   # a freeform profile / detail view is never a dim match
             ok = (_covers_size(s, dim, by_id) if s["kind"] == "size"
                   else _covers_location(s, dim, by_id))
             if ok:
@@ -249,33 +318,63 @@ def assign_dimensions(features, slots, dims):
         if matched:
             used.add(id(dim))
     leftover = [d for d in dims if id(d) not in used]
-    return coverage, leftover
+    return coverage, leftover, note_covered
 
 
-def check_completeness(features, dims, process, *, datums_declared=False):
+# violation code for an uncovered slot, by the feature class it belongs to: the
+# curved/periodic classes (#108) get their own codes so they are never lumped in
+# with — nor hidden by — the prismatic "under".
+_UNDER_CODE = {"cone": "angle_undimensioned",
+               "freeform": "freeform_undimensioned",
+               "pattern": "pattern_undimensioned"}
+
+
+def check_completeness(features, dims, process, *, datums_declared=False, notes=None):
     """Decide whether ``dims`` fully and non-redundantly reconstruct ``features``
     under ``process``. Returns a realize-style violation list; each violation has a
-    ``code`` in {under, redundant, conflict, no_datum, extra, scheme} and a ``reason``.
-    An empty list means the drawing is manufacturing-complete.
+    ``code`` in {under, redundant, conflict, no_datum, extra, scheme,
+    angle_undimensioned, freeform_undimensioned, pattern_undimensioned} and a
+    ``reason``. An empty list means the drawing is manufacturing-complete.
 
     ``datums_declared`` — whether the part carries annotated datum faces
     (``DP_FaceRoles``); when true, a location dimension that is not measured *from*
-    a datum is flagged (``no_datum``)."""
+    a datum is flagged (``no_datum``). ``notes`` — explicit feature notes that close
+    curved/periodic slots (see :func:`assign_dimensions`)."""
     slots = required_slots(features, process)
-    coverage, leftover = assign_dimensions(features, slots, dims)
+    coverage, leftover, note_covered = assign_dimensions(features, slots, dims, notes)
     out = []
 
+    feat_kind = {f["id"]: f.get("kind") for f in features}
     by_id = {s["id"]: s for s in slots}
+    pattern_flagged = set()   # one pattern_undimensioned per pattern feature, not N
     for sid, covering in coverage.items():
         s = by_id[sid]
-        if not covering:
-            out.append({
-                "code": "under", "slot": sid, "feature": s["feature"],
-                "kind": s["kind"], "axis": s["axis"], "nominal": s["nominal"],
-                "reason": f"{s['desc']} is not dimensioned — the part is "
-                          f"under-constrained ({'size' if s['kind']=='size' else 'location'} "
-                          f"missing; nominal {s['nominal']:.2f} mm)"})
+        if not covering and sid not in note_covered:
+            kind = feat_kind.get(s["feature"])
+            code = _UNDER_CODE.get(kind, "under")
+            if code == "pattern_undimensioned":
+                # collapse a pattern's many param slots into ONE finding for the
+                # whole pattern (the wrong abstraction the gate used to explode into
+                # N per-instance chamfer callouts).
+                if s["feature"] in pattern_flagged:
+                    continue
+                pattern_flagged.add(s["feature"])
+                out.append({
+                    "code": code, "feature": s["feature"], "kind": "pattern",
+                    "reason": f"periodic pattern {s['feature']} is undimensioned — "
+                              f"call out pitch + count + depth + facet angle + draft "
+                              f"angle and add a detail view (or a pattern-table note), "
+                              f"not per-instance dimensions"})
+            else:
+                out.append({
+                    "code": code, "slot": sid, "feature": s["feature"],
+                    "kind": s["kind"], "axis": s["axis"], "nominal": s["nominal"],
+                    "reason": f"{s['desc']} is not dimensioned — the part is "
+                              f"under-constrained ({'size' if s['kind']=='size' else 'location'} "
+                              f"missing; nominal {s['nominal']:.2f} mm)"})
             continue
+        if not covering:
+            continue   # closed by an explicit note — satisfied
         # redundancy / conflict among multiple dims on one slot
         if len(covering) > 1:
             vals = [_dim_diameter_value(d) if s["axis"] == "dia"
@@ -314,23 +413,31 @@ def check_completeness(features, dims, process, *, datums_declared=False):
     return out
 
 
-def completeness_report(features, dims, process, *, datums_declared=False):
+def completeness_report(features, dims, process, *, datums_declared=False, notes=None):
     """``check_completeness`` plus a positive summary, so a PASS still reports the
-    numbers (a green gate that shows its work, like the realize gate). Returns
-    ``{ok, violations, slots_total, slots_covered, process, features}``."""
+    numbers (a green gate that shows its work, like the realize gate). The coverage
+    accounting spans ALL feature classes — prismatic holes AND curved/periodic
+    surface features (#108) — so a cone half-angle or a pattern left undimensioned
+    drops the ratio. Returns ``{ok, violations, slots_total, slots_covered,
+    slots_noted, coverage, process, features, ...}``."""
     slots = required_slots(features, process)
-    coverage, _ = assign_dimensions(features, slots, dims)
-    covered = sum(1 for v in coverage.values() if v)
+    coverage, _leftover, note_covered = assign_dimensions(features, slots, dims, notes)
+    by_dim = sum(1 for v in coverage.values() if v)
+    noted = sum(1 for sid in note_covered if not coverage[sid])
+    covered = by_dim + noted
     violations = check_completeness(features, dims, process,
-                                    datums_declared=datums_declared)
+                                    datums_declared=datums_declared, notes=notes)
     return {
         "ok": not violations,
         "violations": violations,
         "process": process,
         "slots_total": len(slots),
         "slots_covered": covered,
+        "slots_noted": noted,
+        "coverage": round(covered / len(slots), 4) if slots else 1.0,
         "features": len(features),
         "dimensions": len(dims),
+        "notes": len(notes or []),
     }
 
 

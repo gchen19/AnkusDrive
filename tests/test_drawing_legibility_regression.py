@@ -108,9 +108,12 @@ def test_oversize_part_fit_page():
     print("test_oversize_part_fit_page")
     with Worker() as w:
         w.call("new_document", name="reg_oversize")
-        plate = w.call("add_primitive", kind="box", w=120, d=80, h=6)["handle"]
+        # tall enough that the Top view's overall-depth dim runs off the top at 1:1
+        # (each overall extent is now placed once — issue #108 #4 — so the overflow
+        # must come from the geometry's height, not a duplicated cross-view callout)
+        plate = w.call("add_primitive", kind="box", w=120, d=120, h=6)["handle"]
         part = _cut_holes(w, plate, 4, 6,
-                          [(x, y) for x in (20, 60, 100) for y in (25, 55)])
+                          [(x, y) for x in (20, 60, 100) for y in (30, 90)])
         page = _page_for(w, part)
         w.call("add_dimension", page=page, auto=True)
         before = _report(w, page, "oversize-before")

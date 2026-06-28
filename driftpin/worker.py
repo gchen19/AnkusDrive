@@ -6080,7 +6080,8 @@ def _dim_text(dim):
     prefix = str(getattr(dim, "DP_Prefix", "") or "")
     if not prefix:
         prefix = {"Diameter": "Ø", "Radius": "R"}.get(str(getattr(dim, "Type", "")), "")
-    return f"{prefix}{val:.2f}{_dim_tol_text(dim)}"
+    suffix = "°" if prefix == "∠" else ""   # a stamped angle reads in degrees
+    return f"{prefix}{val:.2f}{suffix}{_dim_tol_text(dim)}"
 
 
 def _fmt_dev(x):
@@ -6675,6 +6676,20 @@ def _stamp_parent_view(dim, view):
         pass
 
 
+def _stamp_str_prop(obj, name, value):
+    """Stamp a plain string property (idempotent add-then-set), used for feature
+    notes that the drawing_gate reads back as coverage."""
+    if not hasattr(obj, name):
+        try:
+            obj.addProperty("App::PropertyString", name, "DriftPin", name)
+        except Exception:
+            return
+    try:
+        setattr(obj, name, str(value))
+    except Exception:
+        pass
+
+
 def _stamp_model_ref(dim, ref):
     """Record, on the dimension, the model-space geometry it references — a circle
     {"circle":{"center":[x,y,z],"radius":r}} or a span {"span":{"p1":[..],"p2":[..]}}
@@ -6754,20 +6769,48 @@ def _project_centred(view, vec):
     return App.Vector((p.x - c.x) * s, (p.y - c.y) * s, 0.0)
 
 
+def _dominant_axis(vec):
+    """Index (0/1/2) of a direction's dominant component, or None if the direction
+    is not (near) axis-aligned — i.e. not a principal X/Y/Z."""
+    comps = [abs(vec.x), abs(vec.y), abs(vec.z)]
+    i = max(range(3), key=lambda k: comps[k])
+    others = sum(comps) - comps[i]
+    return i if (comps[i] > 0.95 and others < 0.1) else None
+
+
+def _view_world_axes(view):
+    """The world axis indices a part-view's local horizontal and vertical map to
+    (used so `auto` dimensions each overall extent exactly once). Returns
+    (h_axis, v_axis) for an axis-aligned orthographic view, or (None, None) when the
+    view is not axis-aligned (e.g. an isometric)."""
+    try:
+        h = _dominant_axis(App.Vector(view.XDirection))
+        n = _dominant_axis(App.Vector(view.Direction))
+    except Exception:
+        return (None, None)
+    if h is None or n is None or h == n:
+        return (None, None)
+    v = 3 - h - n          # the remaining principal axis (0+1+2 == 3)
+    return (h, v)
+
+
 @handler("add_dimension")
 def _h_add_dimension(p):
     """Add dimension(s) to a drawing page.
 
     Modes (pick one):
-      * auto=True            -> overall horizontal + vertical extent dimensions
-                                for every part-view (or those named in `views`).
+      * auto=True            -> overall extent dimensions for the part-views (or
+                                those named in `views`); each world axis once.
       * view + edge=<tag>    -> dimension the true length of a model edge,
                                 projected into that view; text shows the real
                                 measured length (DP_TrueValue).
       * view + kind=diameter|radius + edge=<circular tag>
                              -> ⌀/R dimension of a hole or arc.
+      * view + kind=angle + face=<conical face tag>
+                             -> half/included-angle of a conical face (issue #108).
       * view + from_point/to_point -> dimension between two 3D model points.
-    kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'.
+    kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'
+          | 'angle'.
     tolerance: optional, attaches a tolerance rendered next to the value —
       {"sym": 0.1} (±0.1) | {"plus": .., "minus": ..} (asymmetric) |
       {"fit": "H7"} / {"fit": "H7/g6"} (ISO 286 hole-side deviations at this size).
@@ -6801,11 +6844,26 @@ def _h_add_dimension(p):
 
     if p.get("auto"):
         want = p.get("views")
+        # Each overall extent is placed ONCE: an orthographic set repeats every world
+        # axis across two views (Front→X,Z; Top→X,Y; Right→Y,Z), so emitting both
+        # extents per view double-dimensions every bbox axis — which the gate it feeds
+        # then (correctly) reports as `redundant` (issue #108 #4). Map each view's
+        # local horizontal/vertical to a world axis and skip an axis already covered.
+        seen = set()
         for (v, _cx, _cy) in _page_part_views(page):
             if want and v.Name not in want and str(getattr(v, "Type", "")) not in want:
                 continue
-            _record(TechDraw.makeExtentDim(v, [], 0), v)  # horizontal
-            _record(TechDraw.makeExtentDim(v, [], 1), v)  # vertical
+            h_ax, v_ax = _view_world_axes(v)
+            if h_ax is None or v_ax is None:      # non-orthographic — dimension both
+                _record(TechDraw.makeExtentDim(v, [], 0), v)
+                _record(TechDraw.makeExtentDim(v, [], 1), v)
+                continue
+            if h_ax not in seen:
+                _record(TechDraw.makeExtentDim(v, [], 0), v)   # horizontal
+                seen.add(h_ax)
+            if v_ax not in seen:
+                _record(TechDraw.makeExtentDim(v, [], 1), v)   # vertical
+                seen.add(v_ax)
         doc.recompute()
         return {"dimensions": created}
 
@@ -6814,7 +6872,29 @@ def _h_add_dimension(p):
     dim_type = {"horizontal": "DistanceX", "vertical": "DistanceY",
                 "aligned": "Distance"}.get(kind, "Distance")
 
-    if kind in ("diameter", "radius"):
+    if kind == "angle":
+        if "face" not in p:
+            raise ValueError("angle dimension needs a conical face=<tag>")
+        face = _face_by_tag(view.Source[0].Shape, p["face"])
+        surf = getattr(face, "Surface", None)
+        semi = getattr(surf, "SemiAngle", None)
+        if semi is None:
+            raise ValueError(f"face {p['face']!r} is not conical")
+        half = math.degrees(abs(float(semi)))
+        # included angle (2× half-angle) is the usual countersink/taper callout;
+        # pass half_angle=True to dimension the half-angle instead.
+        value = half if p.get("half_angle") else 2.0 * half
+        centre, r = surf.Center, float(surf.Radius)
+        rad = _vscale(App.Vector(view.XDirection), r)
+        a = _project_centred(view, centre - rad)
+        b = _project_centred(view, centre + rad)
+        dim = TechDraw.makeDistanceDim(view, "DistanceX", a, b)
+        if dim is not None:
+            _stamp_prefix(dim, "∠")
+        _record(dim, view, true_value=value,
+                model_ref={"cone": {"center": [centre.x, centre.y, centre.z],
+                                    "semi_angle": half}})
+    elif kind in ("diameter", "radius"):
         if "edge" not in p:
             raise ValueError(f"{kind} dimension needs a circular edge=<tag>")
         edge = _edge_by_tag(view.Source[0].Shape, p["edge"])
@@ -6879,6 +6959,13 @@ def _edge_by_tag(shape, tag):
     raise KeyError(f"edge tag {tag!r} not found on shape")
 
 
+def _face_by_tag(shape, tag):
+    for face in shape.Faces:
+        if f"f_{_hash_sig(_face_signature(face))}" == tag:
+            return face
+    raise KeyError(f"face tag {tag!r} not found on shape")
+
+
 @handler("add_annotation")
 def _h_add_annotation(p):
     """Add a free text annotation to a drawing page at page position (x, y) mm
@@ -6893,6 +6980,33 @@ def _h_add_annotation(p):
     doc.recompute()
     h = _register("note", ann)
     return {"handle": h, "name": ann.Name, "text": p["text"]}
+
+
+@handler("add_feature_note")
+def _h_add_feature_note(p):
+    """Attach an explicit manufacturing NOTE that satisfies a curved/periodic
+    feature slot the drawing_gate enumerates (issue #108) — the "per CAD model /
+    profile table" escape hatch for geometry a single number can't capture (a
+    freeform/BSpline wall's profile, a tooth pattern's full parameter set), or a
+    documented cone half-angle. `feature` is the enumerated feature id (e.g.
+    'FREEFORM1', 'PAT1', 'CONE1', from drawing_gate's `enumerated_features`); `text`
+    is the note (a sensible default is composed when omitted). Rendered as a page
+    annotation and read back by the gate as coverage. Returns {handle, name, feature}.
+    """
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    feature = str(p["feature"])
+    text = p.get("text") or f"{feature}: see CAD model / profile table"
+    ann = doc.addObject("TechDraw::DrawViewAnnotation", p.get("name", "FeatureNote"))
+    page.addView(ann)
+    ann.Text = [text]
+    ann.X = float(p.get("x", 20.0))
+    ann.Y = float(p.get("y", 20.0))
+    _stamp_str_prop(ann, "DP_FeatureNote", feature)
+    _stamp_str_prop(ann, "DP_NoteKind", str(p.get("kind", "feature")))
+    doc.recompute()
+    h = _register("note", ann)
+    return {"handle": h, "name": ann.Name, "feature": feature, "text": text}
 
 
 @handler("set_title_block")
@@ -6991,10 +7105,78 @@ def _is_axis_aligned(n, tol=0.05):
     return comps[0] < tol and comps[1] < tol and comps[2] > 1.0 - tol
 
 
+_PATTERN_MIN_TEETH = 6   # >= this many regularly-spaced narrow bevels == a pattern
+
+
+def _detect_linear_pattern(facets):
+    """Recognise a PERIODIC array of near-congruent narrow bevel facets (e.g. a
+    linear Fresnel comb's ~80 teeth) — issue #108. ``facets`` is the off-axis narrow
+    planar faces, each ``{"centroid","slope","mid"}``. Returns ONE pattern descriptor
+    (pitch + count + depth + facet/draft angle) when the centroids form a regular
+    linear array of at least ``_PATTERN_MIN_TEETH`` instances, else None — so a few
+    scattered chamfers stay chamfers and only a real comb collapses to a pattern."""
+    if len(facets) < _PATTERN_MIN_TEETH:
+        return None
+    cents = [fi["centroid"] for fi in facets]
+    spreads = [max(c[k] for c in cents) - min(c[k] for c in cents) for k in range(3)]
+    ax = max(range(3), key=lambda k: spreads[k])
+    if spreads[ax] <= 1e-6:
+        return None
+    pos = sorted(c[ax] for c in cents)
+    gaps = [pos[i + 1] - pos[i] for i in range(len(pos) - 1)]
+    gaps = [g for g in gaps if g > 1e-6]     # merge coincident (two facets/tooth)
+    if len(gaps) < _PATTERN_MIN_TEETH - 1:
+        return None
+    gaps.sort()
+    pitch = gaps[len(gaps) // 2]             # median spacing
+    if pitch <= 1e-6:
+        return None
+    regular = sum(1 for g in gaps if abs(g - pitch) <= 0.15 * pitch)
+    if regular < 0.7 * len(gaps):            # not a regular array — scattered bevels
+        return None
+    count = sum(1 for i in range(1, len(pos)) if pos[i] - pos[i - 1] > 1e-6) + 1
+    slopes = sorted(fi["slope"] for fi in facets)
+    depths = sorted(fi["mid"] for fi in facets)
+    facet_angle = round(slopes[len(slopes) // 2], 2)
+    return {"id": "PAT1", "kind": "pattern", "count": int(count),
+            "pitch": round(pitch, 4), "depth": round(depths[len(depths) // 2], 4),
+            "facet_angle": facet_angle, "draft_angle": round(90.0 - facet_angle, 2),
+            "axis": "XYZ"[ax]}
+
+
+def _enumerate_curved_features(shape):
+    """Surface-based dimensionable features the edge/bbox enumeration is blind to
+    (issue #108): conical faces (the half-angle a machinist sets) grouped by angle —
+    the 6 identical chamfer cones of a part are ONE callout — and freeform
+    BSpline/Bezier faces collapsed to a single freeform feature ('per CAD model /
+    profile table')."""
+    out = []
+    cone_angles = {}
+    for f in shape.Faces:
+        if _surf_kind(f) != "Cone":
+            continue
+        try:
+            semi = abs(math.degrees(float(f.Surface.SemiAngle)))
+            r = float(f.Surface.Radius)
+        except Exception:
+            continue
+        cone_angles.setdefault(round(semi, 2), []).append(r)
+    for i, (semi, radii) in enumerate(sorted(cone_angles.items()), 1):
+        out.append({"id": f"CONE{i}", "kind": "cone", "semi_angle": semi,
+                    "radius": round(max(radii), 3), "count": len(radii)})
+    nspline = sum(1 for f in shape.Faces
+                  if _surf_kind(f) in ("BSplineSurface", "BezierSurface"))
+    if nspline:
+        out.append({"id": "FREEFORM1", "kind": "freeform", "faces": nspline})
+    return out
+
+
 def _enumerate_fillets_chamfers(shape, bb):
     """Fillet (partial-cylinder edge round) and chamfer (off-axis narrow bevel)
     features, deduped to DISTINCT sizes — a drawing calls out "R3" or "2×45°" once,
-    not per edge. A fillet is matched by an R dimension, a chamfer by a linear one."""
+    not per edge. A fillet is matched by an R dimension, a chamfer by a linear one.
+    A dense regular array of bevels is recognised as ONE pattern (issue #108) instead
+    of exploding into N per-instance chamfers."""
     out = []
     diag = bb.DiagonalLength or 1.0
     min_dim = min(bb.XLength, bb.YLength, bb.ZLength) or diag
@@ -7007,7 +7189,7 @@ def _enumerate_fillets_chamfers(shape, bb):
             radii.add(r)
     for i, r in enumerate(sorted(radii), 1):
         out.append({"id": f"FIL{i}", "kind": "fillet", "radius": r})
-    sizes = set()
+    facets = []
     for f in shape.Faces:
         if _surf_kind(f) != "Plane":
             continue
@@ -7020,10 +7202,32 @@ def _enumerate_fillets_chamfers(shape, bb):
             continue
         mid = sorted((f.BoundBox.XLength, f.BoundBox.YLength, f.BoundBox.ZLength))[1]
         if 1e-3 < mid < 0.5 * min_dim:        # a narrow bevel, not a main angled face
-            sizes.add(round(mid, 2))
-    for i, sz in enumerate(sorted(sizes), 1):
-        out.append({"id": f"CHM{i}", "kind": "chamfer", "size": sz})
+            c = f.CenterOfMass
+            slope = math.degrees(math.acos(min(1.0, abs(n.z))))   # tilt from base plane
+            facets.append({"centroid": [c.x, c.y, c.z], "slope": slope, "mid": mid})
+    pat = _detect_linear_pattern(facets)
+    if pat is not None:
+        out.append(pat)
+    else:
+        sizes = sorted({round(fi["mid"], 2) for fi in facets})
+        for i, sz in enumerate(sizes, 1):
+            out.append({"id": f"CHM{i}", "kind": "chamfer", "size": sz})
     return out
+
+
+def _bbox_size(shape, bb):
+    """Overall extents for the BBOX feature. ``Shape.BoundBox`` is computed from a
+    BSpline's CONTROL POLES, which overshoot the trimmed surface — a freeform part
+    then reports inflated extents no honest dimension can match (issue #108). When the
+    shape carries freeform faces, fall back to the tight ``optimalBoundingBox`` so the
+    overall-size slots equal the real, dimensionable extents."""
+    if any(_surf_kind(f) in ("BSplineSurface", "BezierSurface") for f in shape.Faces):
+        try:
+            ob = shape.optimalBoundingBox()
+            return [ob.XLength, ob.YLength, ob.ZLength]
+        except Exception:
+            pass
+    return [bb.XLength, bb.YLength, bb.ZLength]
 
 
 def _enumerate_features(shape, process):
@@ -7031,11 +7235,11 @@ def _enumerate_features(shape, process):
     bounding box, plus holes (inward cylinders, grouped coaxially so a counterbore
     is recognised) for a prismatic part, or outer cylindrical steps for a turned
     one, plus fillet (partial-cylinder edge-round) and chamfer (off-axis bevel)
-    features. Deliberately conservative — an unrecognised face simply yields no slot
-    rather than a wrong one."""
+    features, and surface-based curved/periodic features (cones, freeform walls,
+    patterns — issue #108). Deliberately conservative — an unrecognised face simply
+    yields no slot rather than a wrong one."""
     bb = shape.BoundBox
-    feats = [{"id": "BBOX", "kind": "bbox",
-              "size": [bb.XLength, bb.YLength, bb.ZLength]}]
+    feats = [{"id": "BBOX", "kind": "bbox", "size": _bbox_size(shape, bb)}]
 
     # Only FULL cylinders are holes/bores/steps; partial cylinders are edge fillets
     # (handled in _enumerate_fillets_chamfers), so a fillet is never mistaken for a
@@ -7076,6 +7280,7 @@ def _enumerate_features(shape, process):
             feats.append({"id": f"B{nb}", "kind": "bore",
                           "dia": 2.0 * float(s.Radius),
                           "depth": None if through else float(depth)})
+        feats += _enumerate_curved_features(shape)
         feats += _enumerate_fillets_chamfers(shape, bb)
         return feats
 
@@ -7125,6 +7330,7 @@ def _enumerate_features(shape, process):
                        fc.BoundBox.ZLength)[ai]
             feats.append({"id": f"{hid}.cb", "kind": "counterbore", "parent": hid,
                           "dia": 2.0 * float(sc.Radius), "depth": float(cbdepth)})
+    feats += _enumerate_curved_features(shape)
     feats += _enumerate_fillets_chamfers(shape, bb)
     return feats
 
@@ -7202,6 +7408,8 @@ def _dim_descriptors(page, datum_faces=None):
             kind = "Diameter"
         elif prefix == "R":
             kind = "Radius"
+        elif prefix == "∠":
+            kind = "Angle"
         else:
             kind = str(getattr(dim, "Type", "Distance"))
         try:
@@ -7223,6 +7431,19 @@ def _dim_descriptors(page, datum_faces=None):
             d["from_datum"] = (_point_on_any_face(datum_faces, d["span"]["p1"])
                                or _point_on_any_face(datum_faces, d["span"]["p2"]))
         out.append(d)
+    return out
+
+
+def _page_feature_notes(page):
+    """Explicit feature notes attached to the page (add_feature_note): each carries
+    DP_FeatureNote = the enumerated feature id it documents. The drawing_gate credits
+    them as coverage for curved/periodic slots a dimension can't capture (#108)."""
+    out = []
+    for o in page.Views:
+        fid = getattr(o, "DP_FeatureNote", None)
+        if fid:
+            out.append({"feature": str(fid),
+                        "kind": str(getattr(o, "DP_NoteKind", "feature") or "feature")})
     return out
 
 
@@ -7250,11 +7471,21 @@ def _h_drawing_gate(p):
     feats = _enumerate_features(shape, process)
     datum_faces = _datum_faces(src, shape)
     dims = _dim_descriptors(page, datum_faces)
+    notes = _page_feature_notes(page)
     # enforce datum-origin discipline when datum faces are declared (or forced on)
     datums_declared = bool(datum_faces) or bool(p.get("datums_declared", False))
     rep = drawing_gate.completeness_report(
-        feats, dims, process, datums_declared=datums_declared)
-    rep["enumerated_features"] = [{"id": f["id"], "kind": f["kind"]} for f in feats]
+        feats, dims, process, datums_declared=datums_declared, notes=notes)
+    # surface-based curved/periodic features (issue #108) carry the parameters a
+    # caller needs to dimension them — surface the cone half-angle, freeform face
+    # count, and pattern pitch/count/depth/angles, not just id+kind.
+    _extra = {"cone": ("semi_angle", "radius", "count"),
+              "freeform": ("faces",),
+              "pattern": ("count", "pitch", "depth", "facet_angle", "draft_angle")}
+    rep["enumerated_features"] = [
+        {"id": f["id"], "kind": f["kind"],
+         **{k: f[k] for k in _extra.get(f["kind"], ()) if k in f}}
+        for f in feats]
     rep["datum_faces"] = len(datum_faces)
     # advisory: does this part need a cross-section to read unambiguously?
     rep["section_recommended"] = drawing_gate.needs_section(feats)
@@ -7336,10 +7567,18 @@ def _h_drawing_legibility(p):
 def _page_dim_envelope(page):
     """The bounding box [x0,y0,x1,y1] in page mm of everything DriftPin draws —
     view outlines, dimension lines, and dimension labels — i.e. the real footprint
-    the sheet must contain. None if nothing is placed yet."""
+    the sheet must contain. None if nothing is placed yet.
+
+    The title block is excluded: it is pinned to the bottom-right corner and the fit
+    border is already trimmed clear of it, so counting it here as part of the movable
+    footprint would (wrongly) read as a bottom overflow and shove the views UP, off
+    the top of the sheet — exactly the failure a single overall-extent per axis
+    (issue #108 #4) would otherwise expose."""
     labels, segments, view_boxes = _page_dim_graphics(page)
     xs, ys = [], []
     for b in view_boxes:
+        if b.get("id") == "TitleBlock":
+            continue
         xs += [b["box"][0], b["box"][2]]
         ys += [b["box"][1], b["box"][3]]
     for lab in labels:
