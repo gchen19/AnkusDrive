@@ -5525,6 +5525,12 @@ def _run_typed_checks(checks, by_name, links_by_inst):
 
 _LIBRARY_TOOLS = {"add_fastener", "add_bearing", "add_gear", "add_spring",
                   "add_sprocket", "add_pulley", "add_rack", "add_thread"}
+# issue #136 (append-only registration): a part RECIPE is buildable through the
+# library generation path too, so merge_assembly materializes a lowered recipe
+# component (recipes.lower_component -> {"library": {"tool": "recipe", ...}}) the
+# very way it builds a standard part. The "recipe" library tool dispatches to the
+# recipe-build handler defined near the end of this file.
+_LIBRARY_TOOLS.add("recipe")
 
 
 def _library_spec_hash(tool, spec):
@@ -14002,6 +14008,66 @@ def _h_job_result(p):
 def _h_job_list(p):
     from driftpin import jobs
     return jobs.list_jobs()
+
+
+# --- part recipes (issue #136, append-only registration) ----------------------
+#
+# A RECIPE is a named, declared-input build template (the intra-part parametric
+# model + PowerCopy/UDF, RFC docs/DESIGN_HIERARCHY.md §2.1). The registry, input
+# schema, typed validation, and the reference recipes all live in driftpin/recipes.py
+# (a pure-Python module that touches FreeCAD only through the `call` dispatch
+# injected here). These handlers expose it on the worker surface; merge_assembly
+# builds a recipe component through the "recipe" library tool (the build below).
+
+@handler("recipe_list")
+def _h_recipe_list(p):
+    """List every registered part recipe (issue #136). Returns {schema, count,
+    recipes} where each recipe maps to {doc, required, optional, emits} — the cheap
+    directory an agent browses before picking and parameterizing a recipe."""
+    from driftpin import recipes as _rcp
+    return _rcp.list_recipes()
+
+
+@handler("recipe_schema")
+def _h_recipe_schema(p):
+    """Return one recipe's declared INPUT SCHEMA (the frozen contract): {schema,
+    recipe, doc, inputs:[{name,type,unit?,default?,min?,max?,required,choices?,
+    doc?}], emits}. `recipe` names a registered recipe; an unknown name fails
+    loudly. This is what downstream design-table / feature-template work builds
+    against."""
+    from driftpin import recipes as _rcp
+    return _rcp.input_schema(p["recipe"])
+
+
+@handler("recipe_validate")
+def _h_recipe_validate(p):
+    """Validate a recipe-reference {recipe, inputs} WITHOUT building it — the cheap
+    front door (mirrors validate_manifest). Catches an unknown recipe, a missing
+    required input, and a wrong-typed / out-of-range / bad-unit / unknown input.
+    Returns {ok, problems} — ok is True iff problems is empty."""
+    from driftpin import recipes as _rcp
+    problems = _rcp.validate_ref({"recipe": p.get("recipe"),
+                                  "inputs": p.get("inputs", {})})
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("recipe")
+def _h_recipe(p):
+    """Build a registered part recipe into the active document (issue #136):
+    validate {recipe, inputs} against the declared schema (typed units + ranges) at
+    the door, then run the deterministic build — geometry + publish_interface +
+    declare_intent. This is also the "recipe" library tool merge_assembly uses to
+    materialize a recipe component. Returns {recipe, schema, inputs, handle, name,
+    interfaces, intent, part}."""
+    from driftpin import recipes as _rcp
+    name = p.get("recipe")
+    if not name:
+        raise ValueError("recipe build needs a 'recipe' name")
+
+    def _call(_tool, **kw):
+        return HANDLERS[_tool](kw)
+
+    return _rcp.build(name, p.get("inputs", {}), _call)
 
 
 # --- item model + part numbering (issue #140, C1) ----------------------------

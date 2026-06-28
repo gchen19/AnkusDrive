@@ -258,6 +258,10 @@ echo "== Item model + part numbering (C1, #140 — items.json identity, no key, 
 python3 tests/test_items.py
 
 echo
+echo "== Part recipes (issue #136 — declared-input build templates: contract + door + determinism, no key) =="
+$VENV_PY tests/test_recipes.py
+
+echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="
 $VENV_PY -m orchestration.selftest
 $VENV_PY -m orchestration.dryrun

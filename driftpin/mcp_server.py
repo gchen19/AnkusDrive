@@ -5576,6 +5576,45 @@ def job_list() -> dict:
     return _call("job_list")
 
 
+# --- part recipes (issue #136, append-only registration) ----------------------
+
+@mcp.tool()
+def recipe_list() -> dict:
+    """List every registered part recipe — named, parameterized, declared-input
+    build templates (issue #136). Returns {schema, count, recipes} where each
+    recipe maps to {doc, required, optional, emits}; the cheap directory to browse
+    before picking and parameterizing a recipe with recipe_schema / recipe."""
+    return _call("recipe_list")
+
+
+@mcp.tool()
+def recipe_schema(recipe: str) -> dict:
+    """Return one recipe's declared INPUT SCHEMA — its driving parameters with
+    type/unit/default/range. Returns {schema, recipe, doc, inputs:[{name, type,
+    unit?, default?, min?, max?, required, choices?, doc?}], emits}. `recipe` names
+    a registered recipe; an unknown name fails loudly. This is the contract a
+    parametric regeneration is authored against."""
+    return _call("recipe_schema", recipe=recipe)
+
+
+@mcp.tool()
+def recipe_validate(recipe: str, inputs: dict | None = None) -> dict:
+    """Validate a recipe reference {recipe, inputs} WITHOUT building it — the cheap
+    front door (mirrors validate_manifest). Catches an unknown recipe, a missing
+    required input, and a wrong-typed / out-of-range / bad-unit / unknown input.
+    Returns {ok, problems} — ok is True iff problems is empty. Run before building
+    or merging to reject a malformed parameterization before geometry is spent."""
+    return _call("recipe_validate", recipe=recipe, inputs=inputs or {})
+
+
+@mcp.tool()
+def recipe(recipe: str, inputs: dict | None = None) -> dict:
+    """Build a registered part recipe into the active document (issue #136):
+    "regenerate with new parameters" = "re-run the recipe." Validates {recipe,
+    inputs} against the declared schema (typed units + ranges) at the door, then
+    runs the deterministic build — geometry + publish_interface + declare_intent.
+    Returns {recipe, schema, inputs, handle, name, interfaces, intent, part}."""
+    return _call("recipe", recipe=recipe, inputs=inputs or {})
 # --- item model + part numbering (issue #140, C1) — append-only exposure ------
 
 @mcp.tool()

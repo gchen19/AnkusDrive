@@ -1,0 +1,40 @@
+{
+  "_doc": "Golden fixture for issue #136 — the FROZEN recipe contract. Downstream Wave-1 work (#138 design tables, #139 feature templates, #146 registry) builds against this shape. Two parts: (1) `component` — the recipe-reference manifest component form, a fourth source kind alongside file/manifest/library; (2) `input_schema` — the declared per-recipe input schema returned by recipe_schema('spur_gear'). tests/test_recipes.py asserts the live registry matches this fixture exactly.",
+
+  "component": {
+    "recipe": "spur_gear",
+    "inputs": {
+      "module_mm": 2.0,
+      "teeth": 24,
+      "width_mm": 6.0
+    }
+  },
+
+  "lowered_component": {
+    "library": {
+      "tool": "recipe",
+      "spec": {
+        "recipe": "spur_gear",
+        "inputs": {
+          "module_mm": 2.0,
+          "teeth": 24,
+          "width_mm": 6.0
+        }
+      }
+    }
+  },
+
+  "input_schema": {
+    "schema": "driftpin.recipe/1",
+    "recipe": "spur_gear",
+    "doc": "Involute spur gear (wraps add_gear): a solid disc of teeth on the XY plane about +Z, publishing a 'gear_mesh' frame at its axis and declaring a watertight-solid intent. The canonical reference recipe (issue #136).",
+    "inputs": [
+      {"name": "module_mm", "type": "length", "required": true, "unit": "mm", "default": 2.0, "min": 0.2, "max": 50.0, "doc": "Gear module (tooth size); pitch_dia = module * teeth."},
+      {"name": "teeth", "type": "int", "required": true, "default": 17, "min": 3, "max": 500, "doc": "Number of teeth (>=3 for a valid involute)."},
+      {"name": "width_mm", "type": "length", "required": false, "unit": "mm", "default": 6.0, "min": 0.5, "max": 1000.0, "doc": "Face width (extrusion along the axis)."},
+      {"name": "pressure_angle_deg", "type": "number", "required": false, "unit": "deg", "default": 20.0, "min": 14.5, "max": 30.0, "doc": "Involute pressure angle (14.5/20/25 deg are standard)."},
+      {"name": "external", "type": "bool", "required": false, "default": true, "doc": "External (True) vs internal/ring (False) gear."}
+    ],
+    "emits": {"interfaces": ["gear_mesh"], "intent": ["watertight"]}
+  }
+}
