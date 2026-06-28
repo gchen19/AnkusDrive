@@ -4645,6 +4645,8 @@ def molding_fill_submit(
     cool_window_s: float | None = None,
     eject_temp_c: float | None = None,
     pack_wall_h_w_m2k: float | None = None,
+    hold_pressure_pa: float | None = None,
+    room_temp_c: float | None = None,
 ) -> dict:
     """Injection-molding FILL (+ optional PACK/COOL) solve, asynchronous — the higher-
     fidelity twin
@@ -4680,6 +4682,19 @@ def molding_fill_submit(
     `pack_gate:{pass (on sink risk), score, volumetric_shrinkage_pct,
     expected_densification_pct (Tait-EOS), pvt_faithful, sink_risk, warnings}`.
 
+    **Net mold shrinkage** (the cavity-sizing number; issue #116) — distinct from
+    pack_gate's raw-PVT densification. The fill_pack result also models the packing-feed
+    make-up (melt fed at the hold pressure until the gate freezes at the Tait no-flow
+    transition; only the uncompensated post-gate-freeze densification is net shrinkage)
+    and gates it against the resin's published linear band. `hold_pressure_pa` (effective
+    cavity packing pressure; default = the ramp peak), `room_temp_c` (free-part relax
+    temperature; default 23). Adds `net_shrinkage:{net_linear_pct, net_vol_pct,
+    raw_vol_pct, compensated_vol_pct, gate_freeze_temp_k}` and `shrinkage_gate:{pass (in
+    corpus band), score, net_linear_pct, corpus_band_pct, in_band, warnings}`. Plus
+    `cooling_dT_through_k` — the antisymmetric through-thickness differential auto-derived
+    from the cooling field, ready to flow straight into `molding_warpage_submit` (pass it,
+    or pass this result's `case_dir`+`nx`/`ny` as `cooling_case_dir` etc.).
+
     Drive the interFoam path with cavity + process params:
     - `length_mm` (flow length, default 100), `wall_thickness_mm` (cavity height,
       default 2), `depth_mm` (out-of-plane, default 1), mesh `nx`/`ny`.
@@ -4714,7 +4729,9 @@ def molding_fill_submit(
                  ("application", application), ("stages", stages),
                  ("pack_phases", pack_phases), ("cool_window_s", cool_window_s),
                  ("eject_temp_c", eject_temp_c),
-                 ("pack_wall_h_w_m2k", pack_wall_h_w_m2k)):
+                 ("pack_wall_h_w_m2k", pack_wall_h_w_m2k),
+                 ("hold_pressure_pa", hold_pressure_pa),
+                 ("room_temp_c", room_temp_c)):
         if v is not None:
             params[k] = v
     return _call("molding_fill_submit", **params)
@@ -4723,7 +4740,7 @@ def molding_fill_submit(
 @mcp.tool()
 def molding_warpage_submit(
     body: str,
-    dT_through_k: float,
+    dT_through_k: float | None = None,
     material: str | None = None,
     youngs_mpa: float | None = None,
     poisson: float | None = None,
@@ -4733,6 +4750,11 @@ def molding_warpage_submit(
     thickness_axis: str | None = None,
     flatness_tol_mm: float | None = None,
     flatness_tol_frac: float | None = None,
+    cooling_case_dir: str | None = None,
+    cooling_nx: int | None = None,
+    cooling_ny: int | None = None,
+    cooling_nz: int | None = None,
+    cooling_time: str | None = None,
 ) -> dict:
     """Injection-molding **WARPAGE / residual distortion**, asynchronous — the FEM
     thermo-elastic post-step of the cooling solve (GitHub issue #113 Part B; the
@@ -4755,7 +4777,15 @@ def molding_warpage_submit(
     solver is held at the subprocess boundary, never imported). Units mm / MPa / 1/K /
     °C, so warp comes back in **mm**.
 
-    Params: `body` (a shape handle — the part), `dT_through_k` (required). Material
+    **Coupled cooling hand-off** (issue #116): instead of hand-passing `dT_through_k`,
+    pass `cooling_case_dir` (a `molding_fill_submit(stages="fill_pack")` result's
+    `case_dir`) with `cooling_nx`/`cooling_ny` (the cooling case mesh; defaults 60/8) and
+    optional `cooling_nz`/`cooling_time` — the worker reads that cooling solve's cell-
+    centre temperature field and auto-derives the antisymmetric (bending) through-
+    thickness differential. The result reports `dT_through_k` and `dT_source`.
+
+    Params: `body` (a shape handle — the part), and **either** `dT_through_k` **or**
+    `cooling_case_dir` (one is required). Material
     elastic props from `material` (corpus card) or explicit `youngs_mpa`/`poisson`/
     `cte_per_k` — solidified-resin defaults are used with a warning otherwise (the
     corpus rheology cards don't carry structural props). `ref_temp_c` is the stress-
@@ -4772,16 +4802,20 @@ def molding_warpage_submit(
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
     {ok, returncode, solver, case_dir, nodes, tets, warp_axis, span_mm, thickness_mm,
-    analytic_bow_mm, gate} where gate is {pass (on flatness), score, fidelity:"solve",
-    band_pct, max_warp_mm, flatness_tol_mm, warp_per_span, max_disp_mm, warp_faithful,
-    analytic_bow_mm, warnings}."""
-    params: dict = {"body": body, "dT_through_k": dT_through_k}
-    for k, v in (("material", material), ("youngs_mpa", youngs_mpa),
+    dT_through_k, dT_source, analytic_bow_mm, gate} where gate is {pass (on flatness),
+    score, fidelity:"solve", band_pct, max_warp_mm, flatness_tol_mm, warp_per_span,
+    max_disp_mm, warp_faithful, analytic_bow_mm, warnings}."""
+    params: dict = {"body": body}
+    for k, v in (("dT_through_k", dT_through_k),
+                 ("material", material), ("youngs_mpa", youngs_mpa),
                  ("poisson", poisson), ("cte_per_k", cte_per_k),
                  ("ref_temp_c", ref_temp_c), ("char_length_mm", char_length_mm),
                  ("thickness_axis", thickness_axis),
                  ("flatness_tol_mm", flatness_tol_mm),
-                 ("flatness_tol_frac", flatness_tol_frac)):
+                 ("flatness_tol_frac", flatness_tol_frac),
+                 ("cooling_case_dir", cooling_case_dir), ("cooling_nx", cooling_nx),
+                 ("cooling_ny", cooling_ny), ("cooling_nz", cooling_nz),
+                 ("cooling_time", cooling_time)):
         if v is not None:
             params[k] = v
     return _call("molding_warpage_submit", **params)

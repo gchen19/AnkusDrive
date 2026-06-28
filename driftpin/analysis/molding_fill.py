@@ -1097,6 +1097,250 @@ def tait_densification_pct(tait: dict, *, T_hot_k: float, T_cold_k: float,
     return 100.0 * (1.0 - rho_hot / rho_cold)
 
 
+# --- net mold shrinkage (the cavity-sizing number; issue #116) ---------------
+#
+# parse_pack / pack_gate report the RAW PVT densification on cooling
+# (volumetric_shrinkage_pct = 1 - rho_fill/rho_final), checked for Tait-EOS
+# faithfulness — deliberately NOT the net "mold shrinkage" molders quote on a resin
+# card (PS 0.4-0.7%, HDPE 1.5-4.0% linear). The quoted number is POST-packing-feed:
+# while the gate is open the melt is fed at hold pressure to make up the volume lost
+# as it densifies, so only the densification AFTER the gate freezes is uncompensated
+# and becomes net dimensional shrinkage. The gate seals when the melt at the gate
+# reaches the no-flow / PVT transition temperature (Tt = b5 + b6*p — the same melt/
+# solid switch the Tait EOS uses). After that the sealed, constant-mass part keeps
+# cooling to room temperature at (decaying) atmospheric pressure: that residual
+# densification IS the net mold shrinkage. This is the cavity-sizing verdict the #104
+# CTE screen approximates and the number gated against the corpus band.
+
+
+def tait_transition_temp_k(tait: dict, p_pa: float) -> float:
+    """The 2-domain Tait melt/solid transition temperature ``Tt = b5 + b6*p`` — where
+    the melt at the gate solidifies and the gate seals (feeding stops). The natural
+    default gate-freeze temperature for the net-shrinkage model."""
+    return tait["b5"] + tait["b6"] * p_pa
+
+
+def net_mold_shrinkage(
+    tait: dict, *, melt_temp_k: float, gate_freeze_temp_k: float | None = None,
+    room_temp_k: float = 296.15, hold_pressure_pa: float = 1.0e7,
+    ambient_pressure_pa: float = 1.0e5,
+) -> dict:
+    """Net (post-packing-feed) mold shrinkage from the 2-domain Tait EOS — the
+    cavity-sizing number molders quote, distinct from the raw PVT densification.
+
+    A real cycle FEEDS fresh melt through the gate at ``hold_pressure_pa`` while the
+    melt densifies, so the densification from the melt temperature down to **gate
+    freeze** is compensated (make-up melt) and contributes ~nothing to the part's net
+    dimensional change. The gate seals at ``gate_freeze_temp_k`` (default the Tait
+    transition ``b5 + b6*p_hold`` — the no-flow temperature). The sealed, constant-mass
+    part then cools the rest of the way to ``room_temp_k`` at ``ambient_pressure_pa``;
+    that **uncompensated** densification is the net shrinkage:
+
+        S_vol = 1 - rho(T_gate_freeze, p_hold) / rho(T_room, p_atm)
+
+    (cavity packed full and dense at the gate-freeze state vs. the free cold part).
+    Linear shrinkage assumes isotropy: ``S_lin = 1 - (1 - S_vol)^(1/3)`` — the form
+    resin cards quote (``mold_shrinkage_pct``). Much smaller than the raw melt->room
+    densification because the feed makes up the early shrink.
+
+    Returns ``{net_vol_pct, net_linear_pct, raw_vol_pct, compensated_vol_pct,
+    gate_freeze_temp_k, hold_pressure_pa, room_temp_k, rho_gate_freeze, rho_room}``;
+    ``raw_vol_pct`` is the un-fed melt->room densification (the upper bound) and
+    ``compensated_vol_pct`` the make-up the feed contributes (melt->gate-freeze)."""
+    p_hold = hold_pressure_pa
+    default_tgf = gate_freeze_temp_k is None
+    tgf = (tait_transition_temp_k(tait, p_hold) if default_tgf
+           else gate_freeze_temp_k)
+    rho_melt = tait_density(tait, melt_temp_k, p_hold)
+    # The gate seals while the melt is still MOLTEN at the no-flow temperature, so the
+    # crystallization volume jump (the melt/solid Tait branch step — big for HDPE, ~nil
+    # for amorphous PS) happens AFTER feeding stops and is uncompensated. Evaluate the
+    # gate-freeze state on the melt side of the transition (a negligible nudge) so that
+    # jump is counted in the net shrinkage; an explicit gate_freeze_temp_k is honoured
+    # on whichever branch it falls.
+    rho_gf = tait_density(tait, tgf + (1e-3 if default_tgf else 0.0), p_hold)
+    rho_room = tait_density(tait, room_temp_k, ambient_pressure_pa)
+    if not (rho_gf > 0 and rho_room > 0 and rho_melt > 0):
+        return {"net_vol_pct": float("nan"), "net_linear_pct": float("nan"),
+                "raw_vol_pct": float("nan"), "compensated_vol_pct": float("nan"),
+                "gate_freeze_temp_k": tgf, "hold_pressure_pa": p_hold,
+                "room_temp_k": room_temp_k, "rho_gate_freeze": rho_gf,
+                "rho_room": rho_room}
+    s_vol = 1.0 - rho_gf / rho_room                       # uncompensated (net)
+    raw_vol = 1.0 - rho_melt / rho_room                   # un-fed upper bound
+    comp_vol = 1.0 - rho_melt / rho_gf                    # what the feed makes up
+    s_lin = 1.0 - (1.0 - s_vol) ** (1.0 / 3.0) if s_vol < 1.0 else float("nan")
+    return {
+        "net_vol_pct": round(100.0 * s_vol, 4),
+        "net_linear_pct": round(100.0 * s_lin, 4),
+        "raw_vol_pct": round(100.0 * raw_vol, 4),
+        "compensated_vol_pct": round(100.0 * comp_vol, 4),
+        "gate_freeze_temp_k": round(tgf, 3),
+        "hold_pressure_pa": round(p_hold, 1),
+        "room_temp_k": room_temp_k,
+        "rho_gate_freeze": round(rho_gf, 3),
+        "rho_room": round(rho_room, 3),
+    }
+
+
+def mold_shrinkage_gate(
+    net: dict, *, corpus_band_pct: tuple, band_pct: float = 30.0,
+) -> dict:
+    """House verdict for the **net mold shrinkage** vs the resin's published linear
+    band (``materials`` card ``mold_shrinkage_pct``, e.g. PS ``(0.4, 0.7)``, HDPE
+    ``(1.5, 4.0)``) — the cavity-sizing pass/fail (#116).
+
+    ``pass`` is true when the modelled ``net_linear_pct`` lands inside
+    ``corpus_band_pct = (lo, hi)``: the cavity allowance the part was (or should be)
+    sized for is consistent with the resin's quoted shrinkage. Below the band → the
+    part is over-packed / cavity oversized (parts run large); above → under-packed /
+    undersized (parts run small, possible sink). ``score`` is 1.0 inside the band and
+    decays with the fractional distance to the nearest edge. This is **distinct from**
+    ``pack_gate`` (whose pass/fail is sink risk and whose shrinkage check is raw-PVT
+    Tait faithfulness) — keep both: one sizes the cavity, the other flags sinks.
+
+    Returns ``{pass, score, fidelity, band_pct, net_linear_pct, net_vol_pct,
+    corpus_band_pct, in_band, raw_vol_pct, compensated_vol_pct, gate_freeze_temp_k,
+    warnings}``."""
+    lo, hi = float(corpus_band_pct[0]), float(corpus_band_pct[1])
+    lin = net.get("net_linear_pct")
+    warnings: list[str] = []
+    in_band = lin is not None and lin == lin and lo <= lin <= hi
+    if lin is None or lin != lin:
+        score = 0.0
+        warnings.append("net shrinkage unavailable (degenerate Tait/temperature inputs)")
+    elif in_band:
+        score = 1.0
+    else:
+        width = max(hi - lo, 1e-6)
+        dist = (lo - lin) if lin < lo else (lin - hi)
+        score = max(0.0, 1.0 - dist / width)
+        if lin < lo:
+            warnings.append(
+                f"net mold shrinkage {lin:.2f}% is BELOW the resin band "
+                f"{lo:.2f}-{hi:.2f}% — likely over-packed (high hold pressure / late "
+                "gate freeze): the cavity allowance is too small, parts will run large")
+        else:
+            warnings.append(
+                f"net mold shrinkage {lin:.2f}% is ABOVE the resin band "
+                f"{lo:.2f}-{hi:.2f}% — under-packed (low hold pressure / early gate "
+                "freeze): the cavity allowance is too large, parts run small (and risk "
+                "sink); raise/extend the hold")
+    return {
+        "pass": bool(in_band),
+        "score": round(float(score), 4),
+        "fidelity": "solve",
+        "band_pct": band_pct,
+        "net_linear_pct": lin,
+        "net_vol_pct": net.get("net_vol_pct"),
+        "corpus_band_pct": [lo, hi],
+        "in_band": bool(in_band),
+        "raw_vol_pct": net.get("raw_vol_pct"),
+        "compensated_vol_pct": net.get("compensated_vol_pct"),
+        "gate_freeze_temp_k": net.get("gate_freeze_temp_k"),
+        "warnings": warnings,
+    }
+
+
+# --- cooling field -> antisymmetric dT_through_k (warpage hand-off; issue #116)
+#
+# Part B's molding_warpage_submit takes the through-thickness differential dT_through_k
+# as an INPUT. The fuller coupling auto-derives it from the Part-A cooling solve's
+# cell-centre temperature field: average T into through-thickness (y) layers, then
+# reduce that profile to its ANTISYMMETRIC (bending) component — the only part that
+# drives warp (a symmetric profile just shrinks the part uniformly). The result is an
+# effective linear dT_through_k the free-plate twin (warpage.free_plate_thermal_bow)
+# and the ccx eigenstrain consume directly.
+
+
+def through_thickness_layer_temps(
+    field: list, *, nx: int, ny: int, nz: int = 1, mask: list | None = None,
+) -> list:
+    """Average a structured-mesh cell ``field`` into ``ny`` through-thickness layers.
+
+    The openInjMoldSim plaque meshes **x fastest, then y (thickness — walls at y=0 and
+    y=H), then z**, so cell ``k`` sits in y-layer ``iy = (k // nx) % ny``. Returns
+    ``[layer_0 .. layer_{ny-1}]`` from the y=0 wall to the y=H wall, each the mean over
+    that layer's cells. ``mask`` (a per-cell list; a cell counts when ``mask[k] >=
+    0.5``) restricts the average to melt/polymer cells (pass the ``alpha.poly`` field).
+    Layers with no contributing cell come back as ``None``."""
+    sums = [0.0] * ny
+    cnts = [0] * ny
+    for k, v in enumerate(field):
+        if mask is not None and (k >= len(mask) or mask[k] < 0.5):
+            continue
+        iy = (k // nx) % ny
+        sums[iy] += v
+        cnts[iy] += 1
+    return [(sums[i] / cnts[i]) if cnts[i] else None for i in range(ny)]
+
+
+def antisymmetric_dT_through(layer_temps: list) -> float:
+    """Reduce a through-thickness temperature profile to its **antisymmetric (bending)
+    component**, expressed as an effective linear differential ``dT_through_k = T(min-
+    thickness face) − T(max-thickness face)``.
+
+    Least-squares fit ``T(xi) ≈ a + b·xi`` over layer-centre coordinates
+    ``xi_i = (i + 0.5)/n − 0.5`` (the y=0 / min-thickness face at ``xi = −0.5``). The
+    even (symmetric) part of the profile contributes zero to the odd moment ``Σ xi·T``,
+    so the slope isolates the bending eigenstrain; ``dT_eff = −b`` reproduces the
+    convention of :func:`warpage.linear_through_thickness_temps` (positive ⇒ the min-
+    thickness face is hotter, the part bows toward it). ``None`` layers are skipped.
+
+    Raises ``ValueError`` with fewer than two usable layers."""
+    pts = [(((i + 0.5) / len(layer_temps)) - 0.5, t)
+           for i, t in enumerate(layer_temps) if t is not None]
+    if len(pts) < 2:
+        raise ValueError("need >= 2 usable through-thickness layers")
+    n = len(pts)
+    xbar = sum(x for x, _ in pts) / n
+    tbar = sum(t for _, t in pts) / n
+    sxx = sum((x - xbar) ** 2 for x, _ in pts)
+    if sxx <= 0:
+        return 0.0
+    b = sum((x - xbar) * (t - tbar) for x, t in pts) / sxx
+    return -b
+
+
+def cooling_field_dT_through_k(
+    case_dir: str, *, nx: int, ny: int, nz: int = 1, time_dir: str | None = None,
+    alpha_melt_min: float = 0.5,
+) -> dict | None:
+    """Read the pack/cool case's ``T`` field and reduce it to an effective
+    antisymmetric ``dT_through_k`` for the warpage hand-off (#116) — so a
+    ``molding_fill_submit(stages="fill_pack")`` cooling solve flows straight into
+    ``molding_warpage_submit`` without the user hand-passing the differential.
+
+    Averages the cell-centre temperatures into ``ny`` through-thickness layers
+    (melt-masked at ``alpha.poly >= alpha_melt_min``), then extracts the bending
+    component via :func:`antisymmetric_dT_through`. Returns ``{dT_through_k,
+    layer_temps, n_layers, mean_temp_k, time}`` (temperatures in K, matching the
+    field), or None when the field is missing/degenerate."""
+    td = time_dir or _latest_time_dir(case_dir)
+    if td is None:
+        return None
+    T = _read_internal_scalar_field(os.path.join(case_dir, td, "T"))
+    if not T or len(T) < ny:
+        return None
+    af = _alpha_file(case_dir, td)
+    mask = _read_internal_scalar_field(af) if af else None
+    layers = through_thickness_layer_temps(T, nx=nx, ny=ny, nz=nz, mask=mask)
+    usable = [t for t in layers if t is not None]
+    if len(usable) < 2:
+        return None
+    try:
+        dT = antisymmetric_dT_through(layers)
+    except ValueError:
+        return None
+    return {
+        "dT_through_k": round(dT, 6),
+        "layer_temps": [round(t, 4) if t is not None else None for t in layers],
+        "n_layers": len(usable),
+        "mean_temp_k": round(sum(usable) / len(usable), 4),
+        "time": td,
+    }
+
+
 def _melt_stats(case_dir: str, time_dir: str, *, alpha_melt_min: float = 0.99):
     """Mean/min density and max/mean temperature over the **melt** cells
     (alpha.poly >= alpha_melt_min) at ``time_dir``, plus the melt cell count and the

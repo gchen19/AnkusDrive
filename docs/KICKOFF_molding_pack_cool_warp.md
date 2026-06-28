@@ -3,9 +3,16 @@
 **Status:** **CLOSED / COMPLETE (2026-06-23).** Both headline stages are merged to
 `main`: **Part A — packing/cooling** via PR #114 (branch `feat/molding-pack-cool`),
 **Part B — warpage** via PR #115 (branch `feat/molding-warpage`). **Issue #113 is
-closed.** Remaining follow-ups (net mold shrinkage via packing-feed modelling; the
-coupled cooling→warpage field hand-off) are split out into **issue #116**. This doc is
-kept as the design/decision record for both stages.
+closed.** The split-out follow-ups in **issue #116** are now also **DONE**: **net mold
+shrinkage** via packing-feed modelling (`molding_fill.net_mold_shrinkage` +
+`mold_shrinkage_gate` — gate seals at the Tait no-flow transition, only the uncompensated
+post-freeze densification is net; gated against the corpus `mold_shrinkage_pct` band,
+kept distinct from `pack_gate`'s sink/PVT-faithfulness check) and the **coupled
+cooling→warpage field hand-off** (`cooling_field_dT_through_k` reduces the cooling solve's
+cell-centre T field to its antisymmetric bending `dT_through_k`; `molding_warpage_submit`
+auto-derives it from a `cooling_case_dir`). Still deferred: weld-line / air-trap labels
+and the viscoelastic `elastic=True` residual-stress path. See `docs/MOLDING_FILL_SOLVER.md`.
+This doc is kept as the design/decision record for both stages.
 
 GitHub: **issue #113 (closed)** → follow-ons in **#116**. Builds directly on **#105 /
 PR #112** (the *fill* stage, merged to `main`).

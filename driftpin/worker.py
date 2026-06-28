@@ -11950,6 +11950,22 @@ def _resolve_warpage_props(p):
     return float(E), float(nu), float(cte), used
 
 
+def _warp_dT_from_cooling(p):
+    """Auto-derive the antisymmetric through-thickness ``dT_through_k`` from a Part-A
+    openInjMoldSim cooling case (the #116 coupled hand-off): read the pack/cool case's
+    cell-centre ``T`` field and reduce its through-thickness profile to the bending
+    component. Driven by ``cooling_case_dir`` (+ ``cooling_nx``/``cooling_ny``/
+    ``cooling_nz``/``cooling_time``). Returns the ``cooling_field_dT_through_k`` dict or
+    None when the field is absent/degenerate."""
+    from driftpin.analysis import molding_fill as _mf
+    cdir = p["cooling_case_dir"]
+    if not os.path.isdir(cdir):
+        raise ValueError(f"cooling_case_dir not found: {cdir}")
+    return _mf.cooling_field_dT_through_k(
+        cdir, nx=int(p.get("cooling_nx", 60)), ny=int(p.get("cooling_ny", 8)),
+        nz=int(p.get("cooling_nz", 1)), time_dir=p.get("cooling_time"))
+
+
 def _molding_warpage_submit(p, info):
     """Thermo-elastic warpage post-step (#113 Part B). Gmsh-meshes a FreeCAD solid on
     the MAIN thread (FemMesh + CalculiX ABAQUS export; the jobs.py contract keeps all
@@ -11973,10 +11989,21 @@ def _molding_warpage_submit(p, info):
     doc = _active_doc()
     obj = _shape_handle_to_obj(p["body"])
     dT = p.get("dT_through_k")
+    dT_source = "input"
+    # Coupled cooling -> warpage hand-off (issue #116): when dT_through_k is not given
+    # but a Part-A cooling case is, auto-derive the antisymmetric (bending) differential
+    # from that solve's cell-centre temperature field — the fuller coupling.
+    if dT is None and p.get("cooling_case_dir"):
+        cdt = _warp_dT_from_cooling(p)
+        if cdt is not None:
+            dT = cdt["dT_through_k"]
+            dT_source = f"cooling_field@{cdt.get('time')}"
     if dT is None:
         raise ValueError(
             "dT_through_k (the through-thickness temperature differential at ejection, "
-            "K — the asymmetric frozen-in cooling that drives warp) is required")
+            "K — the asymmetric frozen-in cooling that drives warp) is required, or "
+            "pass cooling_case_dir (+ cooling_nx/cooling_ny) to auto-derive it from a "
+            "molding_fill_submit(stages='fill_pack') cooling solve")
     dT = float(dT)
     E, nu, cte, used_defaults = _resolve_warpage_props(p)
     ref_temp_c = p.get("ref_temp_c")
@@ -12043,6 +12070,8 @@ def _molding_warpage_submit(p, info):
             "warp_axis": built["axis"],
             "span_mm": span_mm,
             "thickness_mm": thick_mm,
+            "dT_through_k": dT,
+            "dT_source": dT_source,
             "analytic_bow_mm": round(twin["bow_mm"], 6),
             "stdout_tail": (proc.stdout or "")[-2000:],
         }
@@ -12074,7 +12103,11 @@ def _h_molding_warpage_submit(p):
     Hand it the part (`body` handle) and the frozen-in differential cooling as a
     through-thickness temperature differential `dT_through_k` (K, ``T`` at the
     thin-face minimum minus the maximum — the asymmetric component that drives bow;
-    the higher-fidelity warp twin of the #104 CTE shrinkage screen). Optional:
+    the higher-fidelity warp twin of the #104 CTE shrinkage screen). Or, for the
+    coupled hand-off (issue #116), omit `dT_through_k` and pass `cooling_case_dir`
+    (+ `cooling_nx`/`cooling_ny`) — a `molding_fill_submit(stages='fill_pack')` cooling
+    case — and the worker auto-derives the antisymmetric differential from its cell-
+    centre temperature field (`dT_source` reports which). Optional:
     `material` or explicit `youngs_mpa`/`poisson`/`cte_per_k` (solidified-resin
     defaults with a warning otherwise), `ref_temp_c` (stress-free / solidification
     temperature; warp is invariant to it, it only sets the reported residual stress),
@@ -13665,6 +13698,19 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
         _tait = _mf0._resin_cross_wlf_tait(resin)[1]
     except Exception:
         _tait = None
+    # Net-shrinkage (cavity-sizing) model (#116): the effective hold/packing pressure
+    # the feed runs at (defaults to the ramp peak — the imposed injection/hold), the
+    # ambient state the free part relaxes to, and the resin's published linear
+    # mold-shrinkage band for the verdict.
+    hold_pa = float(p.get("hold_pressure_pa", peak_pa))
+    room_k = float(p.get("room_temp_c", 23.0)) + 273.15
+    try:
+        from driftpin.analysis import materials as _materials
+        _card = _materials.get(resin) or {}
+        _shr_band = (_materials.parse_range(_card["mold_shrinkage_pct"])
+                     if _card.get("mold_shrinkage_pct") else None)
+    except Exception:
+        _shr_band = None
     key = jobs.content_key("molding_fill", {"oims_gen": {
         "L": length_m, "H": height_m, "D": depth_m, "nx": nx, "ny": ny,
         "resin": resin, "peak": peak_pa, "melt": melt_k, "mold": mold_k,
@@ -13728,6 +13774,28 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
                 out["pack"] = ppar
                 out["pack_gate"] = _mf.pack_gate(
                     ppar, tait=_tait, fill_T_mean_k=fill_T_mean)
+                # --- net mold shrinkage (cavity-sizing number; issue #116) -----
+                # Distinct from pack_gate's raw-PVT densification: model the packing-
+                # feed make-up (gate fed at hold pressure until it freezes at the Tait
+                # no-flow transition) so only the uncompensated post-gate-freeze
+                # densification is the NET shrinkage, then gate THAT against the resin's
+                # published linear band.
+                if _tait and fill_T_mean:
+                    net = _mf.net_mold_shrinkage(
+                        _tait, melt_temp_k=fill_T_mean, hold_pressure_pa=hold_pa,
+                        room_temp_k=room_k)
+                    out["net_shrinkage"] = net
+                    if _shr_band:
+                        out["shrinkage_gate"] = _mf.mold_shrinkage_gate(
+                            net, corpus_band_pct=_shr_band)
+                # --- cooling -> warpage field hand-off (issue #116) ------------
+                # Auto-derive the antisymmetric through-thickness differential from the
+                # cooling solve's cell-centre T field so it can flow straight into
+                # molding_warpage_submit (no hand-passed dT_through_k).
+                cdt = _mf.cooling_field_dT_through_k(cdir, nx=nx, ny=ny)
+                if cdt:
+                    out["cooling_dT_through_k"] = cdt["dT_through_k"]
+                    out["cooling_field"] = cdt
         return out
 
     return jobs.submit("molding_fill", _work, key=key,
