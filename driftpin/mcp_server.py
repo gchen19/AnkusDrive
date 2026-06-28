@@ -2008,7 +2008,9 @@ def add_dimension(
     view: str | None = None,
     auto: bool = False,
     edge: str | None = None,
+    face: str | None = None,
     kind: str = "aligned",
+    half_angle: bool = False,
     from_point: list | None = None,
     to_point: list | None = None,
     views: list | None = None,
@@ -2024,10 +2026,15 @@ def add_dimension(
         length, not the foreshortened projection.
       * view + kind='diameter'|'radius' + edge=<circular edge tag>: a ⌀/R
         dimension of a hole or arc.
+      * view + kind='angle' + face=<conical face tag>: the half-angle (or, by
+        default, the 2× included angle) of a conical face — the curved angle a
+        machinist sets for a chamfer cone / countersink / taper (issue #108).
+        Pass half_angle=True to call out the half-angle instead.
       * view + from_point/to_point ([x,y,z] model points): dimension between
         two 3D points.
     view: a view handle, object name, or projection code ('Front', 'Top', ...).
-    kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'.
+    kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'
+          | 'angle'.
     tolerance: optional, rendered next to the value (a machinist needs it to make
       the part to size): {"sym": 0.1} for ±0.1, {"plus": .., "minus": ..} for an
       asymmetric tolerance, or {"fit": "H7"} / {"fit": "H7/g6"} to look up ISO 286
@@ -2047,13 +2054,20 @@ def add_dimension(
             raise ValueError("add_dimension requires `view` unless auto=True")
         params["view"] = view
         params["kind"] = kind
-        if edge is not None:
+        if kind == "angle":
+            if face is None:
+                raise ValueError("angle add_dimension needs a conical face=<tag>")
+            params["face"] = face
+            if half_angle:
+                params["half_angle"] = True
+        elif edge is not None:
             params["edge"] = edge
         elif from_point is not None and to_point is not None:
             params["from_point"] = from_point
             params["to_point"] = to_point
         else:
-            raise ValueError("manual add_dimension needs edge or from_point/to_point")
+            raise ValueError(
+                "manual add_dimension needs edge, face (angle), or from_point/to_point")
     return _call("add_dimension", **params)
 
 
@@ -2064,6 +2078,21 @@ def add_annotation(page: str, text: str, x: float = 20.0, y: float = 20.0,
     mm (origin bottom-left, +Y up, matching TechDraw view placement).
     Returns {handle, name, text}."""
     return _call("add_annotation", page=page, text=text, x=x, y=y, name=name)
+
+
+@mcp.tool()
+def add_feature_note(page: str, feature: str, text: str | None = None,
+                     kind: str = "feature", x: float = 20.0, y: float = 20.0,
+                     name: str = "FeatureNote") -> dict:
+    """Attach an explicit manufacturing NOTE that satisfies a curved/periodic
+    feature the drawing_gate enumerates (issue #108) — the 'per CAD model / profile
+    table' coverage for geometry a single number can't capture (a freeform/BSpline
+    wall's profile, a tooth pattern's full parameter set) or a documented cone angle.
+    `feature` is the enumerated feature id (e.g. 'FREEFORM1', 'PAT1', 'CONE1', from
+    drawing_gate's `enumerated_features`); `text` defaults to a sensible callout.
+    The gate reads the note back as coverage. Returns {handle, name, feature, text}."""
+    return _call("add_feature_note", page=page, feature=feature, text=text,
+                 kind=kind, x=x, y=y, name=name)
 
 
 @mcp.tool()

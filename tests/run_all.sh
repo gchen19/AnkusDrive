@@ -162,6 +162,14 @@ echo "== Worker / FreeCAD-side tests =="
 python3 tests/test_worker.py
 
 echo
+echo "== Drawing-is-manufacturable gates (issue #85/#108 — completeness, legibility, curved/periodic) =="
+python3 tests/test_drawing_gate.py
+python3 tests/test_drawing_gate_worker.py
+python3 tests/test_drawing_gate_curved.py
+python3 tests/test_drawing_thumbnail_section.py
+python3 tests/test_drawing_legibility_regression.py
+
+echo
 echo "== Nonlinear structural FEM (plastic/elastica/Hertz oracles always; ccx gate when present) =="
 python3 tests/test_fem_nonlinear.py
 

@@ -97,16 +97,25 @@ def test_missing_hole_location_under():
                rep["violations"])
 
 
-def test_auto_overdimensions_width():
-    print("test_auto_overdimensions_width")
+def test_auto_dimensions_no_redundant_bbox():
+    """Issue #108 #4: auto-dimensioning used to call out every overall extent in two
+    views (Front→X,Z; Top→X,Y), so the gate it feeds reported every bbox axis as
+    `redundant` — auto-dim couldn't satisfy its own gate. The fix places each world
+    extent ONCE, so no bbox axis is redundant (the hole stays under-dimensioned, as
+    auto only does extents)."""
+    print("test_auto_dimensions_no_redundant_bbox")
     with Worker() as w:
         page, hole, _part = _plate(w, "gate_auto")
-        # auto extents on BOTH views call out the overall width twice -> redundant
         w.call("add_dimension", page=page, auto=True)
         rep = w.call("drawing_gate", page=page, process="prismatic")
         codes = [v["code"] for v in rep["violations"]]
-        _check("redundant flagged for double-dimensioned width",
-               "redundant" in codes, codes)
+        _check("no redundant bbox axis after the auto-dimension fix",
+               "redundant" not in codes, codes)
+        # all three overall extents are dimensioned exactly once
+        bbox_under = [v for v in rep["violations"]
+                      if v["code"] == "under" and v.get("feature") == "BBOX"]
+        _check("every overall extent is dimensioned (none under)",
+               not bbox_under, bbox_under)
 
 
 def test_turned_shaft_enumeration():

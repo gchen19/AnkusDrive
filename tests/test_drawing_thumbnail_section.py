@@ -139,8 +139,9 @@ def test_thumbnail_places_in_free_corner():
             out = os.path.join(tmp, "thumb.svg")
             r = w.call("export_drawing", page=page, path=out)
             _check("thumbnail counted as a rendered view", r["views"] == 3, r)
-            # auto dims = overall H+V on each of the 2 part-views; the iso adds none
-            _check("thumbnail not counted as a dimension", r["dimensions"] == 4, r)
+            # auto dims = each overall extent ONCE (X,Z from Front, Y from Top —
+            # issue #108 #4: no axis double-dimensioned); the iso pictorial adds none
+            _check("thumbnail not counted as a dimension", r["dimensions"] == 3, r)
 
 
 def test_thumbnail_skips_when_corner_busy():
