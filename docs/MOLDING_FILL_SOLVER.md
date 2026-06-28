@@ -225,6 +225,36 @@ python3 tools/openinjmoldsim_toy.py --pack --cool-window-s 1.2   # → pack_cool
   fill-end state or too-coarse mesh) but does **not** fail. Validated: solved 3.70% vs
   Tait-expected 4.03% (493.8 → 420 K @ 2 MPa) → `pvt_faithful=true`, `pass=true`.
 
+### Net mold shrinkage — the cavity-sizing number (issue #116)
+
+The raw PVT densification above is **not** the net "mold shrinkage" molders quote on a
+resin card (PS 0.4–0.7 %, HDPE 1.5–4.0 % *linear*). That number is *post-packing-feed*:
+while the gate is open the melt is fed at the hold pressure to **make up** the volume lost
+as it densifies, so only the densification *after the gate freezes* is uncompensated and
+becomes net dimensional shrinkage. `molding_fill.net_mold_shrinkage` models exactly this:
+
+- The gate seals when the melt at the gate reaches the **no-flow / PVT transition**
+  temperature `Tt = b5 + b6·p` (the same melt/solid switch the Tait EOS uses).
+- Net volumetric shrinkage `S_vol = 1 − ρ(T_gate_freeze, p_hold) / ρ(T_room, p_atm)`
+  (cavity packed full and dense at gate freeze vs. the free cold part), evaluated on the
+  **melt side** of the transition so the crystallization volume jump (large for HDPE,
+  ~nil for amorphous PS) is counted as uncompensated — which is *why* semicrystallines
+  shrink so much. Linear `S_lin = 1 − (1 − S_vol)^(1/3)` (isotropic), the form cards quote.
+- It reports `raw_vol_pct` (the un-fed melt→room upper bound) and `compensated_vol_pct`
+  (what the feed makes up) for transparency.
+
+`mold_shrinkage_gate` is the **cavity-sizing verdict**, kept *distinct* from `pack_gate`:
+**`pass` = the modelled `net_linear_pct` lands inside the resin's corpus
+`mold_shrinkage_pct` band**. Below band → over-packed (cavity allowance too small, parts
+run large); above band → under-packed (allowance too large, parts run small / risk sink).
+This is the verdict the #104 CTE screen approximates. The hand-off is automatic: the
+`fill_pack` result carries `net_shrinkage:{net_linear_pct, net_vol_pct, raw_vol_pct,
+compensated_vol_pct, gate_freeze_temp_k}` and `shrinkage_gate:{pass, score, in_band,
+corpus_band_pct, warnings}`. `hold_pressure_pa` (default = the ramp peak — the molder's
+shrinkage lever: more packing → less shrinkage) and `room_temp_c` are exposed. Validated
+(no-solver oracle): corpus PS → 0.49 % and HDPE → 2.33 % linear at 10 MPa hold, both
+in-band.
+
 ## Warpage / residual distortion — `molding_warpage_submit` (issue #113 Part B)
 
 There is no purpose-built open-source injection-molding warpage solver, so we take the
@@ -285,8 +315,18 @@ magnitude miss flags a bad mesh/field. Validated `artifacts/molding_warpage_bow.
    mid-span (κ·L²/8), not a cantilever arc from one end. The artifact's analytic overlay
    matches that chord reference.
 
-**Still out of scope — tracked in #113:** **net mold shrinkage** (the cavity-sizing
-number — needs packing-feed modelling) and a *coupled* field hand-off (auto-deriving
-`dT_through_k` from the Part-A openInjMoldSim cooling field's cell-centre temperatures,
-rather than passing the differential in). Also deferred: first-class weld-line / air-trap
-labels, and the viscoelastic residual-stress path (`elastic=True` stabilised).
+**Coupled cooling → warpage hand-off (issue #116).** Instead of hand-passing
+`dT_through_k`, give `molding_warpage_submit` the Part-A cooling case
+(`cooling_case_dir` + `cooling_nx`/`cooling_ny`): the worker reads that solve's
+cell-centre `T` field, averages it into through-thickness (y) layers, and reduces the
+profile to its **antisymmetric (bending) component** via
+`molding_fill.cooling_field_dT_through_k` — a least-squares fit `T(ξ) ≈ a + b·ξ` over the
+layer centres whose slope isolates the bending eigenstrain (the symmetric part, which only
+shrinks the part uniformly, drops out). That effective `dT_through_k` feeds straight into
+the same ccx eigenstrain / `free_plate_thermal_bow` twin. A `fill_pack` result also
+reports `cooling_dT_through_k` directly for convenience; the warpage result reports
+`dT_through_k` and `dT_source` (`input` vs `cooling_field@<time>`).
+
+**Still deferred — tracked in #116:** first-class weld-line / air-trap labels on the fill
+result, and the viscoelastic residual-stress path (openInjMoldSim `elastic=True`
+stabilised — it still diverges on cooling, max U → 1e8).

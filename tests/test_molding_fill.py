@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin import solvers  # noqa: E402
+from driftpin.analysis import materials  # noqa: E402
 from driftpin.analysis import molding_fill as mf  # noqa: E402
 
 
@@ -288,6 +289,99 @@ def test_pack_gate_sink_drives_pass_and_pvt_faithfulness():
     assert any("Tait-EOS" in w for w in g3["warnings"])
 
 
+# --- net mold shrinkage (cavity-sizing number; issue #116, no solver) --------
+
+def test_net_mold_shrinkage_lands_in_corpus_band():
+    """The packing-feed make-up model yields a NET linear shrinkage in the resin's
+    published band (PS 0.4-0.7%, HDPE 1.5-4.0%) — the cavity-sizing number, NOT the
+    raw PVT densification. Both amorphous (PS) and semicrystalline (HDPE — whose
+    crystallization jump is uncompensated post-gate-freeze) land in band."""
+    for resin in ("PS", "HDPE"):
+        tait = mf._resin_cross_wlf_tait(resin)[1]
+        band = materials.parse_range(materials.get(resin)["mold_shrinkage_pct"])
+        melt_k = float(str(materials.get(resin)["melt_temp_c"]).split()[0]) + 273.15
+        net = mf.net_mold_shrinkage(tait, melt_temp_k=melt_k, hold_pressure_pa=1.0e7)
+        assert band[0] <= net["net_linear_pct"] <= band[1], (resin, net, band)
+        # net is below the raw (un-fed) melt->room densification — the feed makes up the
+        # early (pre-gate-freeze) shrink, so only the uncompensated remainder is net
+        assert net["net_vol_pct"] < net["raw_vol_pct"]
+        assert net["compensated_vol_pct"] > 0.0
+
+
+def test_net_shrinkage_responds_to_hold_pressure():
+    """Higher hold pressure packs more in → less net shrinkage (the molder's lever)."""
+    tait = mf._resin_cross_wlf_tait("PS")[1]
+    lo = mf.net_mold_shrinkage(tait, melt_temp_k=493.15, hold_pressure_pa=2.0e6)
+    hi = mf.net_mold_shrinkage(tait, melt_temp_k=493.15, hold_pressure_pa=6.0e7)
+    assert lo["net_linear_pct"] > hi["net_linear_pct"]
+
+
+def test_mold_shrinkage_gate_band_verdict():
+    """The gate passes in-band and fails (with a directional warning) out-of-band —
+    distinct from pack_gate's sink-risk pass/fail."""
+    g_in = mf.mold_shrinkage_gate({"net_linear_pct": 0.55, "net_vol_pct": 1.6,
+                                   "raw_vol_pct": 7.5, "compensated_vol_pct": 6.0,
+                                   "gate_freeze_temp_k": 376.0},
+                                  corpus_band_pct=(0.4, 0.7))
+    assert g_in["pass"] is True and g_in["in_band"] is True and g_in["score"] == 1.0
+    assert g_in["fidelity"] == "solve"
+    g_lo = mf.mold_shrinkage_gate({"net_linear_pct": 0.20}, corpus_band_pct=(0.4, 0.7))
+    assert g_lo["pass"] is False and any("over-packed" in w for w in g_lo["warnings"])
+    g_hi = mf.mold_shrinkage_gate({"net_linear_pct": 1.20}, corpus_band_pct=(0.4, 0.7))
+    assert g_hi["pass"] is False and any("under-packed" in w for w in g_hi["warnings"])
+
+
+# --- cooling -> warpage field hand-off (issue #116, no solver) ----------------
+
+def test_antisymmetric_dt_extracts_bending_component():
+    """A pure linear through-thickness profile T(xi)=ref-dT*xi recovers dT exactly;
+    adding a symmetric (even) component leaves the extracted bending dT unchanged."""
+    ny, ref, dT = 8, 400.0, 30.0
+    lin = [ref - dT * (((i + 0.5) / ny) - 0.5) for i in range(ny)]
+    assert abs(mf.antisymmetric_dT_through(lin) - dT) < 1e-9
+    sym = [lin[i] + 15.0 * (((i + 0.5) / ny - 0.5) ** 2) for i in range(ny)]  # even
+    assert abs(mf.antisymmetric_dT_through(sym) - dT) < 1e-9                  # invariant
+    flat = [ref] * ny
+    assert abs(mf.antisymmetric_dT_through(flat)) < 1e-9                      # no bow
+
+
+def test_through_thickness_layer_temps_folds_and_masks():
+    """Cells fold to ny y-layers by iy=(k//nx)%ny; the mask drops non-melt cells."""
+    nx, ny = 4, 3
+    # layer temps 300/310/320; one whole column is 'air' via the mask
+    field = [300.0 + 10.0 * ((k // nx) % ny) for k in range(nx * ny)]
+    layers = mf.through_thickness_layer_temps(field, nx=nx, ny=ny)
+    assert layers == [300.0, 310.0, 320.0]
+    mask = [1.0] * (nx * ny)
+    mask[0] = 0.0                                       # drop one cell in layer 0
+    layers_m = mf.through_thickness_layer_temps(field, nx=nx, ny=ny, mask=mask)
+    assert layers_m[0] == 300.0 and layers_m[1] == 310.0   # still correct means
+
+
+def _write_scalar_field(path, name, values):
+    """Emit a minimal OpenFOAM nonuniform scalar field the parser reads."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    body = "\n".join(f"{v:.8g}" for v in values)
+    with open(path, "w") as f:
+        f.write(f"FoamFile {{ version 2.0; format ascii; class volScalarField; "
+                f"object {name}; }}\n"
+                f"internalField   nonuniform List<scalar>\n{len(values)}\n(\n{body}\n);\n")
+
+
+def test_cooling_field_dt_through_k_from_synthetic_case():
+    """End-to-end field reduction: write a synthetic T (linear+antisymmetric across y)
+    and a full-melt alpha.poly into a time dir, and recover the bending dT_through_k."""
+    nx, ny, dT, ref = 5, 8, 24.0, 360.0
+    d = tempfile.mkdtemp(prefix="cool_dt_test_")
+    td = os.path.join(d, "0.5")
+    T = [ref - dT * ((((k // nx) % ny) + 0.5) / ny - 0.5) for k in range(nx * ny)]
+    _write_scalar_field(os.path.join(td, "T"), "T", T)
+    _write_scalar_field(os.path.join(td, "alpha.poly"), "alpha.poly", [1.0] * (nx * ny))
+    got = mf.cooling_field_dT_through_k(d, nx=nx, ny=ny)
+    assert got is not None and abs(got["dT_through_k"] - dT) < 1e-6, got
+    assert got["n_layers"] == ny and got["time"] == "0.5"
+
+
 # --- openInjMoldSim solver-backed fill (skips when the OF7 build is absent) ---
 
 def test_openinjmoldsim_generated_case_fills():
@@ -367,6 +461,16 @@ def test_openinjmoldsim_fill_pack_cools_and_densifies():
     assert pg["fidelity"] == "solve"
     assert pg["pass"] is True and pg["sink_risk"] is False
     assert pg["pvt_faithful"] is True                    # solve tracks its own EOS
+
+    # net mold shrinkage (#116): the cavity-sizing number, distinct from raw densification
+    net = mf.net_mold_shrinkage(tait, melt_temp_k=fstats["T_mean"], hold_pressure_pa=2.0e6)
+    band = materials.parse_range(materials.get("PS")["mold_shrinkage_pct"])
+    sg = mf.mold_shrinkage_gate(net, corpus_band_pct=band)
+    assert net["net_linear_pct"] < net["raw_vol_pct"]    # feed-compensated << raw PVT
+    assert sg["fidelity"] == "solve"
+    # cooling -> warpage hand-off (#116): the cooling field reduces to an antisymmetric dT
+    cdt = mf.cooling_field_dT_through_k(d, nx=60, ny=8)
+    assert cdt is not None and "dT_through_k" in cdt
 
 
 if __name__ == "__main__":
