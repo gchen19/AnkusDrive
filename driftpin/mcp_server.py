@@ -2664,6 +2664,44 @@ def fem_results(analysis: str, top_n: int = 5) -> dict:
 
 
 @mcp.tool()
+def fem_result_probe(
+    analysis: str,
+    point: list | None = None,
+    handle: str | None = None,
+    face: str | None = None,
+    field: str = "auto",
+) -> dict:
+    """Probe FEM results at a specific location, instead of only the global
+    max + top-N that `fem_results` returns. Answers "what is the stress at this
+    point / on this face?" — the agent-friendly form for design iteration.
+
+    Pick exactly one mode:
+      * POINT: point=[x, y, z] (mm, model coordinates). Interpolates the field
+        barycentrically inside the tet containing the point
+        (method='interpolated'); if the point is outside the mesh it falls back
+        to the nearest node and reports distance_mm (method='nearest_node').
+      * FACE: handle=<body handle> + face=<'f_*' tag or 'FaceN'>. Aggregates the
+        field over the mesh nodes on that CAD face, returning {min, max, mean}.
+
+    field: 'auto' (default — every field present in the result) | 'vonmises' |
+    'displacement' | 'temperature'.
+
+    Returns (point mode) {mode:'point', query_point, method, element_id?, node?,
+    distance_mm, vonmises_mpa?, displacement_mm?, displacement_vector?,
+    temperature_c?}; (face mode) {mode:'face', face, node_count,
+    vonmises_mpa?:{min,max,mean}, displacement_mm?:{...}, temperature_c?:{...}}.
+    """
+    params: dict = {"analysis": analysis, "field": field}
+    if point is not None:
+        params["point"] = point
+    if handle is not None:
+        params["handle"] = handle
+    if face is not None:
+        params["face"] = face
+    return _call("fem_result_probe", **params)
+
+
+@mcp.tool()
 def fem_cantilever_demo(
     length: float = 8000.0,
     width: float = 1000.0,

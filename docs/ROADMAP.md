@@ -312,9 +312,13 @@ test. Old monolithic version stays for backwards compat until callers move.
 - Streaming/async `fem_run` so long solves don't block the MCP channel. (The
   long-running external solvers already use the async `*_submit` + `job_result`
   job pattern; `fem_run` itself is still synchronous.)
-- Result interpolation: "stress at point (x, y, z)" or "stress on this face
-  tag" — currently we only return globals + top-N. This is the agent-friendly
-  form for design iteration. **Tracked in issue #124.**
+- ~~Result interpolation: "stress at point (x, y, z)" or "stress on this face
+  tag" — currently we only return globals + top-N.~~ ✓ shipped (issue #124):
+  `fem_result_probe(analysis, point=[x,y,z] | handle+face, field)` —
+  barycentric interpolation inside the containing tet (nearest-node fallback
+  with reported distance off-mesh) for point queries; min/max/mean aggregation
+  over a CAD face's mesh nodes for face queries. Fields: von Mises /
+  displacement (+vector) / temperature.
 
 ---
 

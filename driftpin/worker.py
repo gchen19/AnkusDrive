@@ -8656,22 +8656,7 @@ def _h_fem_results(p):
     one result object per converged increment (named CCX_Time_<t>_Results); the
     FINAL increment (highest time = full applied load) is the one summarized."""
     analysis = _resolve_analysis(p["analysis"])
-    results = [o for o in analysis.Group if o.isDerivedFrom("Fem::FemResultObject")]
-    if not results:
-        raise RuntimeError("no result object on analysis (run fem_run first)")
-    # One object per increment on a nonlinear run — take the last applied step.
-    # Prefer the parsed time stamp (robust to Group ordering); fall back to the
-    # last object FreeCAD appended (increments are added in solve order).
-    def _result_time(o):
-        m = re.search(r"Time_(\d+)_(\d+)_Results", o.Name)
-        if m:
-            return float(f"{m.group(1)}.{m.group(2)}")
-        t = getattr(o, "Time", None)
-        return float(t) if t else -1.0
-    if any(_result_time(o) >= 0 for o in results):
-        result = max(results, key=_result_time)
-    else:
-        result = results[-1]
+    result = _select_final_mech_result(analysis)
 
     stress = list(result.vonMises)
     disp_lengths = list(result.DisplacementLengths)
@@ -9068,6 +9053,196 @@ def _h_fem_thermal_results(p):
             for i, t in indexed
         ],
     }
+
+
+def _select_final_mech_result(analysis):
+    """Pick the result object to summarize. A nonlinear ccx run writes one result
+    object per converged increment (CCX_Time_<t>_Results); take the FINAL one
+    (highest time = full applied load). Shared by fem_results and fem_result_probe."""
+    results = [o for o in analysis.Group if o.isDerivedFrom("Fem::FemResultObject")]
+    if not results:
+        raise RuntimeError("no result object on analysis (run fem_run first)")
+
+    def _result_time(o):
+        m = re.search(r"Time_(\d+)_(\d+)_Results", o.Name)
+        if m:
+            return float(f"{m.group(1)}.{m.group(2)}")
+        t = getattr(o, "Time", None)
+        return float(t) if t else -1.0
+
+    if any(_result_time(o) >= 0 for o in results):
+        return max(results, key=_result_time)
+    return results[-1]
+
+
+def _result_femmesh(analysis, result):
+    """The FemMesh (nodes + connectivity) the result lives on. Prefer the result's
+    own Mesh link; fall back to any mesh object in the analysis."""
+    m = getattr(result, "Mesh", None)
+    if m is not None and hasattr(m, "FemMesh") and m.FemMesh is not None:
+        return m.FemMesh
+    for o in analysis.Group:
+        fm = getattr(o, "FemMesh", None)
+        if fm is not None:
+            return fm
+    raise RuntimeError("no FemMesh found on the analysis result")
+
+
+def _result_field_maps(result, field):
+    """Build {node_id: value} maps for the requested field(s). `field` is
+    'auto' (all available) or one of 'vonmises'|'displacement'|'temperature'.
+    Returns (maps, vec_map) where maps holds scalar fields and vec_map holds the
+    displacement vectors keyed by node id."""
+    nodes = list(getattr(result, "NodeNumbers", []) or [])
+    if not nodes:
+        raise RuntimeError("result has no NodeNumbers (incompatible result object)")
+
+    def _col(name):
+        return list(getattr(result, name, []) or [])
+
+    vm = _col("vonMises")
+    dl = _col("DisplacementLengths")
+    dv = _col("DisplacementVectors")
+    temp = _col("Temperature")
+
+    want = {
+        "vonmises": field in ("auto", "vonmises"),
+        "displacement": field in ("auto", "displacement"),
+        "temperature": field in ("auto", "temperature"),
+    }
+    maps, vec_map = {}, {}
+    if want["vonmises"] and vm:
+        maps["vonmises_mpa"] = {nodes[i]: vm[i] for i in range(min(len(nodes), len(vm)))}
+    if want["displacement"] and dl:
+        maps["displacement_mm"] = {nodes[i]: dl[i] for i in range(min(len(nodes), len(dl)))}
+        for i in range(min(len(nodes), len(dv))):
+            v = dv[i]
+            vec_map[nodes[i]] = [v.x, v.y, v.z] if hasattr(v, "x") else list(v)
+    if want["temperature"] and temp:
+        maps["temperature_c"] = {nodes[i]: temp[i] for i in range(min(len(nodes), len(temp)))}
+    if not maps:
+        raise ValueError(
+            f"no data for field {field!r} on this result "
+            f"(available: vonMises={bool(vm)}, displacement={bool(dl)}, temperature={bool(temp)})"
+        )
+    return maps, vec_map
+
+
+def _tet_bary_weights(p, a, b, c, d):
+    """Barycentric weights of point p in tet (a,b,c,d) via signed-volume ratios.
+    Returns (w_a, w_b, w_c, w_d) or None if the tet is degenerate. Sign is
+    handled consistently so orientation doesn't matter."""
+    def vol6(q, r, s, t):
+        return r.sub(q).cross(s.sub(q)).dot(t.sub(q))
+    v = vol6(a, b, c, d)
+    if abs(v) < 1e-12:
+        return None
+    return (
+        vol6(p, b, c, d) / v,
+        vol6(a, p, c, d) / v,
+        vol6(a, b, p, d) / v,
+        vol6(a, b, c, p) / v,
+    )
+
+
+@handler("fem_result_probe")
+def _h_fem_result_probe(p):
+    """Probe FEM results at a specific location instead of returning only the
+    global max + top-N. Two modes:
+
+    * POINT: pass `point=[x,y,z]` (mm, model coords). Finds the tet containing
+      the point and barycentrically interpolates the field from its corner nodes
+      (method='interpolated'). If the point is outside the mesh, falls back to the
+      nearest node and reports `distance_mm` (method='nearest_node').
+    * FACE: pass `handle` + `face` (an `f_*` tag or 'FaceN'). Aggregates the field
+      over the mesh nodes lying on that CAD face, returning {min,max,mean} each.
+
+    `field` selects the data: 'auto' (default, all available) | 'vonmises' |
+    'displacement' | 'temperature'. Scalar fields are keyed
+    vonmises_mpa/displacement_mm/temperature_c; point mode also returns the
+    displacement_vector when displacement is included."""
+    analysis = _resolve_analysis(p["analysis"])
+    field = p.get("field", "auto")
+    result = _select_final_mech_result(analysis)
+    femmesh = _result_femmesh(analysis, result)
+    maps, vec_map = _result_field_maps(result, field)
+
+    has_point = p.get("point") is not None
+    has_face = p.get("face") is not None or p.get("tag") is not None
+    if has_point == has_face:
+        raise ValueError("pass exactly one of `point` or `face`")
+
+    # --- FACE mode: aggregate over the face's mesh nodes ----------------------
+    if has_face:
+        if "handle" not in p:
+            raise ValueError("face mode needs `handle` (the body the face lives on)")
+        ref = p.get("face") or p.get("tag")
+        _obj, face_n = _resolve_face_ref(p["handle"], ref)
+        idx = int(re.sub(r"\D", "", face_n))
+        face_shape = _obj.Shape.Faces[idx - 1]
+        node_ids = list(femmesh.getNodesByFace(face_shape))
+        if not node_ids:
+            raise RuntimeError(
+                f"no mesh nodes on {ref!r} — the mesh may not be tied to this body's faces"
+            )
+        out = {"mode": "face", "face": ref, "node_count": len(node_ids)}
+        for key, nmap in maps.items():
+            vals = [nmap[n] for n in node_ids if n in nmap]
+            if vals:
+                out[key] = {
+                    "min": min(vals),
+                    "max": max(vals),
+                    "mean": sum(vals) / len(vals),
+                }
+        return out
+
+    # --- POINT mode: interpolate within the containing tet --------------------
+    pt = p["point"]
+    P = App.Vector(float(pt[0]), float(pt[1]), float(pt[2]))
+    coords = femmesh.Nodes  # {node_id: Vector}
+
+    hit = None  # (element_id, [(node_id, weight), ...])
+    for elem in femmesh.Volumes:
+        enodes = femmesh.getElementNodes(elem)
+        if len(enodes) < 4:
+            continue
+        corners = enodes[:4]  # 1st- and 2nd-order tets list corner nodes first
+        try:
+            a, b, c, d = (coords[n] for n in corners)
+        except KeyError:
+            continue
+        w = _tet_bary_weights(P, a, b, c, d)
+        if w is None:
+            continue
+        if all(wi >= -1e-6 for wi in w):
+            hit = (elem, list(zip(corners, w)))
+            break
+
+    out = {"mode": "point", "query_point": [P.x, P.y, P.z]}
+    if hit is not None:
+        elem, nw = hit
+        out["method"] = "interpolated"
+        out["element_id"] = int(elem)
+        out["distance_mm"] = 0.0
+        for key, nmap in maps.items():
+            if all(n in nmap for n, _ in nw):
+                out[key] = sum(nmap[n] * wi for n, wi in nw)
+        if vec_map and all(n in vec_map for n, _ in nw):
+            out["displacement_vector"] = [
+                sum(vec_map[n][k] * wi for n, wi in nw) for k in range(3)
+            ]
+    else:
+        # Nearest-node fallback (point outside the mesh, e.g. just off a surface).
+        nid, ncoord = min(coords.items(), key=lambda kv: kv[1].sub(P).Length)
+        out["method"] = "nearest_node"
+        out["node"] = int(nid)
+        out["distance_mm"] = ncoord.sub(P).Length
+        for key, nmap in maps.items():
+            if nid in nmap:
+                out[key] = nmap[nid]
+        if vec_map and nid in vec_map:
+            out["displacement_vector"] = vec_map[nid]
+    return out
 
 
 @handler("fem_mesh_refinement")
