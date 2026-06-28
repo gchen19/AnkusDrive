@@ -254,6 +254,10 @@ echo "== Manifest schema + validation (RFC 11.7, contract-drift detection, no ke
 $VENV_PY tests/test_manifest_schema.py
 
 echo
+echo "== Item model + part numbering (C1, #140 — items.json identity, no key, no FreeCAD) =="
+python3 tests/test_items.py
+
+echo
 echo "== Part recipes (issue #136 — declared-input build templates: contract + door + determinism, no key) =="
 $VENV_PY tests/test_recipes.py
 

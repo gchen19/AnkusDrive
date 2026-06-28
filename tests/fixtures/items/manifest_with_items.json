@@ -1,0 +1,13 @@
+{
+  "schema": "driftpin.manifest/1",
+  "name": "pinned_bracket",
+  "root": "pinned_bracket.FCStd",
+  "components": {
+    "bracket": {"item": "bracket"},
+    "pin": {"item": "pin"}
+  },
+  "instances": [
+    {"component": "bracket", "name": "bracket", "placement": [0, 0, 0]},
+    {"component": "pin", "name": "pin", "placement": [20, 0, 0]}
+  ]
+}
