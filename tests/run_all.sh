@@ -262,6 +262,10 @@ echo "== Part recipes (issue #136 — declared-input build templates: contract +
 $VENV_PY tests/test_recipes.py
 
 echo
+echo "== Design tables / variant families (issue #138, B1 — a gear family + a bearing catalog from one table each, no key) =="
+$VENV_PY tests/test_families.py
+
+echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="
 $VENV_PY -m orchestration.selftest
 $VENV_PY -m orchestration.dryrun

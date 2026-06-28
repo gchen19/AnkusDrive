@@ -1,0 +1,16 @@
+# A variant family (issue #138, B1) — every gear in the family from ONE table,
+# replacing the hand-rolled loop in example/gearbox_manifest.py. Row = a variant
+# keyed by a size designator; column = a recipe parameter / feature-flag / material.
+#   module_mm, teeth, width_mm, external -> spur_gear recipe inputs
+#   external (bool) is a FEATURE-FLAG column (external vs internal/ring gear)
+#   material -> free-form item metadata (queryable), not a geometry input
+# family: gear_family
+# recipe: spur_gear
+# mode: instances
+# key: size
+size,module_mm,teeth,width_mm,external,material
+M1_18T,1.0,18,5.0,true,POM
+M1_24T,1.0,24,5.0,true,POM
+M2_24T,2.0,24,6.0,true,SS304
+M2_40T,2.0,40,8.0,true,SS304
+M2_RING_60T,2.0,60,8.0,false,AL6061-T6
