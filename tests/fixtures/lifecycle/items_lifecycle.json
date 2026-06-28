@@ -1,0 +1,65 @@
+{
+  "schema": "driftpin.items/1",
+  "part_number_format": {
+    "prefix": "DP-",
+    "digits": 6,
+    "next": 1004
+  },
+  "items": {
+    "housing": {
+      "part_number": "DP-001001",
+      "rev": "-",
+      "lifecycle": "in_work",
+      "files": [
+        "components/housing.FCStd"
+      ],
+      "metadata": {
+        "name": "gearbox housing",
+        "material": "AL6061-T6",
+        "category": "structural",
+        "bore_dia_mm": 47.0,
+        "bolt_circle_mm": 80.0,
+        "mass_g": 412.0,
+        "wall_thickness_mm": 4.0,
+        "rib_count": 6
+      }
+    },
+    "cover": {
+      "part_number": "DP-001002",
+      "rev": "A",
+      "lifecycle": "released",
+      "files": [
+        "components/cover.FCStd"
+      ],
+      "metadata": {
+        "name": "end cover",
+        "material": "AL6061-T6",
+        "category": "structural",
+        "bore_dia_mm": 47.0,
+        "bolt_circle_mm": 80.0,
+        "mass_g": 88.0,
+        "wall_thickness_mm": 3.0
+      },
+      "lifecycle_log": [
+        {"from": "in_work", "to": "in_review", "rev": "-", "action": "submit"},
+        {"from": "in_review", "to": "released", "rev": "A", "action": "release"}
+      ]
+    },
+    "shaft": {
+      "part_number": "DP-001003",
+      "rev": "-",
+      "lifecycle": "in_review",
+      "files": [
+        "components/shaft.FCStd"
+      ],
+      "metadata": {
+        "name": "output shaft",
+        "material": "SS304",
+        "category": "rotating",
+        "diameter_mm": 20.0,
+        "function": "drive",
+        "ratio": 1.0
+      }
+    }
+  }
+}

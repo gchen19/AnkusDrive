@@ -14135,6 +14135,163 @@ def _h_items_check_manifest(p):
     return {"ok": not problems, "problems": problems}
 
 
+# --- design tables / variant families (issue #138, B1, append-only) -----------
+# A FAMILY is a row x column design table (row = a variant, column = a parameter /
+# feature-flag / material). All logic lives in the owned, pure-Python module
+# driftpin/families.py — table parsing, the column split, the recipe door, and the
+# item/part-number allocation. Importing it also registers the standard-part
+# CATALOG recipes (ball_bearing) into the recipe registry (subsumes #101). These
+# handlers are thin wrappers, exactly like the recipe handlers above.
+from driftpin import families as _families_register  # noqa: E402,F401  (registers catalog recipes)
+
+
+@handler("family_validate")
+def _h_family_validate(p):
+    """Validate a family design table (issue #138): load CSV/JSON, then check the
+    recipe, mode, key column, duplicate/missing size keys, and every per-row recipe-
+    door value — each problem names the row+column. Returns {ok, problems}."""
+    from driftpin import families as _fam
+    table = _fam.load_table(p["table"])
+    problems = _fam.validate_table(table)
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("family_materialize")
+def _h_family_materialize(p):
+    """Materialize a whole variant family from one design table (issue #138): for
+    each row, in table order, build the part with its recipe and allocate one item +
+    one sequential part number. params: table (path), registry? (path, created if
+    absent and written back), mode? (instances|configurations override). Builds into
+    the active document. Returns {schema, family, recipe, mode, key, count, rows,
+    registry}."""
+    import json as _json
+    import os as _os
+    from driftpin import families as _fam
+    from driftpin import items as _items
+    table = _fam.load_table(p["table"])
+    reg_path = p.get("registry")
+    if reg_path and _os.path.exists(reg_path):
+        registry = _items.load_registry(reg_path)
+    else:
+        registry = _items.empty_registry()
+
+    def _call(_tool, **kw):
+        return HANDLERS[_tool](kw)
+
+    result = _fam.materialize(table, _call, registry=registry, mode=p.get("mode"))
+    if reg_path:
+        with open(reg_path, "w") as f:
+            _json.dump(registry, f, indent=2, sort_keys=True)
+    return result
+# --- Liskov-substitutability gate (issue #147, T1; DESIGN_HIERARCHY §7.1) -----
+# Append-only registration of the Form/Fit/Function-as-code swap gate. All logic
+# lives in the owned, FreeCAD-free module driftpin/gates/substitutability.py; this
+# handler is a thin wrapper that injects merge_assembly as the merge primitive
+# (exactly like the recipe/items handlers wrap their pure modules), so the gate
+# drives merge_assembly through its existing entry point and never interleaves
+# into its body. Callable by #138 (B1 families) and #146 (the interface registry).
+
+@handler("substitutability_check")
+def _h_substitutability_check(p):
+    """Liskov-substitutability gate (§7.1): take an assembly that gates green with
+    variant A in a slot, swap in variant B (a different family row / any part
+    claiming the same interface), and re-run merge_assembly + all gates. Still
+    green ⇒ B is interchangeable (a compatible MINOR/PATCH change ⇒ revise); a gate
+    fails ⇒ the swap broke Form/Fit/Function ⇒ a new part number. Deterministic, no
+    API. params: manifest (base, gates green), slot (component id to swap), variant
+    (replacement component spec: one of file/manifest/library), verify_baseline?
+    (default True). Returns {schema, slot, substitutable, verdict, broken_gates
+    (NAMES the broken gate), broken, classification, baseline_ok, swap_ok, ...}."""
+    from driftpin.gates import substitutability as _subst
+
+    def _call(_method, **kw):
+        return HANDLERS[_method](kw)
+
+    return _subst.substitutability_report(
+        p["manifest"], p["slot"], p["variant"], _call,
+        verify_baseline=p.get("verify_baseline", True))
+# Append-only registration of the revision + lifecycle state machine (issue #141 /
+# C2). All logic lives in the owned, pure-Python module driftpin/lifecycle.py (no
+# FreeCAD); these handlers are thin wrappers over it, exactly like the items.json
+# (C1) handlers above. Read-only handlers (editable / classify) do not write back;
+# mutating handlers (transition / apply_change) persist the registry.
+
+@handler("lifecycle_editable")
+def _h_lifecycle_editable(p):
+    """The cheap "is this editable?" check a builder runs before writing (issue
+    #141 / C2): an item is editable only in lifecycle state in_work; in_review,
+    released and obsolete are frozen. params: registry (path), item (id). Returns
+    {ok, editable, state}."""
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    reg = _items.load_registry(p["registry"])
+    return {"ok": True, "editable": _lc.item_editable(reg, p["item"]),
+            "state": _lc.item_state(reg, p["item"])}
+
+
+@handler("lifecycle_transition")
+def _h_lifecycle_transition(p):
+    """Move an item to a new lifecycle state, guarded by the transition table
+    (issue #141 / C2): an illegal edge (e.g. skip review in_work->released) is
+    rejected loudly; releasing stamps the first revision and freezes the item.
+    params: registry (path), item (id), to (state), actor?, note?. Persists the
+    registry. Returns {ok, state, rev} or {ok:false, problems}."""
+    import json as _json
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    path = p["registry"]
+    reg = _items.load_registry(path)
+    try:
+        _lc.transition(reg, p["item"], p["to"], actor=p.get("actor"),
+                       note=p.get("note"))
+    except (_lc.LifecycleError, KeyError) as e:
+        return {"ok": False, "problems": [str(e)]}
+    with open(path, "w") as f:
+        _json.dump(reg, f, indent=2, sort_keys=True)
+    rec = reg["items"][p["item"]]
+    return {"ok": True, "state": rec["lifecycle"], "rev": rec.get("rev", "-")}
+
+
+@handler("lifecycle_classify_change")
+def _h_lifecycle_classify_change(p):
+    """The deterministic Form/Fit/Function predicate (issue #141 / C2): compare an
+    item's before/after interface-defining + internal attributes and decide
+    rename-vs-revise. An F3-preserving change -> "revise" (bump revision, same part
+    number); an F3-breaking change -> "new_part_number". params: before (object),
+    after (object), extra_f3? (object). Returns the verdict dict {disposition, f3,
+    changed, f3_changed, categories, reason}."""
+    from driftpin import lifecycle as _lc
+    return _lc.form_fit_function(p["before"], p["after"],
+                                 extra_f3=p.get("extra_f3"))
+
+
+@handler("lifecycle_apply_change")
+def _h_lifecycle_apply_change(p):
+    """Apply a change to a RELEASED item, dispatching on the F3 predicate (issue
+    #141 / C2): F3-preserving -> open a new revision on the same part number;
+    F3-breaking -> allocate a new part number (a new item, new_item required). The
+    original released item is never silently mutated. params: registry (path),
+    item (id), after (metadata object), new_item? (id), extra_f3?, actor?, note?.
+    Persists the registry. Returns {ok, disposition, item, part_number, rev, ...}
+    or {ok:false, problems}."""
+    import json as _json
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    path = p["registry"]
+    reg = _items.load_registry(path)
+    try:
+        res = _lc.apply_change(reg, p["item"], p["after"],
+                               new_item_id=p.get("new_item"),
+                               extra_f3=p.get("extra_f3"),
+                               actor=p.get("actor"), note=p.get("note"))
+    except (_lc.LifecycleError, KeyError, ValueError) as e:
+        return {"ok": False, "problems": [str(e)]}
+    with open(path, "w") as f:
+        _json.dump(reg, f, indent=2, sort_keys=True)
+    res["ok"] = True
+    return res
+
+
 # --- feature templates (issue #139, B2 — append-only registration) ------------
 #
 # A FEATURE TEMPLATE is the sub-part analog of a part recipe: a reusable feature

@@ -1,0 +1,15 @@
+{
+  "_doc": "JSON form of the SAME gear family as gear_family.csv (issue #138, B1). JSON carries native types (numbers, bools) where CSV carries strings; both normalize to the same resolved recipe inputs (tests/test_families.py asserts the two forms materialize identically). external (bool) is the feature-flag column; material is item metadata.",
+  "schema": "driftpin.family/1",
+  "family": "gear_family",
+  "recipe": "spur_gear",
+  "mode": "instances",
+  "key": "size",
+  "rows": [
+    {"size": "M1_18T", "module_mm": 1.0, "teeth": 18, "width_mm": 5.0, "external": true,  "material": "POM"},
+    {"size": "M1_24T", "module_mm": 1.0, "teeth": 24, "width_mm": 5.0, "external": true,  "material": "POM"},
+    {"size": "M2_24T", "module_mm": 2.0, "teeth": 24, "width_mm": 6.0, "external": true,  "material": "SS304"},
+    {"size": "M2_40T", "module_mm": 2.0, "teeth": 40, "width_mm": 8.0, "external": true,  "material": "SS304"},
+    {"size": "M2_RING_60T", "module_mm": 2.0, "teeth": 60, "width_mm": 8.0, "external": false, "material": "AL6061-T6"}
+  ]
+}
