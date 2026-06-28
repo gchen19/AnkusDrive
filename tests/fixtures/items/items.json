@@ -1,0 +1,41 @@
+{
+  "schema": "driftpin.items/1",
+  "part_number_format": {
+    "prefix": "DP-",
+    "digits": 6,
+    "next": 1003
+  },
+  "items": {
+    "bracket": {
+      "part_number": "DP-001001",
+      "rev": "-",
+      "lifecycle": "in_work",
+      "files": [
+        "components/bracket.FCStd",
+        "components/bracket.step"
+      ],
+      "metadata": {
+        "name": "L-bracket",
+        "material": "AL6061-T6",
+        "category": "structural",
+        "mass_g": 84.2,
+        "owner": "agent-a"
+      }
+    },
+    "pin": {
+      "part_number": "DP-001002",
+      "rev": "-",
+      "lifecycle": "in_work",
+      "files": [
+        "components/dowel_pin.FCStd"
+      ],
+      "metadata": {
+        "name": "dowel pin",
+        "material": "SS304",
+        "category": "fastener",
+        "diameter_mm": 6.0,
+        "owner": "agent-b"
+      }
+    }
+  }
+}
