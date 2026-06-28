@@ -3796,7 +3796,9 @@ def molding_screen(
     overridable; with all temps + alpha_mm2_s explicit no material is needed.
     A cooling-only call returns fidelity='exact'; adding flow_length_mm makes the
     headline answer fidelity='correlation', band_pct=30 (cooling stays exact).
-    No mold-filling solver is shipped (escalate_to=None).
+    When a flow_length_mm is given the headline check is a chart correlation, so
+    escalate_to='molding_fill_submit' (the openInjMoldSim VOF fill solve, #105);
+    a cooling-only call needs no solver and returns escalate_to=None.
 
     Returns {material, wall_thickness_mm, t_melt_c, t_mold_c, t_eject_c,
     alpha_mm2_s, cooling_time_s, flow_length_mm, flow_ratio, flow_ratio_limit,

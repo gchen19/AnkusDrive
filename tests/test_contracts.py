@@ -21,9 +21,13 @@ import time
 import traceback
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import determinism_registry as detreg  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 WORKER = REPO / "driftpin" / "worker.py"
 MCP = REPO / "driftpin" / "mcp_server.py"
+ANALYSIS_DIR = REPO / "driftpin" / "analysis"
 
 
 # --- known, intentional exceptions (keep these honest; the tests verify that
@@ -107,6 +111,48 @@ _HANDLERS = set(_HANDLER_LIST)
 _TOOLS = _tool_defs()
 _TOOL_NAMES = {t["name"] for t in _TOOLS}
 _DISPATCH_TARGETS = {t["target"] for t in _TOOLS if t["target"]}
+
+
+# --- escalate_to referential integrity (issue #127) ---------------------------
+#
+# A screen's `escalate_to` names the higher-fidelity tool an agent should run
+# next. If that name is a typo or a renamed/removed handler, the escalation is a
+# dead end the LLM can't act on. We harvest every `escalate_to` VALUE any tool can
+# emit by static-parsing the dict literals across driftpin/ (no imports), and
+# require each to be either None or a real tool/handler name.
+
+def _str_constants(node):
+    """All str literals reachable as a dict-value expression: a bare Constant, or
+    either arm of a conditional `X if c else Y` (the molding.py escalation form)."""
+    if isinstance(node, ast.Constant):
+        return [node.value] if isinstance(node.value, str) else [None]
+    if isinstance(node, ast.IfExp):
+        return _str_constants(node.body) + _str_constants(node.orelse)
+    return []  # dynamic expression we can't (and needn't) resolve statically
+
+
+def _escalate_targets():
+    """{source: set(targets)} — every string an `escalate_to` dict key can hold,
+    parsed from driftpin/analysis/*.py + worker.py. None (escalate to nothing) is
+    represented by the literal None in the set."""
+    out = {}
+    files = sorted(ANALYSIS_DIR.glob("*.py")) + [WORKER]
+    for f in files:
+        tree = ast.parse(f.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, val in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value == "escalate_to":
+                    out.setdefault(f.name, set()).update(_str_constants(val))
+    return out
+
+
+_ESCALATE_TARGETS = _escalate_targets()
+_ALL_ESCALATE_NAMES = {
+    name for targets in _ESCALATE_TARGETS.values()
+    for name in targets if name is not None
+}
 
 
 # --- parity tests -------------------------------------------------------------
@@ -258,6 +304,111 @@ def test_returns_grandfather_list_has_no_stale_entries():
         elif "eturn" in t["doc"]:
             stale.append(f"{name}: now documents its return — remove from grandfather list")
     assert not stale, "stale _RETURNS_GRANDFATHERED entries:\n  " + "\n  ".join(sorted(stale))
+
+
+# --- escalate_to contract (issue #127) ----------------------------------------
+
+def test_escalate_to_targets_are_registered():
+    """Every `escalate_to` a tool can emit resolves to a real MCP tool or worker
+    handler (or is None). Catches a typo'd / renamed escalation target — the
+    higher-fidelity solver an agent is told to run next must actually exist."""
+    known = _TOOL_NAMES | _HANDLERS
+    offenders = []
+    for source, targets in sorted(_ESCALATE_TARGETS.items()):
+        for name in sorted(t for t in targets if t is not None):
+            if name not in known:
+                offenders.append(f"{source}: escalate_to={name!r} is no tool/handler")
+    assert not offenders, (
+        "escalate_to targets with no registered tool/handler:\n  "
+        + "\n  ".join(offenders)
+    )
+    assert _ALL_ESCALATE_NAMES, "no escalate_to targets parsed — collector is broken"
+
+
+def test_molding_screen_docstring_names_its_escalation():
+    """The molding_screen tool used to say 'No mold-filling solver is shipped
+    (escalate_to=None)' — stale since #105 shipped molding_fill_submit. Guard the
+    fix so the MCP-facing docstring keeps naming the real escalation target."""
+    doc = next(t["doc"] for t in _TOOLS if t["name"] == "molding_screen")
+    assert "molding_fill_submit" in doc, (
+        "molding_screen docstring must name its escalation target molding_fill_submit"
+    )
+    assert "No mold-filling solver is shipped" not in doc, (
+        "molding_screen docstring still carries the stale 'no solver' claim"
+    )
+
+
+# --- determinism-class registry (issue #123) ----------------------------------
+
+def test_every_tool_has_a_determinism_class():
+    """Every MCP tool is either given a determinism class (exact / bounded /
+    nondeterministic-by-design) in tests/determinism_registry.py, or sits on the
+    explicit NOT_YET_CLASSIFIED allowlist. A newly-added tool that is on NEITHER
+    trips this test — that's the ratchet that stops the determinism-coverage gap
+    re-opening with every new tool. Fix: classify it + add a sweep entry."""
+    classified = (detreg.EXACT_TOOLS | detreg.BOUNDED_TOOLS
+                  | detreg.NONDETERMINISTIC_TOOLS)
+    unclassified = sorted(
+        _TOOL_NAMES - classified - detreg.NOT_YET_CLASSIFIED)
+    assert not unclassified, (
+        "MCP tools with no determinism class (classify in determinism_registry.py "
+        "and add a sweep entry, or — last resort — list in NOT_YET_CLASSIFIED):\n  "
+        + "\n  ".join(unclassified)
+    )
+
+
+def test_determinism_registry_names_are_real_tools():
+    """Honesty: every name the registry classifies (or parks on the allowlist) is
+    a real MCP tool, so a renamed/removed tool can't leave a stale ghost entry."""
+    classified = (detreg.EXACT_TOOLS | detreg.BOUNDED_TOOLS
+                  | detreg.NONDETERMINISTIC_TOOLS)
+    stale = sorted((classified | detreg.NOT_YET_CLASSIFIED) - _TOOL_NAMES)
+    assert not stale, "determinism registry names that are not MCP tools:\n  " + \
+        "\n  ".join(stale)
+
+
+def test_determinism_classes_are_disjoint():
+    """A tool has exactly one class: the three class sets and the allowlist must
+    not overlap (an overlap makes determinism_class() ambiguous / a stale entry)."""
+    sets = {
+        "EXACT_TOOLS": detreg.EXACT_TOOLS,
+        "BOUNDED_TOOLS": detreg.BOUNDED_TOOLS,
+        "NONDETERMINISTIC_TOOLS": detreg.NONDETERMINISTIC_TOOLS,
+        "NOT_YET_CLASSIFIED": detreg.NOT_YET_CLASSIFIED,
+    }
+    names = list(sets)
+    overlaps = []
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            common = sets[names[i]] & sets[names[j]]
+            if common:
+                overlaps.append(f"{names[i]} ∩ {names[j]} = {sorted(common)}")
+    assert not overlaps, "determinism-class sets overlap:\n  " + "\n  ".join(overlaps)
+
+
+def test_swept_analysis_tools_are_classified_exact():
+    """Every tool the bitwise analysis sweep asserts (determinism_registry
+    ANALYSIS_SWEEP) is declared "exact" — the table and the class registry can't
+    drift apart. (Sweep entries are handler-callable; those that are also MCP
+    tools must carry the exact class.)"""
+    swept = {name for name, _ in detreg.ANALYSIS_SWEEP}
+    misclassed = sorted(
+        n for n in swept if n in _TOOL_NAMES and n not in detreg.EXACT_TOOLS)
+    assert not misclassed, (
+        "tools in ANALYSIS_SWEEP not classified 'exact':\n  " + "\n  ".join(misclassed)
+    )
+
+
+def test_bounded_submits_are_classified_bounded():
+    """Every BOUNDED_SUBMITS entry is a real tool classified "bounded"."""
+    offenders = []
+    for spec in detreg.BOUNDED_SUBMITS:
+        t = spec["tool"]
+        if t not in _TOOL_NAMES:
+            offenders.append(f"{t}: not an MCP tool")
+        elif t not in detreg.BOUNDED_TOOLS:
+            offenders.append(f"{t}: not classified bounded")
+    assert not offenders, "BOUNDED_SUBMITS problems:\n  " + "\n  ".join(offenders)
 
 
 # --- runner (mirrors tests/test_worker.py) ------------------------------------

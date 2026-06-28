@@ -31,7 +31,7 @@ else
 fi
 
 echo
-echo "== Static contracts (registry parity + docstrings; no FreeCAD) =="
+echo "== Static contracts (registry parity + docstrings + escalate_to integrity + determinism-class coverage; no FreeCAD) =="
 python3 tests/test_contracts.py
 
 echo
@@ -210,7 +210,7 @@ echo "== Cross-slice integration =="
 $VENV_PY tests/test_integration.py
 
 echo
-echo "== Determinism =="
+echo "== Determinism (geometry bitwise + table-driven analysis-tool sweep + bounded submits; see determinism_registry.py) =="
 $VENV_PY tests/test_determinism.py
 
 echo
