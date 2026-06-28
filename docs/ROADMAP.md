@@ -307,12 +307,14 @@ test. Old monolithic version stays for backwards compat until callers move.
   refines the parent mesh on tagged faces with a per-region CharacteristicLength.
 
 **Deferred (TODO):**
-- Constraint kinds beyond static + thermal: contact, tie, spring, bearing,
-  transform.
-- Streaming/async `fem_run` so long solves don't block the MCP channel.
+- Constraint kinds beyond static + thermal: tie, spring, bearing, transform.
+  (Contact shipped separately as `contact_setup`.)
+- Streaming/async `fem_run` so long solves don't block the MCP channel. (The
+  long-running external solvers already use the async `*_submit` + `job_result`
+  job pattern; `fem_run` itself is still synchronous.)
 - Result interpolation: "stress at point (x, y, z)" or "stress on this face
   tag" — currently we only return globals + top-N. This is the agent-friendly
-  form for design iteration.
+  form for design iteration. **Tracked in issue #124.**
 
 ---
 
@@ -455,9 +457,11 @@ Big. ~1–2 weeks total, easy to slice further.
   the full joint solver remains an option if motion/DOF is ever needed. Toy #5
   (multi-interface enclosure) proves it in Layer M1. See
   [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) §4.
-- Dimension annotations on TechDraw pages (`add_dimension(page, kind, refs)`
-  with face/edge tags from Slice 1) — the agent-friendly form. Currently
-  only multi-view projection is supported.
+- ~~Dimension annotations on TechDraw pages (`add_dimension(page, kind, refs)`
+  with face/edge tags from Slice 1) — the agent-friendly form.~~ ✓ shipped:
+  `add_dimension` (auto extent dims; true-length edge dims; ⌀/R for circular
+  edges; point-to-point; tolerances) and `add_annotation`. Remaining gap for
+  curved/periodic features (cone angles, BSpline walls) is tracked in issue #108.
 - ~~BOM extraction across nested sub-assemblies (recursion).~~ ✓ shipped
   2026-05-30 (multi-agent Phase 1 slice 2): `bom_extract(recursive=True)` and
   `interference_check` both flatten through linked `App::Part` subassemblies;
@@ -465,14 +469,11 @@ Big. ~1–2 weeks total, easy to slice further.
   `.Placement` is reset to origin by recompute when an `App::Part` sibling
   exists). New: `merge_assembly(manifest)` (manifest-driven construct-up + gates)
   and `envelope_check`. See [`docs/MULTI_AGENT.md`](MULTI_AGENT.md) Phase 1.
-- **PDF/SVG export of TechDraw pages**: not possible from headless
-  `freecadcmd` in FreeCAD 1.1. The export functions live in `TechDrawGui`,
-  which can't be imported headless. `export_drawing` raises
-  `NotImplementedError` with the workaround (save the .FCStd, export from
-  GUI). Fix path: ship a separate small CLI helper that launches FreeCAD
-  GUI with a render-and-quit script, OR find a third-party SVG/PDF
-  renderer that consumes the page object directly. Filed in
-  `project_freecad_api_drift.md` so future-me doesn't re-discover it.
+- ~~**PDF/SVG export of TechDraw pages**: not possible from headless
+  `freecadcmd` in FreeCAD 1.1 (`TechDrawGui` can't be imported headless).~~
+  ✓ shipped: `export_drawing(page, path)` composes PDF/SVG headless from the
+  template + per-view geometry + dimensions/annotations (via svglib/reportlab,
+  not `TechDrawGui`), and writes DXF via FreeCAD's native page writer.
 - `generate_assembly_instructions` — pure LLM task once `feature_tree`
   introspection lands.
 
@@ -516,14 +517,17 @@ Smaller items, parallelizable:
   back.~~ ✓ shipped 2026-04-25 (Phase 2): `transaction_open`/`commit`/`abort`.
   Wiki-drift note: FreeCAD 1.1 `doc.abortTransaction()` no longer rolls back
   in headless mode — the worker uses commit-then-undo for correct semantics.
-- Geometry validation: `check_shape` (find faulty solids), unit sanity checks.
+- ~~Geometry validation: `check_shape` (find faulty solids).~~ ✓ shipped
+  (`check_shape` reports validity/closed/watertight + solid/shell/face/edge
+  counts). Unit sanity checks remain — a typed units/quantity layer is tracked
+  in issue #102.
 - "Session transcript" tool: dump the call history as a re-runnable Python
   script — important for reproducibility and human audit.
 - Worker pool or async `fem_run` so long solves don't block the MCP channel.
 - Verify macOS Gatekeeper / quarantine path under non-interactive launch
   (still flagged open in README).
-- `mass_properties`, `bounding_box` — useful enough to pull in earlier than
-  Slice 5; cheap.
+- ~~`mass_properties`, `bounding_box` — useful enough to pull in earlier than
+  Slice 5; cheap.~~ ✓ both shipped.
 
 ---
 
