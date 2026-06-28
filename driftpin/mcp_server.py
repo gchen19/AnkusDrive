@@ -5665,6 +5665,70 @@ def items_check_manifest(manifest: str, registry: str) -> dict:
     registry. Returns {ok, problems} — a dangling item-ref is caught before a
     merge, removing the "a part is its filename" fragility."""
     return _call("items_check_manifest", manifest=manifest, registry=registry)
+# --- feature templates (issue #139, B2) — append-only exposure ----------------
+
+@mcp.tool()
+def get_interface(handle: str, name: str) -> dict:
+    """Read back a single published interface FRAME by name from a component
+    (issue #139). The reference-by-name primitive feature templates ride on: an
+    unpublished name fails loudly. Returns {handle, name, frame}."""
+    return _call("get_interface", handle=handle, name=name)
+
+
+@mcp.tool()
+def feature_list() -> dict:
+    """List every registered FEATURE TEMPLATE — the PowerCopy/UDF analog of a part
+    recipe: a reusable feature with declared reference-geometry inputs (a frame, an
+    f_/e_ tag, an axis) plus scalar parameters, stamped onto a host by name (issue
+    #139). Returns {schema, count, templates} where each maps to {doc, refs,
+    required, optional, emits}; the directory to browse before picking one with
+    feature_schema / feature_instantiate."""
+    return _call("feature_list")
+
+
+@mcp.tool()
+def feature_schema(template: str) -> dict:
+    """Return one feature template's declared REF+INPUT SCHEMA — its reference
+    geometry (name/kind) and its scalar parameters (type/unit/default/range).
+    Returns {schema, template, doc, refs:[{name, kind, required, doc?}],
+    inputs:[{name, type, unit?, default?, min?, max?, required, choices?, doc?}],
+    emits}. An unknown name fails loudly."""
+    return _call("feature_schema", template=template)
+
+
+@mcp.tool()
+def feature_validate(template: str, refs: dict | None = None,
+                     inputs: dict | None = None) -> dict:
+    """Validate a feature instantiation {template, refs, inputs} WITHOUT building it
+    — the cheap structural front door (mirrors recipe_validate). Catches an unknown
+    template, an unknown/missing required reference, a malformed reference value,
+    and every scalar-input failure (missing required, out of range, wrong type, bad
+    unit, unknown key). A tag that doesn't resolve against real geometry is caught
+    at feature_instantiate time. Returns {ok, problems}."""
+    return _call("feature_validate", template=template, refs=refs or {},
+                 inputs=inputs or {})
+
+
+@mcp.tool()
+def feature_instantiate(template: str, host: str, refs: dict | None = None,
+                        inputs: dict | None = None) -> dict:
+    """Stamp a registered FEATURE TEMPLATE onto a host body at reference geometry
+    supplied BY NAME (PowerCopy/UDF, issue #139) — e.g. a mounting_boss onto a
+    published seat frame, or a bolt_pattern onto an f_ face tag. Validates {refs,
+    inputs} at the door, resolves each reference against the host's CURRENT
+    geometry (an f_ tag / interface name that doesn't resolve fails loudly), then
+    runs the deterministic build — geometry + publish_interface + declare_intent.
+
+    template: registered template name (feature_list to browse).
+    host: the handle of the body to stamp onto.
+    refs: reference inputs by name — an interface name, an f_/e_ tag, or a literal
+        {origin, z_axis?, x_axis?} frame, per the template's declared ref kinds.
+    inputs: scalar parameters (typed + unit-bearing + range-checked).
+
+    Returns {template, schema, host, refs, inputs, handle, name, interfaces,
+    intent}."""
+    return _call("feature_instantiate", template=template, host=host,
+                 refs=refs or {}, inputs=inputs or {})
 
 
 def run():
