@@ -230,6 +230,10 @@ echo "== Manifest resolve step (RFC 11.1, pure python) =="
 $VENV_PY tests/test_manifest_resolve.py
 
 echo
+echo "== Relations: driving/driven parameter DAG (issue #137, arithmetic+lookup, no key) =="
+$VENV_PY tests/test_relations.py
+
+echo
 echo "== Typed-interface merge gates (RFC 11.2, scripted, no key) =="
 $VENV_PY tests/test_typed_interfaces.py
 

@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 
 from driftpin import Worker
-from driftpin.manifest import resolve_constraints
+from driftpin.manifest import resolve_constraints, resolve_manifest
 from . import agentkit
 
 
@@ -38,15 +38,18 @@ def resolve_brief(brief, log=print):
     """If the brief carries constraints, resolve them and substitute each
     component's resolved parameters into its task text. Raises ValueError on an
     infeasible contract — by design this fails BEFORE any builder is billed."""
-    if not brief.get("constraints"):
+    if not (brief.get("constraints") or brief.get("relations")
+            or brief.get("parameters")):
         return brief
-    brief = resolve_constraints(brief)
+    brief = resolve_manifest(brief)   # relations (#137) then sum/grid constraints
     for cid, spec in brief["components"].items():
         params = spec.get("parameters")
         if params and spec.get("task"):
             spec["task"] = spec["task"].format(**params)
-    log(f"  resolve: {sorted(brief['resolved'])} -> literal values in "
-        f"{len(brief['components'])} slices")
+    resolved = sorted(brief.get("resolved", {}))
+    driven = sorted(brief.get("relations_resolved", {}))
+    log(f"  resolve: relations {driven} + constraints {resolved} -> literal "
+        f"values in {len(brief['components'])} slices")
     return brief
 
 
