@@ -52,6 +52,8 @@ EXACT_TOOLS = {
     "waveguide_cutoff", "dipole_resonance", "monopole_sphere", "rigid_sphere_scattering",
     # FSI closed-form twins
     "fsi_channel_pressure", "fsi_plate_deflection", "fsi_interface_balance",
+    # laminate / composite-stack closed-form
+    "laminate_properties",
     # molding / kinematics
     "molding_screen", "moldability_screen", "mechanism_kinematics",
     # dfx / cost / slicing
@@ -96,7 +98,8 @@ def determinism_class(tool_name):
 # tests already; they're parked here pending a representative-kwargs sweep entry.
 # BURN THIS DOWN — move names into a class + add a sweep entry; do not grow it.
 NOT_YET_CLASSIFIED = {
-    'add_annotation', 'add_bearing', 'add_dimension', 'add_fastener', 'add_gear',
+    'add_annotation', 'add_bearing', 'add_dimension', 'add_fastener', 'add_feature_note',
+    'add_gear',
     'add_part', 'add_primitive', 'add_projection_group', 'add_pulley', 'add_rack',
     'add_rib', 'add_section_view', 'add_sketch_constraint', 'add_sketch_external',
     'add_sketch_geometry', 'add_spring', 'add_sprocket', 'add_thread', 'add_thumbnail',
@@ -152,6 +155,11 @@ ANALYSIS_SWEEP = [
     ("bolted_joint_check", dict(bolt_dia_mm=10.0, torque_nm=50.0, k_factor=0.2)),
     ("spring_check", dict(wire_dia_mm=2.0, coil_mean_dia_mm=16.0, active_coils=10,
                           force_n=50.0)),
+    # --- laminate / composite-stack closed-form ---
+    ("laminate_properties", dict(
+        layers=[{"material": "Steel-A36", "thickness": 1.0},
+                {"material": "ABS", "thickness": 2.0}],
+        width_mm=20.0, delta_T=60.0, moment_nmm=500.0)),
     # --- fits / tolerance / GD&T ---
     ("fit_class", dict(basic_size=25, fit="H7/g6")),
     ("fit_check", dict(hole={"nominal": 20.0, "plus": 0.021, "minus": 0.0},
