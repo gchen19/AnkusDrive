@@ -467,3 +467,74 @@ modularity and software-design literature.
   https://www.buyplm.com/plm-good-practice/plm-software-part-revision-form-fit-function.aspx
 - PTC Windchill — *About Effectivity* (date/serial/revision).
   https://support.ptc.com/help/windchill/plus/r12.0.2.0/en/Windchill_Help_Center/ChgMgmtEffectivityAbout.html
+
+---
+
+## 10. Parallelization plan — waves, owned files, and the integration discipline
+
+The §2 dependency graph reads as a *chain* (A1→A2→B1, C1→C2→C3), which would serialize a
+team. It needn't. The fix is the one this whole program preaches and the one
+`MULTI_AGENT.md` §11.1 already proved: **fix the shared contracts first, then fan out —
+hand each agent a resolved interface, never a derivation.** Almost every dependency here is
+a dependency on a *schema* (the recipe-reference shape, the `items.json` shape), not on
+working code. Freeze those text schemas + fixtures in a first wave, and the rest of the
+work parallelizes against fixtures with no agent blocked on another's geometry.
+
+### 10.1 The two rules that make it parallel-safe
+
+1. **Contracts before code.** Each keystone's *deliverable schema* (a JSON shape + a golden
+   fixture + a `validate_*` stub that accepts it) lands **before** its full implementation.
+   A downstream item builds against the fixture, exactly as a component builder builds
+   against the manifest without seeing its neighbors (`MULTI_AGENT.md` §3). The schema *is*
+   the ICD between work items.
+
+2. **One module, one owner — keep agents off the shared files.** The collision hazard is
+   real and already in the project's memory (the multi-agent git-worktree hazard, the
+   parallel-sprint integration gap): `driftpin/worker.py` and `driftpin/mcp_server.py` are
+   giant shared files that *every* item wants to touch to register a handler/tool. So:
+   **each work item implements its logic in its own new module** (`driftpin/recipes.py`,
+   `driftpin/items.py`, `driftpin/families.py`, …) exposing a single registration function;
+   the only shared edit is **one import + one `register()` line** per feature, appended (not
+   interleaved) to `worker.py`/`mcp_server.py`. Append-only touches to a shared file rarely
+   conflict; interleaved edits to `merge_assembly` do. Run each builder in a **worktree**,
+   and re-run the **full suite on integrated `main`** after the sprint (not just per-PR
+   green) — the two lessons already paid for.
+
+### 10.2 The wave board
+
+Each item names the module it **owns** (no other agent writes it), the schema/fixtures it
+**consumes**, and who it is **parallel-safe with**.
+
+| Wave | Item | Owns (new module) | Consumes | Notes |
+|---|---|---|---|---|
+| **0 — keystones** (run first, parallel *with each other*; publish schema+fixture in PR #1) | **A1** recipes | `driftpin/recipes.py` + recipe-ref schema | units (#102) | emits the `{recipe,inputs}` contract B1/B2/registry build on |
+| | **C1** item model | `driftpin/items.py` + `items.json` schema | — | emits the item-ref contract B1/C2/C3/D1 build on |
+| **1 — fan out** (all parallel once Wave 0 schemas are frozen; each owns a disjoint module) | **A2** relations | resolve layer in `driftpin/manifest.py` | param-dict shape | independent of A1; meet at "driven values → recipe inputs" |
+| | **B1** design tables | `driftpin/families.py` + table format | A1, C1 (fixtures) | the headline demo |
+| | **B2** feature templates | `driftpin/feature_templates.py` | A1 (fixtures) | reuses `resolve_face`/`f_`,`e_` tags |
+| | **C2** revision + lifecycle | `driftpin/lifecycle.py` (+ items.json fields) | C1 (fixtures) | F3 predicate is pure + unit-testable |
+| | **M1** interface-type registry (§6.3) | `driftpin/iface_registry.py` | A1, C1 (fixtures) | strengthens B1 + the §11.2 typed gates |
+| | **D1** project container | `driftpin/project.py` | C1 (fixtures) | scaffold + ref-integrity guard |
+| | **T1** substitutability gate (§7.1) | `driftpin/gates/substitutability.py` | `merge_assembly` (exists) | builds against existing typed-interface fixtures *today* |
+| | **G1** design-modularly skill (§8) | `docs`/skill files only | — | **zero code dep — can start immediately**, fully parallel |
+| **2 — integration** (need multiple Wave-1 outputs) | **C3** ECO / where-used / baseline | `driftpin/change.py` + baseline format | C1, C2, lockfile (§9) | reuses the `depends_on` graph |
+| | **E1** modularity eval ladder (§7.2) | `tests/MODULARITY_EVAL.md` + scripted builders | A1, B1, C2, T1 | capstone; mirrors `MULTI_AGENT_EVAL.md` |
+
+### 10.3 Critical path & crew sizing
+
+- **Critical path:** Wave 0 (A1 *or* C1, whichever is slower) → its longest Wave-1 dependent
+  (B1 or C2) → Wave 2 (C3 / E1). Three serial hops, not the twelve a naïve chain implies.
+- **Max useful concurrency:** 2 agents in Wave 0, up to **8** in Wave 1, 2 in Wave 2. G1
+  (skill) and A2 (relations) have no Wave-0 dependency and can launch on day one alongside
+  the keystones — so even Wave 0 runs ≥4 wide.
+- **The F3 predicate, the substitutability gate (T1), and the skill (G1)** are pure
+  logic/doc with no geometry dependency — assign them early to keep agents productive while
+  the keystone schemas settle.
+
+### 10.4 Definition of done (parallelization)
+
+- Wave 0 ships each keystone's schema + golden fixture + `validate_*` stub in its first PR,
+  and a Wave-1 item is demonstrated building green against that fixture **before** the
+  keystone's full implementation lands (proving the contract, not the code, was the dep).
+- No two merged PRs in a sprint contain conflicting edits to `worker.py`/`mcp_server.py`
+  beyond appended registration lines; the full `run_all.sh` passes on integrated `main`.
