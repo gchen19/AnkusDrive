@@ -262,6 +262,10 @@ echo "== Part recipes (issue #136 — declared-input build templates: contract +
 $VENV_PY tests/test_recipes.py
 
 echo
+echo "== Project / workspace container (D1, #143 — scaffold + ref-integrity guard + master-skeleton, no key) =="
+$VENV_PY tests/test_project_container.py
+
+echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="
 $VENV_PY -m orchestration.selftest
 $VENV_PY -m orchestration.dryrun

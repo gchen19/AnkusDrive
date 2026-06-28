@@ -5667,6 +5667,81 @@ def items_check_manifest(manifest: str, registry: str) -> dict:
     return _call("items_check_manifest", manifest=manifest, registry=registry)
 
 
+# --- project / workspace container (issue #143, D1) — append-only exposure ----
+
+@mcp.tool()
+def scaffold_project(base_dir: str, name: str, components: dict | None = None,
+                     instances: list | None = None,
+                     shared_parameters: dict | None = None,
+                     master: str | None = None, items: dict | None = None) -> dict:
+    """Lay out a well-formed project in one call (issue #143 / D1) — promote the
+    MULTI_AGENT.md §3/§7 directory convention to a primitive. Creates the convention
+    directories (components/, .dp_lib/), an item registry (items.json, #140), a seed
+    assembly manifest from the supplied components/instances, and the project.json
+    container that ties them together. The result loads clean and merge_assembly
+    consumes it unchanged once its components resolve.
+
+    base_dir: the project root directory (created if absent).
+    name: the project id (naming-convention checked).
+    components/instances/shared_parameters: the assembly manifest content.
+    master: optional component id to record as the master/skeleton single-source-of-
+        truth slot (the lean interface-geometry skeleton children mate against).
+    items: optional {item_id: {files?, metadata?}} to seed the item registry with.
+
+    Returns the layout {project_file, manifest, registry, components_dir, lib_dir,
+    lockfile, master, dirs}."""
+    return _call("scaffold_project", base_dir=base_dir, name=name,
+                 components=components, instances=instances,
+                 shared_parameters=shared_parameters, master=master, items=items)
+
+
+@mcp.tool()
+def project_validate(project: str) -> dict:
+    """Validate a project.json container (issue #143 / D1): the schema stamp
+    ("driftpin.project/1"), the naming convention on the project name, the
+    conventional path fields, and — relative to the project directory — that the
+    referenced manifest + item registry exist, the components directory is present,
+    and a named master/skeleton is a real component of the assembly manifest.
+
+    project: path to the project.json container.
+
+    Returns {ok, problems, schema, name} — ok is True iff problems is empty."""
+    return _call("project_validate", project=project)
+
+
+@mcp.tool()
+def project_check_references(project: str) -> dict:
+    """Reference-integrity guard (issue #143 / D1) — catch a broken cross-file
+    reference *before* a merge (the chronic PDM failure mode). Loads a project's
+    assembly manifest + item registry and checks every reference resolves: a moved /
+    renamed / missing component file, a dangling item-ref (an unknown id, or a
+    resolved file missing on disk), an instance naming an unknown component, and
+    naming-convention violations.
+
+    project: path to the project.json container.
+
+    Returns {ok, problems} — ok is True iff every reference is live, so a broken
+    reference is reported here instead of as a cryptic merge failure."""
+    return _call("project_check_references", project=project)
+
+
+@mcp.tool()
+def project_resolve_manifest(project: str, out: str | None = None) -> dict:
+    """Resolve a project's item-ref components to file components and write a merge-
+    ready manifest (issue #143 / D1, the deferred #140 seam). Each component naming an
+    `item` (items.json identity, not a bare path) is lowered to a `{file}` component
+    with the CAD artifact resolved from the registry, so merge_assembly consumes the
+    result unchanged — renaming/moving a file updates the item's files[] in one place
+    without breaking any reference.
+
+    project: path to the project.json container.
+    out: output manifest path (defaults to <manifest>.resolved.json next to it).
+
+    Returns {path, lowered} — the written path and the lowered manifest object; a
+    dangling item-ref fails loudly."""
+    return _call("project_resolve_manifest", project=project, out=out)
+
+
 def run():
     mcp.run()
 
