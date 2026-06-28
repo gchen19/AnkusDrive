@@ -9517,6 +9517,12 @@ def _h_bearing_life(p):
     return me.bearing_life(**p)
 
 
+@handler("laminate_properties")
+def _h_laminate_properties(p):
+    from driftpin.analysis import laminate
+    return laminate.laminate_properties(**p)
+
+
 @handler("spring_check")
 def _h_spring_check(p):
     from driftpin.analysis import machine_elements as me

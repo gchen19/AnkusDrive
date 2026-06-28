@@ -3369,6 +3369,54 @@ def hertz_contact(
 
 
 @mcp.tool()
+def laminate_properties(
+    layers: list,
+    width_mm: float = 1.0,
+    delta_T: float | None = None,
+    force_n: float | None = None,
+    moment_nmm: float | None = None,
+) -> dict:
+    """Effective stiffness, thermal warp, and first-ply failure of a bonded
+    multi-layer composite stack (NO solver) — the closed-form screening twin a
+    layered multi-material CalculiX `fem_run` static solve is gated against (e.g.
+    1 metal layer + 1 plastic layer, or any `[(material, thickness), …]`).
+
+    `layers` is the stack bottom→top; each entry is a mapping with a `thickness`
+    (mm) and either a corpus `material` name or explicit `E`/`youngs_mpa`/
+    `youngs_gpa` (+ optional `nu`/`poisson`, `yield_mpa`, `cte`/`cte_per_k`,
+    `density_kg_m3`, `thermal_conductivity_w_mk`); explicit values override the
+    card. `width_mm` scales EI / first-ply. Optional `delta_T` (K) gives the
+    bimetal thermal curvature; `force_n` (in-plane, total across width) and/or
+    `moment_nmm` (about the neutral axis) give the first-ply margin.
+
+    Computes the in-plane modulus (Voigt rule-of-mixtures parallel, Reuss series
+    through-thickness); the transformed-section neutral axis, EI_eff, and flexural
+    modulus E_flex = 12·EI/(b·h³); the CLT A/B/D matrices per unit width (B ≠ 0 ⇒
+    bending–extension coupling / warp warning); mass-averaged ρ, stiffness-weighted
+    in-plane CTE, series/parallel thermal conductivity; the transformed-section
+    bimetal curvature (= Timoshenko's two-layer formula exactly, also reported);
+    and per-layer extreme-fibre stress → margin to yield → governing layer + load
+    to first yield. A single-material stack reduces to that material's E / EI; a
+    symmetric stack gives B = 0; ΔT = 0 or zero CTE-mismatch gives zero curl.
+    Escalate to a layered `fem_run` solve for thick stacks, anticlastic curvature,
+    free-edge interlaminar stress, or non-isotropic plies.
+
+    Returns {n_layers, width_mm, total_thickness_mm, layers, E_inplane_mpa,
+    E_through_mpa, neutral_axis_mm, EI_eff_nmm2, E_flex_mpa, A_matrix, B_matrix,
+    D_matrix, coupling_ratio, asymmetric, rho_eff_kg_m3, cte_eff_per_k,
+    k_through_w_mk, k_inplane_w_mk, delta_T, thermal_curvature_per_mm,
+    radius_of_curvature_mm, timoshenko_curvature_per_mm, applied_force_n,
+    applied_moment_nmm, kappa_applied_per_mm, axial_strain, layer_stresses,
+    first_ply, fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    params = {"layers": layers, "width_mm": width_mm}
+    for k, v in (("delta_T", delta_T), ("force_n", force_n),
+                 ("moment_nmm", moment_nmm)):
+        if v is not None:
+            params[k] = v
+    return _call("laminate_properties", **params)
+
+
+@mcp.tool()
 def monopole_sphere(
     a_m: float,
     freq_hz: float,
