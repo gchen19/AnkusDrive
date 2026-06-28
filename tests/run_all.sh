@@ -35,6 +35,10 @@ echo "== Static contracts (registry parity + docstrings; no FreeCAD) =="
 python3 tests/test_contracts.py
 
 echo
+echo "== Typed units / quantity layer (pure-Python; no FreeCAD) =="
+python3 tests/test_units.py
+
+echo
 echo "== Materials DB toys (pure-Python; no FreeCAD) =="
 python3 tests/test_materials.py
 

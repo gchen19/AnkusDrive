@@ -8516,11 +8516,14 @@ def _h_fem_add_constraint(p):
         c = ObjectsFem.makeConstraintFixed(doc, p.get("name", "Fixed"))
         c.References = refs
     elif kind == "force":
+        from driftpin import units
         c = ObjectsFem.makeConstraintForce(doc, p.get("name", "Force"))
         c.References = refs
         # Force is an App::PropertyForce: its raw base unit is mN (kg·mm/s²), so a
-        # bare float would be applied 1000× too small. Assign as an N quantity.
-        c.Force = f"{float(p['force'])} N"
+        # bare float would be applied 1000× too small. Route through the units
+        # layer, which converts to the property's base mN in one place and rejects
+        # a wrong-dimension input (e.g. a pressure unit) rather than mis-scaling.
+        c.Force = units.freecad_force(p["force"])
         if "direction" in p:
             d = p["direction"]
             obj = _shape_handle_to_obj(d["handle"])
@@ -8534,11 +8537,13 @@ def _h_fem_add_constraint(p):
             c.Direction = (obj, [idx])
         c.Reversed = bool(p.get("reversed", False))
     elif kind == "pressure":
+        from driftpin import units
         c = ObjectsFem.makeConstraintPressure(doc, p.get("name", "Pressure"))
         c.References = refs
         # Pressure is an App::PropertyPressure: raw base unit is kPa, so a bare
-        # float would be 1000× too small. Assign as an MPa quantity.
-        c.Pressure = f"{float(p['pressure'])} MPa"
+        # float would be 1000× too small. Route through the units layer (converts
+        # to base kPa centrally; rejects a wrong-dimension input).
+        c.Pressure = units.freecad_pressure(p["pressure"])
         c.Reversed = bool(p.get("reversed", False))
     elif kind == "displacement":
         c = ObjectsFem.makeConstraintDisplacement(doc, p.get("name", "Displacement"))
@@ -9428,11 +9433,12 @@ def _h_fem_cantilever(p):
     fixed.References = [(box, "Face1")]
     analysis.addObject(fixed)
 
+    from driftpin import units
     force = ObjectsFem.makeConstraintForce(doc, "Force")
     force.References = [(box, "Face2")]
-    # App::PropertyForce base unit is mN — assign as an N quantity (see
-    # fem_add_constraint) so the demo applies a physical Newton load.
-    force.Force = f"{float(p.get('force', 9000.0))} N"
+    # App::PropertyForce base unit is mN — route through the units layer (see
+    # fem_add_constraint) so the demo applies a physical Newton load in base mN.
+    force.Force = units.freecad_force(p.get("force", 9000.0))
     force.Direction = (box, ["Edge5"])
     force.Reversed = True
     analysis.addObject(force)
