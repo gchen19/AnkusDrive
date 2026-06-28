@@ -230,6 +230,10 @@ echo "== Manifest resolve step (RFC 11.1, pure python) =="
 $VENV_PY tests/test_manifest_resolve.py
 
 echo
+echo "== Relations: driving/driven parameter DAG (issue #137, arithmetic+lookup, no key) =="
+$VENV_PY tests/test_relations.py
+
+echo
 echo "== Typed-interface merge gates (RFC 11.2, scripted, no key) =="
 $VENV_PY tests/test_typed_interfaces.py
 
@@ -264,6 +268,10 @@ python3 tests/test_items.py
 echo
 echo "== Part recipes (issue #136 — declared-input build templates: contract + door + determinism, no key) =="
 $VENV_PY tests/test_recipes.py
+
+echo
+echo "== Revision + lifecycle state machine + F3 predicate (C2, #141 — state machine, immutability, rename-vs-revise; no key, no FreeCAD) =="
+python3 tests/test_lifecycle.py
 
 echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="

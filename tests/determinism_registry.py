@@ -115,6 +115,8 @@ NOT_YET_CLASSIFIED = {
     'fit_page', 'fluid_props', 'get_object', 'granular_screen', 'harmonic_response',
     'helix', 'hole', 'interface_align_check', 'interference_check',
     'items_check_manifest', 'items_new', 'items_resolve', 'items_validate', 'job_list',
+    'lifecycle_apply_change', 'lifecycle_classify_change', 'lifecycle_editable',
+    'lifecycle_transition',
     'job_result', 'job_status', 'linear_pattern', 'list_assembly_parts', 'list_documents',
     'list_edges', 'list_face_roles', 'list_faces', 'list_objects', 'list_thread_options',
     'loft', 'make_assembly', 'make_body', 'make_datum_plane', 'make_drawing_page',

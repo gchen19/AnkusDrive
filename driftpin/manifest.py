@@ -129,3 +129,25 @@ def resolve_constraints(manifest):
         audit[name] = _resolve_sum(comps, name, spec)
     out["resolved"] = audit
     return out
+
+
+# --- relations hook (issue #137) ---------------------------------------------
+# The generalized resolve flow. A2 (driving/driven relations) is an append-only
+# layer over this module — it lives in driftpin/relations.py (the parser /
+# evaluator / DAG) and is invoked here WITHOUT touching resolve_constraints'
+# body, so #137 stays localized and back-compatible. Order matters: relations
+# compute literal driven values into the component slices FIRST, then the
+# sum/grid constraints reconcile over those literals.
+
+def resolve_manifest(manifest):
+    """Resolve a manifest end to end: first the driving/driven relation DAG
+    (driftpin.relations, #137 — arithmetic + table lookup, no solver), then the
+    sum/grid global constraints (:func:`resolve_constraints`, §11.1). A manifest
+    with neither relations nor constraints is returned as a deep copy unchanged.
+    Raises ValueError loudly on any malformed/infeasible/double-driven/cyclic
+    input — the whole contract fails before any builder is billed."""
+    from driftpin.relations import resolve_relations  # local: keep import light
+    out = resolve_relations(manifest)
+    if out.get("constraints"):
+        out = resolve_constraints(out)
+    return out
