@@ -5667,6 +5667,35 @@ def items_check_manifest(manifest: str, registry: str) -> dict:
     return _call("items_check_manifest", manifest=manifest, registry=registry)
 
 
+# --- Liskov-substitutability gate (issue #147, T1; §7.1) — append-only exposure -
+
+@mcp.tool()
+def substitutability_check(manifest: str, slot: str, variant: dict,
+                           verify_baseline: bool = True) -> dict:
+    """Liskov-substitutability gate — Form/Fit/Function as code (§7.1, #147). Take
+    an assembly that gates green with variant A in a slot, swap in variant B (a
+    different family row, or any part claiming the same interface), and re-run
+    merge_assembly + all the gates. Still green ⇒ B is interchangeable with A — by
+    construction a compatible (MINOR/PATCH) change ⇒ revise the existing part
+    number; a gate now fails ⇒ the swap broke Form/Fit/Function ⇒ a new part
+    number. Purely deterministic (no API, no judgment); the substitutability test
+    #138 (B1 families) and #146 (the interface registry) call.
+
+    manifest: path to a manifest that gates green with variant A in `slot`.
+    slot: the component id to swap (variant A → variant B).
+    variant: the replacement component spec — a dict with exactly one of
+      file/manifest/library (the same one-source rule merge_assembly enforces).
+    verify_baseline: re-merge the base assembly first and require it green so the
+      premise is honest (default True).
+
+    Returns {schema, slot, variant, baseline_ok, swap_ok, substitutable, verdict
+    ('substitutable' | 'not_substitutable' | 'baseline_not_green'), broken_gates
+    (the NAMED gate(s) the swap broke), broken (gate→violations), classification
+    (compatibility/semver/decision), reports}."""
+    return _call("substitutability_check", manifest=manifest, slot=slot,
+                 variant=variant, verify_baseline=verify_baseline)
+
+
 def run():
     mcp.run()
 

@@ -234,6 +234,10 @@ echo "== Typed-interface merge gates (RFC 11.2, scripted, no key) =="
 $VENV_PY tests/test_typed_interfaces.py
 
 echo
+echo "== Liskov substitutability gate (§7.1, #147 — F3 as code; same-interface swap stays green, off-interface fails naming the broken gate; no key) =="
+$VENV_PY tests/test_substitutability.py
+
+echo
 echo "== verify_contract self-check (RFC 11.3, scripted, no key) =="
 $VENV_PY tests/test_verify_contract.py
 
