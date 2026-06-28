@@ -286,6 +286,35 @@ def test_solver_tier_cross_wlf_and_tait():
         assert 200.0 < float(tt["b5_k"]) < 600.0, name      # transition temp K
 
 
+def test_solver_tier_resin_coverage():
+    """The solver-tier (Cross-WLF + Tait) resins now cover the two validation
+    resins (HDPE/PS) AND the two most common molding resins (ABS/PP) — issue
+    #106. Asserted explicitly so the ABS/PP additions can't silently regress."""
+    have = {n for n in _MOLDING_RESINS
+            if "cross_wlf" in materials.get(n) and "tait_pvt" in materials.get(n)}
+    assert {"HDPE", "PS", "ABS", "PP"} <= have, sorted(have)
+
+
+def test_molding_polymers_derived_from_cards_no_duplication():
+    """Consolidation is real (issue #106): molding._POLYMERS holds NO duplicated
+    temperature literals — it is assembled from the corpus cards at import. Edit
+    a card temp in memory, rebuild, and the derived table must follow."""
+    from driftpin.analysis import molding
+    base = molding._build_polymers()
+    assert base == molding._POLYMERS, "derived table must match module table"
+    # the screen-only chart layer carries no temperatures, only alpha + L/t.
+    for short, row in molding._SCREEN_CHART.items():
+        assert len(row) == 3, (short, row)          # (card_name, alpha, lt)
+        card_name, alpha, lt = row
+        c = materials.get(card_name)
+        # the derived temps equal the card temps (the cards win, can't drift)
+        t_melt, t_mold, t_eject, a, l = molding._POLYMERS[short]
+        assert t_melt == materials.numeric(c, "melt_temp_c"), short
+        assert t_mold == materials.numeric(c, "mold_temp_c"), short
+        assert t_eject == materials.numeric(c, "eject_temp_c"), short
+        assert (a, l) == (alpha, lt), short
+
+
 # --- expanded mechanical corpus (issue #99) -----------------------------------
 # FCMat first-class + provenance/basis on every card + handbook mechanical
 # fields. These gates run over the WHOLE shipped corpus (seed + vendored FCMat
