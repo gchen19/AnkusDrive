@@ -4647,6 +4647,8 @@ def molding_fill_submit(
     cool_window_s: float | None = None,
     eject_temp_c: float | None = None,
     pack_wall_h_w_m2k: float | None = None,
+    pack_wall_h_low_w_m2k: float | None = None,
+    pack_wall_h_high_w_m2k: float | None = None,
     hold_pressure_pa: float | None = None,
     room_temp_c: float | None = None,
 ) -> dict:
@@ -4697,6 +4699,17 @@ def molding_fill_submit(
     from the cooling field, ready to flow straight into `molding_warpage_submit` (pass it,
     or pass this result's `case_dir`+`nx`/`ny` as `cooling_case_dir` etc.).
 
+    **Asymmetric per-wall cooling** (#134): set `pack_wall_h_low_w_m2k` and
+    `pack_wall_h_high_w_m2k` (the y=0 and y=H mold-face heat-transfer coeffs) to DIFFERENT
+    values to model an asymmetric cool — the case is meshed with split `wallLow`/`wallHigh`
+    patches and each face cools at its own rate, freezing a real through-thickness bending
+    differential. This is what makes the live `cooling_dT_through_k` nonzero (a symmetric
+    cool correctly gives ≈0 → no warp). The part bows toward the slower-cooled (lower-h,
+    hotter, last-to-freeze) face; the result adds `asymmetric_cooling:{pack_wall_h_low_w_m2k,
+    pack_wall_h_high_w_m2k, warps_toward}`. Leave both unset (or equal) for the default
+    symmetric cool. Feed the resulting `case_dir` into `molding_warpage_submit` to predict
+    the warp magnitude.
+
     Drive the interFoam path with cavity + process params:
     - `length_mm` (flow length, default 100), `wall_thickness_mm` (cavity height,
       default 2), `depth_mm` (out-of-plane, default 1), mesh `nx`/`ny`.
@@ -4732,6 +4745,8 @@ def molding_fill_submit(
                  ("pack_phases", pack_phases), ("cool_window_s", cool_window_s),
                  ("eject_temp_c", eject_temp_c),
                  ("pack_wall_h_w_m2k", pack_wall_h_w_m2k),
+                 ("pack_wall_h_low_w_m2k", pack_wall_h_low_w_m2k),
+                 ("pack_wall_h_high_w_m2k", pack_wall_h_high_w_m2k),
                  ("hold_pressure_pa", hold_pressure_pa),
                  ("room_temp_c", room_temp_c)):
         if v is not None:

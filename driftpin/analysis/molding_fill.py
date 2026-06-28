@@ -477,10 +477,17 @@ def _resin_cross_wlf_tait(resin: str | None):
     return cw, tt
 
 
-def _plaque_blockmeshdict(*, length_m, height_m, depth_m, nx, ny, nz=1) -> str:
+def _plaque_blockmeshdict(*, length_m, height_m, depth_m, nx, ny, nz=1,
+                          split_walls=False) -> str:
     """blockMeshDict for the 2-D plaque: flow along x (``inlet`` at x=0, ``outlet``
     at x=L), the cooled mold ``walls`` at y=0 and y=H, ``frontAndBack`` (the ±z
-    faces) ``empty`` (one cell deep). One hex block, ``nx``×``ny``×``nz`` cells."""
+    faces) ``empty`` (one cell deep). One hex block, ``nx``×``ny``×``nz`` cells.
+
+    ``split_walls`` emits the two thickness faces as **separate** patches —
+    ``wallLow`` (y=0) and ``wallHigh`` (y=H) — instead of one fused ``walls`` patch,
+    so the pack/cool stage can pull heat out of each face at a different ``h``
+    (asymmetric cooling → a frozen-in through-thickness bending differential, #134).
+    The default (fused ``walls``) is byte-identical to the pre-#134 case."""
     if min(length_m, height_m, depth_m) <= 0:
         raise ValueError("all plaque dimensions must be > 0")
     if nx < 4 or ny < 2:
@@ -491,12 +498,19 @@ def _plaque_blockmeshdict(*, length_m, height_m, depth_m, nx, ny, nz=1) -> str:
         (0, 0, D), (L, 0, D), (L, H, D), (0, H, D),
     ]
     vtxt = "\n".join(f"    ({x:.10g} {y:.10g} {z:.10g})" for x, y, z in verts)
+    # y=0 face is (0 1 5 4); y=H face is (3 2 6 7).
+    walls_patches = (
+        "    wallLow  { type wall;  faces ((0 1 5 4)); }\n"
+        "    wallHigh { type wall;  faces ((3 2 6 7)); }\n"
+        if split_walls else
+        "    walls  { type wall;  faces ((0 1 5 4) (3 2 6 7)); }\n"
+    )
     boundary = (
         "boundary\n(\n"
         "    inlet  { type patch; faces ((0 3 7 4)); }\n"
         "    outlet { type patch; faces ((1 5 6 2)); }\n"
-        "    walls  { type wall;  faces ((0 1 5 4) (3 2 6 7)); }\n"
-        "    frontAndBack { type empty; faces ((0 1 2 3) (4 5 6 7)); }\n"
+        + walls_patches
+        + "    frontAndBack { type empty; faces ((0 1 2 3) (4 5 6 7)); }\n"
         ");\n"
     )
     return _header("dictionary", "blockMeshDict", "system") + f"""
@@ -544,6 +558,9 @@ def openinjmoldsim_case_files(
     melt_temp_k: float = 493.15,
     mold_temp_k: float = 333.15,
     wall_h_w_m2k: float = 1.0,
+    split_walls: bool = False,
+    wall_h_low_w_m2k: float | None = None,
+    wall_h_high_w_m2k: float | None = None,
     peak_pressure_pa: float = 2.0e6,
     ramp_time_s: float = 0.12,
     end_time_s: float = 0.6,
@@ -601,6 +618,14 @@ def openinjmoldsim_case_files(
     it (with ``mold_temp_k`` kept **above** the Cross-WLF singularity ``D2-A2`` —
     ~321 K for corpus PS) to model freeze-off short shots.
 
+    **Asymmetric cooling (#134):** pass ``split_walls=True`` (or a per-wall
+    ``wall_h_low_w_m2k``/``wall_h_high_w_m2k``) to mesh the y=0/y=H faces as separate
+    ``wallLow``/``wallHigh`` patches, so the pack stage can pull heat out of each at a
+    different ``h`` (via :func:`set_wall_h_cmd`). The unequal cooling freezes a
+    through-thickness temperature differential whose antisymmetric (bending) part
+    :func:`cooling_field_dT_through_k` reduces to an effective ``dT_through_k`` for the
+    warpage hand-off. The default (fused ``walls``, both faces equal) is unchanged.
+
     Returns the dict the caller writes under ``0/``, ``constant/``, ``system/``."""
     L, H, D = length_m, height_m, depth_m
     cw = cross_wlf or _resin_cross_wlf_tait(resin)[0]
@@ -612,9 +637,26 @@ def openinjmoldsim_case_files(
                                                                    end_time_s / 40.0)
     files: dict[str, str] = {}
 
+    # Asymmetric per-wall cooling (#134): when split_walls (or either per-wall h) is
+    # requested, the y=0/y=H faces become separate wallLow/wallHigh patches; the fill
+    # stage stays symmetric-near-adiabatic unless a per-wall h is given (the asymmetry
+    # normally lands at the pack stage, set via set_wall_h_cmd). Default = fused walls.
+    split = bool(split_walls or wall_h_low_w_m2k is not None
+                 or wall_h_high_w_m2k is not None)
+    h_low = wall_h_low_w_m2k if wall_h_low_w_m2k is not None else wall_h_w_m2k
+    h_high = wall_h_high_w_m2k if wall_h_high_w_m2k is not None else wall_h_w_m2k
+
+    def _walls(body: str, body_high: str | None = None) -> str:
+        """A field's wall boundaryField entry/entries: one fused ``walls`` patch
+        (default) or split ``wallLow``/``wallHigh`` patches (asymmetric cooling)."""
+        if not split:
+            return f"    walls  {{ {body} }}\n"
+        return (f"    wallLow  {{ {body} }}\n"
+                f"    wallHigh {{ {body_high if body_high is not None else body} }}\n")
+
     # --- system/ -------------------------------------------------------------
     files["system/blockMeshDict"] = _plaque_blockmeshdict(
-        length_m=L, height_m=H, depth_m=D, nx=nx, ny=ny, nz=nz)
+        length_m=L, height_m=H, depth_m=D, nx=nx, ny=ny, nz=nz, split_walls=split)
     files["system/controlDict"] = (
         _header("dictionary", "controlDict", "system")
         # startFrom latestTime (not startTime): latestTime is 0 initially so the FILL
@@ -754,21 +796,21 @@ def openinjmoldsim_case_files(
         "boundaryField\n{\n"
         "    inlet  { type fixedValue; value uniform 1; }\n"
         "    outlet { type zeroGradient; }\n"
-        "    walls  { type zeroGradient; }\n" + empty + "}\n")
+        + _walls("type zeroGradient;") + empty + "}\n")
     files["0/U"] = (
         _header("volVectorField", "U", "0")
         + "\ndimensions      [0 1 -1 0 0 0 0];\ninternalField   uniform (0 0 0);\n"
         "boundaryField\n{\n"
         "    inlet  { type zeroGradient; }\n"
         "    outlet { type zeroGradient; }\n"
-        "    walls  { type fixedValue; value uniform (0 0 0); }\n" + empty + "}\n")
+        + _walls("type fixedValue; value uniform (0 0 0);") + empty + "}\n")
     files["0/p"] = (
         _header("volScalarField", "p", "0")
         + "\ndimensions      [1 -1 -2 0 0 0 0];\ninternalField   uniform 1e5;\n"
         "boundaryField\n{\n"
         "    inlet  { type calculated; value uniform 1e5; }\n"
         "    outlet { type calculated; value uniform 1e5; }\n"
-        "    walls  { type calculated; value uniform 1e5; }\n" + empty + "}\n")
+        + _walls("type calculated; value uniform 1e5;") + empty + "}\n")
     ramp = _pressure_ramp_table(peak_pressure_pa, ramp_time_s, end_time_s)
     files["0/p_rgh"] = (
         _header("volScalarField", "p_rgh", "0")
@@ -776,7 +818,13 @@ def openinjmoldsim_case_files(
         "boundaryField\n{\n"
         f"    inlet  {{ type uniformFixedValue; uniformValue {ramp}; }}\n"
         "    outlet { type fixedValue; value uniform 1e5; }\n"
-        "    walls  { type fixedFluxPressure; value uniform 1e5; }\n" + empty + "}\n")
+        + _walls("type fixedFluxPressure; value uniform 1e5;") + empty + "}\n")
+
+    def _t_wall(h):
+        return ("type externalWallHeatFluxTemperature; kappaMethod lookup; "
+                f"mode coefficient; Ta uniform {mold_temp_k:.10g}; h uniform {h:.10g}; "
+                f"value uniform {melt_temp_k:.10g}; kappa mojKappaOut; Qr none; "
+                "relaxation 1;")
     files["0/T"] = (
         _header("volScalarField", "T", "0")
         + "\ndimensions      [0 0 0 1 0 0 0];\n"
@@ -786,9 +834,7 @@ def openinjmoldsim_case_files(
         "    outlet { type externalWallHeatFluxTemperature; kappaMethod lookup; "
         f"mode coefficient; Ta uniform {mold_temp_k:.10g}; h uniform 1; "
         f"value uniform {melt_temp_k:.10g}; kappa mojKappaOut; Qr none; relaxation 1; }}\n"
-        "    walls  { type externalWallHeatFluxTemperature; kappaMethod lookup; "
-        f"mode coefficient; Ta uniform {mold_temp_k:.10g}; h uniform {wall_h_w_m2k:.10g}; "
-        f"value uniform {melt_temp_k:.10g}; kappa mojKappaOut; Qr none; relaxation 1; }}\n"
+        + _walls(_t_wall(h_low if split else wall_h_w_m2k), _t_wall(h_high))
         + empty + "}\n")
     files["0/shrRate"] = (
         _header("volScalarField", "shrRate", "0")
@@ -796,7 +842,7 @@ def openinjmoldsim_case_files(
         "boundaryField\n{\n"
         "    inlet  { type calculated; value uniform 0; }\n"
         "    outlet { type calculated; value uniform 0; }\n"
-        "    walls  { type calculated; value uniform 0; }\n" + empty + "}\n")
+        + _walls("type calculated; value uniform 0;") + empty + "}\n")
     return files
 
 
@@ -852,7 +898,16 @@ def set_walls_h_cmd(time_dir: str, h_w_m2k: float) -> list:
     (``wall_h_w_m2k≈1``). Real fill is fast enough to be ~isothermal, so we fill hot
     (clean, completes) then extract heat during the pack/hold — and `close_outlet`
     (run after this) copies this same ``h`` onto the sealed outlet."""
-    return foamdict_set(f"{time_dir}/T", "boundaryField.walls.h", f"{h_w_m2k:.10g}")
+    return set_wall_h_cmd(time_dir, "walls", h_w_m2k)
+
+
+def set_wall_h_cmd(time_dir: str, patch: str, h_w_m2k: float) -> list:
+    """Set the heat-transfer coefficient ``h`` on one wall ``patch`` of
+    ``<time_dir>/T``. For asymmetric cooling (#134) the case is meshed with split
+    ``wallLow``/``wallHigh`` patches, and the pack stage calls this twice (one per
+    face) with different ``h`` so the two thickness faces freeze at different rates —
+    the through-thickness bending differential the warpage hand-off reads."""
+    return foamdict_set(f"{time_dir}/T", f"boundaryField.{patch}.h", f"{h_w_m2k:.10g}")
 
 
 def reset_restart_deltaT_cmd(time_dir: str, deltaT: float = 1e-10) -> list:

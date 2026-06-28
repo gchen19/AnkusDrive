@@ -13690,6 +13690,13 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
     # switched on at the pack transition. pack_wall_h is the heat-transfer coeff used
     # for the cool/hold (real mold ~1e3-2e3 W/m^2K).
     pack_wall_h = float(p.get("pack_wall_h_w_m2k", 1250.0))
+    # Asymmetric per-wall cooling (#134): give the two thickness faces different
+    # pack-stage h so an antisymmetric through-thickness differential freezes in (the
+    # bending signal the cooling->warpage hand-off reads). Default = symmetric
+    # (both = pack_wall_h) → fused walls patch, byte-identical to pre-#134.
+    pack_wall_h_low = float(p.get("pack_wall_h_low_w_m2k", pack_wall_h))
+    pack_wall_h_high = float(p.get("pack_wall_h_high_w_m2k", pack_wall_h))
+    asym_cool = pack_wall_h_low != pack_wall_h_high
     # Tait coefficients for the pack gate's PVT-faithfulness check (the solved cooling
     # densification is checked against the resin's own EOS, not a net-shrinkage band —
     # see molding_fill.pack_gate / issue #113).
@@ -13714,7 +13721,8 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
     key = jobs.content_key("molding_fill", {"oims_gen": {
         "L": length_m, "H": height_m, "D": depth_m, "nx": nx, "ny": ny,
         "resin": resin, "peak": peak_pa, "melt": melt_k, "mold": mold_k,
-        "h": wall_h, "stages": stages, "npack": n_pack, "cool": cool_window_s}})
+        "h": wall_h, "stages": stages, "npack": n_pack, "cool": cool_window_s,
+        "hlow": pack_wall_h_low, "hhigh": pack_wall_h_high}})
 
     def _work():
         import tempfile
@@ -13723,7 +13731,8 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
         built = _mf.write_openinjmoldsim_case(
             cdir, resin=resin, length_m=length_m, height_m=height_m,
             depth_m=depth_m, nx=nx, ny=ny, peak_pressure_pa=peak_pa,
-            melt_temp_k=melt_k, mold_temp_k=mold_k, wall_h_w_m2k=wall_h)
+            melt_temp_k=melt_k, mold_temp_k=mold_k, wall_h_w_m2k=wall_h,
+            split_walls=asym_cool)  # split y=0/y=H patches for asymmetric pack cooling
         rc, tail = _run_foam(
             cdir, [["blockMesh"], ["setFields"],
                    [of_bin, "-fillEnd", str(fill_end)]],
@@ -13756,9 +13765,18 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
             # once: ease the restart step, switch the walls to cooling (the fill ran
             # ~isothermal), then seal the gate/outlet (which cools through the now-cooled
             # walls); then per phase: extend the time controls + re-run (no -fillEnd).
-            cmds = ([_mf.reset_restart_deltaT_cmd(fe_td),
-                     _mf.set_walls_h_cmd(fe_td, pack_wall_h)]
-                    + _mf.close_outlet_cmds(fe_td))
+            if asym_cool:
+                # split wallLow/wallHigh patches: cool each face at its own h, and let
+                # the sealed outlet cool through wallHigh's coefficient (#134).
+                cmds = ([_mf.reset_restart_deltaT_cmd(fe_td),
+                         _mf.set_wall_h_cmd(fe_td, "wallLow", pack_wall_h_low),
+                         _mf.set_wall_h_cmd(fe_td, "wallHigh", pack_wall_h_high)]
+                        + _mf.close_outlet_cmds(
+                            fe_td, walls_h_entry="boundaryField.wallHigh.h"))
+            else:
+                cmds = ([_mf.reset_restart_deltaT_cmd(fe_td),
+                         _mf.set_walls_h_cmd(fe_td, pack_wall_h)]
+                        + _mf.close_outlet_cmds(fe_td))
             for (end_s, wi_s, mdt_s) in plan:
                 cmds += _mf.time_extend_cmds(end_time_s=end_s, write_interval_s=wi_s,
                                              max_deltaT_s=mdt_s)
@@ -13796,6 +13814,15 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
                 if cdt:
                     out["cooling_dT_through_k"] = cdt["dT_through_k"]
                     out["cooling_field"] = cdt
+                if asym_cool:
+                    out["asymmetric_cooling"] = {
+                        "pack_wall_h_low_w_m2k": pack_wall_h_low,
+                        "pack_wall_h_high_w_m2k": pack_wall_h_high,
+                        # +dT_through_k ⇒ y=0 (wallLow) face hotter ⇒ part bows toward it;
+                        # the slower-cooled (lower-h) face stays hotter / freezes last.
+                        "warps_toward": ("wallLow" if pack_wall_h_low < pack_wall_h_high
+                                         else "wallHigh"),
+                    }
         return out
 
     return jobs.submit("molding_fill", _work, key=key,
