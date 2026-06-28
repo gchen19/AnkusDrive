@@ -14004,6 +14004,71 @@ def _h_job_list(p):
     return jobs.list_jobs()
 
 
+# --- item model + part numbering (issue #140, C1) ----------------------------
+# Append-only registration of the items.json identity layer. All logic lives in
+# the owned, pure-Python module driftpin/items.py (no FreeCAD); these handlers are
+# thin wrappers, exactly like the manifest handlers wrap _validate_manifest.
+
+@handler("items_validate")
+def _h_items_validate(p):
+    """Validate an items.json registry (the cheap front door, issue #140 / C1):
+    schema stamp, item-record shape, unique part numbers, held reserved rev/
+    lifecycle fields. Returns {ok, problems, schema, count}."""
+    from driftpin import items as _items
+    reg = _items.load_registry(p["registry"])
+    problems = _items.validate_registry(reg)
+    return {"ok": not problems, "problems": problems,
+            "schema": reg.get("schema"), "count": len(reg.get("items", {}))}
+
+
+@handler("items_resolve")
+def _h_items_resolve(p):
+    """Resolve an item-reference (an item id) to its artifact file(s) against an
+    items.json registry. Returns {ok, files} or {ok:false, problems} on a dangling
+    reference — identity, not a bare path, so a renamed file never breaks refs."""
+    from driftpin import items as _items
+    reg = _items.load_registry(p["registry"])
+    try:
+        return {"ok": True, "files": _items.resolve_item_ref(reg, p["item"])}
+    except (KeyError, ValueError) as e:
+        return {"ok": False, "problems": [str(e)]}
+
+
+@handler("items_new")
+def _h_items_new(p):
+    """Allocate a non-significant sequential part number and register a new item in
+    an items.json sidecar (created if absent), writing it back. params: registry
+    (path), item (id), files?, metadata?. Returns {part_number, item, registry}."""
+    import json as _json
+    import os as _os
+    from driftpin import items as _items
+    path = p["registry"]
+    if _os.path.exists(path):
+        reg = _items.load_registry(path)
+    else:
+        reg = _items.empty_registry()
+    _items.new_item(reg, p["item"], files=p.get("files"),
+                    metadata=p.get("metadata"))
+    with open(path, "w") as f:
+        _json.dump(reg, f, indent=2, sort_keys=True)
+    return {"part_number": reg["items"][p["item"]]["part_number"],
+            "item": p["item"], "registry": path}
+
+
+@handler("items_check_manifest")
+def _h_items_check_manifest(p):
+    """Reference-integrity guard: check every item-reference in a manifest resolves
+    against an items.json registry. params: manifest (path), registry (path).
+    Returns {ok, problems} — a dangling item-ref is caught before a merge."""
+    import json as _json
+    from driftpin import items as _items
+    with open(p["manifest"]) as f:
+        man = _json.load(f)
+    reg = _items.load_registry(p["registry"])
+    problems = _items.validate_manifest_refs(man, reg)
+    return {"ok": not problems, "problems": problems}
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:

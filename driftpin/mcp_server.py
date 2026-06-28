@@ -5576,6 +5576,58 @@ def job_list() -> dict:
     return _call("job_list")
 
 
+# --- item model + part numbering (issue #140, C1) — append-only exposure ------
+
+@mcp.tool()
+def items_validate(registry: str) -> dict:
+    """Validate an items.json registry (the PLM item/document/file split, #140 C1).
+    Checks the schema stamp ("driftpin.items/1"), each item record's shape, that
+    part numbers are unique, and the held reserved rev/lifecycle fields. An item is
+    the logical part (part_number + rev + lifecycle + metadata), distinct from its
+    file artifact(s); part numbers are non-significant + sequential, with meaning in
+    queryable metadata.
+
+    registry: path to the items.json sidecar.
+
+    Returns {ok, problems, schema, count} — ok is True iff problems is empty."""
+    return _call("items_validate", registry=registry)
+
+
+@mcp.tool()
+def items_resolve(registry: str, item: str) -> dict:
+    """Resolve an item-reference (an item id) to its artifact file(s) against an
+    items.json registry — identity, not a bare path, so renaming/moving a file
+    updates the item's files[] without breaking references. Returns {ok, files}, or
+    {ok:false, problems} on a dangling reference (an unknown item id)."""
+    return _call("items_resolve", registry=registry, item=item)
+
+
+@mcp.tool()
+def items_new(registry: str, item: str, files: list | None = None,
+              metadata: dict | None = None) -> dict:
+    """Allocate a non-significant sequential part number and register a new item in
+    an items.json sidecar (created if absent), writing it back. The reserved rev /
+    lifecycle fields are seeded with held defaults (the #141 state machine, not C1).
+
+    registry: path to the items.json sidecar (created if it does not exist).
+    item: the new item's stable logical id (what manifests reference).
+    files: optional list of artifact paths the item maps to.
+    metadata: optional free-form, queryable attributes (where "meaning" lives).
+
+    Returns {part_number, item, registry}."""
+    return _call("items_new", registry=registry, item=item,
+                 files=files, metadata=metadata)
+
+
+@mcp.tool()
+def items_check_manifest(manifest: str, registry: str) -> dict:
+    """Reference-integrity guard (#140 C1): check every item-reference in a manifest
+    ({"item":"<id>"} on a component/instance) resolves against an items.json
+    registry. Returns {ok, problems} — a dangling item-ref is caught before a
+    merge, removing the "a part is its filename" fragility."""
+    return _call("items_check_manifest", manifest=manifest, registry=registry)
+
+
 def run():
     mcp.run()
 
