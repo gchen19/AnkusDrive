@@ -254,6 +254,10 @@ echo "== Manifest schema + validation (RFC 11.7, contract-drift detection, no ke
 $VENV_PY tests/test_manifest_schema.py
 
 echo
+echo "== Item model + part numbering (C1, #140 — items.json identity, no key, no FreeCAD) =="
+python3 tests/test_items.py
+
+echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="
 $VENV_PY -m orchestration.selftest
 $VENV_PY -m orchestration.dryrun
