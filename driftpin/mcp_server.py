@@ -5699,6 +5699,113 @@ def family_materialize(table: str, registry: str | None = None,
     registry: optional items.json path (created if absent, written back).
     mode:     optional override of the table's mode (instances|configurations)."""
     return _call("family_materialize", table=table, registry=registry, mode=mode)
+# --- Liskov-substitutability gate (issue #147, T1; §7.1) — append-only exposure -
+
+@mcp.tool()
+def substitutability_check(manifest: str, slot: str, variant: dict,
+                           verify_baseline: bool = True) -> dict:
+    """Liskov-substitutability gate — Form/Fit/Function as code (§7.1, #147). Take
+    an assembly that gates green with variant A in a slot, swap in variant B (a
+    different family row, or any part claiming the same interface), and re-run
+    merge_assembly + all the gates. Still green ⇒ B is interchangeable with A — by
+    construction a compatible (MINOR/PATCH) change ⇒ revise the existing part
+    number; a gate now fails ⇒ the swap broke Form/Fit/Function ⇒ a new part
+    number. Purely deterministic (no API, no judgment); the substitutability test
+    #138 (B1 families) and #146 (the interface registry) call.
+
+    manifest: path to a manifest that gates green with variant A in `slot`.
+    slot: the component id to swap (variant A → variant B).
+    variant: the replacement component spec — a dict with exactly one of
+      file/manifest/library (the same one-source rule merge_assembly enforces).
+    verify_baseline: re-merge the base assembly first and require it green so the
+      premise is honest (default True).
+
+    Returns {schema, slot, variant, baseline_ok, swap_ok, substitutable, verdict
+    ('substitutable' | 'not_substitutable' | 'baseline_not_green'), broken_gates
+    (the NAMED gate(s) the swap broke), broken (gate→violations), classification
+    (compatibility/semver/decision), reports}."""
+    return _call("substitutability_check", manifest=manifest, slot=slot,
+                 variant=variant, verify_baseline=verify_baseline)
+# --- revision + lifecycle state machine + F3 predicate (issue #141, C2) --------
+# Append-only exposure of driftpin/lifecycle.py (built on the C1 item model).
+
+@mcp.tool()
+def lifecycle_editable(registry: str, item: str) -> dict:
+    """The cheap "is this editable?" check a builder runs before writing (#141 C2).
+    An item is editable only in lifecycle state in_work; in_review, released and
+    obsolete are frozen (released = immutable, the API-stability guarantee).
+
+    registry: path to the items.json sidecar.
+    item: the item id to check.
+
+    Returns {ok, editable, state}."""
+    return _call("lifecycle_editable", registry=registry, item=item)
+
+
+@mcp.tool()
+def lifecycle_transition(registry: str, item: str, to: str,
+                         actor: str | None = None, note: str | None = None) -> dict:
+    """Move an item through the lifecycle state machine
+    in_work -> in_review -> released -> obsolete, guarded by a transition table
+    (#141 C2). An illegal edge (e.g. skipping review, or re-opening a released item
+    in place) is rejected loudly; releasing stamps the item's first revision and
+    freezes it.
+
+    registry: path to the items.json sidecar (written back on success).
+    item: the item id to transition.
+    to: the target lifecycle state.
+    actor / note: optional provenance recorded in the item's transition log.
+
+    Returns {ok, state, rev}, or {ok:false, problems} on an illegal transition."""
+    return _call("lifecycle_transition", registry=registry, item=item, to=to,
+                 actor=actor, note=note)
+
+
+@mcp.tool()
+def lifecycle_classify_change(before: dict, after: dict,
+                              extra_f3: dict | None = None) -> dict:
+    """The deterministic Form/Fit/Function predicate (#141 C2): compare an item's
+    before/after attributes and decide rename-vs-revise. A change touching a
+    Form/Fit/Function (public, interface-defining) attribute breaks
+    interchangeability => "new_part_number" (allocate a new number); a change to
+    only internal/hidden attributes is interchangeable => "revise" (bump the
+    revision, same part number).
+
+    before / after: attribute objects (the item's interface-defining + internal
+        attributes, before and after the proposed change).
+    extra_f3: optional map of extra attribute name -> F3 leg ("form"/"fit"/
+        "function") for domain-specific interface attributes.
+
+    Returns the verdict {disposition, f3, changed, f3_changed, categories,
+    reason} where disposition is "revise" / "new_part_number" / "noop"."""
+    return _call("lifecycle_classify_change", before=before, after=after,
+                 extra_f3=extra_f3)
+
+
+@mcp.tool()
+def lifecycle_apply_change(registry: str, item: str, after: dict,
+                           new_item: str | None = None,
+                           extra_f3: dict | None = None,
+                           actor: str | None = None, note: str | None = None) -> dict:
+    """Apply a change to a RELEASED item, dispatching on the F3 predicate (#141 C2)
+    — the sanctioned way to change a frozen part. An F3-preserving change opens a
+    new revision on the SAME part number (rev A->B, back to in_work); an
+    F3-breaking change allocates a NEW part number as a new item (new_item
+    required) carrying a `supersedes` back-link, leaving the released item
+    untouched.
+
+    registry: path to the items.json sidecar (written back on success).
+    item: the released item id being changed.
+    after: the proposed new metadata (attribute object).
+    new_item: id for the new item when the change is F3-breaking.
+    extra_f3 / actor / note: optional, as in lifecycle_classify_change /
+        lifecycle_transition.
+
+    Returns {ok, disposition, item, part_number, rev, ...}, or {ok:false,
+    problems} (e.g. the item is not released, or an F3-break lacks new_item)."""
+    return _call("lifecycle_apply_change", registry=registry, item=item,
+                 after=after, new_item=new_item, extra_f3=extra_f3,
+                 actor=actor, note=note)
 
 
 def run():
