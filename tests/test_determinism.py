@@ -137,6 +137,69 @@ def test_fem_results_within_tolerance():
     )
 
 
+def _solve_box_cantilever(w):
+    """Minimal decomposed cantilever (box, fixed -X end, +Z tip load) solved with
+    ccx. Returns (analysis_handle, body_handle, fixed_tag, loaded_tag) so the
+    probe can be exercised against a real solved result."""
+    w.call("new_document", name="probe_det")
+    box = w.call("add_primitive", kind="box", w=40, d=10, h=10)
+    bh = box["handle"]
+    fixed = w.call("query_faces", handle=bh, predicate={
+        "type": "planar", "normal_dir": [-1, 0, 0], "centroid_min": "x"})[0]["tag"]
+    loaded = w.call("query_faces", handle=bh, predicate={
+        "type": "planar", "normal_dir": [0, 0, 1], "centroid_max": "z"})[0]["tag"]
+    an = w.call("fem_new_analysis", name="ProbeDet")["handle"]
+    w.call("fem_set_solver", analysis=an, kind="ccx", tunables={
+        "GeometricalNonlinearity": "linear", "ThermoMechSteadyState": True,
+        "MatrixSolverType": "default", "IterationsControlParameterTimeUse": False})
+    w.call("fem_set_material", analysis=an, body=bh, material={
+        "Name": "Steel-Generic", "YoungsModulus": "210000 MPa",
+        "PoissonRatio": "0.30", "Density": "7900 kg/m^3"})
+    w.call("fem_add_constraint", analysis=an, kind="fixed",
+           refs=[{"handle": bh, "tag": fixed}])
+    w.call("fem_add_constraint", analysis=an, kind="force",
+           refs=[{"handle": bh, "tag": loaded}], force=1000.0)
+    w.call("fem_mesh", analysis=an, body=bh, char_length=4.0, _timeout=180.0)
+    w.call("fem_run", analysis=an, workdir="/tmp/driftpin_probe_det_fem",
+           _timeout=300.0)
+    return an, bh, fixed, loaded
+
+
+def test_fem_result_probe_deterministic():
+    """fem_result_probe is a PURE read over a fixed solved result, so repeated
+    probes of the same analysis must be bit-identical. This isolates the probe's
+    own determinism — stable element-iteration order, stable nearest-node
+    tie-break, stable dict ordering — from the solver's bounded nondeterminism
+    (which test_fem_results_within_tolerance already covers). Exercises all three
+    code paths: interpolated interior point, off-mesh nearest-node fallback, and
+    face aggregation."""
+    with Worker() as w:
+        an, bh, _fixed, loaded = _solve_box_cantilever(w)
+
+        # Interior point → barycentric interpolation.
+        p1 = w.call("fem_result_probe", analysis=an, point=[20, 5, 5])
+        p2 = w.call("fem_result_probe", analysis=an, point=[20, 5, 5])
+        assert p1["method"] == "interpolated", p1
+        assert p1 == p2, f"interpolated probe diverged:\n  1: {p1}\n  2: {p2}"
+
+        # Off-mesh point → nearest-node fallback (tie-break must be stable).
+        o1 = w.call("fem_result_probe", analysis=an, point=[500, 500, 500])
+        o2 = w.call("fem_result_probe", analysis=an, point=[500, 500, 500])
+        assert o1["method"] == "nearest_node", o1
+        assert o1 == o2, f"nearest-node probe diverged:\n  1: {o1}\n  2: {o2}"
+
+        # Face aggregation → min/max/mean over the face's mesh nodes.
+        f1 = w.call("fem_result_probe", analysis=an, handle=bh, face=loaded)
+        f2 = w.call("fem_result_probe", analysis=an, handle=bh, face=loaded)
+        assert f1["mode"] == "face" and f1["node_count"] > 0, f1
+        assert f1 == f2, f"face probe diverged:\n  1: {f1}\n  2: {f2}"
+    print(
+        f"    probe: interp |u|={p1['displacement_mm']:.5f}mm exact-repeat OK; "
+        f"nearest-node d={o1['distance_mm']:.1f}mm OK; "
+        f"face nodes={f1['node_count']} OK"
+    )
+
+
 _AIRTIGHT_SRC = '''
 import Part, FreeCAD as App
 doc = App.ActiveDocument
