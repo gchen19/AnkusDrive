@@ -193,6 +193,56 @@ def _post_fem_tag_survival(w, fillet_handle, bottom_tag, loaded_tag):
     assert load_after["index"].startswith("Face"), load_after
 
 
+def _probe_fem_results(w, analysis_h, fillet_handle, bottom_tag, loaded_tag, summary):
+    """Issue #124: probe the field at a point and over a face, not just the
+    global max + top-N. Proves barycentric interpolation, nearest-node fallback,
+    field filtering, and face aggregation against physical expectations."""
+    gmax_disp = summary["max_displacement_mm"]
+    gmax_vm = summary["max_vonmises_mpa"]
+
+    # POINT inside the body (centroid) → barycentric interpolation inside a tet.
+    inside = w.call("fem_result_probe", analysis=analysis_h, point=[5, 5, 5])
+    assert inside["method"] == "interpolated", inside
+    assert inside["element_id"] is not None and inside["distance_mm"] == 0.0, inside
+    assert "vonmises_mpa" in inside and "displacement_mm" in inside, inside
+    assert len(inside["displacement_vector"]) == 3, inside
+    # Interpolated values are bounded by the global extrema (with FP slack).
+    assert 0.0 <= inside["displacement_mm"] <= gmax_disp + 1e-6, (inside, gmax_disp)
+    assert 0.0 <= inside["vonmises_mpa"] <= gmax_vm + 1e-3, (inside, gmax_vm)
+
+    # POINT far outside the mesh → nearest-node fallback with a real distance.
+    outside = w.call(
+        "fem_result_probe", analysis=analysis_h, point=[1000, 1000, 1000],
+    )
+    assert outside["method"] == "nearest_node", outside
+    assert outside["distance_mm"] > 100.0 and outside["node"] >= 0, outside
+
+    # FIELD filter: request displacement only — von Mises must be absent.
+    only_disp = w.call(
+        "fem_result_probe", analysis=analysis_h, point=[5, 5, 5],
+        field="displacement",
+    )
+    assert "displacement_mm" in only_disp and "vonmises_mpa" not in only_disp, only_disp
+
+    # FACE mode: the fixed bottom face barely moves; the loaded face moves more.
+    fixed_face = w.call(
+        "fem_result_probe", analysis=analysis_h, handle=fillet_handle, face=bottom_tag,
+    )
+    loaded_face = w.call(
+        "fem_result_probe", analysis=analysis_h, handle=fillet_handle, face=loaded_tag,
+    )
+    assert fixed_face["mode"] == "face" and fixed_face["node_count"] > 0, fixed_face
+    assert loaded_face["node_count"] > 0, loaded_face
+    fdisp, ldisp = fixed_face["displacement_mm"], loaded_face["displacement_mm"]
+    # Constrained face → its motion is a tiny fraction of the global max.
+    assert fdisp["max"] <= 0.05 * gmax_disp + 1e-6, (fixed_face, gmax_disp)
+    assert fdisp["max"] < ldisp["max"], (fixed_face, loaded_face)
+    # Every aggregate is internally ordered.
+    for agg in (fdisp, ldisp, fixed_face["vonmises_mpa"], loaded_face["vonmises_mpa"]):
+        assert agg["min"] <= agg["mean"] <= agg["max"], agg
+    return inside, fixed_face, loaded_face
+
+
 def _render_three_views(w, fillet_handle):
     """Slice 4: render iso/top/front. Verify all three are distinct and non-blank."""
     if not _RENDER_OK:
@@ -294,6 +344,13 @@ def test_cross_slice_integration():
         # Cross-slice property: tags survive the FEM pipeline.
         _post_fem_tag_survival(w, fillet_h, bottom_tag, loaded_tag)
 
+        # Slice 3 (issue #124): probe results at a point + on a face.
+        t0 = time.time()
+        probe_pt, probe_fixed, probe_loaded = _probe_fem_results(
+            w, analysis_h, fillet_h, bottom_tag, loaded_tag, fem_results,
+        )
+        t_probe = time.time() - t0
+
         # Slice 4: render.
         t0 = time.time()
         pngs = _render_three_views(w, fillet_h)
@@ -312,6 +369,10 @@ def test_cross_slice_integration():
         f"    Slice 3 (FEM by tag):     {t_fem:.2f}s  "
         f"nodes={mesh['nodes']} vM_max={fem_results['max_vonmises_mpa']:.3f}MPa "
         f"|u|max={fem_results['max_displacement_mm']:.4f}mm\n"
+        f"    Slice 3 (probe #124):     {t_probe:.2f}s  "
+        f"centroid |u|={probe_pt['displacement_mm']:.4f}mm "
+        f"fixed-face |u|max={probe_fixed['displacement_mm']['max']:.4f}mm "
+        f"loaded-face |u|max={probe_loaded['displacement_mm']['max']:.4f}mm\n"
         f"    Slice 4 (render):         {t_render:.2f}s  "
         f"{'(skipped)' if pngs is None else '3 distinct views, all centered'}\n"
         f"    Slice 5 (mass+asm+draw):  {t_s5:.2f}s  "
