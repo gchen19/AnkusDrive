@@ -11,6 +11,21 @@ Same input → same output, across worker boots and repeated calls.
                                        agree within established 8%/15% bounds
                                        (Slice 3 baseline)
 
+EXACT vs BOUNDED is kept explicit (issue #123). Two surfaces beyond the geometry
+kernel are swept here, driven by tests/determinism_registry.py:
+
+  test_analysis_tools_bitwise_*      : the closed-form analysis/screen family
+                                       (machine elements, fits, thermal, fluids,
+                                       dfx, screens, …) MUST be bit-identical
+                                       across two workers and repeated calls —
+                                       these are "exact". A hidden dict-ordering,
+                                       set iteration, or unseeded RNG fails here.
+  test_bounded_submits_within_*      : the async `*_submit` solver family is
+                                       "bounded" — reproducible only within a
+                                       documented tolerance envelope. Only the
+                                       cheap representative runs on the shared
+                                       host (heavy solves are declared, skipped).
+
 The bit-for-bit geometry assertion is load-bearing: it's what catches hidden
 state, accidental caching, or worker-counter leakage.
 
@@ -24,7 +39,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from determinism_registry import ANALYSIS_SWEEP, BOUNDED_SUBMITS  # noqa: E402
 from driftpin import Worker  # noqa: E402
 
 try:
@@ -229,6 +246,106 @@ def test_check_airtight_path_deterministic():
     with Worker() as w_b:
         rb = _airtight_result(w_b)
     assert ra == rb, f"check_airtight_path diverged:\n  A: {ra}\n  B: {rb}"
+
+
+# --- table-driven analysis sweep (issue #123) ---------------------------------
+
+def _run_analysis_sweep(w):
+    """Call every (tool, kwargs) in ANALYSIS_SWEEP once; return {tool: result}."""
+    return {name: w.call(name, **kwargs) for name, kwargs in ANALYSIS_SWEEP}
+
+
+def _diff_sweep(a, b):
+    """Tools whose result differs between two sweeps (exact dict equality)."""
+    return [name for name in a if a[name] != b[name]]
+
+
+def test_analysis_tools_bitwise_two_workers():
+    """The closed-form analysis/screen family is "exact": every tool in
+    ANALYSIS_SWEEP returns a bit-for-bit identical result in two independent
+    worker processes. This is the breadth complement to the geometry-kernel
+    bitwise test — it nets a hidden dict-ordering, set-iteration order, or
+    (the load-bearing case) an UNSEEDED RNG in any screen. tolerance_stackup runs
+    method='montecarlo' on purpose, so the seed contract (seed=12345) is asserted
+    too: drop the seed and this test is what goes red."""
+    with Worker() as w_a:
+        ra = _run_analysis_sweep(w_a)
+    with Worker() as w_b:
+        rb = _run_analysis_sweep(w_b)
+    mismatches = _diff_sweep(ra, rb)
+    assert not mismatches, (
+        "analysis tools diverged across two workers (non-deterministic): "
+        + ", ".join(f"{n}\n  A={ra[n]}\n  B={rb[n]}" for n in mismatches)
+    )
+    print(f"    analysis sweep: {len(ANALYSIS_SWEEP)} exact tools bit-identical "
+          f"across two workers")
+
+
+def test_analysis_tools_repeated_in_one_worker():
+    """Same ANALYSIS_SWEEP, but two passes in ONE worker — catches per-call state
+    leakage (cached module globals, accumulating counters, a seeded RNG advanced
+    by the first call) that a two-worker comparison would miss."""
+    with Worker() as w:
+        r1 = _run_analysis_sweep(w)
+        r2 = _run_analysis_sweep(w)
+    mismatches = _diff_sweep(r1, r2)
+    assert not mismatches, (
+        "analysis tools diverged on a repeated call in one worker: "
+        + ", ".join(f"{n}\n  1={r1[n]}\n  2={r2[n]}" for n in mismatches)
+    )
+
+
+def test_analysis_sweep_has_breadth():
+    """Guard the table itself: if someone guts ANALYSIS_SWEEP the two tests above
+    pass vacuously. Hold a floor on coverage (machine-elements, fits/tolerance,
+    thermal, fluids, dfx/cost, screen + closed-form-twin families)."""
+    assert len(ANALYSIS_SWEEP) >= 40, (
+        f"ANALYSIS_SWEEP shrank to {len(ANALYSIS_SWEEP)} — coverage floor is 40"
+    )
+
+
+def _await_job(w, job_id, timeout=30.0):
+    """Poll job_status until terminal, then return job_result. The async worker
+    threads finish in microseconds once unblocked (jobs.py contract)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if w.call("job_status", job_id=job_id)["status"] in ("done", "failed"):
+            break
+        time.sleep(0.02)
+    return w.call("job_result", job_id=job_id)
+
+
+def test_bounded_submits_within_envelope():
+    """Async `*_submit` results are "bounded": reproducible within a documented
+    per-solver tolerance, asserted the same way test_fem_results_within_tolerance
+    does. Only BOUNDED_SUBMITS entries flagged run=True execute (the cheap async
+    representative); the heavy real-solver entries are declared with their bound
+    but skipped so CI doesn't burn minutes on a shared host. The cheap path also
+    proves the submit→job_result async registry round-trips deterministically."""
+    ran = []
+    for spec in BOUNDED_SUBMITS:
+        if not spec.get("run"):
+            continue
+        tool, kwargs, fields, rtol = (
+            spec["tool"], spec["kwargs"], spec["fields"], spec["rtol"])
+        with Worker() as w_a:
+            ja = w_a.call(tool, **kwargs)
+            ra = _await_job(w_a, ja["job_id"])["result"]
+        with Worker() as w_b:
+            jb = w_b.call(tool, **kwargs)
+            rb = _await_job(w_b, jb["job_id"])["result"]
+        for f in fields:
+            va, vb = float(ra[f]), float(rb[f])
+            denom = max(abs(va), abs(vb), 1e-12)
+            diff = abs(va - vb) / denom
+            assert diff <= rtol, (
+                f"{tool}.{f} variance {diff:.2%} exceeds bound {rtol:.0%}: "
+                f"a={va}, b={vb}"
+            )
+        ran.append(tool)
+    declared = [s["tool"] for s in BOUNDED_SUBMITS if not s.get("run")]
+    print(f"    bounded submits: ran {ran} within envelope; "
+          f"{len(declared)} heavy solvers declared (bound documented, skipped)")
 
 
 # --- runner -------------------------------------------------------------------
