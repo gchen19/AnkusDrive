@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Seed engineering-material corpus. SI quantity strings match the FreeCAD FCMat / fem_set_material convention so material_get output drops straight into a FEM material card. Values are typical/handbook references for screening, NOT certified design allowables — cite MMPDS/ASM and set 'basis' before using for qualification. Polymer cards also carry a process/rheology layer for injection molding (issue #106): screen-tier crystallinity, recommended_wall_mm, mold_shrinkage_pct (published linear range), and melt/mold/eject_temp_c — each with process_source/process_basis; and for HDPE/PS a solver-tier cross_wlf + tait_pvt block for the openInjMoldSim fill solver (#105), seeded with representative literature coefficients (NOT specific resin grades — see each block's source). These card fields are the authoritative source of truth; molding.molding_screen._POLYMERS mirrors the melt/mold/eject/flow-ratio defaults for now. See docs/SIMULATION_EXAMPLES.md.",
+  "note": "Seed engineering-material corpus. SI quantity strings match the FreeCAD FCMat / fem_set_material convention so material_get output drops straight into a FEM material card. Values are typical/handbook references for screening, NOT certified design allowables — cite MMPDS/ASM and set 'basis' before using for qualification. Polymer cards also carry a process/rheology layer for injection molding (issue #106): screen-tier crystallinity, recommended_wall_mm, mold_shrinkage_pct (published linear range), and melt/mold/eject_temp_c — each with process_source/process_basis; and for HDPE/PS/ABS/PP a solver-tier cross_wlf + tait_pvt block for the openInjMoldSim fill solver (#105), seeded with representative literature coefficients (NOT specific resin grades — see each block's source). These card fields are the authoritative source of truth: molding.molding_screen reads its per-resin melt/mold/eject temps from these cards (the _POLYMERS table is now derived from them, not duplicated). See docs/SIMULATION_EXAMPLES.md.",
   "materials": [
     {
       "name": "AL6061-T6", "category": "aluminum",
@@ -105,7 +105,22 @@
       "mold_shrinkage_pct": "0.4 0.7",
       "melt_temp_c": "240", "mold_temp_c": "60", "eject_temp_c": "95",
       "process_source": "DuPont/RTP Co. molding guides; Protolabs/Xometry DFM wall & shrinkage tables (generic ABS)",
-      "process_basis": "typical"
+      "process_basis": "typical",
+      "cross_wlf": {
+        "n": "0.300", "tau_star_pa": "1.0e5",
+        "D1_pa_s": "3.0e12", "D2_k": "373.15", "D3_k_per_pa": "0.0",
+        "A1": "27.00", "A2_k": "51.6",
+        "source": "Generic amorphous ABS Cross-WLF fit, Moldflow/Autodesk-style material card form; representative literature coefficients (Osswald & Menges, Materials Science of Polymers for Engineers; C-MOLD/Moldflow generic-ABS database form). NOT a specific resin grade — order-of-magnitude/validation use only.",
+        "basis": "nominal"
+      },
+      "tait_pvt": {
+        "model": "2-domain Tait (amorphous: solid domain meets at Tg)",
+        "b1m_m3_kg": "9.70e-4", "b2m_m3_kg_k": "6.0e-7", "b3m_pa": "1.5e8", "b4m_per_k": "4.2e-3",
+        "b1s_m3_kg": "9.50e-4", "b2s_m3_kg_k": "2.5e-7", "b3s_pa": "2.4e8", "b4s_per_k": "2.7e-3",
+        "b5_k": "378.15", "b6_k_per_pa": "3.0e-7", "b7_m3_kg": "0.0", "b8_per_k": "0.0", "b9_per_pa": "0.0",
+        "source": "Generic amorphous ABS 2-domain Tait PVT (transition at Tg ~105 C), representative literature coefficients (Zoller & Walsh, Standard PVT Data for Polymers; Moldflow material database form). NOT a specific grade — for solver wiring/validation only.",
+        "basis": "nominal"
+      }
     },
     {
       "name": "PLA", "category": "polymer",
@@ -188,7 +203,22 @@
       "mold_shrinkage_pct": "1.0 2.5",
       "melt_temp_c": "230", "mold_temp_c": "40", "eject_temp_c": "90",
       "process_source": "LyondellBasell / Borealis PP processing guides; Protolabs DFM PP shrinkage table",
-      "process_basis": "typical"
+      "process_basis": "typical",
+      "cross_wlf": {
+        "n": "0.340", "tau_star_pa": "3.0e4",
+        "D1_pa_s": "1.0e13", "D2_k": "263.15", "D3_k_per_pa": "0.0",
+        "A1": "24.00", "A2_k": "51.6",
+        "source": "Generic PP homopolymer Cross-WLF fit, Moldflow/Autodesk-style material card form; representative literature coefficients (Osswald & Menges, Materials Science of Polymers for Engineers; C-MOLD/Moldflow generic-PP database form, D2 at the conventional 263.15 K reference). NOT a specific resin grade — order-of-magnitude/validation use only.",
+        "basis": "nominal"
+      },
+      "tait_pvt": {
+        "model": "2-domain Tait",
+        "b1m_m3_kg": "1.270e-3", "b2m_m3_kg_k": "9.0e-7", "b3m_pa": "8.0e7", "b4m_per_k": "4.5e-3",
+        "b1s_m3_kg": "1.160e-3", "b2s_m3_kg_k": "5.0e-7", "b3s_pa": "1.3e8", "b4s_per_k": "3.0e-3",
+        "b5_k": "438.15", "b6_k_per_pa": "2.0e-7", "b7_m3_kg": "0.0", "b8_per_k": "0.0", "b9_per_pa": "0.0",
+        "source": "Generic semicrystalline PP homopolymer 2-domain Tait PVT (transition near Tm ~165 C), representative literature coefficients (Zoller & Walsh, Standard PVT Data for Polymers; Moldflow material database form). NOT a specific grade — for solver wiring/validation only.",
+        "basis": "nominal"
+      }
     },
     {
       "name": "HDPE", "category": "polymer",

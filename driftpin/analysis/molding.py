@@ -27,27 +27,50 @@ import math
 
 from . import materials
 
-# (t_melt_c, t_mold_c, t_eject_c, alpha_mm2_s, flow_ratio_limit) — typical
-# datasheet midpoints for unfilled grades; rough by design (a screen, not a
-# datasheet), and each is individually overridable.
+# SINGLE SOURCE OF TRUTH (issue #106): the per-resin melt/mold/eject
+# temperatures are NOT stored here — they live, cited, on the polymer cards in
+# driftpin/analysis/materials/seed.json (melt_temp_c/mold_temp_c/eject_temp_c)
+# and are read out at import time. The only screen-only chart values that do
+# *not* live on the cards are the melt diffusivity α (mm²/s) and the spiral-flow
+# length/thickness limit; those are kept here, keyed by the molding short-name →
+# materials-DB card name. PA66 == the Nylon-6/6 card. α and flow_ratio_limit are
+# typical unfilled-grade chart midpoints (rough by design — a screen, not a
+# datasheet), and every value is individually overridable on the public API.
 #
-# SOURCE OF TRUTH: the melt/mold/eject temperatures here mirror the
-# melt_temp_c/mold_temp_c/eject_temp_c fields now carried (cited) on the polymer
-# cards in driftpin/analysis/materials/seed.json (issue #106), which are the
-# authoritative process-data layer. This table is kept in place for now so the
-# existing molding_screen API/tests are unchanged; α and flow_ratio_limit are
-# screen-only chart values that don't live on the cards. PA66 == the Nylon-6/6
-# card. When this estimator is rewired to read materials.numeric(card,
-# "melt_temp_c"/...) the cards win; keep the two consistent until then.
-_POLYMERS = {
-    "ABS":  (240.0, 60.0,  95.0, 0.09, 175.0),
-    "PP":   (230.0, 40.0,  90.0, 0.07, 280.0),
-    "PC":   (300.0, 90.0, 130.0, 0.11, 130.0),
-    "PA66": (280.0, 80.0, 170.0, 0.10, 200.0),
-    "POM":  (205.0, 90.0, 120.0, 0.08, 190.0),
-    "HDPE": (220.0, 30.0,  80.0, 0.10, 250.0),
-    "PS":   (220.0, 40.0,  80.0, 0.09, 220.0),
+# short_name: (card_name, alpha_mm2_s, flow_ratio_limit)
+_SCREEN_CHART = {
+    "ABS":  ("ABS",       0.09, 175.0),
+    "PP":   ("PP",        0.07, 280.0),
+    "PC":   ("PC",        0.11, 130.0),
+    "PA66": ("Nylon-6/6", 0.10, 200.0),
+    "POM":  ("POM",       0.08, 190.0),
+    "HDPE": ("HDPE",      0.10, 250.0),
+    "PS":   ("PS",        0.09, 220.0),
 }
+
+
+def _build_polymers() -> dict:
+    """Assemble the per-resin screen defaults
+    ``(t_melt_c, t_mold_c, t_eject_c, alpha_mm2_s, flow_ratio_limit)`` keyed by
+    molding short-name. The three temperatures come from the materials corpus
+    cards — the single source of truth (issue #106) — so they cannot drift from
+    the cited process layer; α and the flow-ratio limit are screen-only chart
+    values not carried on the cards."""
+    table: dict[str, tuple] = {}
+    for short, (card_name, alpha, lt_limit) in _SCREEN_CHART.items():
+        card = materials.get(card_name)
+        table[short] = (
+            materials.numeric(card, "melt_temp_c"),
+            materials.numeric(card, "mold_temp_c"),
+            materials.numeric(card, "eject_temp_c"),
+            alpha,
+            lt_limit,
+        )
+    return table
+
+
+# Derived from the cards at import (the cards win — no duplicated temperatures).
+_POLYMERS = _build_polymers()
 
 
 def molding_screen(
