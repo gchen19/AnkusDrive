@@ -327,6 +327,22 @@ the same ccx eigenstrain / `free_plate_thermal_bow` twin. A `fill_pack` result a
 reports `cooling_dT_through_k` directly for convenience; the warpage result reports
 `dT_through_k` and `dT_source` (`input` vs `cooling_field@<time>`).
 
+**Asymmetric per-wall cooling — making the live hand-off bite (issue #134).** The default
+plaque fuses the y=0 and y=H mold faces into one `walls` patch cooled at a single `h`, so a
+symmetrically-cooled plaque has *no* antisymmetric component and `cooling_dT_through_k ≈ 0`
+(correct — a symmetric cool doesn't warp). To exercise the coupling end-to-end, pass
+**different** per-wall coefficients `pack_wall_h_low_w_m2k` / `pack_wall_h_high_w_m2k` to
+`molding_fill_submit`: the generator meshes the faces as split `wallLow` (y=0) / `wallHigh`
+(y=H) patches (`openinjmoldsim_case_files(split_walls=…)` /
+`_plaque_blockmeshdict(split_walls=…)`), and the pack stage sets each face's `h` separately
+via `set_wall_h_cmd(time_dir, patch, h)`. The unequal cooling freezes a real through-thickness
+gradient; the part bows toward the **slower-cooled (lower-`h`, hotter, last-to-freeze)** face,
+and the result adds `asymmetric_cooling:{pack_wall_h_low_w_m2k, pack_wall_h_high_w_m2k,
+warps_toward}` with a clearly nonzero `cooling_dT_through_k`. Leaving both unset (or equal)
+is byte-identical to the pre-#134 fused-`walls` case, so the validated fill golden is
+untouched. The live two-sided test (`tests/test_molding_fill.py`): asymmetric cool →
+`dT_through_k > 0.5 K` toward the low-`h` face; symmetric cool → `|dT_through_k| < 0.5 K`.
+
 **Still deferred — tracked in #116:** first-class weld-line / air-trap labels on the fill
 result, and the viscoelastic residual-stress path (openInjMoldSim `elastic=True`
 stabilised — it still diverges on cooling, max U → 1e8).

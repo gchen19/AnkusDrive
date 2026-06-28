@@ -471,6 +471,111 @@ def test_openinjmoldsim_fill_pack_cools_and_densifies():
     # cooling -> warpage hand-off (#116): the cooling field reduces to an antisymmetric dT
     cdt = mf.cooling_field_dT_through_k(d, nx=60, ny=8)
     assert cdt is not None and "dT_through_k" in cdt
+    # symmetric cool (both faces same h) ⇒ ~no bending differential — the other half of
+    # the #134 two-sided check (asymmetric cool gives a clearly nonzero dT_through_k).
+    assert abs(cdt["dT_through_k"]) < 0.5, cdt
+
+
+# --- asymmetric per-wall cooling -> warpage hand-off (#134, no solver) --------
+
+def test_symmetric_walls_unchanged():
+    """Default (no per-wall h) keeps the fused `walls` patch — byte-compatible with
+    the pre-#134 case, so the validated fill golden is untouched."""
+    f = mf.openinjmoldsim_case_files(resin="PS")
+    bm, T = f["system/blockMeshDict"], f["0/T"]
+    assert "walls  { type wall" in bm and "wallLow" not in bm and "wallHigh" not in bm
+    for fld in ("0/alpha.poly", "0/U", "0/p", "0/p_rgh", "0/T", "0/shrRate"):
+        assert "wallLow" not in f[fld] and "walls" in f[fld], fld
+
+
+def test_split_walls_emits_two_patches_with_per_wall_h():
+    """Per-wall h splits the y=0/y=H faces into wallLow/wallHigh across every field,
+    with the two heat-transfer coefficients landing on T."""
+    f = mf.openinjmoldsim_case_files(resin="PS", wall_h_low_w_m2k=300.0,
+                                     wall_h_high_w_m2k=1800.0)
+    bm, T = f["system/blockMeshDict"], f["0/T"]
+    assert "wallLow  { type wall;  faces ((0 1 5 4)); }" in bm   # y=0 face
+    assert "wallHigh { type wall;  faces ((3 2 6 7)); }" in bm   # y=H face
+    assert "h uniform 300" in T and "h uniform 1800" in T
+    for fld in ("0/alpha.poly", "0/U", "0/p", "0/p_rgh", "0/T", "0/shrRate"):
+        assert "wallLow" in f[fld] and "wallHigh" in f[fld], fld
+    # split_walls=True alone (no per-wall h) also splits, both at the symmetric default
+    g = mf.openinjmoldsim_case_files(resin="PS", split_walls=True)
+    assert "wallLow" in g["system/blockMeshDict"]
+
+
+def test_set_wall_h_cmd_per_patch():
+    """The pack stage sets each face's h independently on the split case."""
+    lo = mf.set_wall_h_cmd("0.25", "wallLow", 300.0)
+    hi = mf.set_wall_h_cmd("0.25", "wallHigh", 1800.0)
+    assert lo[1] == "0.25/T" and "boundaryField.wallLow.h" in lo and lo[-1] == "300"
+    assert hi[1] == "0.25/T" and "boundaryField.wallHigh.h" in hi and hi[-1] == "1800"
+    # the symmetric helper still targets the fused patch
+    assert "boundaryField.walls.h" in mf.set_walls_h_cmd("0.25", 1250.0)
+
+
+def test_asymmetric_cooling_warp_direction():
+    """The reduction maps a slower-cooled (hotter) face to a positive dT toward it.
+    wallLow (y=0) hotter ⇒ dT_through_k>0 ⇒ part bows toward y=0 (the convention
+    cooling_field_dT_through_k / warpage.linear_through_thickness_temps share)."""
+    # layers run y=0 -> y=H; make the y=0 face the hot one (slower cooled)
+    hot_low = [380.0, 372.0, 364.0, 356.0]
+    assert mf.antisymmetric_dT_through(hot_low) > 0          # bows toward y=0/wallLow
+    hot_high = list(reversed(hot_low))
+    assert mf.antisymmetric_dT_through(hot_high) < 0          # bows toward y=H/wallHigh
+    # symmetric (even) profile ⇒ no bending component
+    sym = [360.0, 372.0, 372.0, 360.0]
+    assert abs(mf.antisymmetric_dT_through(sym)) < 1e-9
+
+
+# --- asymmetric cooling, live (#134) -----------------------------------------
+
+def test_openinjmoldsim_asymmetric_cooling_warps():
+    """LIVE: an asymmetric pack cool (wallLow near-adiabatic, wallHigh strongly
+    cooled) freezes a real through-thickness gradient → a NONZERO antisymmetric
+    dT_through_k pointing toward the hotter (slower-cooled, low-h) face. The symmetric
+    twin (test_openinjmoldsim_fill_pack_cools_and_densifies) gives ≈0 → the two-sided
+    check. Skips unless the OF7 build is present. Slow (~5-6 min)."""
+    binp = solvers.openinjmoldsim_bin()
+    bashrc = solvers.openinjmoldsim_bashrc()
+    if not binp or not bashrc:
+        print("    SKIP — openInjMoldSim (OF7-org) not built")
+        return
+    d = tempfile.mkdtemp(prefix="oims_asym_test_")
+    # split walls; fill stays symmetric near-adiabatic, asymmetry applied at pack
+    mf.write_openinjmoldsim_case(
+        d, resin="PS", length_m=0.02, height_m=1e-3, depth_m=1e-3, nx=60, ny=8,
+        peak_pressure_pa=2.0e6, wall_h_w_m2k=1.0, split_walls=True)
+
+    def run(cmds, log):
+        chain = " && ".join(" ".join(a) for a in cmds)
+        script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
+        with open(os.path.join(d, log), "w") as f:
+            return subprocess.run(["bash", "-c", script], cwd=d, stdout=f,
+                                  stderr=subprocess.STDOUT).returncode
+
+    assert run([["blockMesh"], ["setFields"], [binp, "-fillEnd", "0.98"]],
+               "log.fill") == 0
+    fe = mf._latest_time_dir(d)
+    # asymmetric pack: wallLow barely cools (h=50), wallHigh cools hard (h=2000)
+    h_low, h_high = 50.0, 2000.0
+    cmds = ([mf.reset_restart_deltaT_cmd(fe),
+             mf.set_wall_h_cmd(fe, "wallLow", h_low),
+             mf.set_wall_h_cmd(fe, "wallHigh", h_high)]
+            + mf.close_outlet_cmds(fe, walls_h_entry="boundaryField.wallHigh.h"))
+    for (e, w, m) in mf.pack_phase_plan(float(fe), n_phases=1, cool_window_s=0.6):
+        cmds += mf.time_extend_cmds(end_time_s=e, write_interval_s=w, max_deltaT_s=m)
+        cmds += [[binp]]
+    assert run(cmds, "log.pack") == 0
+    with open(os.path.join(d, "log.pack")) as f:
+        assert "nan" not in f.read().lower(), "asymmetric pack diverged (nan)"
+
+    cdt = mf.cooling_field_dT_through_k(d, nx=60, ny=8)
+    assert cdt is not None, "no cooling T field"
+    # wallLow (y=0) cooled far less ⇒ y=0 face hotter ⇒ dT_through_k > 0 (toward wallLow)
+    assert cdt["dT_through_k"] > 0.5, cdt
+    print(f"    asymmetric dT_through_k = {cdt['dT_through_k']:.2f} K (warps toward "
+          "wallLow / the h=50 face)")
 
 
 if __name__ == "__main__":
