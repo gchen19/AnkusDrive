@@ -14135,6 +14135,33 @@ def _h_items_check_manifest(p):
     return {"ok": not problems, "problems": problems}
 
 
+# --- Liskov-substitutability gate (issue #147, T1; DESIGN_HIERARCHY §7.1) -----
+# Append-only registration of the Form/Fit/Function-as-code swap gate. All logic
+# lives in the owned, FreeCAD-free module driftpin/gates/substitutability.py; this
+# handler is a thin wrapper that injects merge_assembly as the merge primitive
+# (exactly like the recipe/items handlers wrap their pure modules), so the gate
+# drives merge_assembly through its existing entry point and never interleaves
+# into its body. Callable by #138 (B1 families) and #146 (the interface registry).
+
+@handler("substitutability_check")
+def _h_substitutability_check(p):
+    """Liskov-substitutability gate (§7.1): take an assembly that gates green with
+    variant A in a slot, swap in variant B (a different family row / any part
+    claiming the same interface), and re-run merge_assembly + all gates. Still
+    green ⇒ B is interchangeable (a compatible MINOR/PATCH change ⇒ revise); a gate
+    fails ⇒ the swap broke Form/Fit/Function ⇒ a new part number. Deterministic, no
+    API. params: manifest (base, gates green), slot (component id to swap), variant
+    (replacement component spec: one of file/manifest/library), verify_baseline?
+    (default True). Returns {schema, slot, substitutable, verdict, broken_gates
+    (NAMES the broken gate), broken, classification, baseline_ok, swap_ok, ...}."""
+    from driftpin.gates import substitutability as _subst
+
+    def _call(_method, **kw):
+        return HANDLERS[_method](kw)
+
+    return _subst.substitutability_report(
+        p["manifest"], p["slot"], p["variant"], _call,
+        verify_baseline=p.get("verify_baseline", True))
 # Append-only registration of the revision + lifecycle state machine (issue #141 /
 # C2). All logic lives in the owned, pure-Python module driftpin/lifecycle.py (no
 # FreeCAD); these handlers are thin wrappers over it, exactly like the items.json
