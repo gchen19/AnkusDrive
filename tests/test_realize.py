@@ -3,7 +3,7 @@ declared mechanism? End-to-end against the REAL CAD, through merge_assembly.
 
 The gearbox arc shipped three green validations on geometry that was actually wrong,
 because each ran on a *model* of the mechanism, not the *artifact* (see
-docs/KICKOFF_validate_the_artifact.md). The headline regression: a dog collar
+docs/archive/KICKOFF_validate_the_artifact.md). The headline regression: a dog collar
 declared ENGAGED had a SOLID FACE where the dog gaps belonged; it could not interlock,
 yet every gate passed. This test builds that exact bug and proves the gate now FAILS
 it — while the interleaved collar PASSES — by consuming the exported shapes.

@@ -1,5 +1,5 @@
 """CFD field animation (simulation-video-capture kickoff item D — the deferred spike,
-docs/KICKOFF_simulation_video_capture.md). Turn a transient OpenFOAM solve, whose fields
+docs/archive/KICKOFF_simulation_video_capture.md). Turn a transient OpenFOAM solve, whose fields
 live only as native results, into a GIF a reviewer can watch: the velocity field of a
 lid-driven cavity developing from rest into its steady primary vortex, beside the
 centre-line profile converging onto the Ghia (1982) benchmark.

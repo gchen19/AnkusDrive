@@ -1,7 +1,7 @@
 """Internal-flow hydraulics — the exact closed-form gate for the CFD family (§6).
 
 Pure-Python, FreeCAD-free. The unambiguous oracle the kickoff
-(docs/SIMULATION_P2_KICKOFF.md) names for CFD: a straight circular pipe. Laminar
+(docs/archive/SIMULATION_P2_KICKOFF.md) names for CFD: a straight circular pipe. Laminar
 flow has the exact Hagen–Poiseuille pressure drop
 
     Δp = 128·μ·L·Q / (π·D⁴),

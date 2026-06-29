@@ -1,15 +1,15 @@
 # Kickoff — standing up the P2 simulation families (external solvers)
 
-The async/long-solve infrastructure ([`driftpin/jobs.py`](../driftpin/jobs.py),
+The async/long-solve infrastructure ([`driftpin/jobs.py`](../../driftpin/jobs.py),
 Sprint 6) is the last cross-cutting blocker, and it shipped. This doc kicks off the
 **P2 tier** — the heavy-solver families that ride on it: CFD, multibody dynamics,
 topology optimization, and transient/radiation thermal. It is the onboarding +
-provisioning plan, the way [`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md)
+provisioning plan, the way [`RENDER_RENDERER_INSTALL.md`](../RENDER_RENDERER_INSTALL.md)
 was for the external renderers.
 
 It complements:
-- [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) — family catalog + result schemas (families 5–8).
-- [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) — the closed-form **acceptance toy** per family.
+- [`SIMULATION_TOOLS.md`](../SIMULATION_TOOLS.md) — family catalog + result schemas (families 5–8).
+- [`SIMULATION_EXAMPLES.md`](../SIMULATION_EXAMPLES.md) — the closed-form **acceptance toy** per family.
 - [`SIMULATION_SPRINTS.md`](SIMULATION_SPRINTS.md) — sprint sequence (Sprints 7–9).
 
 ---
@@ -165,36 +165,36 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 ```
 
 > **Status (branch `feat/sim-p2-provisioning`):** M0 landed —
-> [`driftpin/solvers.py`](../driftpin/solvers.py) (FreeCAD-free registry +
+> [`driftpin/solvers.py`](../../driftpin/solvers.py) (FreeCAD-free registry +
 > env→PATH→per-OS resolution), `solve_capabilities` + `_require_solver` in the
-> worker/MCP surfaces, [`scripts/install-solvers.sh`](../scripts/install-solvers.sh),
+> worker/MCP surfaces, [`scripts/install-solvers.sh`](../../scripts/install-solvers.sh),
 > the `mbd/topology/optics/cfd` extras, and the gating degradation test
-> [`tests/test_solve_degradation.py`](../tests/test_solve_degradation.py). M1
-> `random_vibration` landed — [`driftpin/analysis/vibration.py`](../driftpin/analysis/vibration.py)
-> + [`tests/test_vibration.py`](../tests/test_vibration.py) (Miles toy: f_n=312 Hz,
+> [`tests/test_solve_degradation.py`](../../tests/test_solve_degradation.py). M1
+> `random_vibration` landed — [`driftpin/analysis/vibration.py`](../../driftpin/analysis/vibration.py)
+> + [`tests/test_vibration.py`](../../tests/test_vibration.py) (Miles toy: f_n=312 Hz,
 > W=0.01, Q=10 → 7.0 g). Still open: `contact_setup`, then M2–M5.
 >
 > **Status (branch `feat/sim-p2-mbd`, stacked on the above):** M2 landed — the first
 > external family, proving the M0 provisioning glue end-to-end.
-> [`driftpin/analysis/kinematics.py`](../driftpin/analysis/kinematics.py) is the
+> [`driftpin/analysis/kinematics.py`](../../driftpin/analysis/kinematics.py) is the
 > closed-form, solver-free gate (Grübler DOF, Grashof, slider-crank stroke = 2R,
 > four-bar sweep) behind the `mechanism_kinematics` tool;
-> [`driftpin/analysis/mbd.py`](../driftpin/analysis/mbd.py) is the PyBullet executor
+> [`driftpin/analysis/mbd.py`](../../driftpin/analysis/mbd.py) is the PyBullet executor
 > behind `mechanism_simulate_submit` (async via `jobs.py`, `_require_solver('pybullet')`
-> degradation). Toys: [`tests/test_kinematics.py`](../tests/test_kinematics.py) (exact,
-> fast lane) + [`tests/test_mbd.py`](../tests/test_mbd.py) (pendulum torque = m·g·L/2,
+> degradation). Toys: [`tests/test_kinematics.py`](../../tests/test_kinematics.py) (exact,
+> fast lane) + [`tests/test_mbd.py`](../../tests/test_mbd.py) (pendulum torque = m·g·L/2,
 > swept envelope, through-motion contact; skips when PyBullet is absent).
 >
 > **Status (branch `feat/sim-p2-remaining`, stacked on the above):** the rest of the
 > P2 tier landed — M1 `contact_setup` (CCX surface contact + nonlinear flag), M3
 > `topology_optimize_submit` (in-house NumPy SIMP — no new dep — in
-> [`driftpin/analysis/topology.py`](../driftpin/analysis/topology.py)), M4
+> [`driftpin/analysis/topology.py`](../../driftpin/analysis/topology.py)), M4
 > `thermal_transient_1d` (analytic Heisler oracle) + `thermal_transient_submit`
 > (Elmer), M5 `cfd_pipe_flow` (Hagen–Poiseuille) + `cfd_{internal,external}_flow_submit`
 > (OpenFOAM/SU2). The pure-Python oracles (SIMP volume/compliance, 1-D transient vs
 > lumped, Hagen–Poiseuille + D⁴) are gated on the fast lane
-> ([`test_topology.py`](../tests/test_topology.py), [`test_cfd.py`](../tests/test_cfd.py),
-> [`test_thermal.py`](../tests/test_thermal.py)); the Elmer/OpenFOAM **execution** paths
+> ([`test_topology.py`](../../tests/test_topology.py), [`test_cfd.py`](../../tests/test_cfd.py),
+> [`test_thermal.py`](../../tests/test_thermal.py)); the Elmer/OpenFOAM **execution** paths
 > degrade cleanly when the binary is absent (verified) and run only on the provisioned
 > runner. **The P2 tier (M0–M5) is complete; the heavy-solver case-from-FreeCAD export
 > and topology→solid reconstruction remain as follow-ons.**
@@ -202,17 +202,17 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 > **Status (branch `feat/sim-p2-topo-solid`, stacked on the above):** the
 > topology→solid follow-on landed — `topology_to_solid` closes the loop back into
 > the modeller. The pure-Python core `density_to_rects`
-> ([`driftpin/analysis/topology.py`](../driftpin/analysis/topology.py)) thresholds a
+> ([`driftpin/analysis/topology.py`](../../driftpin/analysis/topology.py)) thresholds a
 > `topology_optimize_submit` density grid and run-length-merges each row into maximal
 > solid spans (so the kernel fuses O(runs), not O(cells), boxes); the
-> `topology_to_solid` worker handler ([`driftpin/worker.py`](../driftpin/worker.py))
+> `topology_to_solid` worker handler ([`driftpin/worker.py`](../../driftpin/worker.py))
 > tiles each span as a `cell_mm`×`thickness_mm` box, `multiFuse`+`removeSplitter`s
 > them into one static `Part::Feature`, and reports `{volume, mass_fraction, n_solids,
 > bbox_mm, …}`. It runs **synchronously** (it builds geometry — unlike the `*_submit`
 > solves it does NOT touch `jobs.py`), the modeller-side counterpart to the async
-> optimizer. Toys: [`test_topology.py`](../tests/test_topology.py) gates
+> optimizer. Toys: [`test_topology.py`](../../tests/test_topology.py) gates
 > `density_to_rects` (run merging, thresholding, validation) on the fast lane;
-> [`test_worker.py`](../tests/test_worker.py) gates the live reconstruction
+> [`test_worker.py`](../../tests/test_worker.py) gates the live reconstruction
 > end-to-end (full grid cell-tiled exactly, a holed frame, a split-load-path two-solid
 > result, and the all-void-threshold clean error). Verified end-to-end: a real SIMP
 > run's density reconstructs to a valid solid whose thresholded mass fraction is
@@ -223,22 +223,22 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 > heavy-solver case-build follow-on landed — with ElmerSolver/ElmerGrid (v26.2) and
 > OpenFOAM (1912) **provisioned on the runner**, both families now build their case
 > from physical parameters, run the real solver, and gate against the analytic oracle.
-> - **M4 Elmer** — [`driftpin/analysis/elmer.py`](../driftpin/analysis/elmer.py)
+> - **M4 Elmer** — [`driftpin/analysis/elmer.py`](../../driftpin/analysis/elmer.py)
 >   generates the 1-D plane-wall transient case (native Elmer mesh + `.sif`, symmetry
 >   at the centre, convection at the surface, SaveScalars max/min → centre/surface
 >   temps). `thermal_transient_submit` now takes the slab params (or still a prepared
 >   `case_dir`), runs ElmerSolver via `jobs.py`, and returns the temperatures —
 >   matching `thermal_transient_1d` (Heisler) to **< 0.1 %** and the lumped limit at
->   small Biot. Toys: [`test_elmer.py`](../tests/test_elmer.py) (structure always;
+>   small Biot. Toys: [`test_elmer.py`](../../tests/test_elmer.py) (structure always;
 >   solver gate when ElmerSolver resolves).
-> - **M5 CFD** — [`driftpin/analysis/openfoam.py`](../driftpin/analysis/openfoam.py)
+> - **M5 CFD** — [`driftpin/analysis/openfoam.py`](../../driftpin/analysis/openfoam.py)
 >   generates the **axisymmetric wedge pipe** (collapsed-axis blockMesh + simpleFoam,
 >   laminar); Δp is read straight from the converged `p` field (the `surfaceFieldValue`
 >   function object is broken in this build). `cfd_internal_flow_submit` now takes the
 >   pipe params (or a prepared `case_dir`), runs blockMesh+simpleFoam via `jobs.py`, and
 >   returns the solved Δp next to the Hagen–Poiseuille reference — **`hp_ratio` ≈ 1.00**
 >   (within ~1 %), and the **D⁴ scaling law** holds (halving the bore → ~16× Δp). Toys:
->   [`test_openfoam.py`](../tests/test_openfoam.py). The OpenFOAM env-sourcing bug
+>   [`test_openfoam.py`](../../tests/test_openfoam.py). The OpenFOAM env-sourcing bug
 >   (`solvers.openfoam_bashrc()`, sourced in `_run_foam`) is fixed — foam apps need
 >   `WM_PROJECT_DIR` exported. **All P2 milestones (M0–M5) and both named follow-ons
 >   are now complete and oracle-gated end-to-end on the provisioned runner.**

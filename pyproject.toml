@@ -56,7 +56,7 @@ dev = [
     "anthropic>=0.40",
     "python-dotenv>=1.0",
 ]
-# P2 external-solver extras (docs/SIMULATION_P2_KICKOFF.md). Each family discovers
+# P2 external-solver extras (docs/archive/SIMULATION_P2_KICKOFF.md). Each family discovers
 # its solver via driftpin.solvers; these extras pull the pip-installable ones.
 # `pip install driftpin[mbd]` is a clean wheel install (no system package). The
 # apt/conda solvers (OpenFOAM, Elmer) are documented in scripts/install-solvers.sh,

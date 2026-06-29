@@ -1,7 +1,7 @@
 """Topology optimization — in-house SIMP, no external solver.
 
 Pure-Python + NumPy (a base dependency), FreeCAD-free. The structural member of P2
-family 5/§2 that the kickoff (docs/SIMULATION_P2_KICKOFF.md) earmarked for a pip
+family 5/§2 that the kickoff (docs/archive/SIMULATION_P2_KICKOFF.md) earmarked for a pip
 wheel (`solidspy`/`topopt`/FEniCS) — but the classic density-based SIMP optimizer
 (Sigmund's "99-line" / Andreassen's "88-line") is a self-contained NumPy routine, so
 this ships with no new dependency (the FEniCS/solidspy upgrade stays an option, and

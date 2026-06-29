@@ -5354,7 +5354,7 @@ def _gate_frame_orientation(by_name, links_by_inst, chk):
 # a dog collar declared ENGAGED with a SOLID FACE where the gaps belong. These gates
 # consume the REAL Part.Shape (never a separate idealised model) and assert the
 # geometry implements the claim. See driftpin/realize.py and
-# docs/KICKOFF_validate_the_artifact.md.
+# docs/archive/KICKOFF_validate_the_artifact.md.
 
 
 def _gate_contact_band(by_name, links_by_inst, chk):
@@ -6026,7 +6026,7 @@ def _h_add_projection_group(p):
 # accessors for dimensions (which viewPartAsSvg does NOT include). We compose
 # the page SVG ourselves — template + placed view fragments + dimension
 # graphics — and rasterise to PDF via svglib+reportlab (pure-Python, no native
-# deps). See docs/KICKOFF_techdraw_export.md.
+# deps). See docs/archive/KICKOFF_techdraw_export.md.
 
 _DIM_COLOR = "#0048a0"
 _DIM_FONT_MM = 3.2
@@ -11630,7 +11630,7 @@ def _h_mechanism_simulate_submit(p):
     max_torques, collisions_through_motion, reachable_envelope, mobility_dof}.
     `orientations` is each link's world quaternion sampled in lockstep with
     `trajectories` — what a review video needs to place the real mesh of a link
-    whose COM sits on its own spin axis (see KICKOFF_simulation_video_capture)."""
+    whose COM sits on its own spin axis (see docs/archive/KICKOFF_simulation_video_capture.md)."""
     from driftpin import jobs
     from driftpin.analysis import kinematics as kin
     from driftpin.analysis import mbd

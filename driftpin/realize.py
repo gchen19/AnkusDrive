@@ -5,7 +5,7 @@ given that the output gears freewheel and a dog clutch engages one per speed, th
 train has a determinate single-DOF power path at the design ratio. It takes the
 declaration on faith. Three times in the gearbox arc a green validation passed while
 the exported geometry was actually wrong, because the check ran on a *model of the
-mechanism* rather than the *artifact itself* (see docs/KICKOFF_validate_the_artifact.md):
+mechanism* rather than the *artifact itself* (see docs/archive/KICKOFF_validate_the_artifact.md):
 
   * a gear declared ``keyed`` was bored ROUND onto a plain shaft — no torque path;
   * a dog collar declared ENGAGED had a SOLID FACE where the dog gaps belonged — it

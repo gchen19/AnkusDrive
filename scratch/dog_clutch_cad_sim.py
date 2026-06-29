@@ -1,5 +1,5 @@
 """Sim-from-CAD: drive the REAL exported dog-clutch geometry in PyBullet
-(validate-kickoff #3 — docs/KICKOFF_validate_the_artifact.md, docs/VALIDATE_THE_ARTIFACT.md).
+(validate-kickoff #3 — docs/archive/KICKOFF_validate_the_artifact.md, docs/VALIDATE_THE_ARTIFACT.md).
 
 Items #1/#2/#4/#5 of that kickoff consume the real geometry *statically*: the §11.10
 oracle (driftpin/realize.py) reads the exported Part.Shape, and the slide-and-catch

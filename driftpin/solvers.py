@@ -36,7 +36,7 @@ import shutil
 
 # Registry of the P2 external solvers, keyed by the name agents pass (and the
 # DRIFTPIN_<NAME>_PATH env override is the upper-cased key). Ordered by the
-# milestone sequence in docs/SIMULATION_P2_KICKOFF.md. Each family lists every
+# milestone sequence in docs/archive/SIMULATION_P2_KICKOFF.md. Each family lists every
 # solver that can satisfy it; a family is reachable if ANY of its solvers resolves
 # (e.g. MBD is happy with PyBullet OR MuJoCo).
 _SOLVERS: dict = {
