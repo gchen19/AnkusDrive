@@ -1,0 +1,37 @@
+{
+  "manifest": "gearbox.manifest.json",
+  "schema": "driftpin.manifest/1",
+  "manifest_hash": "fixturehash0001",
+  "components": {
+    "housing": {
+      "file": "components/housing.part",
+      "file_hash": "h-housing",
+      "interfaces_hash": "i-housing",
+      "depends_on": []
+    },
+    "lid": {
+      "file": "components/lid.part",
+      "file_hash": "h-lid",
+      "interfaces_hash": "i-lid",
+      "depends_on": ["housing"]
+    },
+    "shaft": {
+      "file": "components/shaft.part",
+      "file_hash": "h-shaft",
+      "interfaces_hash": "i-shaft",
+      "depends_on": ["housing"]
+    },
+    "gear": {
+      "file": "components/gear.part",
+      "file_hash": "h-gear",
+      "interfaces_hash": "i-gear",
+      "depends_on": ["shaft"]
+    },
+    "cover": {
+      "file": "components/cover.part",
+      "file_hash": "h-cover",
+      "interfaces_hash": "i-cover",
+      "depends_on": ["lid"]
+    }
+  }
+}

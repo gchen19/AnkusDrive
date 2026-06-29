@@ -1,0 +1,45 @@
+{
+  "schema": "driftpin.items/1",
+  "part_number_format": {
+    "prefix": "DP-",
+    "digits": 6,
+    "next": 1006
+  },
+  "items": {
+    "housing": {
+      "part_number": "DP-001001",
+      "rev": "A",
+      "lifecycle": "released",
+      "files": ["components/housing.part"],
+      "metadata": {"name": "gearbox housing", "material": "AL6061-T6"}
+    },
+    "lid": {
+      "part_number": "DP-001002",
+      "rev": "A",
+      "lifecycle": "released",
+      "files": ["components/lid.part"],
+      "metadata": {"name": "lid", "material": "AL6061-T6"}
+    },
+    "shaft": {
+      "part_number": "DP-001003",
+      "rev": "A",
+      "lifecycle": "released",
+      "files": ["components/shaft.part"],
+      "metadata": {"name": "output shaft", "material": "SS304"}
+    },
+    "gear": {
+      "part_number": "DP-001004",
+      "rev": "B",
+      "lifecycle": "released",
+      "files": ["components/gear.part"],
+      "metadata": {"name": "spur gear 24T", "material": "SS304"}
+    },
+    "cover": {
+      "part_number": "DP-001005",
+      "rev": "A",
+      "lifecycle": "released",
+      "files": ["components/cover.part"],
+      "metadata": {"name": "access cover", "material": "ABS"}
+    }
+  }
+}

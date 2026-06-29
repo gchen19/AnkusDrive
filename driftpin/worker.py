@@ -14563,6 +14563,120 @@ def _h_feature_instantiate(p):
                            _call)
 
 
+# --- change orders + where-used impact + baselines (issue #142, C3) -----------
+# Append-only registration of the change-control layer. All logic lives in the
+# owned, pure-Python module driftpin/change.py (no FreeCAD); these handlers are
+# thin wrappers, exactly like the items (#140) / lifecycle (#141) handlers. The
+# where-used analysis READS the lockfile (the §9 dependency graph) through its
+# on-disk JSON form — the artifact assembly_lock writes — and never interleaves
+# into that handler's body.
+
+@handler("where_used")
+def _h_where_used(p):
+    """Where-used / blast-radius of an item over the lockfile dependency graph
+    (issue #142 / C3, MULTI_AGENT.md §9): every parent that consumes the item,
+    transitively. params: lockfile (path), item (id), direct? (bool — only the
+    immediate mates). Returns {item, where_used, direct} — an unknown item fails
+    loudly (KeyError), never a silent empty set."""
+    from driftpin import change as _chg
+    lock = _chg.load_lockfile(p["lockfile"])
+    item = p["item"]
+    if p.get("direct"):
+        return {"item": item, "direct": _chg.direct_dependents(lock, item),
+                "where_used": _chg.where_used(lock, item)}
+    return {"item": item, "where_used": _chg.where_used(lock, item),
+            "direct": _chg.direct_dependents(lock, item)}
+
+
+@handler("change_impact")
+def _h_change_impact(p):
+    """The where-used impact report for a set of changed items over a lockfile
+    (issue #142 / C3): the §9 immediate `stale` re-dispatch set and the full
+    transitive `where_used` blast radius. params: lockfile (path), changed (list of
+    item ids). Returns {changed, stale, where_used, ok} — ok True iff no consumer is
+    impacted."""
+    from driftpin import change as _chg
+    lock = _chg.load_lockfile(p["lockfile"])
+    return _chg.impact(lock, p["changed"])
+
+
+@handler("eco_validate")
+def _h_eco_validate(p):
+    """Validate an ECO change-order record (the cheap front door, issue #142 / C3):
+    schema stamp, a non-empty id + affected set, a present disposition, and an
+    effectivity with exactly one of date|serial|revision. params: eco (object).
+    Returns {ok, problems}."""
+    from driftpin import change as _chg
+    problems = _chg.validate_eco(p["eco"])
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("eco_create")
+def _h_eco_create(p):
+    """Build an ECO change-order record and compute its where-used impact over a
+    lockfile in one call (issue #142 / C3): the affected items, the disposition, the
+    effectivity (date/serial/revision) and the §9 blast radius the change carries.
+    params: id, affected (list), disposition, effectivity (object), title?,
+    interface_change?, note?, lockfile? (path — if given, the result embeds the
+    impact report). Optionally writes the record to `out` (path). Returns the ECO
+    object (with `impact` when a lockfile is supplied)."""
+    from driftpin import change as _chg
+    eco = _chg.make_eco(p["id"], p["affected"], p["disposition"],
+                        p.get("effectivity", {}), title=p.get("title"),
+                        interface_change=p.get("interface_change", False),
+                        note=p.get("note"))
+    problems = _chg.validate_eco(eco)
+    if problems:
+        raise ValueError(f"invalid ECO: {problems}")
+    if p.get("lockfile"):
+        eco = _chg.eco_with_impact(eco, _chg.load_lockfile(p["lockfile"]))
+    if p.get("out"):
+        with open(p["out"], "w") as f:
+            f.write(_chg.serialize_eco(eco))
+    return eco
+
+
+@handler("baseline_create")
+def _h_baseline_create(p):
+    """Pin a labeled, immutable baseline — a {item: rev + content fingerprint}
+    snapshot over an items.json registry for reproducible rebuilds (issue #142 /
+    C3). params: label, registry (path), items? (subset of item ids), base_dir?
+    (artifact root; defaults to the registry's directory), note?, out? (write the
+    sidecar). Returns the baseline object. Deterministic: same state -> identical
+    bytes."""
+    import os as _os
+    from driftpin import change as _chg
+    from driftpin import items as _items
+    reg_path = p["registry"]
+    reg = _items.load_registry(reg_path)
+    base_dir = p.get("base_dir") or _os.path.dirname(_os.path.abspath(reg_path))
+    baseline = _chg.create_baseline(p["label"], reg, base_dir=base_dir,
+                                    items=p.get("items"), note=p.get("note"))
+    if p.get("out"):
+        with open(p["out"], "w") as f:
+            f.write(_chg.serialize_baseline(baseline))
+    return baseline
+
+
+@handler("baseline_verify")
+def _h_baseline_verify(p):
+    """Verify a rebuild against a pinned baseline (issue #142 / C3): re-resolve every
+    pinned item from the current registry + artifacts and check it still matches the
+    pinned rev AND content fingerprint — a drifted input (changed bytes, bumped rev,
+    a vanished item) is caught. params: baseline (path), registry (path), base_dir?.
+    Returns {ok, label, drifted, missing}."""
+    import json as _json
+    import os as _os
+    from driftpin import change as _chg
+    from driftpin import items as _items
+    with open(p["baseline"]) as f:
+        baseline = _json.load(f)
+    reg_path = p["registry"]
+    reg = _items.load_registry(reg_path)
+    base_dir = p.get("base_dir") or _os.path.dirname(_os.path.abspath(reg_path))
+    return _chg.verify_baseline(baseline, reg, base_dir=base_dir)
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:
