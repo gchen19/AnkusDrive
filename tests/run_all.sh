@@ -270,6 +270,8 @@ echo "== Part recipes (issue #136 — declared-input build templates: contract +
 $VENV_PY tests/test_recipes.py
 
 echo
+echo "== Interface-type registry + conformance gate (issue #146 — implements + bus + unknown-is-loud, no key) =="
+$VENV_PY tests/test_iface_registry.py
 echo "== Project / workspace container (D1, #143 — scaffold + ref-integrity guard + master-skeleton, no key) =="
 $VENV_PY tests/test_project_container.py
 echo "== Feature templates (issue #139 B2 — PowerCopy/UDF: ref-by-name + door + determinism, no key) =="

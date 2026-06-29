@@ -5459,6 +5459,103 @@ _TYPED_GATES = {
     "interleave": _gate_interleave,
 }
 
+# --- interface-type CONFORMANCE gate (issue #146, RFC §6.3) — append-only ----
+#
+# A part DECLARES conformance to a named, versioned interface type (nema17_face@1,
+# bore_h7@1) — the mechanical `implements SomeInterface`. The registry + the pure
+# conformance predicate live in the OWNED, FreeCAD-free module
+# driftpin/iface_registry.py; this thin gate is the only geometry-touching step:
+# it extracts the part's distinct circular features from the REAL shape about the
+# published interface frame and hands them to the registry. An UNKNOWN type is
+# itself a violation (never a silent pass — same discipline as an unknown typed
+# `kind` in _run_typed_checks). The gate slots into the EXISTING typed-check
+# dispatch through one append-only registration below — merge_assembly's body is
+# untouched (the conformance check is authored as a `checks` entry of kind
+# "interface_conformance", or lowered there from an `implements` declaration by
+# iface_registry.lower_manifest, exactly as a recipe component lowers to library).
+
+def _iface_locating_frame(link, iface_name):
+    """(world origin, world unit axis) the conformance features are measured about:
+    the named published interface frame if present (else the first published
+    frame), transformed by the link's world placement — falling back to the part's
+    own centroid + world +Z when nothing is published."""
+    ifaces = _read_interfaces(link)
+    frame = None
+    if iface_name and iface_name in ifaces:
+        frame = ifaces[iface_name]
+    elif ifaces:
+        frame = next(iter(ifaces.values()))
+    if frame is not None:
+        wp = link.LinkPlacement.multiply(_frame_to_placement(frame))
+        zdir = wp.Rotation.multVec(App.Vector(0, 0, 1))
+        zdir.normalize()
+        return wp.Base, zdir
+    sh = _link_world_shape(link)
+    origin = _shape_com(sh) if sh is not None else App.Vector(0, 0, 0)
+    return origin, App.Vector(0, 0, 1)
+
+
+def _iface_circular_features(shape, origin, zdir):
+    """Distinct circular features of `shape` whose axis is parallel to `zdir`,
+    expressed in the interface plane about `origin`. A through-hole's two rim
+    circles share (dia, x, y) and collapse to ONE feature (deduped to 0.01 mm), so
+    four mounting holes read as four features, not eight rims. Returns a list of
+    {dia_mm, x_mm, y_mm, center_r_mm} — the pure list iface_registry checks."""
+    import math
+    import Part  # noqa: F401
+    z = App.Vector(zdir.x, zdir.y, zdir.z)
+    z.normalize()
+    ref = App.Vector(1, 0, 0)
+    if abs(ref.dot(z)) > 0.9:
+        ref = App.Vector(0, 1, 0)
+    # Gram-Schmidt without App.Vector.multiply, which scales IN PLACE and would
+    # corrupt z (the FreeCAD Vector in-place-mutation hazard).
+    proj = ref.dot(z)
+    xdir = App.Vector(ref.x - z.x * proj, ref.y - z.y * proj, ref.z - z.z * proj)
+    xdir.normalize()
+    ydir = z.cross(xdir)
+    seen = {}
+    for e in shape.Edges:
+        c = getattr(e, "Curve", None)
+        if not isinstance(c, Part.Circle):
+            continue
+        ax = App.Vector(c.Axis.x, c.Axis.y, c.Axis.z)
+        if ax.Length < 1e-9:
+            continue
+        ax.normalize()
+        if abs(ax.dot(z)) < 0.99:          # only features along the face normal
+            continue
+        rel = App.Vector(c.Center.x, c.Center.y, c.Center.z) - origin
+        x = rel.dot(xdir)
+        y = rel.dot(ydir)
+        key = (round(2.0 * c.Radius, 2), round(x, 2), round(y, 2))
+        seen[key] = (x, y)
+    feats = []
+    for (dia, _kx, _ky), (x, y) in seen.items():
+        feats.append({"dia_mm": dia, "x_mm": round(x, 3), "y_mm": round(y, 3),
+                      "center_r_mm": round(math.hypot(x, y), 3)})
+    return feats
+
+
+def _gate_interface_conformance(by_name, links_by_inst, chk):
+    """Gate a part's claim to a registered interface type against that type's
+    contract, measured from the REAL geometry (issue #146). chk = {kind:
+    'interface_conformance', part, type, iface?}. An unknown type is a loud
+    violation (handled by iface_registry.check_conformance), never a silent pass."""
+    from driftpin import iface_registry as _ir
+    part = by_name.get(links_by_inst.get(chk["part"], chk["part"]))
+    if part is None:
+        return [{**chk, "error": "interface_conformance part link not found"}]
+    sh = _link_world_shape(part)
+    if sh is None:
+        return [{**chk, "error": "interface_conformance part has no shape"}]
+    origin, zdir = _iface_locating_frame(part, chk.get("iface"))
+    feats = _iface_circular_features(sh, origin, zdir)
+    return [{**chk, **v} for v in _ir.check_conformance(chk.get("type"), feats)]
+
+
+_TYPED_GATES["interface_conformance"] = _gate_interface_conformance
+
 # Typed kinds whose two parts are MEANT to be in contact / interpenetrating in a
 # static pose, so the blunt interference gate must not also flag them: meshing
 # involute teeth overlap at the pitch line (the eval's "posed interference isn't
