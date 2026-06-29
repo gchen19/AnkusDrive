@@ -153,7 +153,11 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     participants exit 0 and preCICE reached the final time window."""
     fluid = os.path.join(case_dir, "fluid-openfoam")
     solid = os.path.join(case_dir, "solid-calculix")
-    of_bashrc = solvers.openfoam_bashrc()
+    # The fluid must source the OpenFOAM version the preCICE adapter was built
+    # against, NOT just any OpenFOAM — a version mismatch makes pimpleFoam abort
+    # at startup (can't load the function-object adapter) and hangs the Solid at
+    # the handshake. See solvers.fsi_openfoam_bashrc().
+    of_bashrc = solvers.fsi_openfoam_bashrc()
     ccxbin = solvers.ccx_precice_bin()
     lib = solvers.precice_lib_dir()
     if not (of_bashrc and ccxbin and lib):
