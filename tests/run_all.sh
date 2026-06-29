@@ -280,6 +280,8 @@ echo "== Design tables / variant families (issue #138, B1 — a gear family + a 
 $VENV_PY tests/test_families.py
 echo "== Revision + lifecycle state machine + F3 predicate (C2, #141 — state machine, immutability, rename-vs-revise; no key, no FreeCAD) =="
 python3 tests/test_lifecycle.py
+echo "== Modularity eval ladder (E1, #148 — Layer M1: family regen / substitutability / encapsulation / interface-break, each vs. its negative control; no key) =="
+$VENV_PY tests/test_modularity_eval.py
 echo "== Change orders + where-used impact + baselines (C3, #142 — ECO record + §9 blast radius + reproducible-rebuild baseline; no key, no FreeCAD) =="
 python3 tests/test_change.py
 
