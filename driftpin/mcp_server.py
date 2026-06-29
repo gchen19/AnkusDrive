@@ -5947,6 +5947,121 @@ def project_resolve_manifest(project: str, out: str | None = None) -> dict:
     return _call("project_resolve_manifest", project=project, out=out)
 
 
+# --- change orders + where-used impact + baselines (issue #142, C3) ------------
+# Append-only exposure of driftpin/change.py — the change-control layer over the
+# C1 item model (#140) + C2 lifecycle (#141) + the §9 lockfile dependency graph.
+
+@mcp.tool()
+def where_used(lockfile: str, item: str, direct: bool = False) -> dict:
+    """Where-used / impact analysis (issue #142, C3; MULTI_AGENT.md §9): traverse the
+    lockfile `depends_on` graph and report every parent that CONSUMES an item — the
+    blast radius, so exactly those parents re-dispatch when the item changes. The
+    lockfile records edges consumer -> consumed (lid depends_on housing); where-used
+    is the reverse reachability of the item (everything that reaches it).
+
+    lockfile: path to the lockfile (the JSON assembly_lock wrote).
+    item: the item / component id to query.
+    direct: if true, also surface only the immediate mates separately.
+
+    Returns {item, where_used (the full transitive blast radius), direct (the §9
+    immediate-neighbour layer)} — an unknown item fails loudly, never a silent empty
+    set."""
+    return _call("where_used", lockfile=lockfile, item=item, direct=direct)
+
+
+@mcp.tool()
+def change_impact(lockfile: str, changed: list) -> dict:
+    """The where-used impact report for a set of changed items over a lockfile graph
+    (issue #142, C3) — surfaces the §9 `stale` set as an item-level impact report
+    BEFORE a change is committed.
+
+    lockfile: path to the lockfile (the §9 dependency graph).
+    changed: the list of changed item / component ids (an ECO's affected set).
+
+    Returns {changed, stale (the §9 immediate re-dispatch consumers), where_used
+    (the full transitive blast radius), ok (true iff nothing is impacted)}."""
+    return _call("change_impact", lockfile=lockfile, changed=changed)
+
+
+@mcp.tool()
+def eco_validate(eco: dict) -> dict:
+    """Validate an ECO (engineering change order) record (issue #142, C3) — the cheap
+    front door. Checks the schema stamp, a non-empty id + affected item set, a present
+    disposition, and an effectivity carrying exactly one of date|serial|revision.
+
+    eco: the ECO object.
+
+    Returns {ok, problems} — ok is True iff problems is empty."""
+    return _call("eco_validate", eco=eco)
+
+
+@mcp.tool()
+def eco_create(id: str, affected: list, disposition: str, effectivity: dict,
+               title: str | None = None, interface_change: bool = False,
+               note: str | None = None, lockfile: str | None = None,
+               out: str | None = None) -> dict:
+    """Build an ECO change-order record (issue #142, C3) — turn a change into a
+    *record*, not a silent mutation (the diff IS the change order, mapping onto a git
+    commit/PR). Optionally compute its where-used impact over a lockfile in the same
+    call, so the blast radius travels with the record.
+
+    id: the ECO id (e.g. "ECO-0001").
+    affected: the list of changed item / component ids.
+    disposition: the change disposition (use_as_is | rework | scrap | revise | ...).
+    effectivity: a dict with exactly one of date|serial|revision (when it takes
+        effect).
+    title / note: optional human description recorded on the record.
+    interface_change: true if a published interface moved (the §9 stale trigger).
+    lockfile: optional path — when given, the result embeds an `impact` report.
+    out: optional path — write the git-diffable ECO sidecar there.
+
+    Returns the ECO object (with `impact` when a lockfile is supplied); a malformed
+    ECO fails loudly."""
+    return _call("eco_create", id=id, affected=affected, disposition=disposition,
+                 effectivity=effectivity, title=title,
+                 interface_change=interface_change, note=note,
+                 lockfile=lockfile, out=out)
+
+
+@mcp.tool()
+def baseline_create(label: str, registry: str, items: list | None = None,
+                    base_dir: str | None = None, note: str | None = None,
+                    out: str | None = None) -> dict:
+    """Pin a labeled, immutable BASELINE (issue #142, C3) — a {item: revision + content
+    fingerprint} snapshot over an items.json registry (a git-tag / lockfile over the
+    item graph) for reproducible rebuilds. The fingerprint pins the artifact BYTES, so
+    a rebuild is verifiable byte-for-byte.
+
+    label: the baseline label (e.g. "v1.0").
+    registry: path to the items.json sidecar.
+    items: optional subset of item ids to pin (default: every item).
+    base_dir: artifact root for fingerprinting (defaults to the registry's directory).
+    note: optional description.
+    out: optional path — write the git-diffable baseline sidecar there.
+
+    Returns the baseline object. Deterministic: same state -> identical bytes."""
+    return _call("baseline_create", label=label, registry=registry, items=items,
+                 base_dir=base_dir, note=note, out=out)
+
+
+@mcp.tool()
+def baseline_verify(baseline: str, registry: str,
+                    base_dir: str | None = None) -> dict:
+    """Verify a rebuild against a pinned baseline (issue #142, C3) — the reproducible-
+    rebuild gate. Re-resolves every pinned item from the current registry + artifacts
+    and checks it still matches the pinned rev AND content fingerprint; a drifted input
+    (changed bytes, a bumped rev, a vanished item) is caught, never silently accepted.
+
+    baseline: path to the baseline sidecar.
+    registry: path to the current items.json sidecar.
+    base_dir: artifact root for fingerprinting (defaults to the registry's directory).
+
+    Returns {ok, label, drifted (item/field/expected/actual), missing} — ok is True
+    iff the rebuild reproduces the baseline exactly."""
+    return _call("baseline_verify", baseline=baseline, registry=registry,
+                 base_dir=base_dir)
+
+
 def run():
     mcp.run()
 
