@@ -34,6 +34,7 @@ from driftpin.analysis import cfd  # noqa: E402
 from driftpin.analysis import meshbridge as mb  # noqa: E402
 from driftpin.analysis import openfoam  # noqa: E402
 from driftpin.analysis import thermal  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 _FIXTURE_UNV = Path(__file__).resolve().parent / "fixtures" / "box20_coarse.unv"
 
@@ -191,6 +192,8 @@ def test_bridged_box_matches_heisler_oracle():
     plane wall — convection on faces 1+2 (x=0, x=20 mm), the four lateral faces
     natural — must match the Heisler one-term oracle at Bi=0.5, Fo≈0.49 (measured
     0.2–0.9 % live; gate 3 %)."""
+    if skip_heavy("Elmer/OpenFOAM mesh bridge"):
+        return
     if not solvers.is_available("elmer") or not shutil.which("ElmerGrid"):
         print("    SKIP — ElmerSolver/ElmerGrid not installed")
         return
@@ -225,6 +228,8 @@ def test_bridged_cylinder_matches_hagen_poiseuille():
     """The kickoff's OpenFOAM-path relative gate: the closed cylinder STL (D=10 mm,
     L=100 mm) through blockMesh + snappyHexMesh + simpleFoam at Re=50 must land the
     developed-profile pressure drop on Hagen–Poiseuille (measured 0.6 %; gate 10 %)."""
+    if skip_heavy("Elmer/OpenFOAM mesh bridge"):
+        return
     if not solvers.is_available("openfoam"):
         print("    SKIP — OpenFOAM not installed")
         return

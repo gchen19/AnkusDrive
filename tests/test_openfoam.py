@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from driftpin import solvers  # noqa: E402
 from driftpin.analysis import cfd  # noqa: E402
 from driftpin.analysis import openfoam  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
 # --- structure (no solver) ----------------------------------------------------
@@ -161,6 +162,8 @@ def _solve_pipe(D_mm, L_mm, U, nu, rho, na=120, nr=15, et=4000):
 def test_pipe_matches_hagen_poiseuille():
     """Re≈50 laminar pipe: the solved developed Δp is within 10% of Hagen–Poiseuille
     (it lands within ~1% in practice)."""
+    if skip_heavy("OpenFOAM CFD"):
+        return
     if not solvers.is_available("openfoam"):
         print("    SKIP — OpenFOAM not installed")
         return
@@ -177,6 +180,8 @@ def test_pipe_matches_hagen_poiseuille():
 def test_pipe_d4_scaling_law():
     """At fixed volumetric flow, halving the bore raises Δp ~16× (the D⁴ law a
     mis-scaled solver fails). Compare two solved pipes (D and D/2, same Q)."""
+    if skip_heavy("OpenFOAM CFD"):
+        return
     if not solvers.is_available("openfoam"):
         print("    SKIP — OpenFOAM not installed")
         return
@@ -215,6 +220,8 @@ def _solve_flat_plate(U, nu, rho, L=0.1):
 def test_flat_plate_matches_blasius():
     """Laminar flat plate (Re_L≈1e4): the solved wall-shear Cd is within 15% of the
     Blasius average Cf=1.328/√Re_L (it lands ~9% high and converges down with Re)."""
+    if skip_heavy("OpenFOAM CFD"):
+        return
     if not solvers.is_available("openfoam"):
         print("    SKIP — OpenFOAM not installed")
         return
@@ -227,6 +234,8 @@ def test_flat_plate_matches_blasius():
 def test_flat_plate_blasius_u_scaling():
     """Blasius friction drag ∝ U^1.5 — two solved plates (U and 2U) reproduce the
     exponent the analytic oracle predicts, within the solver's tolerance."""
+    if skip_heavy("OpenFOAM CFD"):
+        return
     if not solvers.is_available("openfoam"):
         print("    SKIP — OpenFOAM not installed")
         return
@@ -301,6 +310,8 @@ def test_rans_plate_case_files_and_writer():
 
 
 def test_rans_pipe_matches_colebrook_banded():
+    if skip_heavy("OpenFOAM CFD"):
+        return
     if not solvers.is_available("openfoam"):
         print("    SKIP — OpenFOAM not installed")
         return
@@ -322,6 +333,8 @@ def test_rans_pipe_matches_colebrook_banded():
 
 
 def test_rans_plate_matches_mixed_cf_banded():
+    if skip_heavy("OpenFOAM CFD"):
+        return
     if not solvers.is_available("openfoam"):
         print("    SKIP — OpenFOAM not installed")
         return

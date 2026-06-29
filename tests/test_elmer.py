@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from driftpin import solvers  # noqa: E402
 from driftpin.analysis import elmer  # noqa: E402
 from driftpin.analysis import thermal  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
 # --- structure (no solver) ----------------------------------------------------
@@ -175,6 +176,8 @@ def _run_slab(half_mm, h, dur, k, rho, cp, ti=100.0, ta=25.0, ne=40, ns=120):
 def test_solve_matches_heisler_oracle():
     """Bi=0.5, Fo=0.5 plane wall: the Elmer centre/surface temps match the one-term
     analytic oracle to a small fraction of a degree."""
+    if skip_heavy("Elmer thermal/radiation"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
@@ -193,6 +196,8 @@ def test_solve_agrees_with_lumped_at_small_biot():
     """As Bi→0 the slab is near-isothermal: the Elmer centre temp tracks the lumped
     exponential exp(−Bi·Fo), so centre≈surface and both match thermal_transient_1d's
     lumped cross-check."""
+    if skip_heavy("Elmer thermal/radiation"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
@@ -229,6 +234,8 @@ def test_radiation_matches_two_plate_oracle():
     """Two parallel plates exchanging diffuse-gray radiation: the Elmer net flux matches
     the exact two-plate closed form q = σ(T₁⁴−T₂⁴)/(1/ε₁+1/ε₂−1) within 2% (the residual
     is finite-plate edge leakage), across symmetric and asymmetric emissivities."""
+    if skip_heavy("Elmer thermal/radiation"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
@@ -249,6 +256,8 @@ def test_radiation_matches_two_plate_oracle():
 def test_radiation_emissivity_lowers_flux():
     """Halving both emissivities cuts the exchanged flux (the 1/ε₁+1/ε₂−1 denominator
     grows), and Elmer tracks the oracle's drop."""
+    if skip_heavy("Elmer thermal/radiation"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return

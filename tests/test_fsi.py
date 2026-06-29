@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO))
 
 from driftpin import solvers  # noqa: E402
 from driftpin.analysis import fsi  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 _E_STEEL_GPA = 210.0
 
@@ -131,6 +132,8 @@ def test_fsi_coupled_plate_deflects():
     monotonically into the flow — a non-trivial, growing wet displacement, the
     physical signature the plate-deflection oracle anchors. Gated on the FSI stack
     resolving (built via scripts/install-solvers.sh fsi)."""
+    if skip_heavy("FSI preCICE coupled"):
+        return
     if not _fsi_stack_ready():
         miss = solvers.fsi_stack_status()["missing"]
         print(f"    SKIP — preCICE FSI stack not resolved (missing: {miss})")

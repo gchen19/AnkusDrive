@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin import solvers  # noqa: E402
 from driftpin.analysis import warpage as W  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
 # --- analytic twin (no solver) -----------------------------------------------
@@ -226,6 +227,8 @@ def _run_ccx_warpage(cd, nodes, *, dT, cte=7e-5):
 
 
 def test_ccx_warpage_matches_analytic_and_balanced_is_flat():
+    if skip_heavy("CalculiX warpage"):
+        return
     if solvers.ccx_bin() is None:
         print("    SKIP — CalculiX (ccx) not installed")
         return

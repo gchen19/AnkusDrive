@@ -44,6 +44,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from driftpin.analysis import acoustics_bem as ab  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 RUNNER = str(REPO / "driftpin" / "bempp_runner.py")
 
@@ -184,6 +185,8 @@ def test_bempp_runner_subprocess_clean():
     """The Bempp engine answers a ping over the subprocess + sentinel-JSON contract,
     and THIS process never imports bempp_cl (keeping meshio>=4 off the shared venv)."""
     py = _bempp_python()
+    if skip_heavy("Bempp BEM"):
+        return
     if py is None:
         print("    SKIP — no bempp venv resolves (scripts/install-solvers.sh acoustics_bem)")
         return
@@ -199,6 +202,8 @@ def test_bempp_radiation_gate():
     recovered radiated power AND the far-field pressure at 1 m must land on the
     closed-form monopole_sphere oracle within ~2%."""
     py = _bempp_python()
+    if skip_heavy("Bempp BEM"):
+        return
     if py is None:
         print("    SKIP — no bempp venv resolves (scripts/install-solvers.sh acoustics_bem)")
         return
@@ -230,6 +235,8 @@ def test_bempp_scattering_gate():
     far field's backscatter form function |f∞(π)| must land on the Mie oracle within
     ~3%."""
     py = _bempp_python()
+    if skip_heavy("Bempp BEM"):
+        return
     if py is None:
         print("    SKIP — no bempp venv resolves (scripts/install-solvers.sh acoustics_bem)")
         return

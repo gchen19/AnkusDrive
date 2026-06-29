@@ -109,24 +109,18 @@ def test_screen_escalates_to_fill_when_fill_check_runs():
 
 # The solver-backed fill/pack/cool solves below are CPU-intensive — the
 # openInjMoldSim cases run several minutes each (a violent compressible fill at a
-# tiny maxDeltaT, then a conduction-limited cool). They are EXCLUDED from the
-# standard per-push suite (.github/workflows/test.yml), which would otherwise be
-# dominated by them and blow its 20-minute cap, and run ONLY when
-# RUN_MOLDING_SOLVE=1 — set by the dedicated molding-solve workflow for pushes
-# that actually touch the molding solver (plus on-demand / weekly). The cheap
-# no-solver half of this file (case generation, field parsers, gates, Tait EOS,
-# shrinkage) still runs every push and catches most regressions. Without the
-# flag these skip even where the solver IS installed.
-RUN_MOLDING_SOLVE = os.environ.get("RUN_MOLDING_SOLVE") == "1"
+# tiny maxDeltaT, then a conduction-limited cool). Like every live external-solver
+# solve they are gated behind RUN_HEAVY_SOLVES (see tests/heavy_solve.py): the
+# standard per-push suite leaves it unset so these skip even where the solver IS
+# installed, while the cheap no-solver half (case generation, field parsers,
+# gates, Tait EOS, shrinkage) still runs every push and catches most regressions.
+# The dedicated heavy-solves workflow sets the flag to run the real solves.
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
 def _skip_unless_molding_solve():
     """True (and prints a reason) when the heavy molding solves are gated off."""
-    if not RUN_MOLDING_SOLVE:
-        print("    SKIP — solver-backed molding solve gated off "
-              "(set RUN_MOLDING_SOLVE=1 to run)")
-        return True
-    return False
+    return skip_heavy("openInjMoldSim fill/pack/cool")
 
 
 def _run_fill(case_dir):
