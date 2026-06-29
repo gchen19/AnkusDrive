@@ -525,14 +525,56 @@ def openfoam_adapter_lib_dir() -> str | None:
     return None
 
 
+def fsi_openfoam_bashrc() -> str | None:
+    """The OpenFOAM env file the FSI *fluid* (``pimpleFoam`` + the preCICE
+    function-object adapter) must source — which MUST match the OpenFOAM version
+    the adapter (``openfoam_adapter_lib_dir``) was built against.
+
+    This is deliberately distinct from the general ``openfoam_bashrc()``: a
+    function-object library is version/ABI-specific, so a ``pimpleFoam`` from a
+    *different* OpenFOAM than the adapter aborts at startup with
+    ``functionObject::New ... FOAM exiting`` (the adapter isn't in its registry).
+    The fluid then never connects and the Solid hangs at the preCICE handshake
+    until the deadline. On a box with several OpenFOAM installs (e.g. an apt
+    upgrade past the version the adapter was wmade against) the general resolver
+    picks the newest, which is exactly the mismatch that bites.
+
+    Resolution: ``DRIFTPIN_FSI_OPENFOAM_BASHRC`` env -> the install whose version
+    matches the adapter lib path (``~/OpenFOAM/<user>-v2512/...`` -> the
+    ``…openfoam2512…`` / ``…-v2512…`` bashrc) -> the general ``openfoam_bashrc()``."""
+    env = os.environ.get("DRIFTPIN_FSI_OPENFOAM_BASHRC")
+    if env and os.path.isfile(env):
+        return env
+    ofa = openfoam_adapter_lib_dir()
+    if ofa:
+        import re as _re
+        m = _re.search(r"v?(\d{4})", os.path.basename(os.path.dirname(
+            os.path.dirname(os.path.dirname(ofa)))) or ofa)
+        # fall back to scanning the whole adapter path for a 4-digit version token
+        if not m:
+            m = _re.search(r"v?(\d{4})", ofa)
+        if m:
+            ver = m.group(1)
+            for cand in (f"/usr/lib/openfoam/openfoam{ver}/etc/bashrc",
+                         os.path.expanduser(f"~/OpenFOAM/OpenFOAM-v{ver}/etc/bashrc"),
+                         f"/opt/openfoam{ver}/etc/bashrc",
+                         f"/opt/OpenFOAM-v{ver}/etc/bashrc",
+                         f"/usr/share/openfoam{ver}/etc/bashrc"):
+                if os.path.isfile(cand):
+                    return cand
+    return openfoam_bashrc()
+
+
 def fsi_stack_status() -> dict:
     """Resolve the full FSI stack side-effect-free for the capabilities/degradation
     report: ``{ok, ccx_precice, precice_lib, openfoam_adapter_lib, openfoam_bashrc,
-    missing}``. ``ok`` is true only when all four resolve."""
+    missing}``. ``ok`` is true only when all four resolve. ``openfoam_bashrc`` is
+    the *FSI-matched* one (``fsi_openfoam_bashrc``), i.e. the version the adapter
+    was built against — what ``run_coupled_fsi`` actually sources."""
     ccx = ccx_precice_bin()
     lib = precice_lib_dir()
     ofa = openfoam_adapter_lib_dir()
-    of = openfoam_bashrc()
+    of = fsi_openfoam_bashrc()
     missing = [n for n, v in (("ccx_preCICE", ccx), ("libprecice", lib),
                               ("openfoam-adapter", ofa),
                               ("openfoam-bashrc", of)) if not v]
