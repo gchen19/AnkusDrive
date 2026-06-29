@@ -929,10 +929,13 @@ def test_auto_and_manual_dimensions():
                views=["Front", "Top"])
 
         auto = w.call("add_dimension", page=page, auto=True)["dimensions"]
-        # 2 views x (horizontal + vertical) overall extents
-        assert len(auto) == 4, auto
+        # Each overall world-axis extent is dimensioned ONCE across the view set
+        # (issue #108 #4: per-view H+V would double-dimension the shared width and
+        # the gate flags it `redundant`). Front gives W=60 + H=8; Top adds D=40 and
+        # skips the already-covered width — 3 dims, not 4.
+        assert len(auto) == 3, auto
         vals = sorted(round(d["value"], 1) for d in auto)
-        assert vals == [8.0, 40.0, 60.0, 60.0], vals  # W=60 in both views, D=40, H=8
+        assert vals == [8.0, 40.0, 60.0], vals  # W=60 (once), D=40, H=8
 
         # diameter of the hole — true value 12.0, not a foreshortened projection
         dia = w.call("add_dimension", page=page, view="Top", kind="diameter",
@@ -945,7 +948,7 @@ def test_auto_and_manual_dimensions():
         assert abs(pos["value"] - 30.0) < 1e-6, pos
 
         out = w.call("export_drawing", page=page, path=os.path.join(tmp, "d.svg"))
-        assert out["dimensions"] == 6, out
+        assert out["dimensions"] == 5, out  # 3 auto extents + diameter + position
         svg = open(os.path.join(tmp, "d.svg"), encoding="utf-8").read()
         assert "Ø12.00" in svg and "30.00" in svg  # diameter symbol + position
 
@@ -3367,6 +3370,7 @@ _ADD_NOT_SOLID = {
     "add_annotation",        # a TechDraw text annotation
     "add_thumbnail",         # a TechDraw isometric pictorial view
     "add_section_view",      # a TechDraw cross-section view
+    "add_feature_note",      # a TechDraw feature note / leader annotation
 }
 
 
