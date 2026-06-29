@@ -1,0 +1,75 @@
+name: Molding solver (heavy, self-hosted)
+
+# The injection-molding fill / pack / cool solves (OpenFOAM interFoam + the
+# from-source openInjMoldSim OF7 build) are CPU-intensive — several minutes per
+# case. They are EXCLUDED from the standard per-push suite (test.yml), which
+# would otherwise be dominated by them and blow its 20-minute cap. They run here
+# ONLY when actually needed to confirm a change doesn't regress the molding
+# solver:
+#   - a PR (or push to main) that TOUCHES the molding solver / rheology corpus
+#     — the paths filter below, so a docs or unrelated change never triggers it;
+#   - on demand via workflow_dispatch;
+#   - weekly, as a slow-drift guard against solver/host changes.
+#
+# The gate is RUN_MOLDING_SOLVE=1, read by tests/test_molding_fill.py: with it
+# unset the solver-backed cases skip (even where OpenFOAM IS installed); with it
+# set they run the real blockMesh+interFoam / openInjMoldSim solves. Same
+# self-hosted FreeCAD box as test.yml (it also carries the OpenFOAM +
+# openInjMoldSim builds).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "driftpin/analysis/molding_fill.py"
+      - "driftpin/analysis/molding.py"
+      - "driftpin/analysis/materials/**"
+      - "driftpin/solvers.py"
+      - "tests/test_molding_fill.py"
+      - "tools/build_openinjmoldsim.sh"
+      - ".github/workflows/molding-solve.yml"
+  pull_request:
+    paths:
+      - "driftpin/analysis/molding_fill.py"
+      - "driftpin/analysis/molding.py"
+      - "driftpin/analysis/materials/**"
+      - "driftpin/solvers.py"
+      - "tests/test_molding_fill.py"
+      - "tools/build_openinjmoldsim.sh"
+      - ".github/workflows/molding-solve.yml"
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * 1"   # 06:00 UTC Mondays — slow-drift guard
+
+# One heavy molding run per ref needs the single self-hosted box; supersede the
+# old run instead of queueing.
+concurrency:
+  group: molding-solve-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  molding-solve:
+    name: Injection-molding solver regression (self-hosted)
+    runs-on: [self-hosted, driftpin]
+    # The three openInjMoldSim cases (~3 + ~6 + ~6 min) plus the two interFoam
+    # plaques dominate; 40 min bounds a wedged solver without cutting a real run.
+    timeout-minutes: 40
+    env:
+      RUN_MOLDING_SOLVE: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Wire local FreeCAD (no download; reuses installed AppImage)
+        run: |
+          bash tests/setup_local.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run molding fill / pack / cool solver tests
+        # Same file the per-push suite runs, but with the gate ON so the
+        # solver-backed cases execute. The cheap no-solver cases run too — cheap
+        # insurance that the gating itself didn't break the parsers/gates.
+        run: python3 tests/test_molding_fill.py

@@ -13,7 +13,11 @@ name: Tests
 #
 # Perf and reliability suites are gated behind env vars in run_all.sh and
 # intentionally NOT run here (perf is noisy, reliability costs Anthropic
-# API credits).
+# API credits). The CPU-intensive injection-molding fill/pack/cool solves
+# (OpenFOAM interFoam + openInjMoldSim, several minutes each) are likewise gated
+# off here behind RUN_MOLDING_SOLVE — they would blow the 20-min cap below — and
+# run in the dedicated molding-solve.yml only when a change touches the molding
+# solver. The cheap no-solver molding tests (case-gen, parsers, gates) still run.
 
 on:
   push:
