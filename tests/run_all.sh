@@ -280,6 +280,8 @@ echo "== Design tables / variant families (issue #138, B1 — a gear family + a 
 $VENV_PY tests/test_families.py
 echo "== Revision + lifecycle state machine + F3 predicate (C2, #141 — state machine, immutability, rename-vs-revise; no key, no FreeCAD) =="
 python3 tests/test_lifecycle.py
+echo "== Change orders + where-used impact + baselines (C3, #142 — ECO record + §9 blast radius + reproducible-rebuild baseline; no key, no FreeCAD) =="
+python3 tests/test_change.py
 
 echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="

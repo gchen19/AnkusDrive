@@ -98,6 +98,12 @@ def determinism_class(tool_name):
 # tests already; they're parked here pending a representative-kwargs sweep entry.
 # BURN THIS DOWN — move names into a class + add a sweep entry; do not grow it.
 NOT_YET_CLASSIFIED = {
+    # change orders + where-used impact + baselines (issue #142, C3): pure-data,
+    # deterministic by construction (where-used over the §9 lockfile graph; a
+    # byte-fingerprint baseline) but parked here pending a representative-kwargs
+    # sweep entry, exactly like the items_*/lifecycle_*/project_* C-theme tools.
+    'where_used', 'change_impact', 'eco_validate', 'eco_create',
+    'baseline_create', 'baseline_verify',
     'add_annotation', 'add_bearing', 'add_dimension', 'add_fastener', 'add_feature_note',
     'add_gear',
     'add_part', 'add_primitive', 'add_projection_group', 'add_pulley', 'add_rack',
