@@ -1,0 +1,145 @@
+{
+  "schema": "driftpin.feature_template/1",
+  "feature_schema": {
+    "schema": "driftpin.feature_template/1",
+    "template": "mounting_boss",
+    "doc": "A cylindrical mounting boss with a co-axial pilot bore, stamped onto a seat frame and fused to the host (PowerCopy/UDF reference, issue #139). Supply a placement frame by name (interface / f_ face tag / literal) plus a boss diameter; publishes a 'boss_top' seat for what mounts on it.",
+    "refs": [
+      {
+        "name": "seat",
+        "kind": "frame",
+        "required": true,
+        "doc": "Placement frame the boss sits on: a published interface name, an f_/e_ tag, or a literal {origin, z_axis?, x_axis?}."
+      }
+    ],
+    "inputs": [
+      {
+        "name": "boss_dia_mm",
+        "type": "length",
+        "required": true,
+        "unit": "mm",
+        "default": 12.0,
+        "min": 1.0,
+        "max": 500.0,
+        "doc": "Outside diameter of the boss."
+      },
+      {
+        "name": "height_mm",
+        "type": "length",
+        "required": false,
+        "unit": "mm",
+        "default": 8.0,
+        "min": 0.5,
+        "max": 500.0,
+        "doc": "Boss height (extrusion along the seat +z)."
+      },
+      {
+        "name": "bore_dia_mm",
+        "type": "length",
+        "required": false,
+        "unit": "mm",
+        "default": 5.0,
+        "min": 0.0,
+        "max": 490.0,
+        "doc": "Co-axial pilot bore diameter (0 => solid boss)."
+      }
+    ],
+    "emits": {
+      "interfaces": [
+        "boss_top"
+      ],
+      "intent": [
+        "watertight"
+      ]
+    }
+  },
+  "bolt_schema": {
+    "schema": "driftpin.feature_template/1",
+    "template": "bolt_pattern",
+    "doc": "A circular bolt pattern: `count` blind holes on a bolt circle in a reference frame, drilled into the host (issue #139). Supply the frame by name plus the circle diameter, count, and thread; thread rides as metadata (machined, not modeled). Publishes a 'bolt_circle' interface.",
+    "refs": [
+      {
+        "name": "frame",
+        "kind": "frame",
+        "required": true,
+        "doc": "Bolt-circle frame: a published interface name, an f_/e_ tag, or a literal {origin, z_axis?, x_axis?}."
+      }
+    ],
+    "inputs": [
+      {
+        "name": "circle_dia_mm",
+        "type": "length",
+        "required": true,
+        "unit": "mm",
+        "default": 40.0,
+        "min": 1.0,
+        "max": 2000.0,
+        "doc": "Bolt-circle diameter (hole centers lie on it)."
+      },
+      {
+        "name": "count",
+        "type": "int",
+        "required": true,
+        "default": 4,
+        "min": 1,
+        "max": 64,
+        "doc": "Number of equally-spaced holes."
+      },
+      {
+        "name": "hole_dia_mm",
+        "type": "length",
+        "required": false,
+        "unit": "mm",
+        "default": 5.5,
+        "min": 0.2,
+        "max": 200.0,
+        "doc": "Through/blind hole diameter."
+      },
+      {
+        "name": "depth_mm",
+        "type": "length",
+        "required": false,
+        "unit": "mm",
+        "default": 8.0,
+        "min": 0.5,
+        "max": 1000.0,
+        "doc": "Drill depth into the host along -z."
+      },
+      {
+        "name": "thread",
+        "type": "string",
+        "required": false,
+        "default": "none",
+        "choices": [
+          "none",
+          "M3",
+          "M4",
+          "M5",
+          "M6",
+          "M8",
+          "M10"
+        ],
+        "doc": "Tapped thread spec carried as metadata (not modeled)."
+      }
+    ],
+    "emits": {
+      "interfaces": [
+        "bolt_circle"
+      ],
+      "intent": [
+        "watertight"
+      ]
+    }
+  },
+  "instantiation": {
+    "template": "mounting_boss",
+    "host": "box_1",
+    "refs": {
+      "seat": "top_seat_a"
+    },
+    "inputs": {
+      "boss_dia_mm": 12.0,
+      "height_mm": 8.0
+    }
+  }
+}

@@ -5665,6 +5665,286 @@ def items_check_manifest(manifest: str, registry: str) -> dict:
     registry. Returns {ok, problems} — a dangling item-ref is caught before a
     merge, removing the "a part is its filename" fragility."""
     return _call("items_check_manifest", manifest=manifest, registry=registry)
+# --- feature templates (issue #139, B2) — append-only exposure ----------------
+
+@mcp.tool()
+def get_interface(handle: str, name: str) -> dict:
+    """Read back a single published interface FRAME by name from a component
+    (issue #139). The reference-by-name primitive feature templates ride on: an
+    unpublished name fails loudly. Returns {handle, name, frame}."""
+    return _call("get_interface", handle=handle, name=name)
+
+
+@mcp.tool()
+def feature_list() -> dict:
+    """List every registered FEATURE TEMPLATE — the PowerCopy/UDF analog of a part
+    recipe: a reusable feature with declared reference-geometry inputs (a frame, an
+    f_/e_ tag, an axis) plus scalar parameters, stamped onto a host by name (issue
+    #139). Returns {schema, count, templates} where each maps to {doc, refs,
+    required, optional, emits}; the directory to browse before picking one with
+    feature_schema / feature_instantiate."""
+    return _call("feature_list")
+
+
+@mcp.tool()
+def feature_schema(template: str) -> dict:
+    """Return one feature template's declared REF+INPUT SCHEMA — its reference
+    geometry (name/kind) and its scalar parameters (type/unit/default/range).
+    Returns {schema, template, doc, refs:[{name, kind, required, doc?}],
+    inputs:[{name, type, unit?, default?, min?, max?, required, choices?, doc?}],
+    emits}. An unknown name fails loudly."""
+    return _call("feature_schema", template=template)
+
+
+@mcp.tool()
+def feature_validate(template: str, refs: dict | None = None,
+                     inputs: dict | None = None) -> dict:
+    """Validate a feature instantiation {template, refs, inputs} WITHOUT building it
+    — the cheap structural front door (mirrors recipe_validate). Catches an unknown
+    template, an unknown/missing required reference, a malformed reference value,
+    and every scalar-input failure (missing required, out of range, wrong type, bad
+    unit, unknown key). A tag that doesn't resolve against real geometry is caught
+    at feature_instantiate time. Returns {ok, problems}."""
+    return _call("feature_validate", template=template, refs=refs or {},
+                 inputs=inputs or {})
+
+
+@mcp.tool()
+def feature_instantiate(template: str, host: str, refs: dict | None = None,
+                        inputs: dict | None = None) -> dict:
+    """Stamp a registered FEATURE TEMPLATE onto a host body at reference geometry
+    supplied BY NAME (PowerCopy/UDF, issue #139) — e.g. a mounting_boss onto a
+    published seat frame, or a bolt_pattern onto an f_ face tag. Validates {refs,
+    inputs} at the door, resolves each reference against the host's CURRENT
+    geometry (an f_ tag / interface name that doesn't resolve fails loudly), then
+    runs the deterministic build — geometry + publish_interface + declare_intent.
+
+    template: registered template name (feature_list to browse).
+    host: the handle of the body to stamp onto.
+    refs: reference inputs by name — an interface name, an f_/e_ tag, or a literal
+        {origin, z_axis?, x_axis?} frame, per the template's declared ref kinds.
+    inputs: scalar parameters (typed + unit-bearing + range-checked).
+
+    Returns {template, schema, host, refs, inputs, handle, name, interfaces,
+    intent}."""
+    return _call("feature_instantiate", template=template, host=host,
+                 refs=refs or {}, inputs=inputs or {})
+
+
+# --- design tables / variant families (issue #138, B1, append-only) -----------
+
+@mcp.tool()
+def family_validate(table: str) -> dict:
+    """Validate a variant-family design table (issue #138, B1) — a row x column
+    table where row = a variant (keyed by a size designator) and column = a recipe
+    parameter / feature-flag / material. Loads CSV or JSON and checks the recipe,
+    mode, key column, duplicate/missing size keys, and every per-row recipe-door
+    value; each problem names the row+column. Returns {ok, problems}.
+
+    table: path to the family table (.csv or .json)."""
+    return _call("family_validate", table=table)
+
+
+@mcp.tool()
+def family_materialize(table: str, registry: str | None = None,
+                       mode: str | None = None) -> dict:
+    """Materialize a whole variant family from ONE design table (issue #138, B1) —
+    "make all the gears" becomes a table, not a loop. For each row, in table order,
+    builds the part with its recipe (A1, #136) and allocates one item + one
+    sequential part number (C1, #140). Subsumes standard-part catalogs: a bearing
+    catalog is a family table keyed by designation, sourced from the ISO corpus.
+
+    Two modes (both supported): "instances" (each variant its own released file +
+    part number) and "configurations" (variants share one artifact). Builds into the
+    active document. Returns {schema, family, recipe, mode, key, count, rows,
+    registry}.
+
+    table:    path to the family table (.csv or .json).
+    registry: optional items.json path (created if absent, written back).
+    mode:     optional override of the table's mode (instances|configurations)."""
+    return _call("family_materialize", table=table, registry=registry, mode=mode)
+# --- Liskov-substitutability gate (issue #147, T1; §7.1) — append-only exposure -
+
+@mcp.tool()
+def substitutability_check(manifest: str, slot: str, variant: dict,
+                           verify_baseline: bool = True) -> dict:
+    """Liskov-substitutability gate — Form/Fit/Function as code (§7.1, #147). Take
+    an assembly that gates green with variant A in a slot, swap in variant B (a
+    different family row, or any part claiming the same interface), and re-run
+    merge_assembly + all the gates. Still green ⇒ B is interchangeable with A — by
+    construction a compatible (MINOR/PATCH) change ⇒ revise the existing part
+    number; a gate now fails ⇒ the swap broke Form/Fit/Function ⇒ a new part
+    number. Purely deterministic (no API, no judgment); the substitutability test
+    #138 (B1 families) and #146 (the interface registry) call.
+
+    manifest: path to a manifest that gates green with variant A in `slot`.
+    slot: the component id to swap (variant A → variant B).
+    variant: the replacement component spec — a dict with exactly one of
+      file/manifest/library (the same one-source rule merge_assembly enforces).
+    verify_baseline: re-merge the base assembly first and require it green so the
+      premise is honest (default True).
+
+    Returns {schema, slot, variant, baseline_ok, swap_ok, substitutable, verdict
+    ('substitutable' | 'not_substitutable' | 'baseline_not_green'), broken_gates
+    (the NAMED gate(s) the swap broke), broken (gate→violations), classification
+    (compatibility/semver/decision), reports}."""
+    return _call("substitutability_check", manifest=manifest, slot=slot,
+                 variant=variant, verify_baseline=verify_baseline)
+# --- revision + lifecycle state machine + F3 predicate (issue #141, C2) --------
+# Append-only exposure of driftpin/lifecycle.py (built on the C1 item model).
+
+@mcp.tool()
+def lifecycle_editable(registry: str, item: str) -> dict:
+    """The cheap "is this editable?" check a builder runs before writing (#141 C2).
+    An item is editable only in lifecycle state in_work; in_review, released and
+    obsolete are frozen (released = immutable, the API-stability guarantee).
+
+    registry: path to the items.json sidecar.
+    item: the item id to check.
+
+    Returns {ok, editable, state}."""
+    return _call("lifecycle_editable", registry=registry, item=item)
+
+
+@mcp.tool()
+def lifecycle_transition(registry: str, item: str, to: str,
+                         actor: str | None = None, note: str | None = None) -> dict:
+    """Move an item through the lifecycle state machine
+    in_work -> in_review -> released -> obsolete, guarded by a transition table
+    (#141 C2). An illegal edge (e.g. skipping review, or re-opening a released item
+    in place) is rejected loudly; releasing stamps the item's first revision and
+    freezes it.
+
+    registry: path to the items.json sidecar (written back on success).
+    item: the item id to transition.
+    to: the target lifecycle state.
+    actor / note: optional provenance recorded in the item's transition log.
+
+    Returns {ok, state, rev}, or {ok:false, problems} on an illegal transition."""
+    return _call("lifecycle_transition", registry=registry, item=item, to=to,
+                 actor=actor, note=note)
+
+
+@mcp.tool()
+def lifecycle_classify_change(before: dict, after: dict,
+                              extra_f3: dict | None = None) -> dict:
+    """The deterministic Form/Fit/Function predicate (#141 C2): compare an item's
+    before/after attributes and decide rename-vs-revise. A change touching a
+    Form/Fit/Function (public, interface-defining) attribute breaks
+    interchangeability => "new_part_number" (allocate a new number); a change to
+    only internal/hidden attributes is interchangeable => "revise" (bump the
+    revision, same part number).
+
+    before / after: attribute objects (the item's interface-defining + internal
+        attributes, before and after the proposed change).
+    extra_f3: optional map of extra attribute name -> F3 leg ("form"/"fit"/
+        "function") for domain-specific interface attributes.
+
+    Returns the verdict {disposition, f3, changed, f3_changed, categories,
+    reason} where disposition is "revise" / "new_part_number" / "noop"."""
+    return _call("lifecycle_classify_change", before=before, after=after,
+                 extra_f3=extra_f3)
+
+
+@mcp.tool()
+def lifecycle_apply_change(registry: str, item: str, after: dict,
+                           new_item: str | None = None,
+                           extra_f3: dict | None = None,
+                           actor: str | None = None, note: str | None = None) -> dict:
+    """Apply a change to a RELEASED item, dispatching on the F3 predicate (#141 C2)
+    — the sanctioned way to change a frozen part. An F3-preserving change opens a
+    new revision on the SAME part number (rev A->B, back to in_work); an
+    F3-breaking change allocates a NEW part number as a new item (new_item
+    required) carrying a `supersedes` back-link, leaving the released item
+    untouched.
+
+    registry: path to the items.json sidecar (written back on success).
+    item: the released item id being changed.
+    after: the proposed new metadata (attribute object).
+    new_item: id for the new item when the change is F3-breaking.
+    extra_f3 / actor / note: optional, as in lifecycle_classify_change /
+        lifecycle_transition.
+
+    Returns {ok, disposition, item, part_number, rev, ...}, or {ok:false,
+    problems} (e.g. the item is not released, or an F3-break lacks new_item)."""
+    return _call("lifecycle_apply_change", registry=registry, item=item,
+                 after=after, new_item=new_item, extra_f3=extra_f3,
+                 actor=actor, note=note)
+
+
+# --- project / workspace container (issue #143, D1) — append-only exposure ----
+
+@mcp.tool()
+def scaffold_project(base_dir: str, name: str, components: dict | None = None,
+                     instances: list | None = None,
+                     shared_parameters: dict | None = None,
+                     master: str | None = None, items: dict | None = None) -> dict:
+    """Lay out a well-formed project in one call (issue #143 / D1) — promote the
+    MULTI_AGENT.md §3/§7 directory convention to a primitive. Creates the convention
+    directories (components/, .dp_lib/), an item registry (items.json, #140), a seed
+    assembly manifest from the supplied components/instances, and the project.json
+    container that ties them together. The result loads clean and merge_assembly
+    consumes it unchanged once its components resolve.
+
+    base_dir: the project root directory (created if absent).
+    name: the project id (naming-convention checked).
+    components/instances/shared_parameters: the assembly manifest content.
+    master: optional component id to record as the master/skeleton single-source-of-
+        truth slot (the lean interface-geometry skeleton children mate against).
+    items: optional {item_id: {files?, metadata?}} to seed the item registry with.
+
+    Returns the layout {project_file, manifest, registry, components_dir, lib_dir,
+    lockfile, master, dirs}."""
+    return _call("scaffold_project", base_dir=base_dir, name=name,
+                 components=components, instances=instances,
+                 shared_parameters=shared_parameters, master=master, items=items)
+
+
+@mcp.tool()
+def project_validate(project: str) -> dict:
+    """Validate a project.json container (issue #143 / D1): the schema stamp
+    ("driftpin.project/1"), the naming convention on the project name, the
+    conventional path fields, and — relative to the project directory — that the
+    referenced manifest + item registry exist, the components directory is present,
+    and a named master/skeleton is a real component of the assembly manifest.
+
+    project: path to the project.json container.
+
+    Returns {ok, problems, schema, name} — ok is True iff problems is empty."""
+    return _call("project_validate", project=project)
+
+
+@mcp.tool()
+def project_check_references(project: str) -> dict:
+    """Reference-integrity guard (issue #143 / D1) — catch a broken cross-file
+    reference *before* a merge (the chronic PDM failure mode). Loads a project's
+    assembly manifest + item registry and checks every reference resolves: a moved /
+    renamed / missing component file, a dangling item-ref (an unknown id, or a
+    resolved file missing on disk), an instance naming an unknown component, and
+    naming-convention violations.
+
+    project: path to the project.json container.
+
+    Returns {ok, problems} — ok is True iff every reference is live, so a broken
+    reference is reported here instead of as a cryptic merge failure."""
+    return _call("project_check_references", project=project)
+
+
+@mcp.tool()
+def project_resolve_manifest(project: str, out: str | None = None) -> dict:
+    """Resolve a project's item-ref components to file components and write a merge-
+    ready manifest (issue #143 / D1, the deferred #140 seam). Each component naming an
+    `item` (items.json identity, not a bare path) is lowered to a `{file}` component
+    with the CAD artifact resolved from the registry, so merge_assembly consumes the
+    result unchanged — renaming/moving a file updates the item's files[] in one place
+    without breaking any reference.
+
+    project: path to the project.json container.
+    out: output manifest path (defaults to <manifest>.resolved.json next to it).
+
+    Returns {path, lowered} — the written path and the lowered manifest object; a
+    dangling item-ref fails loudly."""
+    return _call("project_resolve_manifest", project=project, out=out)
 
 
 def run():

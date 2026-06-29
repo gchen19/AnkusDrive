@@ -4768,11 +4768,16 @@ def _validate_manifest(man):
         if not isinstance(spec, dict):
             problems.append(f"component {cid!r} must be an object")
             continue
-        sources = [k for k in ("file", "manifest", "library") if k in spec]
+        # item-ref source-kind (issue #143 / D1, the deferred seam from #140): a
+        # component may name an `item` (C1 identity, items.json) instead of a bare
+        # file/manifest/library source; project.lower_item_refs resolves it to a
+        # file before merge. Accept it here so an un-lowered item-ref manifest is
+        # itself structurally valid (still exactly-one-source).
+        sources = [k for k in ("file", "manifest", "library", "item") if k in spec]
         if len(sources) != 1:
             problems.append(
-                f"component {cid!r} must have exactly one of file/manifest/library "
-                f"(has {sources or 'none'})")
+                f"component {cid!r} must have exactly one of "
+                f"file/manifest/library/item (has {sources or 'none'})")
         if "library" in spec and not (isinstance(spec["library"], dict)
                                       and spec["library"].get("tool")):
             problems.append(f"component {cid!r} library needs a 'tool'")
@@ -14230,6 +14235,332 @@ def _h_items_check_manifest(p):
     reg = _items.load_registry(p["registry"])
     problems = _items.validate_manifest_refs(man, reg)
     return {"ok": not problems, "problems": problems}
+
+
+# --- project / workspace container (issue #143, D1) --------------------------
+# Append-only registration of the project container. All logic lives in the owned,
+# pure-Python module driftpin/project.py (no FreeCAD); these handlers are thin
+# wrappers, exactly like the items / manifest handlers. A PROJECT promotes the
+# MULTI_AGENT.md §3/§7 directory convention (manifest.json, components/, .dp_lib/,
+# lockfile) to a primitive: a manifest-of-manifests with a master/skeleton slot and
+# a reference-integrity guard that catches a broken cross-file ref before a merge.
+
+@handler("scaffold_project")
+def _h_scaffold_project(p):
+    """Lay out a well-formed project under `base_dir` in one call (issue #143 / D1):
+    the convention directories (components/, .dp_lib/), an item registry (items.json,
+    #140), a seed assembly manifest from the supplied components/instances, and the
+    project.json container. params: base_dir, name, components?, instances?,
+    shared_parameters?, master? (component id), items? (seed registry). Returns the
+    layout {project_file, manifest, registry, components_dir, lib_dir, lockfile,
+    master, dirs}."""
+    from driftpin import project as _proj
+    return _proj.scaffold(
+        p["base_dir"], p["name"],
+        components=p.get("components"), instances=p.get("instances"),
+        shared_parameters=p.get("shared_parameters"), master=p.get("master"),
+        items=p.get("items"), part_number_format=p.get("part_number_format"))
+
+
+@handler("project_validate")
+def _h_project_validate(p):
+    """Validate a project.json container (issue #143 / D1): the schema stamp, the
+    naming convention on the project name, the conventional path fields, and — when
+    the project's directory is resolvable — that the referenced manifest + registry
+    exist, the components dir is present, and a named master is a real component.
+    params: project (path to project.json). Returns {ok, problems, schema, name}."""
+    from driftpin import project as _proj
+    import os as _os
+    proj = _proj.load_project(p["project"])
+    base_dir = _os.path.dirname(_os.path.abspath(p["project"]))
+    problems = _proj.validate_project(proj, base_dir)
+    return {"ok": not problems, "problems": problems,
+            "schema": proj.get("schema"), "name": proj.get("name")}
+
+
+@handler("project_check_references")
+def _h_project_check_references(p):
+    """Reference-integrity guard (issue #143 / D1): load a project's assembly
+    manifest + item registry and check every cross-file reference resolves *before* a
+    merge — a moved/renamed/missing component file, a dangling item-ref, an instance
+    naming an unknown component, or a naming-convention violation. params: project
+    (path to project.json). Returns {ok, problems} — ok is True iff every reference is
+    live (the chronic-PDM broken-reference failure caught before any geometry)."""
+    from driftpin import project as _proj
+    import os as _os
+    proj = _proj.load_project(p["project"])
+    base_dir = _os.path.dirname(_os.path.abspath(p["project"]))
+    problems = _proj.check_project_references(proj, base_dir)
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("project_resolve_manifest")
+def _h_project_resolve_manifest(p):
+    """Resolve a project's item-ref components to file components and write a merge-
+    ready manifest (issue #143 / D1, the deferred #140 seam): each component naming an
+    `item` (items.json identity) is lowered to a `{file}` component with the CAD
+    artifact resolved from the registry, so merge_assembly consumes it unchanged.
+    params: project (path), out? (output manifest path; defaults to <manifest>.resolved.json).
+    Returns {path, lowered} — a dangling item-ref fails loudly."""
+    from driftpin import project as _proj
+    from driftpin import items as _items
+    import os as _os
+    import json as _json
+    proj = _proj.load_project(p["project"])
+    base_dir = _os.path.dirname(_os.path.abspath(p["project"]))
+    mani = proj.get("manifest", "manifest.json")
+    mpath = _os.path.join(base_dir, mani)
+    with open(mpath) as f:
+        manifest = _json.load(f)
+    reg = _items.load_registry(_os.path.join(base_dir, proj.get("registry", "items.json")))
+    lowered = _proj.lower_item_refs(manifest, reg)
+    out = p.get("out") or (_os.path.splitext(mpath)[0] + ".resolved.json")
+    with open(out, "w") as f:
+        _json.dump(lowered, f, indent=2)
+    return {"path": out, "lowered": lowered}
+# --- design tables / variant families (issue #138, B1, append-only) -----------
+# A FAMILY is a row x column design table (row = a variant, column = a parameter /
+# feature-flag / material). All logic lives in the owned, pure-Python module
+# driftpin/families.py — table parsing, the column split, the recipe door, and the
+# item/part-number allocation. Importing it also registers the standard-part
+# CATALOG recipes (ball_bearing) into the recipe registry (subsumes #101). These
+# handlers are thin wrappers, exactly like the recipe handlers above.
+from driftpin import families as _families_register  # noqa: E402,F401  (registers catalog recipes)
+
+
+@handler("family_validate")
+def _h_family_validate(p):
+    """Validate a family design table (issue #138): load CSV/JSON, then check the
+    recipe, mode, key column, duplicate/missing size keys, and every per-row recipe-
+    door value — each problem names the row+column. Returns {ok, problems}."""
+    from driftpin import families as _fam
+    table = _fam.load_table(p["table"])
+    problems = _fam.validate_table(table)
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("family_materialize")
+def _h_family_materialize(p):
+    """Materialize a whole variant family from one design table (issue #138): for
+    each row, in table order, build the part with its recipe and allocate one item +
+    one sequential part number. params: table (path), registry? (path, created if
+    absent and written back), mode? (instances|configurations override). Builds into
+    the active document. Returns {schema, family, recipe, mode, key, count, rows,
+    registry}."""
+    import json as _json
+    import os as _os
+    from driftpin import families as _fam
+    from driftpin import items as _items
+    table = _fam.load_table(p["table"])
+    reg_path = p.get("registry")
+    if reg_path and _os.path.exists(reg_path):
+        registry = _items.load_registry(reg_path)
+    else:
+        registry = _items.empty_registry()
+
+    def _call(_tool, **kw):
+        return HANDLERS[_tool](kw)
+
+    result = _fam.materialize(table, _call, registry=registry, mode=p.get("mode"))
+    if reg_path:
+        with open(reg_path, "w") as f:
+            _json.dump(registry, f, indent=2, sort_keys=True)
+    return result
+# --- Liskov-substitutability gate (issue #147, T1; DESIGN_HIERARCHY §7.1) -----
+# Append-only registration of the Form/Fit/Function-as-code swap gate. All logic
+# lives in the owned, FreeCAD-free module driftpin/gates/substitutability.py; this
+# handler is a thin wrapper that injects merge_assembly as the merge primitive
+# (exactly like the recipe/items handlers wrap their pure modules), so the gate
+# drives merge_assembly through its existing entry point and never interleaves
+# into its body. Callable by #138 (B1 families) and #146 (the interface registry).
+
+@handler("substitutability_check")
+def _h_substitutability_check(p):
+    """Liskov-substitutability gate (§7.1): take an assembly that gates green with
+    variant A in a slot, swap in variant B (a different family row / any part
+    claiming the same interface), and re-run merge_assembly + all gates. Still
+    green ⇒ B is interchangeable (a compatible MINOR/PATCH change ⇒ revise); a gate
+    fails ⇒ the swap broke Form/Fit/Function ⇒ a new part number. Deterministic, no
+    API. params: manifest (base, gates green), slot (component id to swap), variant
+    (replacement component spec: one of file/manifest/library), verify_baseline?
+    (default True). Returns {schema, slot, substitutable, verdict, broken_gates
+    (NAMES the broken gate), broken, classification, baseline_ok, swap_ok, ...}."""
+    from driftpin.gates import substitutability as _subst
+
+    def _call(_method, **kw):
+        return HANDLERS[_method](kw)
+
+    return _subst.substitutability_report(
+        p["manifest"], p["slot"], p["variant"], _call,
+        verify_baseline=p.get("verify_baseline", True))
+# Append-only registration of the revision + lifecycle state machine (issue #141 /
+# C2). All logic lives in the owned, pure-Python module driftpin/lifecycle.py (no
+# FreeCAD); these handlers are thin wrappers over it, exactly like the items.json
+# (C1) handlers above. Read-only handlers (editable / classify) do not write back;
+# mutating handlers (transition / apply_change) persist the registry.
+
+@handler("lifecycle_editable")
+def _h_lifecycle_editable(p):
+    """The cheap "is this editable?" check a builder runs before writing (issue
+    #141 / C2): an item is editable only in lifecycle state in_work; in_review,
+    released and obsolete are frozen. params: registry (path), item (id). Returns
+    {ok, editable, state}."""
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    reg = _items.load_registry(p["registry"])
+    return {"ok": True, "editable": _lc.item_editable(reg, p["item"]),
+            "state": _lc.item_state(reg, p["item"])}
+
+
+@handler("lifecycle_transition")
+def _h_lifecycle_transition(p):
+    """Move an item to a new lifecycle state, guarded by the transition table
+    (issue #141 / C2): an illegal edge (e.g. skip review in_work->released) is
+    rejected loudly; releasing stamps the first revision and freezes the item.
+    params: registry (path), item (id), to (state), actor?, note?. Persists the
+    registry. Returns {ok, state, rev} or {ok:false, problems}."""
+    import json as _json
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    path = p["registry"]
+    reg = _items.load_registry(path)
+    try:
+        _lc.transition(reg, p["item"], p["to"], actor=p.get("actor"),
+                       note=p.get("note"))
+    except (_lc.LifecycleError, KeyError) as e:
+        return {"ok": False, "problems": [str(e)]}
+    with open(path, "w") as f:
+        _json.dump(reg, f, indent=2, sort_keys=True)
+    rec = reg["items"][p["item"]]
+    return {"ok": True, "state": rec["lifecycle"], "rev": rec.get("rev", "-")}
+
+
+@handler("lifecycle_classify_change")
+def _h_lifecycle_classify_change(p):
+    """The deterministic Form/Fit/Function predicate (issue #141 / C2): compare an
+    item's before/after interface-defining + internal attributes and decide
+    rename-vs-revise. An F3-preserving change -> "revise" (bump revision, same part
+    number); an F3-breaking change -> "new_part_number". params: before (object),
+    after (object), extra_f3? (object). Returns the verdict dict {disposition, f3,
+    changed, f3_changed, categories, reason}."""
+    from driftpin import lifecycle as _lc
+    return _lc.form_fit_function(p["before"], p["after"],
+                                 extra_f3=p.get("extra_f3"))
+
+
+@handler("lifecycle_apply_change")
+def _h_lifecycle_apply_change(p):
+    """Apply a change to a RELEASED item, dispatching on the F3 predicate (issue
+    #141 / C2): F3-preserving -> open a new revision on the same part number;
+    F3-breaking -> allocate a new part number (a new item, new_item required). The
+    original released item is never silently mutated. params: registry (path),
+    item (id), after (metadata object), new_item? (id), extra_f3?, actor?, note?.
+    Persists the registry. Returns {ok, disposition, item, part_number, rev, ...}
+    or {ok:false, problems}."""
+    import json as _json
+    from driftpin import items as _items
+    from driftpin import lifecycle as _lc
+    path = p["registry"]
+    reg = _items.load_registry(path)
+    try:
+        res = _lc.apply_change(reg, p["item"], p["after"],
+                               new_item_id=p.get("new_item"),
+                               extra_f3=p.get("extra_f3"),
+                               actor=p.get("actor"), note=p.get("note"))
+    except (_lc.LifecycleError, KeyError, ValueError) as e:
+        return {"ok": False, "problems": [str(e)]}
+    with open(path, "w") as f:
+        _json.dump(reg, f, indent=2, sort_keys=True)
+    res["ok"] = True
+    return res
+
+
+# --- feature templates (issue #139, B2 — append-only registration) ------------
+#
+# A FEATURE TEMPLATE is the sub-part analog of a part recipe: a reusable feature
+# with declared REFERENCE-GEOMETRY inputs (a placement frame, an f_/e_ tag, an
+# axis) plus scalar parameters, stamped repeatedly onto a host body by name —
+# DriftPin's PowerCopy/UDF (RFC docs/DESIGN_HIERARCHY.md §2 Theme B / B2). The
+# registry, ref/scalar declaration, typed validation, and the reference templates
+# all live in driftpin/feature_templates.py (a pure-Python module that touches
+# FreeCAD only through the `call` dispatch injected here). These handlers expose
+# it on the worker surface; get_interface lets a template resolve a published
+# interface frame by name (the reference-by-name the whole mechanism rides on).
+
+@handler("get_interface")
+def _h_get_interface(p):
+    """Read back a single published interface FRAME by name from a component
+    (issue #139). params: handle, name. Returns {handle, name, frame}; an
+    unpublished name fails loudly (KeyError) so a reference-by-name that doesn't
+    resolve is caught at the door. Mirrors publish_interface's storage."""
+    obj = _resolve(p["handle"])
+    name = p["name"]
+    ifaces = _read_interfaces(obj)
+    if name not in ifaces:
+        raise KeyError(
+            f"no published interface {name!r} on {p['handle']!r} "
+            f"(published: {sorted(ifaces)})")
+    return {"handle": p["handle"], "name": name, "frame": ifaces[name]}
+
+
+@handler("feature_list")
+def _h_feature_list(p):
+    """List every registered feature template (issue #139). Returns {schema,
+    count, templates} where each maps to {doc, refs, required, optional, emits} —
+    the directory an agent browses before picking and instantiating a template."""
+    from driftpin import feature_templates as _ft
+    return _ft.list_templates()
+
+
+@handler("feature_schema")
+def _h_feature_schema(p):
+    """Return one feature template's declared REF+INPUT SCHEMA (the frozen
+    contract): {schema, template, doc, refs:[{name,kind,required,doc?}],
+    inputs:[{name,type,unit?,default?,min?,max?,required,choices?,doc?}], emits}.
+    An unknown name fails loudly."""
+    from driftpin import feature_templates as _ft
+    return _ft.feature_schema(p["template"])
+
+
+@handler("feature_validate")
+def _h_feature_validate(p):
+    """Validate a feature instantiation {template, refs, inputs} WITHOUT building
+    it — the cheap front door (mirrors recipe_validate / validate_manifest).
+    Catches an unknown template, an unknown/missing required reference, a
+    malformed reference value, and every scalar-input failure. NOTE: this is the
+    PURE structural door; a tag that doesn't resolve against real geometry is
+    caught at feature_instantiate time. Returns {ok, problems}."""
+    from driftpin import feature_templates as _ft
+    problems = _ft.validate_instantiation({
+        "template": p.get("template"),
+        "refs": p.get("refs", {}),
+        "inputs": p.get("inputs", {}),
+    })
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("feature_instantiate")
+def _h_feature_instantiate(p):
+    """Stamp a registered feature template onto a host body at reference geometry
+    supplied BY NAME (issue #139): validate {refs, inputs} at the door, resolve
+    each reference against the host's CURRENT geometry (an f_ tag / interface name
+    that doesn't resolve fails loudly), then run the deterministic build — geometry
+    + publish_interface + declare_intent. params: template, host (handle), refs,
+    inputs. Returns {template, schema, host, refs, inputs, handle, name,
+    interfaces, intent}."""
+    from driftpin import feature_templates as _ft
+    name = p.get("template")
+    if not name:
+        raise ValueError("feature instantiation needs a 'template' name")
+    host = p.get("host")
+    if not host:
+        raise ValueError("feature instantiation needs a 'host' handle")
+
+    def _call(_tool, **kw):
+        return HANDLERS[_tool](kw)
+
+    return _ft.instantiate(name, host, p.get("refs", {}), p.get("inputs", {}),
+                           _call)
 
 
 def _main():

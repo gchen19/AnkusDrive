@@ -230,8 +230,16 @@ echo "== Manifest resolve step (RFC 11.1, pure python) =="
 $VENV_PY tests/test_manifest_resolve.py
 
 echo
+echo "== Relations: driving/driven parameter DAG (issue #137, arithmetic+lookup, no key) =="
+$VENV_PY tests/test_relations.py
+
+echo
 echo "== Typed-interface merge gates (RFC 11.2, scripted, no key) =="
 $VENV_PY tests/test_typed_interfaces.py
+
+echo
+echo "== Liskov substitutability gate (§7.1, #147 — F3 as code; same-interface swap stays green, off-interface fails naming the broken gate; no key) =="
+$VENV_PY tests/test_substitutability.py
 
 echo
 echo "== verify_contract self-check (RFC 11.3, scripted, no key) =="
@@ -264,6 +272,14 @@ $VENV_PY tests/test_recipes.py
 echo
 echo "== Interface-type registry + conformance gate (issue #146 — implements + bus + unknown-is-loud, no key) =="
 $VENV_PY tests/test_iface_registry.py
+echo "== Project / workspace container (D1, #143 — scaffold + ref-integrity guard + master-skeleton, no key) =="
+$VENV_PY tests/test_project_container.py
+echo "== Feature templates (issue #139 B2 — PowerCopy/UDF: ref-by-name + door + determinism, no key) =="
+$VENV_PY tests/test_feature_templates.py
+echo "== Design tables / variant families (issue #138, B1 — a gear family + a bearing catalog from one table each, no key) =="
+$VENV_PY tests/test_families.py
+echo "== Revision + lifecycle state machine + F3 predicate (C2, #141 — state machine, immutability, rename-vs-revise; no key, no FreeCAD) =="
+python3 tests/test_lifecycle.py
 
 echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="

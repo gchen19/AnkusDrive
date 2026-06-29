@@ -1,0 +1,14 @@
+# A standard-part CATALOG as a family table (issue #138, B1) — a bearing catalog IS
+# a family table keyed by designation (subsumes #101). The ball_bearing recipe
+# sources bore/OD/width from the ISO 15 standards corpus, so each built row matches
+# the standard table value by construction. 'shield' is queryable item metadata.
+# family: bearing_catalog
+# recipe: ball_bearing
+# mode: instances
+# key: designation
+designation,shield,note
+6000,2RS,light series 10mm bore
+6004,2RS,light series 20mm bore
+6204,ZZ,medium series 20mm bore
+6205,ZZ,medium series 25mm bore
+6305,OPEN,heavy series 25mm bore
