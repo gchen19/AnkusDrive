@@ -12,10 +12,17 @@ name: Heavy solver regressions (self-hosted)
 # This workflow runs the full suite WITH the live solves enabled
 # (RUN_HEAVY_SOLVES=1) only when it's actually needed to confirm a change hasn't
 # regressed a solver:
-#   - a push to main or a PR whose paths touch solver / analysis code (the
-#     filters below) — so a docs or unrelated change never triggers it;
-#   - on demand (workflow_dispatch);
+#   - a push to main whose paths touch solver / analysis code (the filter below)
+#     — i.e. post-merge regression validation; a docs or unrelated change never
+#     triggers it;
+#   - on demand (workflow_dispatch) — e.g. to validate a solver PR pre-merge;
 #   - nightly, as a slow-drift guard against solver / host changes.
+#
+# Deliberately NOT on `pull_request`: these live solves are minutes-long and a
+# couple are flaky under load, so gating PRs on them would re-introduce exactly
+# the merge-blocking flakiness this split removes. PRs run the fast per-push
+# suite (test.yml); the heavy regression runs land on main + nightly, and a dev
+# touching a solver can dispatch this workflow on their branch on demand.
 #
 # The gate is RUN_HEAVY_SOLVES, read via tests/heavy_solve.py: unset (the default
 # in test.yml) every live solve skips even where the solver is installed; set
@@ -25,28 +32,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - "driftpin/analysis/**"
-      - "driftpin/solvers.py"
-      - "driftpin/jobs.py"
-      - "tools/**"
-      - "scripts/install-solvers.sh"
-      - "tests/heavy_solve.py"
-      - "tests/test_fsi.py"
-      - "tests/test_em_fullwave.py"
-      - "tests/test_openfoam.py"
-      - "tests/test_cht.py"
-      - "tests/test_acoustics_bem.py"
-      - "tests/test_acoustic_fem.py"
-      - "tests/test_harmonic_fem.py"
-      - "tests/test_elmer.py"
-      - "tests/test_em.py"
-      - "tests/test_meshbridge.py"
-      - "tests/test_granular.py"
-      - "tests/test_warpage.py"
-      - "tests/test_molding_fill.py"
-      - ".github/workflows/heavy-solves.yml"
-  pull_request:
     paths:
       - "driftpin/analysis/**"
       - "driftpin/solvers.py"
