@@ -262,6 +262,10 @@ echo "== Part recipes (issue #136 — declared-input build templates: contract +
 $VENV_PY tests/test_recipes.py
 
 echo
+echo "== Interface-type registry + conformance gate (issue #146 — implements + bus + unknown-is-loud, no key) =="
+$VENV_PY tests/test_iface_registry.py
+
+echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="
 $VENV_PY -m orchestration.selftest
 $VENV_PY -m orchestration.dryrun
