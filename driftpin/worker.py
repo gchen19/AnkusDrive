@@ -14292,6 +14292,94 @@ def _h_lifecycle_apply_change(p):
     return res
 
 
+# --- feature templates (issue #139, B2 — append-only registration) ------------
+#
+# A FEATURE TEMPLATE is the sub-part analog of a part recipe: a reusable feature
+# with declared REFERENCE-GEOMETRY inputs (a placement frame, an f_/e_ tag, an
+# axis) plus scalar parameters, stamped repeatedly onto a host body by name —
+# DriftPin's PowerCopy/UDF (RFC docs/DESIGN_HIERARCHY.md §2 Theme B / B2). The
+# registry, ref/scalar declaration, typed validation, and the reference templates
+# all live in driftpin/feature_templates.py (a pure-Python module that touches
+# FreeCAD only through the `call` dispatch injected here). These handlers expose
+# it on the worker surface; get_interface lets a template resolve a published
+# interface frame by name (the reference-by-name the whole mechanism rides on).
+
+@handler("get_interface")
+def _h_get_interface(p):
+    """Read back a single published interface FRAME by name from a component
+    (issue #139). params: handle, name. Returns {handle, name, frame}; an
+    unpublished name fails loudly (KeyError) so a reference-by-name that doesn't
+    resolve is caught at the door. Mirrors publish_interface's storage."""
+    obj = _resolve(p["handle"])
+    name = p["name"]
+    ifaces = _read_interfaces(obj)
+    if name not in ifaces:
+        raise KeyError(
+            f"no published interface {name!r} on {p['handle']!r} "
+            f"(published: {sorted(ifaces)})")
+    return {"handle": p["handle"], "name": name, "frame": ifaces[name]}
+
+
+@handler("feature_list")
+def _h_feature_list(p):
+    """List every registered feature template (issue #139). Returns {schema,
+    count, templates} where each maps to {doc, refs, required, optional, emits} —
+    the directory an agent browses before picking and instantiating a template."""
+    from driftpin import feature_templates as _ft
+    return _ft.list_templates()
+
+
+@handler("feature_schema")
+def _h_feature_schema(p):
+    """Return one feature template's declared REF+INPUT SCHEMA (the frozen
+    contract): {schema, template, doc, refs:[{name,kind,required,doc?}],
+    inputs:[{name,type,unit?,default?,min?,max?,required,choices?,doc?}], emits}.
+    An unknown name fails loudly."""
+    from driftpin import feature_templates as _ft
+    return _ft.feature_schema(p["template"])
+
+
+@handler("feature_validate")
+def _h_feature_validate(p):
+    """Validate a feature instantiation {template, refs, inputs} WITHOUT building
+    it — the cheap front door (mirrors recipe_validate / validate_manifest).
+    Catches an unknown template, an unknown/missing required reference, a
+    malformed reference value, and every scalar-input failure. NOTE: this is the
+    PURE structural door; a tag that doesn't resolve against real geometry is
+    caught at feature_instantiate time. Returns {ok, problems}."""
+    from driftpin import feature_templates as _ft
+    problems = _ft.validate_instantiation({
+        "template": p.get("template"),
+        "refs": p.get("refs", {}),
+        "inputs": p.get("inputs", {}),
+    })
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("feature_instantiate")
+def _h_feature_instantiate(p):
+    """Stamp a registered feature template onto a host body at reference geometry
+    supplied BY NAME (issue #139): validate {refs, inputs} at the door, resolve
+    each reference against the host's CURRENT geometry (an f_ tag / interface name
+    that doesn't resolve fails loudly), then run the deterministic build — geometry
+    + publish_interface + declare_intent. params: template, host (handle), refs,
+    inputs. Returns {template, schema, host, refs, inputs, handle, name,
+    interfaces, intent}."""
+    from driftpin import feature_templates as _ft
+    name = p.get("template")
+    if not name:
+        raise ValueError("feature instantiation needs a 'template' name")
+    host = p.get("host")
+    if not host:
+        raise ValueError("feature instantiation needs a 'host' handle")
+
+    def _call(_tool, **kw):
+        return HANDLERS[_tool](kw)
+
+    return _ft.instantiate(name, host, p.get("refs", {}), p.get("inputs", {}),
+                           _call)
+
+
 def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:

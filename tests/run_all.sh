@@ -270,6 +270,8 @@ echo "== Part recipes (issue #136 — declared-input build templates: contract +
 $VENV_PY tests/test_recipes.py
 
 echo
+echo "== Feature templates (issue #139 B2 — PowerCopy/UDF: ref-by-name + door + determinism, no key) =="
+$VENV_PY tests/test_feature_templates.py
 echo "== Design tables / variant families (issue #138, B1 — a gear family + a bearing catalog from one table each, no key) =="
 $VENV_PY tests/test_families.py
 echo "== Revision + lifecycle state machine + F3 predicate (C2, #141 — state machine, immutability, rename-vs-revise; no key, no FreeCAD) =="
