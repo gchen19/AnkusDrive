@@ -4768,11 +4768,16 @@ def _validate_manifest(man):
         if not isinstance(spec, dict):
             problems.append(f"component {cid!r} must be an object")
             continue
-        sources = [k for k in ("file", "manifest", "library") if k in spec]
+        # item-ref source-kind (issue #143 / D1, the deferred seam from #140): a
+        # component may name an `item` (C1 identity, items.json) instead of a bare
+        # file/manifest/library source; project.lower_item_refs resolves it to a
+        # file before merge. Accept it here so an un-lowered item-ref manifest is
+        # itself structurally valid (still exactly-one-source).
+        sources = [k for k in ("file", "manifest", "library", "item") if k in spec]
         if len(sources) != 1:
             problems.append(
-                f"component {cid!r} must have exactly one of file/manifest/library "
-                f"(has {sources or 'none'})")
+                f"component {cid!r} must have exactly one of "
+                f"file/manifest/library/item (has {sources or 'none'})")
         if "library" in spec and not (isinstance(spec["library"], dict)
                                       and spec["library"].get("tool")):
             problems.append(f"component {cid!r} library needs a 'tool'")
@@ -14135,6 +14140,87 @@ def _h_items_check_manifest(p):
     return {"ok": not problems, "problems": problems}
 
 
+# --- project / workspace container (issue #143, D1) --------------------------
+# Append-only registration of the project container. All logic lives in the owned,
+# pure-Python module driftpin/project.py (no FreeCAD); these handlers are thin
+# wrappers, exactly like the items / manifest handlers. A PROJECT promotes the
+# MULTI_AGENT.md §3/§7 directory convention (manifest.json, components/, .dp_lib/,
+# lockfile) to a primitive: a manifest-of-manifests with a master/skeleton slot and
+# a reference-integrity guard that catches a broken cross-file ref before a merge.
+
+@handler("scaffold_project")
+def _h_scaffold_project(p):
+    """Lay out a well-formed project under `base_dir` in one call (issue #143 / D1):
+    the convention directories (components/, .dp_lib/), an item registry (items.json,
+    #140), a seed assembly manifest from the supplied components/instances, and the
+    project.json container. params: base_dir, name, components?, instances?,
+    shared_parameters?, master? (component id), items? (seed registry). Returns the
+    layout {project_file, manifest, registry, components_dir, lib_dir, lockfile,
+    master, dirs}."""
+    from driftpin import project as _proj
+    return _proj.scaffold(
+        p["base_dir"], p["name"],
+        components=p.get("components"), instances=p.get("instances"),
+        shared_parameters=p.get("shared_parameters"), master=p.get("master"),
+        items=p.get("items"), part_number_format=p.get("part_number_format"))
+
+
+@handler("project_validate")
+def _h_project_validate(p):
+    """Validate a project.json container (issue #143 / D1): the schema stamp, the
+    naming convention on the project name, the conventional path fields, and — when
+    the project's directory is resolvable — that the referenced manifest + registry
+    exist, the components dir is present, and a named master is a real component.
+    params: project (path to project.json). Returns {ok, problems, schema, name}."""
+    from driftpin import project as _proj
+    import os as _os
+    proj = _proj.load_project(p["project"])
+    base_dir = _os.path.dirname(_os.path.abspath(p["project"]))
+    problems = _proj.validate_project(proj, base_dir)
+    return {"ok": not problems, "problems": problems,
+            "schema": proj.get("schema"), "name": proj.get("name")}
+
+
+@handler("project_check_references")
+def _h_project_check_references(p):
+    """Reference-integrity guard (issue #143 / D1): load a project's assembly
+    manifest + item registry and check every cross-file reference resolves *before* a
+    merge — a moved/renamed/missing component file, a dangling item-ref, an instance
+    naming an unknown component, or a naming-convention violation. params: project
+    (path to project.json). Returns {ok, problems} — ok is True iff every reference is
+    live (the chronic-PDM broken-reference failure caught before any geometry)."""
+    from driftpin import project as _proj
+    import os as _os
+    proj = _proj.load_project(p["project"])
+    base_dir = _os.path.dirname(_os.path.abspath(p["project"]))
+    problems = _proj.check_project_references(proj, base_dir)
+    return {"ok": not problems, "problems": problems}
+
+
+@handler("project_resolve_manifest")
+def _h_project_resolve_manifest(p):
+    """Resolve a project's item-ref components to file components and write a merge-
+    ready manifest (issue #143 / D1, the deferred #140 seam): each component naming an
+    `item` (items.json identity) is lowered to a `{file}` component with the CAD
+    artifact resolved from the registry, so merge_assembly consumes it unchanged.
+    params: project (path), out? (output manifest path; defaults to <manifest>.resolved.json).
+    Returns {path, lowered} — a dangling item-ref fails loudly."""
+    from driftpin import project as _proj
+    from driftpin import items as _items
+    import os as _os
+    import json as _json
+    proj = _proj.load_project(p["project"])
+    base_dir = _os.path.dirname(_os.path.abspath(p["project"]))
+    mani = proj.get("manifest", "manifest.json")
+    mpath = _os.path.join(base_dir, mani)
+    with open(mpath) as f:
+        manifest = _json.load(f)
+    reg = _items.load_registry(_os.path.join(base_dir, proj.get("registry", "items.json")))
+    lowered = _proj.lower_item_refs(manifest, reg)
+    out = p.get("out") or (_os.path.splitext(mpath)[0] + ".resolved.json")
+    with open(out, "w") as f:
+        _json.dump(lowered, f, indent=2)
+    return {"path": out, "lowered": lowered}
 # --- design tables / variant families (issue #138, B1, append-only) -----------
 # A FAMILY is a row x column design table (row = a variant, column = a parameter /
 # feature-flag / material). All logic lives in the owned, pure-Python module
