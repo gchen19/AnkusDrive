@@ -2,7 +2,7 @@
 #
 # install-solvers.sh — provision the external P2 solvers DriftPin's heavy
 # simulation families shell out to, and make them discoverable by the agent. The
-# solver twin of scripts/install-renderers.sh (see docs/SIMULATION_P2_KICKOFF.md).
+# solver twin of scripts/install-renderers.sh (see docs/archive/SIMULATION_P2_KICKOFF.md).
 #
 # WHAT IT DOES
 #   Two solver shapes, two install paths:

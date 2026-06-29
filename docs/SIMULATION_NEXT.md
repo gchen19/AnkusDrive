@@ -1,7 +1,7 @@
 # Simulation — what's next after the completed sprint plan
 
-[`SIMULATION_SPRINTS.md`](SIMULATION_SPRINTS.md) and the
-[P3 kickoff](SIMULATION_P3_KICKOFF.md) are **fully executed**: eleven families,
+[`SIMULATION_SPRINTS.md`](archive/SIMULATION_SPRINTS.md) and the
+[P3 kickoff](archive/SIMULATION_P3_KICKOFF.md) are **fully executed**: eleven families,
 oracle-gated, from closed-form tolerance math to geometry-driven Elmer/OpenFOAM
 solves. This doc assesses what's worth building next. It is an *assessment*, not
 a committed plan — promote items into a kickoff when one is picked up.

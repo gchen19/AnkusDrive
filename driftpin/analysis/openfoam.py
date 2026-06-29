@@ -1,7 +1,7 @@
 """OpenFOAM case generation — the heavy-solver case-from-geometry half of P2 family 6.
 
 Pure-Python, FreeCAD-free (the case text is testable on the no-FreeCAD lane; the
-*solve* needs the OpenFOAM binaries). The CFD family (``docs/SIMULATION_P2_KICKOFF.md``
+*solve* needs the OpenFOAM binaries). The CFD family (``docs/archive/SIMULATION_P2_KICKOFF.md``
 M5) rides on OpenFOAM; the kickoff's "unambiguous gate" is the **straight circular
 pipe**, whose laminar pressure drop is the exact Hagen–Poiseuille law
 

@@ -107,6 +107,22 @@ def test_screen_escalates_to_fill_when_fill_check_runs():
 
 # --- solver-backed (skips when OpenFOAM is absent) ---------------------------
 
+# The solver-backed fill/pack/cool solves below are CPU-intensive — the
+# openInjMoldSim cases run several minutes each (a violent compressible fill at a
+# tiny maxDeltaT, then a conduction-limited cool). Like every live external-solver
+# solve they are gated behind RUN_HEAVY_SOLVES (see tests/heavy_solve.py): the
+# standard per-push suite leaves it unset so these skip even where the solver IS
+# installed, while the cheap no-solver half (case generation, field parsers,
+# gates, Tait EOS, shrinkage) still runs every push and catches most regressions.
+# The dedicated heavy-solves workflow sets the flag to run the real solves.
+from tests.heavy_solve import skip_heavy  # noqa: E402
+
+
+def _skip_unless_molding_solve():
+    """True (and prints a reason) when the heavy molding solves are gated off."""
+    return skip_heavy("openInjMoldSim fill/pack/cool")
+
+
 def _run_fill(case_dir):
     bashrc = solvers.openfoam_bashrc()
     src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
@@ -118,6 +134,8 @@ def _run_fill(case_dir):
 def test_fillable_cavity_reaches_far_end():
     """A short, thin cavity with enough run time fills: the melt front reaches the
     far end (front_x_frac == 1) and the gate passes (no short shot)."""
+    if _skip_unless_molding_solve():
+        return
     if not solvers.is_available("openfoam") and solvers.openfoam_bashrc() is None:
         print("    SKIP — OpenFOAM not installed")
         return
@@ -138,6 +156,8 @@ def test_fillable_cavity_reaches_far_end():
 def test_short_shot_cavity_stalls():
     """A long, thin, viscous cavity with too little run time short-shots: the melt
     front does NOT reach the far end and the gate flags a short shot."""
+    if _skip_unless_molding_solve():
+        return
     if not solvers.is_available("openfoam") and solvers.openfoam_bashrc() is None:
         print("    SKIP — OpenFOAM not installed")
         return
@@ -392,6 +412,8 @@ def test_openinjmoldsim_generated_case_fills():
 
     Slow (~3 min): the violent compressible fill needs a small maxDeltaT. Guarded
     on the binary so it only runs where tools/build_openinjmoldsim.sh has run."""
+    if _skip_unless_molding_solve():
+        return
     binp = solvers.openinjmoldsim_bin()
     bashrc = solvers.openinjmoldsim_bashrc()
     if not binp or not bashrc:
@@ -420,6 +442,8 @@ def test_openinjmoldsim_fill_pack_cools_and_densifies():
     walls to cooling + seal the gate → cool. Confirms it runs STABLE (no nan) and the
     melt DENSIFIES on cooling, with the densification faithful to the resin's Tait EOS and
     the gate passing (no sink). Skips unless the OF7 build is present. Slow (~5-6 min)."""
+    if _skip_unless_molding_solve():
+        return
     binp = solvers.openinjmoldsim_bin()
     bashrc = solvers.openinjmoldsim_bashrc()
     if not binp or not bashrc:
@@ -536,6 +560,8 @@ def test_openinjmoldsim_asymmetric_cooling_warps():
     dT_through_k pointing toward the hotter (slower-cooled, low-h) face. The symmetric
     twin (test_openinjmoldsim_fill_pack_cools_and_densifies) gives ≈0 → the two-sided
     check. Skips unless the OF7 build is present. Slow (~5-6 min)."""
+    if _skip_unless_molding_solve():
+        return
     binp = solvers.openinjmoldsim_bin()
     bashrc = solvers.openinjmoldsim_bashrc()
     if not binp or not bashrc:

@@ -1,6 +1,6 @@
 """Generate example 2D mechanical drawings (multi-view PDF/SVG/DXF + dimensions)
 straight from CAD, headless — the deliverable for the TechDraw export kickoff
-(docs/KICKOFF_techdraw_export.md).
+(docs/archive/KICKOFF_techdraw_export.md).
 
 Run:
     .venv/bin/python scratch/drawing_demo.py

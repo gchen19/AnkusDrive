@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin import solvers  # noqa: E402
 from driftpin.analysis import em  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
 # --- exact oracles ----------------------------------------------------------------
@@ -150,6 +151,8 @@ def test_case_writers_and_oracles():
 def test_dc_strip_is_machine_exact():
     """StatCurrentSolver on the strip: electrode current, Joule power and Elmer's
     own effective resistance all land on R = L/(σ·A) to ~1e-6 (verified live)."""
+    if skip_heavy("Elmer EM"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
@@ -174,6 +177,8 @@ def test_skin_effect_decays_at_the_exact_skin_depth():
     """MagnetoDynamics2DHarmonic on the slab: the complex A(x) e-folding length
     matches δ = √(2/(ωμσ)) in BOTH magnitude and phase (measured 0.1 % live;
     gate 2 %)."""
+    if skip_heavy("Elmer EM"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
@@ -236,6 +241,8 @@ def test_induction_heating_case_structure():
 
 
 def test_induction_heating_solve_closes_energy_balance():
+    if skip_heavy("Elmer EM"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return

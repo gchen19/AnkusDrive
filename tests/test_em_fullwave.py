@@ -38,6 +38,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from driftpin.analysis import em_fullwave as ew  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 C0 = 299_792_458.0
 RUNNER = str(REPO / "driftpin" / "em_fullwave_gpl_runner.py")
@@ -172,6 +173,8 @@ def test_em_runner_subprocess_clean():
     """The GPL openEMS engine answers a ping over the subprocess + sentinel-JSON
     contract, and THIS process never imports openEMS (the copyleft boundary)."""
     py = _openems_python()
+    if skip_heavy("openEMS FDTD"):
+        return
     if py is None:
         print("    SKIP — no openEMS venv resolves (scripts/install-solvers.sh em_gpl)")
         return
@@ -189,6 +192,8 @@ def test_em_waveguide_cutoff_gate():
     lands on the analytic cutoff within ~1.5%. That clean propagating↔evanescent
     transition at the analytic frequency is the gate the openEMS solve must pass."""
     py = _openems_python()
+    if skip_heavy("openEMS FDTD"):
+        return
     if py is None:
         print("    SKIP — no openEMS venv resolves (scripts/install-solvers.sh em_gpl)")
         return

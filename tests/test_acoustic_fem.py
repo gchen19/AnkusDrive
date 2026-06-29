@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin import solvers                       # noqa: E402
 from driftpin.analysis import acoustics as ac      # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
 def _run_elmer(case_dir, sif):
@@ -93,6 +94,8 @@ def test_resonance_locator_on_synthetic_pole():
 # --- live solver gates (skip when ElmerSolver absent) ----------------------------
 
 def test_duct_standing_wave_matches_exact():
+    if skip_heavy("Elmer acoustic FEM"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
@@ -109,6 +112,8 @@ def test_duct_standing_wave_matches_exact():
 
 
 def test_cavity_oblique_mode_matches_exact():
+    if skip_heavy("Elmer acoustic FEM"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return

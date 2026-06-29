@@ -1,5 +1,5 @@
 """Transient-thermal field animation (simulation-video-capture kickoff item C —
-docs/KICKOFF_simulation_video_capture.md). Turn a transient conduction solve, which today
+docs/archive/KICKOFF_simulation_video_capture.md). Turn a transient conduction solve, which today
 returns only a centre/surface temperature *number* per step, into a GIF a reviewer can
 watch: the REAL meshed plate cooling, its surface coloured by the temperature FIELD T(x,t)
 through the thickness, with the scalar history curve beside it.

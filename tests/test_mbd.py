@@ -80,7 +80,7 @@ def test_orientations_track_driven_revolution():
     """A link driven about Z at a known rate has a STATIONARY com (trajectories show
     nothing), so a review video needs `orientations`: the recorded world quaternion must
     advance by omega*t about Z, sampled in lockstep with trajectories. Pins the field a
-    motion video consumes (KICKOFF_simulation_video_capture, item A)."""
+    motion video consumes (docs/archive/KICKOFF_simulation_video_capture.md, item A)."""
     import math
 
     from driftpin.analysis import mbd

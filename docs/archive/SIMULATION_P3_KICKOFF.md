@@ -6,7 +6,7 @@ contact, and random vibration are all live and oracle-gated
 doc kicks off **the next wave**, which has two halves:
 
 1. **Finish the catalog.** Of the families specced in
-   [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) (§0–§9) and
+   [`SIMULATION_EXAMPLES.md`](../SIMULATION_EXAMPLES.md) (§0–§9) and
    [`SIMULATION_SPRINTS.md`](SIMULATION_SPRINTS.md) (Sprints 1–9), exactly one is
    unshipped — **Optics (Sprint 5 / §7)** — plus two *partial* gaps inside families we
    marked "done": **radiation thermal** (`thermal_radiation`, specced in Sprint 9, never
@@ -21,8 +21,8 @@ doc kicks off **the next wave**, which has two halves:
    external aero on a real body, 3-D topology under real load cases).
 
 It complements:
-- [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) — family catalog + result schemas.
-- [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) — the closed-form **acceptance toy** per family.
+- [`SIMULATION_TOOLS.md`](../SIMULATION_TOOLS.md) — family catalog + result schemas.
+- [`SIMULATION_EXAMPLES.md`](../SIMULATION_EXAMPLES.md) — the closed-form **acceptance toy** per family.
 - [`SIMULATION_SPRINTS.md`](SIMULATION_SPRINTS.md) — sprint sequence (this is **Sprint 5 + Sprints 10–12**).
 
 ---
@@ -31,18 +31,18 @@ It complements:
 
 **Shipped:** the materials DB, the entire pure-Python closed-form wave (tolerance,
 durability, lumped thermal, DfX, cost, slicing, machine-element rating), the async
-facility ([`driftpin/jobs.py`](../driftpin/jobs.py)), and the **complete P2 tier** —
-[`analysis/{cfd,mbd,kinematics,topology,vibration,elmer,openfoam}.py`](../driftpin/analysis/)
-with their `*_submit` tools, the [`solvers.py`](../driftpin/solvers.py) discovery +
+facility ([`driftpin/jobs.py`](../../driftpin/jobs.py)), and the **complete P2 tier** —
+[`analysis/{cfd,mbd,kinematics,topology,vibration,elmer,openfoam}.py`](../../driftpin/analysis/)
+with their `*_submit` tools, the [`solvers.py`](../../driftpin/solvers.py) discovery +
 degradation glue, and the case-builders that build a slab/pipe from physical params,
 run **the real ElmerSolver / OpenFOAM**, and gate against the analytic oracle.
 
 **Missing — four things, none of them new infrastructure:**
 1. **Optics (Sprint 5).** `optics_raytrace` + `optics_moldability_check`. The `optics`
    extra and the `rayoptics`/`optiland` solver are **already registered**
-   ([`solvers.py`](../driftpin/solvers.py), [`pyproject.toml`](../pyproject.toml)); the
+   ([`solvers.py`](../../driftpin/solvers.py), [`pyproject.toml`](../../pyproject.toml)); the
    optical material corpus is in
-   [`analysis/materials/optical.json`](../driftpin/analysis/materials/optical.json)
+   [`analysis/materials/optical.json`](../../driftpin/analysis/materials/optical.json)
    (PMMA n=1.49062, etc.). Snell + Fresnel + TIR are **exact** closed-form anchors. This
    is the lowest-risk, most de-risked item — **ship it first.**
 2. **Radiation thermal.** `thermal_radiation` (Elmer's enclosure/view-factor radiation),
@@ -50,7 +50,7 @@ run **the real ElmerSolver / OpenFOAM**, and gate against the analytic oracle.
 3. **External-flow CFD builder.** A from-geometry builder behind
    `cfd_external_flow_submit` (drag/lift), the counterpart to the shipped internal-pipe
    builder. Needs a new analytic oracle (Stokes / flat-plate) in
-   [`analysis/cfd.py`](../driftpin/analysis/cfd.py).
+   [`analysis/cfd.py`](../../driftpin/analysis/cfd.py).
 4. **The geometry-driven meshing bridge.** The cross-cutting unlock (see below).
 
 ---
@@ -224,7 +224,7 @@ rides on.
   fast lane, gated behind a `solvers.is_available(...)` skip (the `test_elmer.py` /
   `test_openfoam.py` pattern).
 - **Runnable acceptance evidence:** extend
-  [`examples/run_simulation_examples.py`](../examples/run_simulation_examples.py) (+ its
+  [`examples/run_simulation_examples.py`](../../examples/run_simulation_examples.py) (+ its
   `--plots` figures) with each new family, the way A/B/C cover topology/thermal/CFD.
 
 ---

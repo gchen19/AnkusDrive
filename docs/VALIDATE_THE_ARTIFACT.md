@@ -1,6 +1,6 @@
 # Validate the Artifact, Not a Model of It — §11.10 delivered
 
-Companion to `docs/KICKOFF_validate_the_artifact.md`. Written 2026-06-14.
+Companion to `docs/archive/KICKOFF_validate_the_artifact.md`. Written 2026-06-14.
 
 The kickoff named a recurring failure in the gearbox arc: **a green validation passed
 while the exported geometry was wrong**, because the check ran on a *model of the
@@ -142,7 +142,7 @@ headline regression reproduces, now closed in the demo geometry too.
   mm³, both-occupied 0.0) vs an in-phase JAM (254 mm³, 0.46). Done with kinematics + the
   geometry oracle rather than finicky rigid-body mesh contact (which item #3's note
   accepts as a substitute). Part of the simulation-video-capture kickoff
-  (`docs/KICKOFF_simulation_video_capture.md`).
+  (`docs/archive/KICKOFF_simulation_video_capture.md`).
 - **Sim-from-CAD, now done as a spike (kickoff #3):** full rigid-body mesh contact via
   `p.vhacd` on the REAL exported parts — `scratch/dog_clutch_cad_sim.py`. It drives the
   decomposed metal in PyBullet with no constraint imposing the coupling, and the

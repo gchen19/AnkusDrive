@@ -2,7 +2,7 @@
 
 A fresh-session-executable plan for finishing the "core mechanical design"
 surface area. Phase 1 (the original 5 slices + test scaffolding) shipped on
-2026-04-25 and is documented in [`ROADMAP.md`](ROADMAP.md). This document
+2026-04-25 and is documented in [`ROADMAP.md`](../ROADMAP.md). This document
 picks up where that left off.
 
 A new Claude Code session should be able to read this doc, the linked context
@@ -12,12 +12,12 @@ docs, and execute Phase 2 without backstory.
 
 ## Cold-start context (read these first)
 
-- **[`README.md`](../README.md)** — overall pitch and architecture sketch.
-- **[`docs/ROADMAP.md`](ROADMAP.md)** — what each slice shipped, what was
+- **[`README.md`](../../README.md)** — overall pitch and architecture sketch.
+- **[`docs/ROADMAP.md`](../ROADMAP.md)** — what each slice shipped, what was
   deferred, why. The "Status" sections under each slice list known gaps.
-- **[`tests/TEST_PLAN.md`](../tests/TEST_PLAN.md)** — coverage map across the
+- **[`tests/TEST_PLAN.md`](../../tests/TEST_PLAN.md)** — coverage map across the
   six test tiers + how to run them.
-- **[`tests/RELIABILITY.md`](../tests/RELIABILITY.md)** — the gated reliability
+- **[`tests/RELIABILITY.md`](../../tests/RELIABILITY.md)** — the gated reliability
   harness (Layers A/B/C, all scaffolded but pending API key).
 - **Memory:** `~/.claude/projects/-Users-georgechen-DriftPin/memory/`
   - `project_freecad_api_drift.md` — **READ THIS** before adding any new

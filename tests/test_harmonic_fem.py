@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin import solvers                       # noqa: E402
 from driftpin.analysis import vibration as vib     # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
 # --- case generation (no solver needed) -----------------------------------------
@@ -73,6 +74,8 @@ def test_frf_locator_on_synthetic_sdof():
 # --- live solver gate (skip when ElmerSolver absent) -----------------------------
 
 def test_frf_sweep_matches_sdof_oracle():
+    if skip_heavy("Elmer harmonic FEM"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return

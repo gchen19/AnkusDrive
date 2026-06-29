@@ -7,7 +7,7 @@ A CLI + MCP server that drives [FreeCAD](https://www.freecad.org/) through its P
 FreeCAD exposes almost everything it does through a Python API — create documents, build sketches, extrude solids, mesh them, run CalculiX/Elmer FEM solves, read back stress/displacement fields. But that API lives inside FreeCAD's embedded Python (`freecadcmd`), which is awkward to call from anywhere else. DriftPin wraps it behind two surfaces:
 
 - **CLI** — one-shot commands (`driftpin run script.py`, `driftpin box --w 10 --d 20 --h 5 -o part.FCStd`) for scripts, CI, and quick iteration.
-- **MCP server** — ~100 structured tools (`new_document`, `add_primitive`, `boolean_op`, `pad`, `add_gear`, `fem_new_analysis`, `fem_run`, `fem_results`) so an LLM agent can model, inspect, and simulate iteratively.
+- **MCP server** — 240+ structured tools (`new_document`, `add_primitive`, `boolean_op`, `pad`, `add_gear`, `fem_new_analysis`, `fem_run`, `fem_results`) so an LLM agent can model, inspect, and simulate iteratively. Beyond core CAD/FEM this now spans a broad **simulation surface** (thermal, CFD/CHT, EM, acoustics, FSI, injection molding, granular/DEM, optics, multibody) and a **design-control layer** (item/part numbers, recipes, variant families, lifecycle/revision, ECO change orders, versioned interfaces).
 - **Multi-agent orchestration** — a host-side reference layer that lets a *team* of agents partition one product into components, build them in parallel, and merge the pieces back together with the joints actually fitting (see [Multi-agent design](#multi-agent-design)).
 
 ## Target environment
@@ -114,7 +114,7 @@ claude mcp add driftpin -- driftpin mcp
 **Other hosts (Cursor, Continue, custom MCP clients)** — same shape: stdio
 transport, command = `driftpin`, args = `["mcp"]`.
 
-After restarting the host, you should see ~100 `driftpin__*` tools become
+After restarting the host, you should see 240+ `driftpin__*` tools become
 available. If startup hangs or the host reports a closed connection, run
 `driftpin ping` directly — that exercises the same worker boot path with
 cleaner error messages.
@@ -229,9 +229,10 @@ how to invoke it.
 
 ### Layer 1 — typed MCP tools (the agent surface)
 
-~100 first-class MCP tools cover the **core mechanical-design surface area**.
-They have validated parameters, structured returns, and stable handles for
-chaining. This is the happy path — what an agent uses for things people do
+240+ first-class MCP tools span the **core mechanical-design surface**, a broad
+**engineering-analysis / simulation surface**, and a **design-control (PLM)
+layer**. They have validated parameters, structured returns, and stable handles
+for chaining. This is the happy path — what an agent uses for things people do
 every day.
 
 | Domain | What's covered |
@@ -246,13 +247,21 @@ every day.
 | Generic property access | `get_object`, `set_property` |
 | Functional intent & invariants | `annotate_face`, `list_face_roles`, `classify_face_sides`, `check_airtight_path`, `declare_intent`, `verify_intent` |
 | Assembly & interfaces | `make_assembly`, `add_part`, `list_assembly_parts`, `merge_assembly`, `publish_interface`, `interface_align_check`, `assembly_lock`, `assembly_lock_check`, `bom_extract` |
-| Drawings | `make_drawing_page`, `add_projection_group`, `mass_properties` |
-| Visual feedback | `render_view`, `render_views` (8 preset views, multi-view sheets) |
-| FEM | `fem_new_analysis`, `fem_set_solver`, `fem_set_material`, `fem_add_constraint` (fixed/force/pressure/displacement/temperature/heatflux/initial_temperature), `fem_mesh`, `fem_mesh_refinement`, `fem_modal`, `fem_buckling`, `fem_run`, `fem_results`, `fem_modal_results`, `fem_buckling_results`, `fem_thermal_results`, plus the legacy `fem_cantilever_demo` |
+| Drawings (TechDraw, headless) | `make_drawing_page`, `add_projection_group`, `add_section_view`, `add_thumbnail`, `add_dimension`, `add_annotation`, `add_feature_note`, `set_title_block`, `fit_page`, `export_drawing` (PDF/SVG/DXF), plus completeness/legibility gates `drawing_gate`, `drawing_legibility` |
+| Visual feedback | `render_view`, `render_views` (8 preset views, multi-view sheets), `render_photoreal` / `render_photoreal_submit`, `render_capabilities` |
+| FEM (FreeCAD/CalculiX/Elmer) | `fem_new_analysis`, `fem_set_solver`, `fem_set_material`, `fem_set_nonlinear_material`, `fem_add_constraint` (fixed/force/pressure/displacement/temperature/heatflux/initial_temperature), `contact_setup`, `fem_mesh`, `fem_mesh_refinement`, `fem_modal`, `fem_buckling`, `fem_run`, `fem_results`, `fem_result_probe` (stress/disp/temp at a point or face), `fem_modal_results`, `fem_buckling_results`, `fem_thermal_results`, plus the legacy `fem_cantilever_demo` |
+| Engineering oracles & hand-calcs | machine elements (`gear_rating`, `bearing_life`, `belt_drive`, `spring_check`, `bolted_joint_check`, `press_fit_stress`, `seal_check`), structural (`beam_modal`, `beam_buckling`, `plate_check`, `hertz_contact`, `elastica_deflection`, `plastic_collapse`, `random_vibration`, `harmonic_response`), durability (`fatigue_check`, `fracture_check`, `creep_flag`, `wear_estimate`), thermal (`thermal_lumped`, `thermal_transient_1d`, `thermal_composite_wall`, `h_estimate`), tolerance/GD&T (`tolerance_stackup`, `fit_check`, `fit_class`, `gdt_check`) |
+| Simulation families (external solvers, async) | screens + full solves that shell out to OpenFOAM/Elmer/CalculiX/openEMS/YADE/KrakenOS, most via a submit→poll job pattern: thermal/CHT (`cht_channel_submit`, `cht_graetz_submit`, `thermal_transient_submit`, `thermal_radiation_submit`), CFD (`cfd_pipe_flow`, `cfd_internal_flow_submit`, `cfd_external_flow_submit`), EM (`em_skin_depth`, `em_dc_resistance`, `em_field`, `em_conduction_submit`, `em_induction_submit`, `em_fullwave_submit`), acoustics (`acoustic_screen`, `acoustic_fem_submit`, `acoustic_radiation_submit`), FSI (`fsi_*`), molding (`molding_screen`, `molding_fill_submit`, `molding_warpage_submit`), granular/DEM (`granular_screen`, `dem_pack_submit`, `dem_flow_submit`), optics (`optics_lens_design`, `optics_lens_optimize`, `optics_raytrace`, `optics_solid_trace`), multibody (`mechanism_kinematics`, `mechanism_simulate_submit`), topology (`topology_optimize_submit`, `topology_to_solid`) |
+| Async jobs | `job_status`, `job_result`, `job_list` — poll/collect any `*_submit` long-running solve; `solve_capabilities` reports which solvers currently resolve |
+| Materials & fluids | `material_list`, `material_get`, `material_select`, `fluid_props` — mechanical-property / molding / CoolProp thermophysical corpora behind a typed lookup |
+| Manufacturing & Design-for-X | `dfm_check`, `dfa_check`, `moldability_check`, `optics_moldability_check`, `pack_check`, `cost_estimate`, `slice_estimate`, `slice_gcode_submit`, `laminate_properties`, `drop_impact` |
+| Design control / PLM | items & part numbers (`items_new`, `items_validate`, `items_resolve`, `items_check_manifest`), recipes (`recipe`, `recipe_list`, `recipe_schema`, `recipe_validate`), feature templates (`feature_instantiate`, `feature_list`, `feature_schema`, `feature_validate`), variant families (`family_materialize`, `family_validate`), lifecycle/revision (`lifecycle_transition`, `lifecycle_editable`, `lifecycle_classify_change`, `lifecycle_apply_change`), change control (`eco_create`, `eco_validate`, `change_impact`, `where_used`, `baseline_create`, `baseline_verify`), interface registry + substitutability (`get_interface`, `substitutability_check`), projects (`scaffold_project`, `project_validate`, `project_check_references`, `project_resolve_manifest`) |
 | Operations | `transaction_open`, `transaction_commit`, `transaction_abort` |
 
 All tools return JSON; geometry-creating tools return a `handle` (e.g.
-`pad_1`) that subsequent calls reference.
+`pad_1`) that subsequent calls reference. The heavy simulation families return
+a `{ok: false, reason, install}` dict (rather than crashing) when their solver
+isn't installed — see [Simulation solvers](#simulation-solvers--review-video-demos).
 
 ### Layer 2 — generic property reflection
 
@@ -360,33 +369,83 @@ merge gates and a single-agent baseline — see
 [`tests/MULTI_AGENT_EVAL.md`](tests/MULTI_AGENT_EVAL.md). Early experiments have
 partition performing at or above the single-agent baseline on the harder toys.
 
+## Designs, not just parts — the design-control layer
+
+Multi-agent orchestration partitions *one* product across a team. A separate
+axis makes a *design* (not just a part) something you can parameterize, vary,
+and evolve under control — the mechanisms a PLM/PDM workflow expects, mapped
+onto DriftPin's deterministic, headless, git-diffable grain. The keystone
+insight: **the build recipe is the feature tree; the parameters are its inputs;
+regeneration is re-running the recipe** — so DriftPin gets parametric regen and
+family tables without a live in-file expression engine. The full scoping and
+rationale is in [`docs/DESIGN_HIERARCHY.md`](docs/DESIGN_HIERARCHY.md); the
+agent-facing judgment lives in the [`design-modularly`](skills/design-modularly)
+skill.
+
+- **Parametric hierarchy** — *recipes* (`recipe`, `recipe_validate`) are named,
+  declared-input build templates (DriftPin's PowerCopy/UDF *and* its intra-part
+  parametric model); a *relations* DAG drives driven dimensions from master
+  parameters by formula (`pitch_d = module * teeth`, arithmetic only — no
+  iterative solve, no double-driving); *feature templates* (`feature_instantiate`)
+  graft reusable features onto reference geometry by name; the typed
+  [`units`](driftpin/units.py) layer rejects dimensionally-wrong inputs at the
+  door (`"5 N"` for a length is an error, not a silent mis-scale).
+- **Variant families** — `family_materialize` expands a row × column design
+  table into a set of variants deterministically, running the recipe per row and
+  allocating part numbers in table order.
+- **Identity & lifecycle** — *items* (`items_new`) give a part a stable
+  part-number identity decoupled from its file path; a *lifecycle* state machine
+  (`lifecycle_transition`: in_work → in_review → released → obsolete) enforces
+  released-immutability, and a Form/Fit/Function predicate decides revision bump
+  vs. new part number on a change.
+- **Change control** — *ECOs* (`eco_create`) are first-class change records;
+  `where_used` / `change_impact` compute blast radius over the dependency graph
+  before you commit; `baseline_create` / `baseline_verify` pin reproducible
+  snapshots.
+- **Versioned interfaces** — an interface-type registry (`get_interface`,
+  `nema17_face@1`-style named/versioned types) plus a Liskov
+  `substitutability_check` gate enforce Form/Fit/Function compatibility as code,
+  so a swapped part is verified to actually mate.
+- **Projects** — `scaffold_project` + `project_validate` /
+  `project_check_references` promote the multi-agent directory convention to a
+  first-class `project.json` (manifest-of-manifests) with a master/skeleton
+  single-source-of-truth slot and reference-integrity guards.
+
+Like the merge gates, these are thin, deterministic, mostly FreeCAD-free
+primitives — the logic layers import and test without launching a worker.
+
 ## Status
 
 Phase 3 closed 2026-05-10 (v0.3.0). The core mechanical-design surface from
-Phase 2 (2026-04-25) is intact; Phase 3 layered intent-encoding APIs on top
-of it. Since then two waves landed: a **command-tier expansion** (21 new MCAD
-tools) and the **multi-agent orchestration** layer.
+Phase 2 (2026-04-25) is intact; Phase 3 layered intent-encoding APIs on top of
+it. Since then the tool surface has grown from ~100 to **240+ tools** across
+several waves: a command-tier expansion (parametric components + direct feature
+ops + metrology), the **multi-agent orchestration** layer, a broad
+**engineering-analysis + external-solver simulation surface** (thermal/CFD/CHT/
+EM/acoustics/FSI/molding/granular/optics/multibody), and a **design-control
+(PLM) layer** (items, recipes, variant families, lifecycle, ECO/change,
+versioned interfaces, projects).
 
 - **Worker + transport** — long-lived `freecadcmd` worker, newline-JSON over stdio with stdio hygiene (FreeCAD C++ chatter redirected off the protocol fd).
 - **CLI** — `ping`, `version`, `box`, `cylinder`, `export`, `run`, `mcp`, `fem cantilever`, plus top-level `--version`.
-- **MCP server** — FastMCP over stdio, ~100 typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), direct-modeling feature ops, parametric components, metrology/inspection, generic property reflection, mass properties, assembly + interface gates, TechDraw, multi-view rendering, FEM (static + modal + buckling + thermal), and transactions.
+- **MCP server** — FastMCP over stdio, 240+ typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), direct-modeling feature ops, parametric components, metrology/inspection, generic property reflection, mass properties, assembly + interface gates, TechDraw (incl. headless PDF/SVG/DXF export, dimensions, gates), multi-view + photoreal rendering, FEM (static + modal + buckling + thermal + nonlinear + result-probe), the engineering-analysis oracles and external-solver simulation families (sync + async `*_submit`/`job_*`), the materials/fluids corpora, Design-for-X / manufacturing checks, the design-control (PLM) layer, and transactions.
 - **Command tiers 1–3** — 21 new tools: parametric components (`add_gear`, `add_rack`, `add_sprocket`, `add_pulley`, `add_spring`, `add_fastener`, `add_bearing`, `add_thread`), direct feature ops (`fillet_edges`, `chamfer_edges`, `shell_solid`, `add_rib`, `engrave_text`, `oring_groove`, `transform`, `scale_shape`, `copy_shape`), and metrology/inspection (`measure_distance`, `measure_angle`, `bounding_box`, `check_shape`, `section_view`, `min_clearance`).
 - **Multi-agent orchestration** — DriftPin ships the thin merge primitives + gates (`publish_interface`, `merge_assembly`, `interface_align_check`, `envelope_check`, `assembly_lock`/`_check`); the host-side reference coordinator (`orchestration/`) decomposes a brief, fans out per-component builders, merges, gates, and renegotiates. See [Multi-agent design](#multi-agent-design) and [`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md).
 - **Phase 3 intent-encoding additions** — `direction='into_body'|'away_from_body'` and `through='wall'|'body'` on pocket/hole (ray-cast wall depth handles hollow shells correctly); `intended_for='print'|'machine'|'drawing'` on hole drives ModelThread; `verify_feature` diffs actual-vs-expected volume change to catch silent failures; visibility hygiene at save hides consumed inputs; `register_handle` + `run_script` auto_register close the escape-hatch one-way trapdoor; `list_thread_options` surfaces the coupled ThreadType/ThreadSize enums dynamically; revolve has an OCCT pre-check that flags axis-coincident edges with an actionable error.
 - **Selection layer** — `list_faces` / `list_edges` / `query_faces` / `resolve_*` produce stable geometric tags that survive edits; FEM constraints take tags directly.
-- **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer (`render_view` / `render_views` return PNGs as MCP `ImageContent`), plus photoreal `render_photoreal` via the FreeCAD Render addon + an external renderer (POV-Ray / LuxCore / Appleseed). Support matrix, install, and limitations: [`docs/RENDERING.md`](docs/RENDERING.md).
-- **Tests** — 153 test functions across worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent (M1+M2), runnable via `tests/run_all.sh`. Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](tests/RELIABILITY.md).
+- **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer (`render_view` / `render_views` return PNGs as MCP `ImageContent`), plus photoreal `render_photoreal` via the FreeCAD Render addon + an external renderer (POV-Ray / LuxCore / Appleseed / Cycles / OSPRay / PBRT). Support matrix, install, and limitations: [`docs/RENDERING.md`](docs/RENDERING.md).
+- **Simulation surface** — engineering-analysis oracles (machine elements, structural, durability, thermal, tolerance/GD&T) plus external-solver families that shell out to OpenFOAM / Elmer / CalculiX / openEMS / YADE / KrakenOS, discovered at runtime by [`driftpin/solvers.py`](driftpin/solvers.py) and degrading cleanly when absent. Long solves use an async submit→poll job pattern (`*_submit` + `job_status`/`job_result`/`job_list`). Catalog and result schemas: [`docs/SIMULATION_TOOLS.md`](docs/SIMULATION_TOOLS.md); proof harness: [`docs/SIMULATION_EXAMPLES.md`](docs/SIMULATION_EXAMPLES.md). Materials/fluids back these via `material_*` and `fluid_props` (mechanical-property / molding / CoolProp corpora).
+- **Design-control (PLM) layer** — recipes + a relations DAG (parametric regen), feature templates, variant families from a design table, item/part-number identity, a lifecycle/revision state machine, ECO change records with where-used/impact + baselines, a versioned interface registry + Liskov substitutability gate, and project containers with reference-integrity guards. Scoping + rationale: [`docs/DESIGN_HIERARCHY.md`](docs/DESIGN_HIERARCHY.md). See [Designs, not just parts](#designs-not-just-parts--the-design-control-layer).
+- **Tests** — ~980 test functions across ~90 files (worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent / simulation families / molding / PLM layer), runnable via `tests/run_all.sh`. Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](tests/RELIABILITY.md).
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and the
-"After Phase 2" backlog (FEM contact/spring/tie, async `fem_run`,
-dimensioned TechDraw, headless PDF/SVG export, `feature_tree` introspection,
-external solver integrations starting with the in-house optics pipeline).
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and remaining
+backlog (FEM contact/spring/tie refinements, fully async `fem_run`,
+`feature_tree` introspection, deeper external-solver integrations).
 
 ## Open questions
 
 - **Error model**: FreeCAD raises plain Python exceptions from C++; worker catches and serializes them, but stack context across the JSON boundary is still lossy.
-- **Async / concurrency**: one worker = one active document is no longer a hard limit (multi-doc shipped via `list_documents` / `set_active_document` / `close_document`), but long FEM solves still block the MCP channel — async `fem_run` is open.
-- **Headless TechDraw export**: PDF/SVG export lives in `TechDrawGui` and isn't reachable from `freecadcmd`. `export_drawing` raises `NotImplementedError` today; fix path is a separate GUI-launch helper or third-party page renderer.
+- **Async / concurrency**: multi-doc shipped (`list_documents` / `set_active_document` / `close_document`), and the long-running external solvers run off the channel via the `*_submit` + `job_*` pattern, but the in-worker `fem_run` itself is still synchronous and blocks the MCP channel for the duration of a CalculiX/Elmer solve.
 - **macOS Gatekeeper / sandboxing**: `freecadcmd` launched from a non-interactive context may hit quarantine issues — still worth verifying under MCP-host launch paths.
 
 ## License

@@ -41,6 +41,7 @@ sys.path.insert(0, str(REPO))
 
 from driftpin import solvers  # noqa: E402
 from driftpin.analysis import granular as g  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 RUNNER = REPO / "driftpin" / "dem_gpl_runner.py"
 
@@ -178,6 +179,8 @@ def test_dem_pack_live():
     Frictionless because micro-friction freezes a poured pack at the looser
     random-LOOSE limit (~0.55); the frictionless settle is the textbook route to
     the RCP point the oracle headlines."""
+    if skip_heavy("YADE DEM"):
+        return
     if not _yade_available():
         print("    SKIP — yade executable not found (set DRIFTPIN_YADE)")
         return
@@ -210,6 +213,8 @@ def test_dem_repose_monotone_live():
     steeper. The monotone trend is the assumption-free granular gate; here it is
     approximated through the settled packing fraction's sensitivity to friction
     (lower φ at higher friction → a looser, steeper-shouldered pile)."""
+    if skip_heavy("YADE DEM"):
+        return
     if not _yade_available():
         print("    SKIP — yade executable not found")
         return

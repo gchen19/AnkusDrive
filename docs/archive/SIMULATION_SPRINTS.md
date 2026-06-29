@@ -6,14 +6,14 @@
 > through the geometry bridge, 3-D topology and the M6 frontier (modal, conjugate
 > heat transfer, low-frequency EM). This document is retained as the executed
 > plan of record; **what comes next** (screening estimators + higher-order
-> solves) is assessed in [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md).
+> solves) is assessed in [`SIMULATION_NEXT.md`](../SIMULATION_NEXT.md).
 
 The **execution sequence** for building out DriftPin's physical-simulation
 algorithms and exposing them over MCP. Sits between the two existing docs:
 
-- [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) — the *scope map* (what each of the
+- [`SIMULATION_TOOLS.md`](../SIMULATION_TOOLS.md) — the *scope map* (what each of the
   11 families answers, its backend, its build risk, P0/P1/P2 priority).
-- [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) — the *proof harness* (a
+- [`SIMULATION_EXAMPLES.md`](../SIMULATION_EXAMPLES.md) — the *proof harness* (a
   concrete call sequence and a closed-form **toy with a known answer** per family).
 
 This doc is the *plan of record*: it slices that catalog into **dedicated,
@@ -46,11 +46,11 @@ heat transfer, low-frequency EM) shipped with
 external-CLI upgrade shipped as `slice_gcode_submit` (PrusaSlicer, graceful
 degradation) — **every item in this plan is now built.** Candidate next families
 (acoustics, convection correlations, harmonic response, turbulent RANS, …) are
-scoped in [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md).
+scoped in [`SIMULATION_NEXT.md`](../SIMULATION_NEXT.md).
 
 Beyond these happy-path toys, every `analysis/` family now carries a sharper
 **advanced tier** — 64 closed-form gates in
-[`tests/test_toys_advanced.py`](../tests/test_toys_advanced.py), with a per-batch
+[`tests/test_toys_advanced.py`](../../tests/test_toys_advanced.py), with a per-batch
 [figure gallery](ADVANCED_TOYS_PLAN.md#figures); see
 [`ADVANCED_TOYS_PLAN.md`](ADVANCED_TOYS_PLAN.md) for the coverage map.
 
@@ -229,7 +229,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   route through `_call()` → the `freecadcmd` worker. An in-process dispatch path for
   pure-Python tools would cut latency and let them answer with no live worker —
   worth a small cross-cutting task since the bulk of this roadmap is pure-Python.
-- **Merge gates** ([`MULTI_AGENT.md`](MULTI_AGENT.md)). Every tool returns a numeric
+- **Merge gates** ([`MULTI_AGENT.md`](../MULTI_AGENT.md)). Every tool returns a numeric
   margin + `pass` bool, so each sprint's output drops straight into a deterministic
   merge gate ("every rated element passes, every fit is within budget") — the same
   discipline as the existing interference/envelope gates.

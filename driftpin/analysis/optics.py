@@ -3,7 +3,7 @@
 Pure-Python, FreeCAD-free, stdlib-only (``math`` — no NumPy), so it runs on the
 fast lane and inside FreeCAD's bundled interpreter alike. Snell's law, the Fresnel
 power-reflectance equations, and total internal reflection are *exact* — the
-unambiguous oracles the kickoff (``docs/SIMULATION_P3_KICKOFF.md``) names for
+unambiguous oracles the kickoff (``docs/archive/SIMULATION_P3_KICKOFF.md``) names for
 optics:
 
     Snell     n1·sinθ1 = n2·sinθ2     (30° into PMMA n=1.49062 → 19.60°)

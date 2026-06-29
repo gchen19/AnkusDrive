@@ -1,4 +1,4 @@
-"""Reusable simulation-video pipeline (kickoff: docs/KICKOFF_simulation_video_capture.md,
+"""Reusable simulation-video pipeline (kickoff: docs/archive/KICKOFF_simulation_video_capture.md,
 item A). Render a multi-part assembly frame-by-frame from the REAL meshes and encode a
 recording for human review.
 

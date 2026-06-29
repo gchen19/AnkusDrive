@@ -8,10 +8,15 @@ Companion to the README. The README describes what *is*; this file describes wha
 *should be next* and why.
 
 **Related docs:**
-- [`docs/PHASE_2_PLAN.md`](PHASE_2_PLAN.md) — **next session pickup point.**
-  Self-contained plan for completing the remaining ~20% of core mechanical-
-  design surface area (PartDesign holes / patterns / loft / sweep / draft /
-  thickness; FEM modal / buckling / thermal; multi-doc; transactions).
+- [`docs/README.md`](README.md) — **index of the whole `docs/` tree** (living
+  reference vs. shipped design records).
+- [`docs/DESIGN_HIERARCHY.md`](DESIGN_HIERARCHY.md) — the design-control / PLM
+  layer (recipes, relations, families, items, lifecycle, ECO/change, interface
+  registry, projects).
+- [`docs/archive/PHASE_2_PLAN.md`](archive/PHASE_2_PLAN.md) — *shipped* design record: the plan
+  for the core mechanical-design surface (PartDesign holes / patterns / loft /
+  sweep / draft / thickness; FEM modal / buckling / thermal; multi-doc;
+  transactions). All landed; kept for rationale.
 - [`tests/TEST_PLAN.md`](../tests/TEST_PLAN.md) — cross-slice test strategy,
   what's covered today and what's left, in priority order.
 - [`tests/RELIABILITY.md`](../tests/RELIABILITY.md) — Layer A/B/C reliability

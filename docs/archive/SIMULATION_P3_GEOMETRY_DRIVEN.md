@@ -9,8 +9,8 @@ solid, maps results back onto its faces, and lands the two families still on the
 shelf (optics, DfX‑v2).
 
 Companion docs:
-- [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) — family catalog + result schemas.
-- [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) — the closed-form acceptance toy per family.
+- [`SIMULATION_TOOLS.md`](../SIMULATION_TOOLS.md) — family catalog + result schemas.
+- [`SIMULATION_EXAMPLES.md`](../SIMULATION_EXAMPLES.md) — the closed-form acceptance toy per family.
 - [`SIMULATION_SPRINTS.md`](SIMULATION_SPRINTS.md) — sprint sequence (this doc adds Sprints 10–14).
 
 ---

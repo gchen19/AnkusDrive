@@ -2,7 +2,7 @@
 
 Pure-Python, no FreeCAD (driftpin.solvers is FreeCAD-free), so this runs on the
 fast/no-FreeCAD CI lane and gates every PR. It pins the M0 degradation contract
-from docs/SIMULATION_P2_KICKOFF.md: with a solver ABSENT, the resolution path must
+from docs/archive/SIMULATION_P2_KICKOFF.md: with a solver ABSENT, the resolution path must
 return the clean {ok:false, reason, install} dict and never raise — that is what
 lets each P2 family's *_submit degrade instead of crashing on a missing binary.
 

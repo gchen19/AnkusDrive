@@ -1,5 +1,5 @@
 """FEM modal-shape animation (simulation-video-capture kickoff item B —
-docs/KICKOFF_simulation_video_capture.md). Turn a `fem_modal` eigen-solve, which today
+docs/archive/KICKOFF_simulation_video_capture.md). Turn a `fem_modal` eigen-solve, which today
 returns only scalars (frequencies + a max-displacement number), into a GIF a reviewer can
 watch: the REAL meshed part oscillating in each mode shape, coloured by modal amplitude.
 

@@ -2,7 +2,7 @@
 
 Pure-Python, FreeCAD-free (the analytic core is testable on the no-FreeCAD lane; the
 *solve* needs the ElmerSolver binary). The transient/radiation thermal family
-(``docs/SIMULATION_P2_KICKOFF.md`` M4) rides on Elmer; the kickoff's gate is
+(``docs/archive/SIMULATION_P2_KICKOFF.md`` M4) rides on Elmer; the kickoff's gate is
 **relative to the analytic oracle** in the trivial-mesh limit: a 1-D plane-wall
 transient where ``thermal_transient_1d`` (the one-term Heisler series) is exact.
 

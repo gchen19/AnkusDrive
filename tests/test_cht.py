@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from driftpin import solvers  # noqa: E402
 from driftpin.analysis import cht  # noqa: E402
+from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
 # --- composite wall (exact oracle) ----------------------------------------------
@@ -157,6 +158,8 @@ def test_conjugate_channel_matches_energy_balance_and_solid_drop():
     """The M6 CHT gate: one Elmer solve across the coupled fluid+solid regions —
     outlet bulk temperature on the exact h-free energy balance, solid-layer drop on
     q″·t/k (measured 0.5 % / 0.2 % live; gates 3 %)."""
+    if skip_heavy("Elmer CHT"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
@@ -179,6 +182,8 @@ def test_conjugate_channel_matches_energy_balance_and_solid_drop():
 def test_conjugate_channel_zero_flux_negative():
     """The two-sided negative: with q″ = 0 every gate temperature equals the inlet
     temperature — any spurious source/sink in the coupled assembly would show."""
+    if skip_heavy("Elmer CHT"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
@@ -239,6 +244,8 @@ def test_fit_nusselt_recovers_synthetic_exponential():
 
 
 def test_graetz_solve_matches_eigenvalue():
+    if skip_heavy("Elmer CHT"):
+        return
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return

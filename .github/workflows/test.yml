@@ -13,7 +13,13 @@ name: Tests
 #
 # Perf and reliability suites are gated behind env vars in run_all.sh and
 # intentionally NOT run here (perf is noisy, reliability costs Anthropic
-# API credits).
+# API credits). The CPU-intensive LIVE external-solver solves (OpenFOAM,
+# standalone Elmer, openEMS, Bempp, YADE, preCICE FSI, CalculiX warpage,
+# openInjMoldSim molding — minutes each, some flaky under load) are likewise
+# gated OFF here behind RUN_HEAVY_SOLVES (tests/heavy_solve.py) — they would blow
+# the 20-min cap below — and run in the dedicated heavy-solves.yml only when a
+# change touches solver/analysis code, on demand, or nightly. The cheap
+# analytic-oracle / case-structure halves of those test files still run here.
 
 on:
   push:

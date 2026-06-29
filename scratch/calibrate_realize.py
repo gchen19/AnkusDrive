@@ -1,6 +1,6 @@
 """Calibrate the geometry-realizes-declaration signals on REAL CAD.
 
-The kickoff (docs/KICKOFF_validate_the_artifact.md) demands we treat out-of-family
+The kickoff (docs/archive/KICKOFF_validate_the_artifact.md) demands we treat out-of-family
 numbers as red flags — which presupposes we know the family. This builds the engaged
 dog clutch two ways and prints the discriminating signals so the §11.10 gate
 thresholds are grounded in measured geometry, not guessed:
