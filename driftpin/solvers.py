@@ -101,6 +101,17 @@ _SOLVERS: dict = {
                         "conda ('conda install -c conda-forge openfoam'), or the "
                         "FreeCAD CfdOF workbench — then ensure foamRun/simpleFoam is "
                         "on PATH or set DRIFTPIN_OPENFOAM_PATH",
+        # installed-but-unwired probe (issue #177): foamRun/simpleFoam only land on
+        # PATH *after* an etc/bashrc is sourced, so a bare shell reports the binary
+        # absent even when OpenFOAM is fully installed. A standard-location etc/bashrc
+        # is the evidence that it is installed but not wired into this shell.
+        "unwired": {
+            "probe": "bashrc",
+            "globs": ("/usr/share/openfoam/etc/bashrc",
+                      "/usr/lib/openfoam/openfoam*/etc/bashrc",
+                      "/opt/openfoam*/etc/bashrc", "/opt/OpenFOAM*/etc/bashrc"),
+            "hint": "set DRIFTPIN_OPENFOAM_BASHRC={found} (or source it)",
+        },
     },
     "su2": {
         "kind": "binary",
@@ -171,6 +182,14 @@ _SOLVERS: dict = {
                         ".venv-bempp/bin/pip install bempp-cl gmsh 'meshio>=5'  "
                         "(scripts/install-solvers.sh acoustics_bem); then point "
                         "DRIFTPIN_BEMPP_PYTHON at that venv's python.",
+        # installed-but-unwired probe (issue #177): bempp lives in the dedicated
+        # .venv-bempp (meshio>=5), not this interpreter; the venv beside the repo is
+        # the evidence it is installed but DRIFTPIN_BEMPP_PYTHON is not set here.
+        "unwired": {
+            "probe": "venv",
+            "venv": ".venv-bempp",
+            "hint": "set DRIFTPIN_BEMPP_PYTHON={found}/bin/python3",
+        },
     },
     # --- granular DEM: YADE (GPL-3.0, source-built, NOT a pip wheel) ----------
     # YADE is GPL-3.0 and ships no PyPI/conda-noble wheel, so it is source-built
@@ -223,6 +242,15 @@ _SOLVERS: dict = {
                         "runs update_openEMS.sh --python into a dedicated venv); then "
                         "point DRIFTPIN_OPENEMS_PYTHON at that venv's python. Run "
                         "out-of-process only via driftpin/em_fullwave_gpl_runner.py.",
+        # installed-but-unwired probe (issue #177): openEMS lives in a dedicated
+        # .venv-openems, NOT this interpreter, so the find_spec probe above reports it
+        # absent in a bare shell. The venv sitting beside the repo is the evidence
+        # that it is installed but DRIFTPIN_OPENEMS_PYTHON is not set in this shell.
+        "unwired": {
+            "probe": "venv",
+            "venv": ".venv-openems",
+            "hint": "set DRIFTPIN_OPENEMS_PYTHON={found}/bin/python3",
+        },
     },
     # --- FSI coupling: preCICE OpenFOAM<->CalculiX (LGPL core, source adapters) -
     # The partitioned fluid-structure-interaction family. preCICE (LGPL-3.0) is the
@@ -272,6 +300,17 @@ _SOLVERS: dict = {
                         "DRIFTPIN_PRECICE_LIB, DRIFTPIN_OPENFOAM_ADAPTER_LIB and "
                         "DRIFTPIN_OPENFOAM_BASHRC (the v2512 bashrc). Driven out-of-"
                         "process only via driftpin/analysis/fsi_case.py.",
+        # installed-but-unwired probe (issue #177): the ccx_preCICE binary is the
+        # linchpin, but the two source-built adapter libraries (libprecice /
+        # libpreciceAdapterFunctionObject) are the evidence the stack was partly built
+        # even when ccx_preCICE is not resolvable / the DRIFTPIN_* envs are unset.
+        "unwired": {
+            "probe": "fsi_adapter",
+            "hint": "FSI stack partly built at {found}; finish the build "
+                    "(scripts/install-solvers.sh fsi) and set DRIFTPIN_CCX_PRECICE / "
+                    "DRIFTPIN_PRECICE_LIB / DRIFTPIN_OPENFOAM_ADAPTER_LIB / "
+                    "DRIFTPIN_FSI_OPENFOAM_BASHRC",
+        },
     },
     # --- Sprint 4 follow-on: slicer CLI (apt/AppImage, not vendored) ----------
     "prusaslicer": {
@@ -361,6 +400,71 @@ def _binary_path(name: str, spec: dict):
     return None
 
 
+# --- installed-but-unwired probe (issue #177) ----------------------------------
+# A solver's discovery can be *env-scoped*: its binary only lands on PATH after an
+# etc/bashrc is sourced (OpenFOAM), or its python lives in a dedicated venv reached
+# via a DRIFTPIN_*_PYTHON env var (openEMS, bempp). In a bare shell — env unset —
+# find_solver() then reports it flatly absent even though it is installed and green
+# in CI. These probes look, READ-ONLY (never source a bashrc, never set an env var),
+# for a well-known artifact that proves "installed but not wired into this shell",
+# so discovery can report the third state ``unwired`` with the exact wire-up hint.
+
+def _repo_root() -> str:
+    """Repo root used to locate the dedicated per-solver venvs (``.venv-openems``,
+    ``.venv-bempp``) beside the checkout. Honors ``DRIFTPIN_REPO_ROOT`` — a read-only
+    discovery override tests point at a tmp dir — else the checkout holding this file."""
+    return os.environ.get("DRIFTPIN_REPO_ROOT") or \
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _standard_bashrc(cfg: dict):
+    """Probe standard OpenFOAM install prefixes for an ``etc/bashrc`` (the unwired
+    evidence). ``DRIFTPIN_OPENFOAM_DIRS`` (a pathsep-joined list of install prefixes;
+    a read-only discovery override tests point at a tmp dir) is searched first, each
+    prefix for ``<prefix>/etc/bashrc``; then the entry's standard-location globs.
+    Returns the bashrc path or None. Side-effect-free."""
+    roots = os.environ.get("DRIFTPIN_OPENFOAM_DIRS")
+    if roots:
+        for root in roots.split(os.pathsep):
+            cand = os.path.join(root, "etc", "bashrc")
+            if os.path.isfile(cand):
+                return cand
+    import glob as _glob
+    for pat in cfg["globs"]:
+        hits = sorted(_glob.glob(pat))
+        if hits:
+            return hits[-1]
+    return None
+
+
+def _unwired_found(name: str, spec: dict):
+    """When a solver fails to resolve, cheaply probe well-known artifact locations for
+    evidence it is *installed but not wired into this shell*. READ-ONLY — never sources
+    a bashrc, never sets an env var (discovery stays side-effect-free). Returns
+    ``(found_at, wire_hint)`` when such evidence exists, else None."""
+    cfg = spec.get("unwired")
+    if not cfg:
+        return None
+    probe = cfg["probe"]
+    if probe == "venv":
+        # the dedicated venv sits beside the repo or one level up (mirrors the worker's
+        # _em_fullwave_gpl_python / _bempp_python resolution)
+        for base in (_repo_root(), os.path.dirname(_repo_root())):
+            venv = os.path.join(base, cfg["venv"])
+            for rel in ("bin/python3", "bin/python", "Scripts/python.exe"):
+                if os.path.isfile(os.path.join(venv, *rel.split("/"))):
+                    return venv, cfg["hint"].format(found=venv)
+    elif probe == "bashrc":
+        found = _standard_bashrc(cfg)
+        if found:
+            return found, cfg["hint"].format(found=found)
+    elif probe == "fsi_adapter":
+        found = openfoam_adapter_lib_dir() or precice_lib_dir()
+        if found:
+            return found, cfg["hint"].format(found=found)
+    return None
+
+
 # --- discovery -----------------------------------------------------------------
 
 def known_solvers() -> list:
@@ -379,8 +483,16 @@ def _spec(name: str) -> dict:
 
 def find_solver(name: str) -> dict:
     """Side-effect-free probe of a single solver. Returns
-    ``{name, kind, family, extra, available}`` plus, when available, ``path`` (a
-    binary) or ``module`` (a resolved wheel module); when absent, ``install_hint``.
+    ``{name, kind, family, extra, available, status}`` plus, when available (status
+    ``ok``), ``path`` (a binary) or ``module`` (a resolved wheel module). When it does
+    not resolve, ``install_hint`` is always present and ``status`` is one of:
+
+      * ``unwired`` — not resolvable in *this* shell, but a well-known artifact proves
+        it is installed (an env-scoped discovery whose env is unset); carries
+        ``found_at`` + ``wire_hint`` (the exact ``set DRIFTPIN_…`` fix).
+      * ``absent`` — no evidence it is installed anywhere; ``install_hint`` is the
+        install path.
+
     Raises ValueError for an unknown name."""
     spec = _spec(name)
     info = {
@@ -400,8 +512,19 @@ def find_solver(name: str) -> dict:
         if path is not None:
             info["available"] = True
             info["path"] = path
-    if not info["available"]:
-        info["install_hint"] = spec["install_hint"]
+    if info["available"]:
+        info["status"] = "ok"
+        return info
+    # not resolvable here — installed-but-unwired, or truly absent?
+    unwired = _unwired_found(name, spec)
+    if unwired:
+        found_at, wire_hint = unwired
+        info["status"] = "unwired"
+        info["found_at"] = found_at
+        info["wire_hint"] = wire_hint
+    else:
+        info["status"] = "absent"
+    info["install_hint"] = spec["install_hint"]
     return info
 
 
@@ -415,10 +538,13 @@ def require_solver(name: str) -> dict:
 
     Returns ``{ok: True, name, kind, family, path|module}`` when the solver
     resolves, else the structured miss dict
-    ``{ok: False, solver: name, reason: "solver not installed", install: <hint>}``
-    — which a family's ``*_submit`` returns verbatim, so a missing solver is a clean
-    result, never an exception. Raises ValueError only for an unknown solver name
-    (a wiring bug, not a missing install)."""
+    ``{ok: False, solver: name, status, reason, install: <hint>}`` — which a family's
+    ``*_submit`` returns verbatim, so a missing solver is a clean result, never an
+    exception. ``status`` distinguishes ``absent`` (not installed; ``install`` is the
+    install path) from ``unwired`` (installed but env-scoped and unset in this shell;
+    ``install`` is the ``set DRIFTPIN_…`` fix and ``found_at`` names the evidence).
+    Raises ValueError only for an unknown solver name (a wiring bug, not a missing
+    install)."""
     info = find_solver(name)
     if info["available"]:
         out = {"ok": True, "name": name, "kind": info["kind"],
@@ -428,9 +554,19 @@ def require_solver(name: str) -> dict:
         if "module" in info:
             out["module"] = info["module"]
         return out
+    if info["status"] == "unwired":
+        return {
+            "ok": False,
+            "solver": name,
+            "status": "unwired",
+            "reason": "solver installed but env not wired in this shell",
+            "install": info["wire_hint"],
+            "found_at": info["found_at"],
+        }
     return {
         "ok": False,
         "solver": name,
+        "status": "absent",
         "reason": "solver not installed",
         "install": info["install_hint"],
     }
@@ -654,21 +790,25 @@ def capabilities() -> dict:
     ``render_capabilities``. Resolves every solver side-effect-free (no execution,
     no env mutation).
 
-    Returns ``{platform, available (sorted ready solver names), solvers: {name:
-    {available, kind, family, extra, and either path/module or install_hint}},
-    families: {family: {solvers, available, any_available}}, extras: {extra:
-    [solver names]}}``."""
+    Returns ``{platform, available (sorted ready solver names), unwired (sorted
+    installed-but-unwired names, issue #177), solvers: {name: {available, status,
+    kind, family, extra, and either path/module or install_hint (+found_at/wire_hint
+    when unwired)}}, families: {family: {solvers, available, unwired, any_available}},
+    extras: {extra: [solver names]}}``."""
     solvers = {name: find_solver(name) for name in _SOLVERS}
 
     families: dict = {}
     for name, info in solvers.items():
         fam = families.setdefault(
-            info["family"], {"solvers": [], "available": [], "any_available": False}
+            info["family"],
+            {"solvers": [], "available": [], "unwired": [], "any_available": False},
         )
         fam["solvers"].append(name)
         if info["available"]:
             fam["available"].append(name)
             fam["any_available"] = True
+        elif info.get("status") == "unwired":
+            fam["unwired"].append(name)
 
     extras: dict = {}
     for name, spec in _SOLVERS.items():
@@ -678,6 +818,8 @@ def capabilities() -> dict:
     return {
         "platform": platform.system(),
         "available": sorted(n for n, i in solvers.items() if i["available"]),
+        "unwired": sorted(
+            n for n, i in solvers.items() if i.get("status") == "unwired"),
         "solvers": solvers,
         "families": families,
         "extras": {k: sorted(v) for k, v in extras.items()},
