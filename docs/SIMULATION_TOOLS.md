@@ -457,15 +457,15 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
     # thermal answer: joule_power_ratio vs exact R_s|H₀|²/2 (live 1.0003) and
     # energy_balance_ratio ΔT=P·t/(m·cₚ) (live 1.005). tests/test_em.py
   ```
-- Gates in `tests/test_em.py`; acceptance Example J + `em.png`. RF/wave EM stays
-  on the horizon below.
+- Gates in `tests/test_em.py`; acceptance Example J + `em.png`. RF/wave (full-wave)
+  EM shipped separately via openEMS (issue #93, `analysis/em_fullwave.py`).
 
 ### 11. Horizon (table-only)
 
 | Domain | Tooling | Priority |
 |---|---|---|
 | Acoustics | Elmer, pyfar, acoular | **shipped, both tiers** — `acoustic_screen` (Tier A: exact cavity modes / duct cutoff + Helmholtz ±10 % + mass law ±3 dB) + `acoustic_fem_submit` (Tier B1: Elmer `HelmholtzSolve`, async — driven duct gated machine-tight on the exact 1/cos(kL) standing wave; flux-driven cavity sweep localizes the exact eigenfrequencies to <0.1 % via the in-phase sign flip). Both in `analysis/acoustics.py`; gates in `tests/test_acoustic_fem.py` |
-| Electromagnetics (RF/wave) | OpenEMS / FEniCSx (RF), FEMM (2D motors) | low |
+| Electromagnetics (RF/wave) | OpenEMS / FEniCSx (RF), FEMM (2D motors) | **shipped** — full-wave via openEMS (issue #93, `analysis/em_fullwave.py`) |
 | Machining toolpaths | FreeCAD Path, pycam, kiri:moto | low |
 
 ---
@@ -540,9 +540,12 @@ names its own):
   handle instead of explicit descriptors (§9, Appendix A).
 - Materials DB **electrical layer** — fold `em.py`'s handbook conductor table
   into the DB (§2, Frontier EM).
-- **Nonlinear structural** (CCX plasticity / large deflection) — the one
-  unshipped SIMULATION_NEXT Tier B row.
-- Horizon table rows (§11) — RF/wave EM, machining toolpaths — on concrete need only.
+- Horizon table row (§11) — machining toolpaths — on concrete need only.
+
+*(Shipped since this list was last pruned: **nonlinear structural** — CCX
+plasticity / large deflection, issue #90 / PR #94, `analysis/nonlinear.py`,
+SIMULATION_NEXT Tier B ✅; **RF/wave EM** — openEMS full-wave, issue #93,
+`analysis/em_fullwave.py`.)*
 
 ---
 
