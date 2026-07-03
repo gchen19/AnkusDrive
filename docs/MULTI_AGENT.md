@@ -702,7 +702,16 @@ works." The manifest gains an optional `requirements` block gated at merge:
   "density_kg_mm3": 7.9e-6,                          // material for the mass budget
   "max_mass_g": 450,
   "cg_window": { "min": [30,30,0], "max": [50,50,20] },
-  "min_first_mode_hz": 120        // physics tier — deferred (reported as skipped)
+
+  // physics tier (#172): a bare number is still skipped (no assumptions declared);
+  // an object with a fixture + bonding runs the FEM modal gate on the merged tree.
+  "min_first_mode_hz": {
+    "value": 120,                                 // required minimum f1 (Hz)
+    "fixture": { "clamp": { "axis": "z", "side": "min" } },  // boundary condition
+    "bonding": "fused",                           // v1: fused (union) | tied (reserved)
+    "material": { "YoungsModulus": "210000 MPa",
+                  "PoissonRatio": "0.30", "Density": "7900 kg/m^3" }
+  }
 }
 ```
 
@@ -718,16 +727,34 @@ never a silent pass** — the same "don't drop a contract silently" discipline a
 typed gates.
 
 The **physics tier** (`min_first_mode_hz` via FEM modal on the merged tree) is
-*deferred*: FEM is proven on *single* agent-built parts (the `thermo_structural`
-capstone runs thermal + structural CalculiX on one), but a modal gate on a merged
-*assembly* opens real modelling questions — part bonding/contact and where the
-product is fixed (boundary conditions) — that a clean v0 shouldn't fake. It is
-reserved in the schema and reported as `skipped` so it can't be mistaken for met.
+**shipped 2026-07-02** (issue #172, `driftpin/worker.py`). The modelling questions a
+modal gate on an *assembly* opens — how the parts are bonded, and where the product
+is fixed — aren't faked; the requirement must *declare* them, or it stays skipped:
 
-Two-sided gate-validated free in `tests/test_requirements_gates.py` (mass and CG
-measured correctly; an over-budget mass and an off-window CG each caught; mass
-without density loud; the physics tier surfaced as skipped; absent `requirements`
-= back-compat), in `run_all.sh`, no key.
+- **`fixture`** — the boundary condition. Either `{"clamp": {"axis","side","tol_mm"}}`
+  (the extreme face-plane of the fused solid along an axis — a bolted-down base) or
+  `{"interface": {"instance","name"}}` (the plane through a published interface frame
+  on a placed instance). Resolved **geometrically** on the fused solid, so it survives
+  the boolean union (no stale per-component face tags).
+- **`bonding`** — `fused` (v1) boolean-unions the merged leaves into one solid before
+  meshing; `tied` (CCX tie constraints across component faces) is **reserved/stubbed**
+  and surfaces as skipped rather than silently downgrading to `fused`.
+- **`material`** — `{YoungsModulus, PoissonRatio, Density}` for the solve.
+
+Given those, the gate fuses the leaves, meshes with **2nd-order tets** (1st-order tets
+shear-lock on modal — memory), runs a CalculiX frequency extraction in a scratch
+document (nothing lands in the merged `.FCStd`), and fails the merge if mode 1 is below
+the floor. The measured `first_mode` (f1, the mode spectrum, the mesh, the assumptions
+used) rides in `report["requirements"]["report"]`. It **never raises**: a bare number,
+no fixture, or `bonding: tied` → `skipped`; a *declared-but-unsolvable* requirement
+(missing material, a fixture matching no faces) → a **loud violation**, never a silent
+pass.
+
+Two-sided gate-validated in `tests/test_requirements_gates.py` (tier-1: mass/CG) and
+`tests/test_merge_modal_gate.py` (physics tier: a two-box "tuning-fork" whose clamped
+prongs the `beam_modal` closed-form cantilever brackets to ~3% — a stiff fork clears a
+600 Hz floor, a floppy fork is rejected by it; the skip/stub/loud-failure paths run
+without a solver), in `run_all.sh`, no key.
 
 ### 11.7 Manifest formalization *(shipped)*
 
@@ -878,8 +905,10 @@ own; #169 only converges it onto the shared brief schema, it does not replace it
   propagates staleness up the tree); standard parts (11.5) **✅ shipped
   2026-06-12** (`library` components generated from a spec at merge — no owner,
   lock keyed by spec hash); requirements gates (11.6) **✅ tier-1 shipped
-  2026-06-12** (mass + CG over the merged product; physics/FEM tier deferred,
-  reported as skipped); schema formalization (11.7) **✅ shipped 2026-06-12**
+  2026-06-12** (mass + CG over the merged product) **+ physics tier shipped
+  2026-07-02** (#172: `min_first_mode_hz` via FEM modal on the fused merged tree,
+  opt-in on a declared fixture + bonding; still skipped when undeclared); schema
+  formalization (11.7) **✅ shipped 2026-06-12**
   (`driftpin.manifest/1` stamp + load-time validation + `validate_manifest` tool +
   lockfile `manifest_hash` for contract-drift detection); shipped, pipelined
   orchestration (11.8) **✅ shipped 2026-06-12** (`orchestration/` — round-0
@@ -915,10 +944,16 @@ Still open:
 - **Interface conflict resolution** — when two components both need a *shared*
   interface to change, who wins, and how does the coordinator mediate without a
   human? Round 0 amendments (§8) surface the conflict early but don't arbitrate it.
-- **Requirements-gate cost** — FEM at merge is minutes, not milliseconds. When is a
-  physics gate part of the loop vs a final-candidate check, and does a failed
-  physics requirement re-dispatch components the way a fit failure does (whose
-  part made it too heavy)?
+- **Requirements-gate cost** — FEM at merge is seconds-to-minutes, not milliseconds.
+  When is a physics gate part of the loop vs a final-candidate check? **Partly settled
+  by #172:** a failed physics gate does **not** auto-re-dispatch components in v1 —
+  unlike a fit failure (which localizes to a clashing pair), "the assembly is too
+  floppy" has no single owning part to blame, so the gate fails the *merge report* and
+  leaves the re-dispatch decision to the coordinator/human. It's also opt-in per
+  requirement (only runs on a declared fixture), so a caller chooses loop vs
+  final-candidate by where they put the requirement. Still open: attributing a modal
+  failure to specific components (a sensitivity/where-used analysis) so re-dispatch
+  *could* be targeted.
 - **Resolve-step expressiveness** — 11.1 starts with sums/equalities/grids. Where
   is the line before it becomes a constraint solver the coordinator can't reason
   about deterministically?

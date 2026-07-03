@@ -5964,15 +5964,26 @@ def _generate_library_part(tool, spec, path):
 # window (mass_properties + the recursive leaf walk). Returns {report, violations}:
 # `report` is the measured numbers (so a coordinator sees them on a pass too),
 # `violations` is the failing requirements (empty == all met). An unrecognised
-# requirement key is reported as `skipped`, never silently dropped — the
-# expensive physics tier (min_first_mode_hz via FEM, with its bonding / boundary-
-# condition modelling) is deferred, so naming it here surfaces as skipped, not as
-# a silent pass.
+# requirement key is reported as `skipped`, never silently dropped.
+#
+# The expensive PHYSICS tier (`min_first_mode_hz` via FEM modal on the merged tree,
+# issue #172) is opt-in: it evaluates only when the requirement declares its own
+# modelling assumptions — a `fixture` (a clamp plane, or a published interface frame
+# on a named instance) and `bonding` (v1: `fused` = boolean-union the assembly into
+# one solid before meshing; `tied` = CCX tie constraints, reserved/stubbed). Given a
+# fixture it fuses the leaves, meshes with 2nd-order tets (1st-order tets shear-lock
+# on modal), runs a CalculiX frequency extraction, and compares mode 1 against the
+# floor. A bare `min_first_mode_hz` number (or one with no fixture, or bonding other
+# than `fused`) still surfaces as `skipped` — the assumptions aren't declared, so the
+# gate won't fake them. It NEVER raises: a modelling/solve failure is reported as a
+# loud violation (like a mass budget with no density), never a silent pass.
 
 _TIER1_REQ_KEYS = {"max_mass_g", "cg_window", "density_kg_mm3"}
+_PHYSICS_REQ_KEYS = {"min_first_mode_hz"}
+_AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
 
 
-def _requirements_gate(assembly_handle, req):
+def _requirements_gate(assembly_handle, req, links_by_inst=None):
     """Evaluate the manifest `requirements` block over the merged assembly's
     world-space leaves. Returns {report, violations, skipped}."""
     asm = _resolve(assembly_handle)
@@ -6023,8 +6034,231 @@ def _requirements_gate(assembly_handle, req):
                                    "window": win, "axes": bad,
                                    "reason": f"CG {cg} outside window on {bad}"})
 
-    skipped = sorted(set(req) - _TIER1_REQ_KEYS)
+    skipped = sorted(set(req) - _TIER1_REQ_KEYS - _PHYSICS_REQ_KEYS)
+
+    # §11.6 physics tier (issue #172): min_first_mode_hz via FEM modal on the
+    # (fused) merged assembly. Opt-in on a declared fixture; self-skips otherwise.
+    if "min_first_mode_hz" in req:
+        fm = _first_mode_requirement(assembly_handle, req["min_first_mode_hz"],
+                                     shapes, links_by_inst)
+        if fm.get("skipped"):
+            skipped.append("min_first_mode_hz")
+        if fm.get("report") is not None:
+            report["first_mode"] = fm["report"]
+        if fm.get("violation") is not None:
+            violations.append(fm["violation"])
+        skipped = sorted(skipped)
+
     return {"report": report, "violations": violations, "skipped": skipped}
+
+
+def _faces_on_world_plane(shape, point, normal, tol):
+    """Face labels ('FaceN') of `shape` lying in the world plane (point, normal):
+    a face qualifies when every one of its vertices is within `tol` mm of the
+    plane. Robust to a boolean-fused solid whose face count/order is not the
+    components' — the fixture is resolved geometrically, not by a stale tag."""
+    n = App.Vector(float(normal[0]), float(normal[1]), float(normal[2]))
+    if n.Length < 1e-12:
+        return []
+    n.normalize()
+    p0 = App.Vector(float(point[0]), float(point[1]), float(point[2]))
+    out = []
+    for i, f in enumerate(shape.Faces):
+        vs = f.Vertexes
+        if vs and all(abs((App.Vector(v.X, v.Y, v.Z) - p0).dot(n)) <= tol
+                      for v in vs):
+            out.append(f"Face{i + 1}")
+    return out
+
+
+def _fixture_world_plane(fixture, fused, links_by_inst):
+    """Resolve a `fixture` spec to a (point, normal, tol_mm) world clamp plane, or
+    None if it can't be resolved. Two forms:
+
+      {"clamp": {"axis": "z", "side": "min", "tol_mm": 0.5}}
+          the extreme face plane of the fused solid's bounding box along an axis.
+      {"interface": {"instance": "base", "name": "mount", "tol_mm": 0.5}}
+          the plane through a published interface frame on a placed instance
+          (origin + its z-axis), via the same locating-frame math the mate/typed
+          gates use."""
+    tol = float(fixture.get("tol_mm", 0.5))
+    if "clamp" in fixture:
+        c = fixture["clamp"]
+        axis = c["axis"].lower()
+        if axis not in _AXIS_INDEX:
+            return None
+        side = c.get("side", "min").lower()
+        tol = float(c.get("tol_mm", tol))
+        bb = fused.BoundBox
+        lo = (bb.XMin, bb.YMin, bb.ZMin)[_AXIS_INDEX[axis]]
+        hi = (bb.XMax, bb.YMax, bb.ZMax)[_AXIS_INDEX[axis]]
+        coord = lo if side == "min" else hi
+        centre = [bb.Center.x, bb.Center.y, bb.Center.z]
+        centre[_AXIS_INDEX[axis]] = coord
+        normal = [0.0, 0.0, 0.0]
+        normal[_AXIS_INDEX[axis]] = 1.0
+        return centre, normal, tol
+    if "interface" in fixture and links_by_inst is not None:
+        spec = fixture["interface"]
+        iname = spec.get("instance") or spec.get("component")
+        link_name = links_by_inst.get(iname)
+        if link_name is None:
+            return None
+        link = App.ActiveDocument.getObject(link_name)
+        if link is None:
+            return None
+        origin, zdir = _iface_locating_frame(link, spec.get("name"))
+        return ([origin.x, origin.y, origin.z], [zdir.x, zdir.y, zdir.z],
+                float(spec.get("tol_mm", tol)))
+    return None
+
+
+def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
+    """Physics-tier gate (issue #172): the merged assembly's first natural
+    frequency vs a floor, via FEM modal on the FUSED solid.
+
+    `spec` is either a bare Hz number (always skipped — no modelling assumptions
+    declared) or an object:
+
+        {"value": 300,                       # required minimum f1 (Hz)
+         "fixture": {"clamp": {"axis": "z", "side": "min"}},   # boundary condition
+         "bonding": "fused",                 # v1: fused | tied (tied reserved)
+         "material": {"YoungsModulus": "210000 MPa",
+                      "PoissonRatio": "0.30", "Density": "7900 kg/m^3"},
+         "mesh_size_mm": 3.5, "n_modes": 6}  # optional
+
+    Returns {skipped, report, violation}. NEVER raises: a modelling or solve
+    failure comes back as a loud violation, not a silent pass. On a `skipped`
+    result the requirement rides in the gate's `skipped` list (never met, never
+    dropped). A failed physics gate does NOT auto-re-dispatch components in v1
+    (RFC §13) — it fails the merge report; re-dispatch is the coordinator's call."""
+    if not isinstance(spec, dict):
+        return {"skipped": True, "report": {
+            "skipped_reason": "min_first_mode_hz is a bare number — declare a "
+            "`fixture` and `bonding` to run the FEM modal gate"}}
+    value = spec.get("value")
+    fixture = spec.get("fixture")
+    bonding = spec.get("bonding", "fused")
+    if value is None or fixture is None:
+        return {"skipped": True, "report": {
+            "skipped_reason": "min_first_mode_hz needs both `value` and `fixture` "
+            "to run the FEM modal gate"}}
+    if bonding != "fused":
+        # `tied` (CCX tie constraints between component faces) is reserved — a
+        # merged assembly held by contact/tie is a real modelling step v1 doesn't
+        # fake. Surface it rather than silently applying `fused`.
+        return {"skipped": True, "report": {
+            "skipped_reason": f"bonding={bonding!r} not implemented (v1 = 'fused'); "
+            "tied is reserved"}}
+
+    material = spec.get("material")
+    if not material:
+        return {"violation": {"requirement": "min_first_mode_hz",
+                              "error": "needs a `material` "
+                              "{YoungsModulus, PoissonRatio, Density} for the modal solve"},
+                "report": {"min_hz": value, "bonding": bonding}}
+
+    try:
+        solids = [s for _, s in shapes if s is not None and not s.isNull()]
+        if not solids:
+            raise RuntimeError("merged assembly has no solids to fuse")
+        fused = solids[0]
+        for s in solids[1:]:
+            fused = fused.fuse(s)
+        try:
+            fused = fused.removeSplitter()   # merge coplanar seams for clean faces
+        except Exception:
+            pass
+
+        plane = _fixture_world_plane(fixture, fused, links_by_inst)
+        if plane is None:
+            return {"skipped": True, "report": {
+                "min_hz": value, "bonding": bonding,
+                "skipped_reason": f"fixture {fixture!r} could not be resolved to a "
+                "clamp plane"}}
+        point, normal, tol = plane
+        fix_faces = _faces_on_world_plane(fused, point, normal, tol)
+        if not fix_faces:
+            return {"violation": {"requirement": "min_first_mode_hz",
+                                  "error": "fixture plane matched no faces on the "
+                                  "fused assembly (check axis/side/tol_mm)"},
+                    "report": {"min_hz": value, "bonding": bonding,
+                               "fixture": fixture}}
+
+        f1, freqs, mesh_info = _solve_fused_first_mode(
+            fused, fix_faces, material, spec, assembly_handle)
+
+        passed = f1 >= float(value)
+        rep = {"measured_first_mode_hz": round(f1, 2),
+               "min_hz": value, "pass": passed, "bonding": bonding,
+               "fixture": fixture, "fixed_faces": fix_faces,
+               "frequencies_hz": [round(x, 2) for x in freqs],
+               "material": material, "mesh": mesh_info}
+        viol = None
+        if not passed:
+            viol = {"requirement": "min_first_mode_hz",
+                    "measured_hz": round(f1, 2), "min_hz": value,
+                    "reason": f"first mode {f1:.1f} Hz < floor {value} Hz "
+                              f"(too floppy)"}
+        return {"report": rep, "violation": viol}
+    except Exception as e:  # never raise out of a gate
+        return {"violation": {"requirement": "min_first_mode_hz",
+                              "error": f"modal gate failed to evaluate: {e}"},
+                "report": {"min_hz": value, "bonding": bonding,
+                           "fixture": fixture}}
+
+
+def _solve_fused_first_mode(fused, fix_faces, material, spec, assembly_handle):
+    """Mesh the fused solid with 2nd-order tets, clamp `fix_faces`, run a CalculiX
+    frequency extraction, and return (first_mode_hz, all_freqs, mesh_info). Runs in
+    a scratch document so nothing lands in the merged assembly's saved .FCStd; the
+    active document is restored on the way out."""
+    import tempfile as _tempfile
+    prev = App.ActiveDocument.Name if App.ActiveDocument is not None else None
+    doc = App.newDocument("_modal_gate")
+    App.setActiveDocument(doc.Name)
+    workdir = _tempfile.mkdtemp(prefix="driftpin_modal_gate_")
+    try:
+        feat = doc.addObject("Part::Feature", "FusedAssembly")
+        feat.Shape = fused
+        doc.recompute()
+        body_h = _register("fused", feat)
+
+        bb = fused.BoundBox
+        thin = min(bb.XLength, bb.YLength, bb.ZLength) or 1.0
+        mesh_size = float(spec.get("mesh_size_mm", max(1.0, min(thin / 1.5, 8.0))))
+        n_modes = int(spec.get("n_modes", 6))
+
+        analysis = HANDLERS["fem_new_analysis"]({"name": "ModalGate"})["handle"]
+        HANDLERS["fem_set_solver"]({
+            "analysis": analysis, "kind": "ccx",
+            "tunables": {"GeometricalNonlinearity": "linear",
+                         "MatrixSolverType": "default",
+                         "IterationsControlParameterTimeUse": False}})
+        HANDLERS["fem_set_material"]({"analysis": analysis, "body": body_h,
+                                      "material": material})
+        HANDLERS["fem_add_constraint"]({
+            "analysis": analysis, "kind": "fixed",
+            "refs": [{"handle": body_h, "face": f} for f in fix_faces]})
+        mesh_info = HANDLERS["fem_mesh"]({
+            "analysis": analysis, "body": body_h, "char_length": mesh_size,
+            "element_order": "2nd"})
+        HANDLERS["fem_modal"]({"analysis": analysis, "n_modes": n_modes})
+        HANDLERS["fem_run"]({"analysis": analysis, "workdir": workdir})
+        freqs = HANDLERS["fem_modal_results"]({"analysis": analysis})["frequencies_hz"]
+        if not freqs:
+            raise RuntimeError("modal solve produced no frequencies")
+        return freqs[0], freqs, {"nodes": mesh_info["nodes"],
+                                 "tets": mesh_info["tets"],
+                                 "char_length_mm": mesh_size,
+                                 "element_order": "2nd"}
+    finally:
+        try:
+            App.closeDocument(doc.Name)
+        except Exception:
+            pass
+        if prev is not None and prev in App.listDocuments():
+            App.setActiveDocument(prev)
 
 
 def _mobility_gate(man):
@@ -6206,7 +6440,7 @@ def _h_merge_assembly(p):
     # (visible on a pass); only the violations fail the merge.
     req_result = None
     if man.get("requirements"):
-        req_result = _requirements_gate(asm_h, man["requirements"])
+        req_result = _requirements_gate(asm_h, man["requirements"], links_by_inst)
         gates["requirements"] = req_result["violations"]
     # §11.9: motion gate — does the mechanism actually move at the intended ratio?
     # Closed-form (Grübler + ratio consistency), no geometry rebuild; the measured

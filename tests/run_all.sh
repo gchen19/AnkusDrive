@@ -258,6 +258,10 @@ echo "== Requirements gates (RFC 11.6, mass / CG over the merged product, no key
 $VENV_PY tests/test_requirements_gates.py
 
 echo
+echo "== Merge-time physics gate (RFC 11.6 physics tier, #172 — min_first_mode_hz via FEM modal, live ccx) =="
+python3 tests/test_merge_modal_gate.py
+
+echo
 echo "== Manifest schema + validation (RFC 11.7, contract-drift detection, no key) =="
 $VENV_PY tests/test_manifest_schema.py
 
