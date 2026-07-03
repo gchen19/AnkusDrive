@@ -187,20 +187,29 @@ def test_iso286_h7g6_clearance_band_golden():
 
 
 def test_iso286_out_of_table_raises():
-    """An out-of-table size (>500 mm) and an unsupported interference shaft letter
-    both raise rather than returning a wrong number."""
+    """An out-of-table size (>500 mm) raises; interference letters are supported
+    since #168 (H7/p6 → an interference band), but a letter outside the k/m/n/p/r/s
+    set and a non-H hole basis still raise rather than returning a wrong number."""
     try:
         tol.fit_class(600, "H7/g6")
     except ValueError:
         pass
     else:
         raise AssertionError("expected ValueError for >500 mm")
-    try:
-        tol.fit_class(25, "H7/p6")  # interference letter not in v1 set
-    except NotImplementedError:
-        pass
-    else:
-        raise AssertionError("expected NotImplementedError for interference letter")
+    # H7/p6 now resolves to an interference fit (issue #168) — negative clearance,
+    # classified interference, with a press_fit_stress hand-off band.
+    r = tol.fit_class(25, "H7/p6")
+    assert r["fit_class"] == "interference", r
+    assert r["max_clearance"] < 0, r
+    assert r["interference"]["max_mm"] > 0, r
+    # A letter outside the supported set, and a non-H hole basis, still raise.
+    for spec in ("H7/u6", "G7/h6"):
+        try:
+            tol.fit_class(25, spec)
+        except NotImplementedError:
+            pass
+        else:
+            raise AssertionError(f"expected NotImplementedError for {spec}")
 
 
 # --- 4. stock & profiles ------------------------------------------------------
