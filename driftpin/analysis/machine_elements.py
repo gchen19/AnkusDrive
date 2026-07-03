@@ -11,6 +11,8 @@ Methods (textbook closed-form, documented per function):
     bearing_life        — ISO 281 basic rating life (L10)
     spring_check        — helical compression spring (Wahl)
     gear_rating         — spur-gear tooth bending (Lewis)
+    chain_drive         — ANSI roller-chain power rating (ASME B29.1)
+    weld_group          — fillet weld group, treat-weld-as-a-line (Blodgett)
 
 Units are explicit engineering scalars (mm, N, N*mm or N*m where noted, rpm, MPa),
 matching how the FEM tools take forces as plain floats. Results return a numeric
@@ -416,6 +418,233 @@ def press_fit_stress(
         "hub_yield_sf": (round(hub_sf, 2) if hub_sf is not None else None),
         "pass": ok,
     }
+
+
+# --- chain / sprocket rating (ASME B29.1) -------------------------------------
+
+# ANSI standard roller-chain numbers: pitch (in), roller diameter (in) and the
+# roller-impact constant K_r used in the Type-II rating. K_r = 29 for the full
+# 25–240 series, 17 for the lightweight #41 (ANSI/ASME B29.1, Machinery's
+# Handbook 30th, "Roller Chain" horsepower ratings). Pitch is the defining
+# geometry the add_sprocket generator consumes (chain_pitch_mm = pitch·25.4).
+_ANSI_CHAIN = {
+    # number: (pitch_in, roller_dia_in, k_r)
+    "25":  (0.250, 0.130, 29.0),
+    "35":  (0.375, 0.200, 29.0),
+    "40":  (0.500, 0.312, 29.0),
+    "41":  (0.500, 0.306, 17.0),   # lightweight
+    "50":  (0.625, 0.400, 29.0),
+    "60":  (0.750, 0.469, 29.0),
+    "80":  (1.000, 0.625, 29.0),
+    "100": (1.250, 0.750, 29.0),
+    "120": (1.500, 0.875, 29.0),
+    "140": (1.750, 1.000, 29.0),
+    "160": (2.000, 1.125, 29.0),
+    "200": (2.500, 1.562, 29.0),
+    "240": (3.000, 1.875, 29.0),
+}
+
+# Multiple-strand power factors (ASME B29.1): a chain of N strands transmits less
+# than N× a single strand (uneven load sharing).
+_STRAND_FACTOR = {1: 1.0, 2: 1.7, 3: 2.5, 4: 3.3, 5: 3.9, 6: 4.6}
+
+_HP_TO_W = 745.699872
+
+
+def chain_drive(
+    teeth_small: int,
+    speed_rpm: float,
+    chain_pitch_mm: float | None = None,
+    chain_number: str | None = None,
+    strands: int = 1,
+    power_w: float | None = None,
+    k_r: float | None = None,
+) -> dict:
+    """Rate an ANSI roller-chain drive (ASME B29.1 single-strand horsepower).
+
+    Two failure envelopes bound the rated power of one strand; the drive is rated
+    at the LOWER of the two at the operating speed:
+
+      * **Type I — link-plate fatigue** (governs at low/moderate speed):
+        ``HP1 = 0.004 · N1^1.08 · n1^0.9 · P^(3 − 0.07·P)``
+      * **Type II — roller/bushing impact** (governs at high speed):
+        ``HP2 = 1000 · K_r · N1^1.5 · P^0.8 / n1^1.5``
+
+    with N1 the small-sprocket tooth count, n1 the small-sprocket rpm and P the
+    chain pitch in **inches**. Give the pitch metrically (``chain_pitch_mm``, to
+    match ``add_sprocket``) OR name a standard ``chain_number`` ("40", "60", …)
+    to pull pitch and K_r from the ANSI table. Multiple ``strands`` scale by the
+    B29.1 factor (2→1.7, 3→2.5, 4→3.3). Powers are returned in watts.
+
+    Returns {rated_power_w, type1_power_w, type2_power_w, governing, strands,
+    strand_factor, teeth_small, speed_rpm, chain_pitch_mm, required_power_w?,
+    power_sf?, pass}. `pass` is True when power_w is None, else rated >= power_w.
+    Raises ValueError on bad geometry / an unknown chain_number."""
+    if teeth_small < 3:
+        raise ValueError("teeth_small must be >= 3")
+    if speed_rpm <= 0:
+        raise ValueError("speed_rpm must be > 0")
+    if strands not in _STRAND_FACTOR:
+        raise ValueError(f"strands must be one of {sorted(_STRAND_FACTOR)}")
+    if chain_number is not None:
+        key = str(chain_number).strip().upper().lstrip("#")
+        if key not in _ANSI_CHAIN:
+            raise ValueError(
+                f"unknown chain_number {chain_number!r}; known: {sorted(_ANSI_CHAIN)}")
+        pitch_in, _roller, tbl_kr = _ANSI_CHAIN[key]
+        if chain_pitch_mm is None:
+            chain_pitch_mm = pitch_in * 25.4
+        if k_r is None:
+            k_r = tbl_kr
+    if chain_pitch_mm is None or chain_pitch_mm <= 0:
+        raise ValueError("provide chain_pitch_mm (or a chain_number) > 0")
+    if k_r is None:
+        k_r = 29.0
+
+    n1 = float(teeth_small)
+    p_in = chain_pitch_mm / 25.4
+    hp1 = 0.004 * n1 ** 1.08 * speed_rpm ** 0.9 * p_in ** (3.0 - 0.07 * p_in)
+    hp2 = 1000.0 * k_r * n1 ** 1.5 * p_in ** 0.8 / speed_rpm ** 1.5
+
+    factor = _STRAND_FACTOR[strands]
+    p1 = hp1 * _HP_TO_W * factor
+    p2 = hp2 * _HP_TO_W * factor
+    rated = min(p1, p2)
+    governing = "link_plate_fatigue" if p1 <= p2 else "roller_impact"
+
+    out = {
+        "rated_power_w": round(rated, 2),
+        "type1_power_w": round(p1, 2),
+        "type2_power_w": round(p2, 2),
+        "governing": governing,
+        "strands": strands,
+        "strand_factor": factor,
+        "teeth_small": teeth_small,
+        "speed_rpm": speed_rpm,
+        "chain_pitch_mm": round(chain_pitch_mm, 4),
+    }
+    if power_w is not None:
+        out["required_power_w"] = round(power_w, 2)
+        out["power_sf"] = round(rated / power_w, 3) if power_w > 0 else None
+        out["pass"] = rated >= power_w
+    else:
+        out["pass"] = True
+    return out
+
+
+# --- fillet weld group rating (Blodgett treat-weld-as-a-line) -----------------
+
+def _weld_line_props(segments):
+    """Unit-throat (treat-weld-as-a-line) section properties of a set of straight
+    weld segments. Each segment is ((x1,y1),(x2,y2)) in mm. Returns
+    (length, cx, cy, Ix, Iy, J) — line length (mm), centroid (mm) and the
+    centroidal second moments of the LINE (mm^3, unit throat), J = Ix + Iy."""
+    total_l = 0.0
+    sx = sy = 0.0
+    for (x1, y1), (x2, y2) in segments:
+        ell = math.hypot(x2 - x1, y2 - y1)
+        total_l += ell
+        sx += ell * (x1 + x2) / 2.0
+        sy += ell * (y1 + y2) / 2.0
+    if total_l <= 0:
+        raise ValueError("weld segments have zero total length")
+    cx, cy = sx / total_l, sy / total_l
+
+    ix = iy = 0.0
+    for (x1, y1), (x2, y2) in segments:
+        ell = math.hypot(x2 - x1, y2 - y1)
+        # second moment of a line segment about the global axes:
+        #   ∫ y^2 ds = ell·(y1^2 + y1·y2 + y2^2)/3  (Simpson on a linear y(s))
+        ix += ell * (y1 * y1 + y1 * y2 + y2 * y2) / 3.0
+        iy += ell * (x1 * x1 + x1 * x2 + x2 * x2) / 3.0
+    # parallel-axis shift to the centroid
+    ix -= total_l * cy * cy
+    iy -= total_l * cx * cx
+    return total_l, cx, cy, ix, iy, ix + iy
+
+
+def weld_group(
+    segments: list,
+    force_n: list | tuple,
+    load_point_mm: list | tuple,
+    leg_mm: float | None = None,
+    allowable_shear_mpa: float = 96.0,
+    weld_type: str = "fillet",
+) -> dict:
+    """Rate a planar fillet-weld group by Blodgett's treat-the-weld-as-a-line method.
+
+    ``segments`` is a list of straight welds ``[((x1,y1),(x2,y2)), …]`` (mm), all
+    in the load plane. An in-plane force ``force_n = [Fx, Fy]`` applied at
+    ``load_point_mm = [px, py]`` produces, per unit weld length:
+
+      * **direct shear** f_d = F / L (uniform over the group),
+      * **torsional shear** f_t = T·r / J from the eccentric moment
+        T = (px−x̄)·Fy − (py−ȳ)·Fx about the weld centroid, directed ⟂ to the
+        radius (f_tx = −T·(y−ȳ)/J, f_ty = +T·(x−x̄)/J).
+
+    The two are added vectorially at every segment end; the **worst point** sets
+    the resultant force per unit length f_r (N/mm). The required fillet leg is
+    ``ω = f_r / (0.707 · allowable_shear)``; given ``leg_mm`` the actual throat
+    stress ``f_r / (0.707·ω)`` is compared to ``allowable_shear_mpa`` for a
+    safety factor. All properties use the unit-throat line idealisation, so J and
+    the section moduli scale linearly with the real throat.
+
+    Returns {weld_length_mm, centroid_mm, Ix_mm3, Iy_mm3, J_mm3,
+    direct_shear_n_per_mm, max_shear_n_per_mm, worst_point_mm, required_leg_mm,
+    leg_mm?, throat_stress_mpa?, shear_sf?, pass}. Raises ValueError on empty /
+    zero-length geometry or a non-positive allowable."""
+    if not segments:
+        raise ValueError("provide at least one weld segment")
+    if allowable_shear_mpa <= 0:
+        raise ValueError("allowable_shear_mpa must be > 0")
+    fx, fy = float(force_n[0]), float(force_n[1])
+    px, py = float(load_point_mm[0]), float(load_point_mm[1])
+
+    length, cx, cy, ix, iy, j = _weld_line_props(segments)
+    torque = (px - cx) * fy - (py - cy) * fx        # about centroid, +z
+
+    fdx, fdy = fx / length, fy / length
+    direct = math.hypot(fdx, fdy)
+
+    # evaluate the resultant per-length force at every segment endpoint
+    pts = []
+    for (x1, y1), (x2, y2) in segments:
+        pts.append((x1, y1))
+        pts.append((x2, y2))
+    worst = 0.0
+    worst_pt = (cx, cy)
+    for x, y in pts:
+        ftx = -torque * (y - cy) / j if j > 0 else 0.0
+        fty = torque * (x - cx) / j if j > 0 else 0.0
+        fr = math.hypot(fdx + ftx, fdy + fty)
+        if fr > worst:
+            worst = fr
+            worst_pt = (x, y)
+
+    required_leg = worst / (0.707 * allowable_shear_mpa)
+    out = {
+        "weld_length_mm": round(length, 4),
+        "centroid_mm": [round(cx, 4), round(cy, 4)],
+        "Ix_mm3": round(ix, 4),
+        "Iy_mm3": round(iy, 4),
+        "J_mm3": round(j, 4),
+        "direct_shear_n_per_mm": round(direct, 4),
+        "max_shear_n_per_mm": round(worst, 4),
+        "worst_point_mm": [round(worst_pt[0], 4), round(worst_pt[1], 4)],
+        "required_leg_mm": round(required_leg, 4),
+        "weld_type": weld_type,
+    }
+    if leg_mm is not None:
+        if leg_mm <= 0:
+            raise ValueError("leg_mm must be > 0")
+        throat_stress = worst / (0.707 * leg_mm)
+        out["leg_mm"] = leg_mm
+        out["throat_stress_mpa"] = round(throat_stress, 3)
+        out["shear_sf"] = round(allowable_shear_mpa / throat_stress, 3)
+        out["pass"] = throat_stress <= allowable_shear_mpa
+    else:
+        out["pass"] = True
+    return out
 
 
 # Acceptable O-ring squeeze bands (% of cross-section) by application.
