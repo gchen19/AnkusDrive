@@ -111,6 +111,8 @@ NOT_YET_CLASSIFIED = {
     'add_rib', 'add_section_view', 'add_sketch_constraint', 'add_sketch_external',
     'add_sketch_geometry', 'add_spring', 'add_sprocket', 'add_thread', 'add_thumbnail',
     'annotate_face', 'assembly_lock', 'assembly_lock_check', 'bom_extract', 'boolean_op',
+    'component_contract_check',  # builder-side gate (#169): watertight + envelope + interfaces
+    'render_fem_results',        # FEM-field render (#174), host-side raster like render_view*
     'bounding_box', 'chamfer_edges', 'check_airtight_path', 'check_shape',
     'classify_face_sides', 'close_document', 'close_sketch', 'contact_setup', 'copy_shape',
     'declare_intent', 'draft', 'drawing_gate', 'drawing_legibility', 'em_field',
