@@ -5240,11 +5240,37 @@ def _parallel_axis_distance(shape_a, dir_a, shape_b):
     return (dv - dir_a.multiply(dv.dot(dir_a))).Length
 
 
+def _resolve_fit_band(chk):
+    """Resolve a bore_fit / sliding check's clearance band. A check may carry an
+    explicit ``min_clearance_mm`` (+ optional ``max_clearance_mm``), OR a named ISO
+    fit class (``fit_class`` e.g. ``"H7/g6"`` + ``basic_size_mm``) which is resolved
+    through :func:`tolerance.fit_class`. The fit-class clearances are DIAMETRAL
+    (hole Ø − shaft Ø); the geometric gate measures the RADIAL gap (surface-to-
+    surface), so they are halved here. Returns ``(lo, hi, source)`` where ``hi`` may
+    be None. Raises ValueError if a named fit class is not a clearance fit (a
+    transition/interference class belongs on ``press_fit``, not ``bore_fit``)."""
+    if "fit_class" in chk:
+        from driftpin.analysis import tolerance as _tol
+        if "basic_size_mm" not in chk:
+            raise ValueError("fit_class needs a basic_size_mm (the nominal Ø)")
+        fc = _tol.fit_class(float(chk["basic_size_mm"]), chk["fit_class"])
+        if fc["fit_class"] != "clearance":
+            raise ValueError(
+                f"fit class {chk['fit_class']!r} is a {fc['fit_class']} fit, not a "
+                f"clearance fit — use a `press_fit` check for an interference class")
+        return fc["min_clearance"] / 2.0, fc["max_clearance"] / 2.0, chk["fit_class"]
+    return float(chk["min_clearance_mm"]), chk.get("max_clearance_mm"), "explicit"
+
+
 def _gate_bore_fit(by_name, links_by_inst, chk):
     """Clearance-fit gate: the pin must sit in the bore with clearance inside the
     contracted band. Closes the exact-touch blind spot (§6) — interference_check
     reads ZERO for tangent solids, so a slip fit MUST be gated on minimum
-    clearance, not on non-interference. min_clearance_mm required; max optional."""
+    clearance, not on non-interference. The band is either an explicit
+    ``min_clearance_mm`` (+ optional ``max_clearance_mm``), or a named ISO fit class
+    (``fit_class`` + ``basic_size_mm``, e.g. ``"H7/g6"``) resolved via
+    :func:`tolerance.fit_class` (#170) — the manifest carries the design intent, the
+    numbers are derived at merge."""
     pin = by_name.get(links_by_inst.get(chk["pin"], chk["pin"]))
     bore = by_name.get(links_by_inst.get(chk["bore"], chk["bore"]))
     if pin is None or bore is None:
@@ -5252,8 +5278,10 @@ def _gate_bore_fit(by_name, links_by_inst, chk):
     sp, sb = _link_world_shape(pin), _link_world_shape(bore)
     if sp is None or sb is None:
         return [{**chk, "error": "pin/bore has no shape"}]
-    lo = float(chk["min_clearance_mm"])
-    hi = chk.get("max_clearance_mm")
+    try:
+        lo, hi, _src = _resolve_fit_band(chk)
+    except (ValueError, NotImplementedError) as e:
+        return [{**chk, "error": str(e)}]
     try:
         overlap = sp.common(sb).Volume
     except Exception:
@@ -5277,30 +5305,39 @@ def _gate_bore_fit(by_name, links_by_inst, chk):
 
 
 def _gate_gear_mesh(by_name, links_by_inst, chk):
-    """Gear-mesh gate (external pair): the two gears' pitch radii must sum to the
-    contracted centre distance, the as-placed axes must actually sit at that
-    distance, and (if given) the ratio must hit target. The canonical
-    shared-constraint partition — each builder sizes its gear so the pair meshes
-    at one shared C (the M2 gearbox oracle, promoted)."""
+    """Gear-mesh gate. For an EXTERNAL pair the two gears' pitch radii must SUM to
+    the contracted centre distance; for an INTERNAL mesh (a planet inside a ring —
+    set ``a_internal``/``b_internal`` on the toothed ring) the centre distance is
+    the DIFFERENCE of the pitch radii instead. In both cases the as-placed axes must
+    actually sit at that distance, and (if given) the ratio must hit target. The
+    canonical shared-constraint partition — each builder sizes its gear so the pair
+    meshes at one shared C (the M2 gearbox oracle, promoted; #170 adds the planetary
+    ring)."""
     a = by_name.get(links_by_inst.get(chk["a"], chk["a"]))
     b = by_name.get(links_by_inst.get(chk["b"], chk["b"]))
     if a is None or b is None:
         return [{**chk, "error": "gear link not found"}]
-    if chk.get("a_internal") or chk.get("b_internal"):
-        return [{**chk, "error": "internal-gear mesh not supported in v0 "
-                                 "(external pair only)"}]
+    a_int, b_int = bool(chk.get("a_internal")), bool(chk.get("b_internal"))
+    if a_int and b_int:
+        return [{**chk, "error": "internal-internal is not a valid gear pairing "
+                                 "(exactly one gear may be an internal/ring gear)"}]
     la, lb = _link_local_shape(a), _link_local_shape(b)
     if la is None or lb is None:
         return [{**chk, "error": "gear has no shape"}]
     m = float(chk["module_mm"])
     C = float(chk["center_distance_mm"])
     tol = float(chk.get("tol_mm", 0.5))
-    rpa = _gear_pitch_radius(la, m)
-    rpb = _gear_pitch_radius(lb, m)
+    rpa = _gear_pitch_radius(la, m, a_int)
+    rpb = _gear_pitch_radius(lb, m, b_int)
+    internal = a_int or b_int
+    # external pair: C = rp_a + rp_b; internal (ring/planet): C = |rp_ring - rp_planet|
+    expected = abs(rpa - rpb) if internal else (rpa + rpb)
     out = []
-    if abs((rpa + rpb) - C) > tol:
+    if abs(expected - C) > tol:
+        rel = "difference" if internal else "sum"
         out.append({**chk, "rp_a": round(rpa, 4), "rp_b": round(rpb, 4),
-                    "reason": f"pitch radii sum {rpa+rpb:.3f} != centre distance "
+                    "internal": internal,
+                    "reason": f"pitch-radii {rel} {expected:.3f} != centre distance "
                               f"{C:g} mm (pair will not mesh)"})
     _, da = _axis_world(a)
     measured_C = _parallel_axis_distance(_link_world_shape(a), da,
@@ -5343,6 +5380,185 @@ def _gate_frame_orientation(by_name, links_by_inst, chk):
         return [{**chk, "angle_deg": round(ang, 4),
                  "reason": f"{chk['child']}.{ci} axis off {chk['parent']}.{pi} "
                            f"by {ang:.2f}° (> {lim}°)"}]
+    return []
+
+
+# --- typed interfaces v2 (issue #170): thread / press_fit / sliding ----------
+#
+# Three more kinds that carry design INTENT (a thread callout, a named ISO fit
+# class) and derive their numbers at merge, rather than re-specifying mm ad hoc.
+# thread and sliding are pure pairing/clearance checks; press_fit hands the
+# resolved interference band to press_fit_stress for the retention/stress numbers.
+
+# ISO 261 coarse-pitch series (mm) — the default pitch when a callout omits it
+# (e.g. "M6" means M6×1.0). A fine callout states its pitch ("M8×1").
+_COARSE_PITCH_MM = {
+    3: 0.5, 4: 0.7, 5: 0.8, 6: 1.0, 8: 1.25, 10: 1.5, 12: 1.75,
+    14: 2.0, 16: 2.0, 20: 2.5, 24: 3.0, 30: 3.5, 36: 4.0,
+}
+
+_THREAD_RE = re.compile(r"^M\s*(\d+(?:\.\d+)?)\s*(?:[x×]\s*(\d+(?:\.\d+)?))?$", re.I)
+
+
+def _parse_thread(designation):
+    """Parse an ISO metric thread callout ``"M6"`` / ``"M6x1"`` / ``"M8×1.25"`` to
+    ``{major_mm, pitch_mm}``. A callout without an explicit pitch takes the ISO 261
+    coarse pitch. Raises ValueError on a malformed callout or an unknown coarse
+    diameter (state the pitch explicitly for a non-tabulated diameter)."""
+    if not isinstance(designation, str):
+        raise ValueError(f"thread designation must be a string, got {designation!r}")
+    m = _THREAD_RE.match(designation.strip())
+    if not m:
+        raise ValueError(
+            f"malformed thread designation {designation!r} (want 'M6', 'M6x1', "
+            f"'M8×1.25')")
+    major = float(m.group(1))
+    if m.group(2) is not None:
+        pitch = float(m.group(2))
+    else:
+        key = int(major) if major == int(major) else None
+        if key not in _COARSE_PITCH_MM:
+            raise ValueError(
+                f"no ISO 261 coarse pitch tabulated for M{major:g}; state the pitch "
+                f"explicitly, e.g. 'M{major:g}x1'")
+        pitch = _COARSE_PITCH_MM[key]
+    return {"major_mm": major, "pitch_mm": pitch}
+
+
+def _gate_thread(by_name, links_by_inst, chk):
+    """Thread-pairing gate (#170): an internal thread (tapped hole / nut) and an
+    external thread (bolt / stud) mate only if their callouts agree — same nominal
+    MAJOR diameter and PITCH — and the ENGAGEMENT length is adequate. The check
+    carries a callout per side (``thread_a`` / ``thread_b`` = {designation, role})
+    and an ``engagement_mm``; ``min_engagement_mm`` overrides the default rule of
+    thumb (0.8·major, the ~one-diameter steel-into-steel guideline). Pure callout +
+    length logic — no geometry read (a thread's helix is not reliably recoverable
+    from a tessellated solid)."""
+    ta_spec = chk.get("thread_a") or {}
+    tb_spec = chk.get("thread_b") or {}
+    try:
+        ta = _parse_thread(ta_spec.get("designation"))
+        tb = _parse_thread(tb_spec.get("designation"))
+    except ValueError as e:
+        return [{**chk, "error": str(e)}]
+    out = []
+    if abs(ta["major_mm"] - tb["major_mm"]) > 1e-6:
+        out.append({**chk, "major_a_mm": ta["major_mm"], "major_b_mm": tb["major_mm"],
+                    "reason": f"thread major Ø mismatch: {chk['a']} M{ta['major_mm']:g} "
+                              f"vs {chk['b']} M{tb['major_mm']:g} (will not mate)"})
+    if abs(ta["pitch_mm"] - tb["pitch_mm"]) > 1e-6:
+        out.append({**chk, "pitch_a_mm": ta["pitch_mm"], "pitch_b_mm": tb["pitch_mm"],
+                    "reason": f"thread pitch mismatch: {chk['a']} {ta['pitch_mm']:g} mm "
+                              f"vs {chk['b']} {tb['pitch_mm']:g} mm (will cross-thread)"})
+    role_a = str(ta_spec.get("role", "")).lower()
+    role_b = str(tb_spec.get("role", "")).lower()
+    if {role_a, role_b} != {"internal", "external"}:
+        out.append({**chk, "role_a": role_a, "role_b": role_b,
+                    "reason": f"thread pairing needs one internal + one external "
+                              f"(got {role_a or '?'} / {role_b or '?'})"})
+    if "engagement_mm" in chk:
+        eng = float(chk["engagement_mm"])
+        min_eng = float(chk.get("min_engagement_mm", 0.8 * ta["major_mm"]))
+        if eng < min_eng - 1e-6:
+            out.append({**chk, "engagement_mm": eng, "min_engagement_mm": round(min_eng, 4),
+                        "reason": f"engagement {eng:g} mm < minimum {min_eng:g} mm "
+                                  f"(thread will strip / pull out)"})
+    return out
+
+
+def _gate_press_fit(by_name, links_by_inst, chk):
+    """Press-fit gate (#170): a named interference class resolved through
+    :func:`tolerance.fit_class`, then handed to :func:`press_fit_stress` for the
+    retention/stress numbers at merge. The check carries ``fit_class`` (e.g.
+    ``"H7/p6"``) + ``basic_size_mm`` (shaft Ø), ``hub_outer_dia_mm``,
+    ``engagement_length_mm``, optional ``material`` / ``friction_coef`` /
+    ``min_torque_nm``. Fails if the class is NOT an interference fit, if the hub
+    yields at the MAX interference (worst-case stress), or if the guaranteed
+    retention torque at the MIN interference (worst-case grip) is below
+    ``min_torque_nm``. An analysis gate — the shaft/hub refs are for provenance, the
+    numbers come from the fit + Lamé theory, not a geometry read."""
+    from driftpin.analysis import tolerance as _tol
+    from driftpin.analysis import machine_elements as _me
+    try:
+        if "basic_size_mm" not in chk:
+            raise ValueError("press_fit needs a basic_size_mm (the shaft Ø)")
+        fc = _tol.fit_class(float(chk["basic_size_mm"]), chk["fit_class"])
+    except (ValueError, NotImplementedError, KeyError) as e:
+        return [{**chk, "error": f"press_fit fit-class resolution failed: {e}"}]
+    if fc["fit_class"] != "interference" or "interference" not in fc:
+        return [{**chk, "fit_class": chk.get("fit_class"), "resolved": fc["fit_class"],
+                 "reason": f"{chk.get('fit_class')!r} resolves to a {fc['fit_class']} "
+                           f"fit, not an interference fit — no guaranteed press "
+                           f"(use `bore_fit`/`sliding` for a clearance class)"}]
+    band = fc["interference"]              # diametral interference band, mm
+    min_intf = max(0.0, band["min_mm"])    # guaranteed grip: worst-case min interference
+    max_intf = band["max_mm"]              # worst-case hub stress: max interference
+    shaft_d = float(chk["basic_size_mm"])
+    hub_d = float(chk["hub_outer_dia_mm"])
+    length = float(chk["engagement_length_mm"])
+    mat = chk.get("material", "Steel-A36")
+    mu = float(chk.get("friction_coef", 0.15))
+    try:
+        worst_stress = _me.press_fit_stress(shaft_d, hub_d, max_intf, length,
+                                            material=mat, friction_coef=mu)
+        min_grip = _me.press_fit_stress(shaft_d, hub_d, min_intf, length,
+                                        material=mat, friction_coef=mu)
+    except ValueError as e:
+        return [{**chk, "error": f"press_fit_stress: {e}"}]
+    out = []
+    if not worst_stress["pass"]:
+        out.append({**chk, "interference_band_mm": [band["min_mm"], band["max_mm"]],
+                    "hub_hoop_stress_mpa": worst_stress["hub_hoop_stress_mpa"],
+                    "hub_yield_sf": worst_stress["hub_yield_sf"],
+                    "reason": f"hub yields at max interference {max_intf:g} mm "
+                              f"(hoop {worst_stress['hub_hoop_stress_mpa']} MPa, "
+                              f"SF {worst_stress['hub_yield_sf']} < 1)"})
+    if "min_torque_nm" in chk:
+        need = float(chk["min_torque_nm"])
+        got = min_grip["torque_capacity_nm"]
+        if got < need - 1e-9:
+            out.append({**chk, "torque_capacity_nm": got, "min_torque_nm": need,
+                        "reason": f"guaranteed retention {got} N·m (at min "
+                                  f"interference {min_intf:g} mm) < required "
+                                  f"{need} N·m — joint may slip"})
+    return out
+
+
+def _gate_sliding(by_name, links_by_inst, chk):
+    """Sliding / running-clearance gate (#170): a bore/shaft pair MEANT to move.
+    Unlike ``bore_fit`` this is a minimum-clearance gate, not a two-sided band — a
+    sliding fit just needs enough clearance to run freely (too loose is not a merge
+    failure). The minimum is either an explicit ``min_clearance_mm`` or the tightest
+    (min) clearance of a named running fit class (``fit_class`` + ``basic_size_mm``,
+    e.g. ``"H8/f7"``). Interference (overlap) or a gap below the minimum — including
+    exact-touch — fails."""
+    shaft = by_name.get(links_by_inst.get(chk["shaft"], chk["shaft"]))
+    bore = by_name.get(links_by_inst.get(chk["bore"], chk["bore"]))
+    if shaft is None or bore is None:
+        return [{**chk, "error": "shaft/bore link not found"}]
+    ss, sb = _link_world_shape(shaft), _link_world_shape(bore)
+    if ss is None or sb is None:
+        return [{**chk, "error": "shaft/bore has no shape"}]
+    try:
+        lo, _hi, _src = _resolve_fit_band(chk)
+    except (ValueError, NotImplementedError) as e:
+        return [{**chk, "error": str(e)}]
+    try:
+        overlap = ss.common(sb).Volume
+    except Exception:
+        overlap = 0.0
+    if overlap > 1e-9:
+        return [{**chk, "status": "interference", "clearance_mm": 0.0,
+                 "overlap_mm3": round(overlap, 4),
+                 "reason": f"{chk['shaft']} interferes with {chk['bore']} — a sliding "
+                           f"pair must have ≥{lo:g} mm running clearance"}]
+    gap = round(ss.distToShape(sb)[0], 6)
+    if gap < lo - 1e-6:
+        return [{**chk, "status": "clear" if gap > 1e-7 else "contact",
+                 "clearance_mm": gap,
+                 "reason": f"{chk['shaft']}↔{chk['bore']} running clearance "
+                           f"{gap:.4f} mm < min {lo:g} mm"
+                           + (" (exact-touch — will bind)" if gap <= 1e-7 else "")}]
     return []
 
 
@@ -5457,6 +5673,9 @@ _TYPED_GATES = {
     "dog_ring": _gate_dog_ring,
     "bore_keying": _gate_bore_keying,
     "interleave": _gate_interleave,
+    "thread": _gate_thread,
+    "press_fit": _gate_press_fit,
+    "sliding": _gate_sliding,
 }
 
 # --- interface-type CONFORMANCE gate (issue #146, RFC §6.3) — append-only ----
@@ -5565,7 +5784,9 @@ _TYPED_GATES["interface_conformance"] = _gate_interface_conformance
 # contact_band (§11.10) is authoritative for an engaged dog clutch / press band: it
 # bounds the overlap rather than forbidding it, so it owns its pair here. interleave
 # (§11.10) likewise relates an engaged dog-clutch pair that meets at the meshing teeth.
-_CONTACT_KINDS = {"gear_mesh", "contact_band", "interleave"}
+# press_fit (#170) is an interference joint — the shaft is deliberately larger than
+# the bore, so a nominal-geometry model overlaps; the typed gate owns that pair.
+_CONTACT_KINDS = {"gear_mesh", "contact_band", "interleave", "press_fit"}
 
 
 def _check_pair(chk):
@@ -5576,6 +5797,10 @@ def _check_pair(chk):
         return chk["a"], chk["b"]
     if "pin" in chk and "bore" in chk:
         return chk["pin"], chk["bore"]
+    if "shaft" in chk and "bore" in chk:       # sliding (running-clearance) pair
+        return chk["shaft"], chk["bore"]
+    if "shaft" in chk and "hub" in chk:        # press_fit (interference) pair
+        return chk["shaft"], chk["hub"]
     if "child" in chk and "parent" in chk:
         return chk["child"], chk["parent"]
     if "part" in chk:                          # single-part check (dog_ring, bore_keying)
