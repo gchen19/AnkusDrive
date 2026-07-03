@@ -4553,6 +4553,65 @@ def _h_verify_contract(p):
     return {"handle": handle, "ok": ok, "results": results}
 
 
+# --- component_contract_check: the builder-side half of the merge gate (#169) --
+#
+# A builder (any MCP host — a Claude Code subagent, a Cursor task) calls this on
+# its OWN part before saving, against its standalone *builder brief* (a
+# driftpin.builder_brief/1 slice). It runs exactly the three checks merge_assembly
+# re-runs at fan-in — watertight (check_shape), inside the declared envelope, and
+# every required interface published with a sane frame — so a contract violation is
+# caught locally and cheaply instead of after the merge. The judgement lives in the
+# pure, FreeCAD-free driftpin.builder_brief.evaluate_contract, so it is testable
+# with synthetic inputs; this handler only extracts the three primitives from the
+# geometry and hands them over. Like verify_contract it NEVER raises on a failing
+# check (a failure is a passed=False row), so a builder can call it in a repair loop.
+
+@handler("component_contract_check")
+def _h_component_contract_check(p):
+    """Builder-side contract gate for one component (issue #169). Run it on your
+    part before save, against your builder brief; repair any failing check.
+
+    handle: the component's shaped object.
+    brief:  a driftpin.builder_brief/1 slice (see driftpin.builder_brief). Only
+            `envelope` and `interfaces` drive gate checks; other keys are ignored
+            here (the NL `task` etc. guide the build, not the gate).
+
+    Checks (mirrors what merge_assembly verifies for this part at fan-in):
+      watertight  — check_shape says one clean watertight solid.
+      envelope    — the part's LOCAL bounding box fits inside brief.envelope.
+      interface:* — every name in brief.interfaces is published, with a sane frame,
+                    and within tol of the pinned origin/axis when the brief gives one.
+
+    Returns {handle, ok, checks:[{check, passed, detail}], reasons:[...]} and never
+    raises on a failing check."""
+    from driftpin import builder_brief as _bb
+    handle = p["handle"]
+    brief = dict(p.get("brief") or {})
+    obj, shape = _shape_of(handle)
+
+    # 1) watertight verdict via the same logic check_shape reports.
+    try:
+        cs = _h_check_shape({"handle": handle})
+        watertight = bool(cs.get("watertight_solid"))
+    except Exception:
+        watertight = None
+
+    # 2) local bounding box.
+    try:
+        bb = shape.BoundBox
+        bbox = {"min": [bb.XMin, bb.YMin, bb.ZMin],
+                "max": [bb.XMax, bb.YMax, bb.ZMax]}
+    except Exception:
+        bbox = None
+
+    # 3) published interface frames.
+    published = _read_interfaces(obj)
+
+    verdict = _bb.evaluate_contract(brief, watertight=watertight, bbox=bbox,
+                                    published=published)
+    return {"handle": handle, **verdict}
+
+
 def _apply_mate(link, parent_link, child_iface, parent_iface):
     """Place `link` so its child_iface frame coincides with parent_link's
     parent_iface frame in world space: LinkPlacement = Pp · Fp · Fc⁻¹."""

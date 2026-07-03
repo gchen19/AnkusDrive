@@ -2029,6 +2029,32 @@ def verify_contract(handle: str, contract: dict) -> dict:
 
 
 @mcp.tool()
+def component_contract_check(handle: str, brief: dict) -> dict:
+    """Builder-side contract gate for one component (issue #169) — the local half of
+    the gate merge_assembly re-runs at fan-in. Any MCP host builds a component with
+    the full DriftPin tool surface, then calls this on its part BEFORE saving,
+    against its `builder brief` (a driftpin.builder_brief/1 slice), and repairs any
+    failing check. Catching a violation here turns the expensive loop (build → merge
+    → gate-fail → rebuild) into a cheap local one. Never raises on a failing check.
+
+    handle: the component's shaped object.
+    brief:  a builder brief. Only two of its keys drive checks (the rest guide the
+            build, not the gate):
+      envelope   {min:[x,y,z], max:[x,y,z]}   the part's LOCAL bbox must fit inside.
+      interfaces {name: {origin?:[x,y,z], z_axis?:[x,y,z], tol_mm?, angle_tol_deg?}}
+                 each named frame must be PUBLISHED (publish_interface) with a sane
+                 frame, and within tolerance of a pinned origin/axis if the brief
+                 gives one.
+
+    Checks run: watertight (check_shape's one-clean-solid verdict), envelope (local
+    bbox inside the keep-out box), interface:<name> (published + sane + in tol).
+
+    Returns {handle, ok, checks:[{check, passed, detail}], reasons:[...]} — ok True
+    iff every check passed; reasons is the failing checks' details."""
+    return _call("component_contract_check", handle=handle, brief=brief)
+
+
+@mcp.tool()
 def interface_align_check(assembly: str, pairs: list, tol_mm: float = 1e-3) -> list:
     """Gate: verify declared interface pairs coincide in world space — the
     "do the OTHER interfaces line up?" check for multi-interface mates. After the
