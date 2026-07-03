@@ -517,13 +517,13 @@ gate already exists as a tool or as an M2 gate helper waiting to be promoted int
 
 | `kind` | contract fields | gate | status |
 |---|---|---|---|
-| `bore_fit` | min/max clearance band | `min_clearance` (overlap → too tight; gap < min → too tight, **incl. exact-touch**; gap > max → too loose) | ✅ shipped |
-| `gear_mesh` | module, center distance, ratio | pitch-radii-sum + as-placed axis distance + ratio (the `kin_gearbox` oracle, promoted) | ✅ shipped |
+| `bore_fit` | min/max clearance band **or** named ISO fit class (`fit_class` + `basic_size_mm`) | `min_clearance` (overlap → too tight; gap < min → too tight, **incl. exact-touch**; gap > max → too loose); a named clearance class resolves through `fit_class` (diametral → radial), an interference class is rejected here | ✅ shipped (class #170) |
+| `gear_mesh` | module, center distance, ratio, `a_internal`/`b_internal` | pitch-radii **sum** (external) or **difference** (internal/planetary ring) + as-placed axis distance + ratio (the `kin_gearbox` oracle, promoted) | ✅ shipped (internal #170) |
 | `frame_orientation` | child/parent frames, max angle | angle between published frame axes — the orientation `interface_align` does *not* check | ✅ shipped |
+| `thread` | per-side callout (`M6x1`) + role + engagement | callout pairing: major Ø + pitch match, one internal + one external, engagement ≥ min (default 0.8·Ø); pure callout logic, no geometry read | ✅ shipped (#170) |
+| `press_fit` | named interference class + shaft/hub Ø + engagement + `min_torque_nm?` | `fit_class` → interference band → `press_fit_stress`: hub yield at max interference, guaranteed retention at min interference; a clearance class is rejected | ✅ shipped (#170) |
+| `sliding` | shaft/bore, `min_clearance_mm` **or** running fit class | a MIN-clearance gate (not a band) for a pair meant to move — overlap or gap < min (incl. exact-touch) fails | ✅ shipped (#170) |
 | `bolt_circle` | count, pitch, thread | frame mate + alignment check (shipped) | future |
-| `thread` | callout, min engagement | the `thread_engagement` toy gate | future |
-| `press_fit` | interference band | `press_fit_stress` | future |
-| `sliding` / `kinematic` | axis, travel, DOF | `_sweep_clear` posed-interference sweep | future |
 
 **Shipped 2026-06-12** (`driftpin/worker.py`): the manifest gains a `checks` list,
 and `merge_assembly` dispatches each entry to its `kind`'s gate, folding the
@@ -565,9 +565,23 @@ two-sided gate-validated free in `tests/test_typed_interfaces.py` (reference
 passes; every negative — wrong size, wrong placement, wrong ratio, exact touch,
 tilt — caught), in `run_all.sh`, no key.
 
-Still future for §11.2: `bore_fit` carrying a named ISO fit *class* (resolving to
-a clearance band via `fit_check`) rather than explicit mm; the internal-gear
-mesh (planetary ring); and `thread` / `press_fit` / `sliding` from the table.
+**Typed interfaces v2 shipped (#170):** `bore_fit` now also carries a named ISO fit
+*class* (`fit_class` + `basic_size_mm`, e.g. `"H7/g6"`), resolved to a clearance
+band via `fit_class` at merge — the manifest carries the design intent, the numbers
+are derived (diametral clearance halved to the radial gap the gate measures; an
+interference class is rejected on `bore_fit`). `gear_mesh` gains the internal /
+planetary-ring mesh (`a_internal`/`b_internal`): centre distance is the pitch-radii
+*difference* rather than the external sum. Three new kinds join the dispatch:
+`thread` (internal/external callout pairing — major Ø + pitch match, one internal +
+one external, adequate engagement; pure callout logic), `press_fit` (a named
+interference class handed to `press_fit_stress` — hub yield at the max interference,
+guaranteed retention torque at the min), and `sliding` (a running-clearance
+min-gate for a bore/shaft pair meant to move). All six are two-sided gate-validated
+in `tests/test_typed_interfaces.py` (reference passes; every negative — out-of-band
+fit, wrong centre distance, pitch mismatch, hub yield, too-tight clearance — caught).
+
+Still future for §11.2: `bolt_circle` from the table; a `sliding` posed-interference
+travel *sweep* (today's gate is a static min-clearance check, not a swept envelope).
 
 ### 11.3 `verify_contract` — shift failure left *(shipped)*
 
