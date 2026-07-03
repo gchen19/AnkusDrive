@@ -86,6 +86,13 @@ class Worker:
             self._stderr_thread.start()
 
         self._id = 0
+        # Serializes call(): the worker loop is strictly one request → one
+        # response, so two host threads must never interleave stdin writes /
+        # stdout readline()s on the same process (that races the id/response
+        # pairing → "id mismatch" / WorkerDied). FastMCP runs sync tools in an
+        # anyio thread pool, so concurrent tool calls land here in parallel; this
+        # lock makes each call atomic without making the worker multi-threaded.
+        self._call_lock = threading.Lock()
 
         ready = self._read_response(timeout=boot_timeout)
         if not ready.get("ready"):
@@ -126,23 +133,29 @@ class Worker:
         # _method/_timeout are underscored (like the worker protocol's reserved
         # keys) so a tool param of the same name — e.g. tolerance_stackup(method=)
         # — rides through **params without colliding with the positional arg.
-        if self.proc.poll() is not None:
-            raise WorkerDied(f"worker exited with code {self.proc.returncode}")
-        self._id += 1
-        mid = f"r{self._id}"
-        req = {"id": mid, "method": _method, "params": params}
-        try:
-            self.proc.stdin.write(json.dumps(req) + "\n")
-            self.proc.stdin.flush()
-        except BrokenPipeError as e:
-            raise WorkerDied("worker stdin closed") from e
+        #
+        # Held for the whole write→read round-trip so concurrent callers of one
+        # Worker are serialized (see _call_lock in __init__). Distinct Workers —
+        # e.g. one per MCP workspace — hold distinct locks and still run in
+        # parallel; only same-process calls contend.
+        with self._call_lock:
+            if self.proc.poll() is not None:
+                raise WorkerDied(f"worker exited with code {self.proc.returncode}")
+            self._id += 1
+            mid = f"r{self._id}"
+            req = {"id": mid, "method": _method, "params": params}
+            try:
+                self.proc.stdin.write(json.dumps(req) + "\n")
+                self.proc.stdin.flush()
+            except BrokenPipeError as e:
+                raise WorkerDied("worker stdin closed") from e
 
-        resp = self._read_response(timeout=_timeout)
-        if resp.get("id") != mid:
-            raise RuntimeError(f"id mismatch: expected {mid}, got {resp.get('id')!r}")
-        if "error" in resp:
-            raise WorkerError(resp["error"])
-        return resp["result"]
+            resp = self._read_response(timeout=_timeout)
+            if resp.get("id") != mid:
+                raise RuntimeError(f"id mismatch: expected {mid}, got {resp.get('id')!r}")
+            if "error" in resp:
+                raise WorkerError(resp["error"])
+            return resp["result"]
 
     def _reap_group(self):
         """SIGKILL the worker's whole process group, sweeping any renderer
