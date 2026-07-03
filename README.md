@@ -29,6 +29,8 @@ own bundled Python — DriftPin doesn't touch it.
 #    (macOS: drag to /Applications; Linux: distro package or AppImage)
 
 # 2. Install DriftPin. Pick one:
+pipx install driftpin                                       # on release — from PyPI, `driftpin` on PATH
+# until the first PyPI upload (v0.4.0), install straight from the repo:
 pipx install git+https://github.com/gchen19/DriftPin.git    # isolated app, `driftpin` on PATH
 # or for development from a clone:
 git clone https://github.com/gchen19/DriftPin.git && cd DriftPin
@@ -39,8 +41,9 @@ driftpin ping
 # → ping=pong freecad=1.1.1
 ```
 
-A PyPI release (`pipx install driftpin`) is staged behind v0.3.0 — see
-[`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md).
+The `pipx install driftpin` path lights up with the first PyPI release
+(v0.4.0), tracked in [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md); until
+then use the `git+https://…` or clone paths above.
 
 ### Telling DriftPin where FreeCAD lives
 
