@@ -78,12 +78,13 @@ Each family lists: the agent question it answers · backend · new-dependency we
   montecarlo:{mean,std,cpk,pct_in_spec}}`; `fit_check` →
   `{fit_class, min_clearance, max_clearance, prob_interference}`.
 - **Status: shipped (P0)** in `driftpin/analysis/tolerance.py` —
-  `tolerance_stackup`, `fit_check`, `fit_class`, `gdt_check`, with 13 two-sided
+  `tolerance_stackup`, `fit_check`, `fit_class`, `gdt_check`, with 16 two-sided
   toys in `tests/test_tolerance.py`. Signed-deviation convention
   (`plus`=upper, `minus`=lower, half-band = 3σ); stack links carry an optional
-  `direction` (±1) for gap/subtractive chains. `fit_class` v1 covers hole-basis H
-  with clearance shaft letters (h, g, f, e); interference letters extend the same
-  table next.
+  `direction` (±1) for gap/subtractive chains. `fit_class` covers hole-basis H
+  with clearance (h, g, f, e), transition (js, k, m, n) and interference
+  (p, r, s) shaft letters; an interference result returns an interference band
+  and hands off to `press_fit_stress`.
 
 ### 2. Materials & selection  *(foundational — many families cite it)*
 
@@ -533,8 +534,6 @@ immediately useful:
 
 **Remaining stubs** (the only unbuilt items in this catalog; each family section
 names its own):
-- `fit_class` interference/transition shaft letters (k, n, p, s) — currently
-  `NotImplementedError` (§1).
 - Chain/sprocket + weld-group ratings in `machine_elements.py` (§10).
 - DfX / tolerance **v2 Shape wiring** — read geometry summaries off a live
   handle instead of explicit descriptors (§9, Appendix A).

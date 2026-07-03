@@ -111,22 +111,77 @@ def test_iso286_other_bands_and_h_shaft():
     assert abs(r["shaft"]["lower_dev"] - (-0.016)) < 1e-9, r["shaft"]
 
 
+def _dev(r, side, um):
+    # helper: assert a hole/shaft deviation (mm) matches an ISO µm table value
+    assert abs(r[side[0]][side[1]] - um / 1000.0) < 1e-9, (side, r[side[0]])
+
+
+# --- ISO 286-2 shaft-limit goldens (transition/interference), H7 hole ---------
+# es/ei in µm from ISO 286-2 Tables (hole-basis fits). Each row spans a size
+# band; H7/k6 & H7/n6 are transition, H7/p6 & H7/s6 interference.
+#   H7  upper es = +IT7   (Ø10 +15, Ø25 +21, Ø50 +25, Ø100 +35)
+_H7_ES = {10.0: 15, 25.0: 21, 50.0: 25, 100.0: 35}
+# shaft (es, ei) µm per diameter, from ISO 286-2:
+_GOLDEN = {
+    "H7/k6": ({10.0: (10, 1), 25.0: (15, 2), 50.0: (18, 2), 100.0: (25, 3)},
+              "transition"),
+    "H7/n6": ({10.0: (19, 10), 25.0: (28, 15), 50.0: (33, 17), 100.0: (45, 23)},
+              "transition"),
+    "H7/p6": ({10.0: (24, 15), 25.0: (35, 22), 50.0: (42, 26), 100.0: (59, 37)},
+              "interference"),
+    "H7/s6": ({10.0: (32, 23), 25.0: (48, 35), 50.0: (59, 43), 100.0: (93, 71)},
+              "interference"),
+}
+
+
+def test_iso286_transition_interference_goldens():
+    for fit, (table, expected_class) in _GOLDEN.items():
+        for dia, (es, ei) in table.items():
+            r = tol.fit_class(dia, fit)
+            _dev(r, ("hole", "upper_dev"), _H7_ES[dia])
+            _dev(r, ("hole", "lower_dev"), 0)
+            _dev(r, ("shaft", "upper_dev"), es)
+            _dev(r, ("shaft", "lower_dev"), ei)
+            assert r["fit_class"] == expected_class, (fit, dia, r["fit_class"])
+
+
+def test_iso286_interference_handoff_to_press_fit():
+    # H7/p6 Ø50: shaft +0.042/+0.026, hole +0.025/0 -> interference band.
+    r = tol.fit_class(50.0, "H7/p6")
+    assert r["fit_class"] == "interference", r["fit_class"]
+    # tightest fit = hole_min - shaft_max = -0.042 -> max interference 0.042;
+    # loosest fit = hole_max - shaft_min = 0.025-0.026 = -0.001 -> min 0.001.
+    assert abs(r["interference"]["max_mm"] - 0.042) < 1e-9, r["interference"]
+    assert abs(r["interference"]["min_mm"] - 0.001) < 1e-9, r["interference"]
+    assert r["interference"]["next"] == "press_fit_stress", r["interference"]
+
+
+def test_iso286_transition_interference_band_signs():
+    # a transition fit (H7/n6 Ø25) exposes a negative min interference (some
+    # assemblies clear), while max interference is positive.
+    r = tol.fit_class(25.0, "H7/n6")
+    assert r["fit_class"] == "transition", r["fit_class"]
+    assert r["interference"]["min_mm"] < 0 < r["interference"]["max_mm"], r["interference"]
+    # js is transition and symmetric about the shaft basic size
+    rjs = tol.fit_class(25.0, "H7/js6")
+    assert abs(rjs["shaft"]["upper_dev"] + rjs["shaft"]["lower_dev"]) < 1e-9, rjs["shaft"]
+
+
 def test_iso286_unsupported_is_explicit():
-    # interference shaft letter not in the v1 set -> explicit NotImplementedError
-    for bad in ("H7/s6", "H7/p6"):
-        try:
-            tol.fit_class(20.0, bad)
-        except NotImplementedError:
-            pass
-        else:
-            raise AssertionError(f"expected NotImplementedError for {bad}")
-    # non-H hole basis also refused
+    # non-H hole basis (shaft-basis) is refused with the supported set named
     try:
         tol.fit_class(20.0, "G7/h6")
     except NotImplementedError:
         pass
     else:
         raise AssertionError("expected NotImplementedError for non-H hole")
+    # unknown shaft letter refused
+    try:
+        tol.fit_class(20.0, "H7/z6")
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError("expected NotImplementedError for unknown shaft letter")
     # out-of-table size
     try:
         tol.fit_class(800.0, "H7/g6")
