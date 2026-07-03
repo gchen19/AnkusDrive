@@ -10216,6 +10216,95 @@ def _h_fem_result_probe(p):
     return out
 
 
+_FIELD_KEYS = {
+    "vonmises": "vonmises_mpa",
+    "displacement": "displacement_mm",
+    "temperature": "temperature_c",
+}
+
+
+@handler("fem_field_surface")
+def _h_fem_field_surface(p):
+    """Extract the FEM result's exterior surface as a triangle mesh with a
+    per-vertex scalar field, for host-side colormap rendering (render_fem_results).
+
+    The volume (tet) mesh's boundary is the set of triangular tet-faces that
+    belong to exactly one tet; interior faces (shared by two tets) are dropped.
+    Corner nodes are used (2nd-order tets list corners first), so the surface is
+    a clean first-order triangulation.
+
+    field: 'vonmises' (default) | 'displacement' | 'temperature'. Returns
+    {vertices, triangles, values, displacements|None, field, min, max, units,
+    node_count, triangle_count}. `displacements` (per-vertex [dx,dy,dz]) is
+    included whenever displacement data exists, for a deformed-shape overlay."""
+    from collections import defaultdict
+
+    analysis = _resolve_analysis(p["analysis"])
+    field = p.get("field", "vonmises")
+    if field == "auto":
+        field = "vonmises"
+    if field not in _FIELD_KEYS:
+        raise ValueError(
+            f"unknown field {field!r}; use one of {sorted(_FIELD_KEYS)}"
+        )
+    scalar_key = _FIELD_KEYS[field]
+    units = {"vonmises": "MPa", "displacement": "mm", "temperature": "C"}[field]
+
+    result = _select_final_mech_result(analysis)
+    femmesh = _result_femmesh(analysis, result)
+    # Ask for the requested scalar field plus displacement vectors (overlay).
+    want = "auto" if field != "temperature" else "temperature"
+    maps, vec_map = _result_field_maps(result, want)
+    if scalar_key not in maps:
+        raise ValueError(
+            f"no {field!r} data on this result (have: {sorted(maps)})"
+        )
+    scalar_map = maps[scalar_key]
+
+    # Boundary extraction: a tet face bordering only one tet is on the surface.
+    face_count = defaultdict(int)
+    face_repr = {}
+    for elem in femmesh.Volumes:
+        enodes = femmesh.getElementNodes(elem)
+        if len(enodes) < 4:
+            continue
+        corners = enodes[:4]
+        for a, b, c in ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)):
+            tri = (corners[a], corners[b], corners[c])
+            key = tuple(sorted(tri))
+            face_count[key] += 1
+            face_repr[key] = tri
+    boundary = [face_repr[k] for k, cnt in face_count.items() if cnt == 1]
+    if not boundary:
+        raise RuntimeError("no boundary faces extracted (mesh has no volume elements)")
+
+    coords = femmesh.Nodes  # {node_id: Vector}
+    used = sorted({n for tri in boundary for n in tri})
+    remap = {n: i for i, n in enumerate(used)}
+    vertices = [[coords[n].x, coords[n].y, coords[n].z] for n in used]
+    triangles = [[remap[a], remap[b], remap[c]] for (a, b, c) in boundary]
+    values = [float(scalar_map.get(n, 0.0)) for n in used]
+
+    displacements = None
+    if vec_map:
+        displacements = [
+            list(vec_map.get(n, [0.0, 0.0, 0.0])) for n in used
+        ]
+
+    return {
+        "vertices": vertices,
+        "triangles": triangles,
+        "values": values,
+        "displacements": displacements,
+        "field": field,
+        "units": units,
+        "min": min(values) if values else 0.0,
+        "max": max(values) if values else 0.0,
+        "node_count": len(vertices),
+        "triangle_count": len(triangles),
+    }
+
+
 @handler("fem_mesh_refinement")
 def _h_fem_mesh_refinement(p):
     """Add a local mesh refinement to an existing FEM mesh. mesh: handle of
@@ -10440,6 +10529,9 @@ def _h_fem_cantilever(p):
     disp = list(result.DisplacementLengths)
     stress = list(result.vonMises)
     return {
+        # Register the analysis so callers can feed it to result-reading tools
+        # (fem_results, fem_field_surface, …) after this one-shot solve.
+        "analysis": _register("analysis", analysis),
         "nodes": mesh.FemMesh.NodeCount,
         "tets": mesh.FemMesh.TetraCount,
         "max_displacement_mm": max(disp),
