@@ -38,6 +38,7 @@ both the fast static contract lane and the FreeCAD determinism lane can import i
 EXACT_TOOLS = {
     # machine elements
     "bearing_life", "gear_rating", "belt_drive", "bolted_joint_check", "spring_check",
+    "chain_drive", "weld_group",
     # fits / tolerance / GD&T
     "fit_class", "fit_check", "tolerance_stackup", "gdt_check",
     # thermal
@@ -173,6 +174,9 @@ ANALYSIS_SWEEP = [
     ("bolted_joint_check", dict(bolt_dia_mm=10.0, torque_nm=50.0, k_factor=0.2)),
     ("spring_check", dict(wire_dia_mm=2.0, coil_mean_dia_mm=16.0, active_coils=10,
                           force_n=50.0)),
+    ("chain_drive", dict(teeth_small=17, speed_rpm=500.0, chain_number="40")),
+    ("weld_group", dict(segments=[((0, 0), (0, 200)), ((100, 0), (100, 200))],
+                        force_n=[0, -50000.0], load_point_mm=[200, 100], leg_mm=8.0)),
     # --- laminate / composite-stack closed-form ---
     ("laminate_properties", dict(
         layers=[{"material": "Steel-A36", "thickness": 1.0},

@@ -380,8 +380,11 @@ process. Several reuse existing DriftPin tools directly.
   20 mm cube at 100% infill slices to within 1% of its exact volume). 21 two-sided toys across
   `tests/test_dfx.py` / `test_cost.py` / `test_slicing.py`. v1 takes **explicit**
   geometry summaries (face draft angles, bbox, volume) like `tolerance.py` takes an
-  explicit chain; reading those off a `Shape` (via `draft`/`thickness`/`query_faces`/
-  `mass_properties`) is the v2 wiring.
+  explicit chain. **v2 Shape wiring (issue #175):** `dfm_check` now also reads a
+  live `handle` — per-face draft/undercut/wall descriptors are derived off the
+  solid (`_dfm_face_descriptors`, the moldability face-classification machinery)
+  and scored identically, with a golden parity test vs the hand-built descriptor.
+  `tolerance_stackup` off a live handle remains the open half.
 - **Tier A screens (SIMULATION_NEXT):** `molding_screen`
   (`analysis/molding.py` — exact one-term cooling time t ∝ s² + the ±30 %
   spiral-flow fill check, per-polymer defaults, feeding dfm/cost) and
@@ -432,9 +435,10 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
   `seal_check`↔`oring_groove`.
 - **Status: shipped (P0)** in `driftpin/analysis/machine_elements.py` —
   `bolted_joint_check`, `bearing_life`, `spring_check`, `gear_rating`,
-  `belt_drive`, `press_fit_stress`, `seal_check`, all with hand-verified toys in
-  `tests/test_machine_elements.py`. Chain/sprocket and weld-group ratings extend
-  the same module next.
+  `belt_drive`, `press_fit_stress`, `seal_check`, `chain_drive` (ANSI roller-chain
+  power rating, ASME B29.1) and `weld_group` (fillet-weld group, Blodgett
+  treat-weld-as-a-line), all with hand-verified toys in
+  `tests/test_machine_elements.py`.
 
 ### Frontier: low-frequency EM  ✅ shipped (P3 M6)
 
@@ -442,8 +446,10 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
   induction heating reach at this frequency?"
 - **Backend:** Elmer's `StatCurrentSolver` (DC) and `MagnetoDynamics2DHarmonic`
   (AC); exact closed forms in
-  [`analysis/em.py`](../driftpin/analysis/em.py) (a small handbook conductor
-  table ships there — the Materials DB has no electrical layer yet).
+  [`analysis/em.py`](../driftpin/analysis/em.py). The conductor σ / µ_r values
+  live in the **Materials DB electrical layer** (`electrical_conductivity` +
+  `relative_permeability` with provenance, issue #175) — `em_*` and `material_get`
+  share one source of truth; `em.py` keeps a handbook fallback only for offline use.
 - **Signatures (implemented):**
   ```
   em_skin_depth(frequency_hz, conductivity_s_m|conductor, mu_r)   # δ=√(2/ωμσ) + R_s, exact
@@ -534,14 +540,15 @@ immediately useful:
 
 **Remaining stubs** (the only unbuilt items in this catalog; each family section
 names its own):
-- Chain/sprocket + weld-group ratings in `machine_elements.py` (§10).
-- DfX / tolerance **v2 Shape wiring** — read geometry summaries off a live
-  handle instead of explicit descriptors (§9, Appendix A).
-- Materials DB **electrical layer** — fold `em.py`'s handbook conductor table
-  into the DB (§2, Frontier EM).
+- Tolerance **v2 Shape wiring** — `tolerance_stackup` reading a dimension chain
+  off a live handle (§9, Appendix A). *(the DfX half shipped: `dfm_check` now
+  reads a live handle, issue #175.)*
 - Horizon table row (§11) — machining toolpaths — on concrete need only.
 
-*(Shipped since this list was last pruned: **nonlinear structural** — CCX
+*(Shipped since this list was last pruned: **fit_class** interference/transition
+shaft letters — k/m/n/p/r/s, issue #168, `analysis/tolerance.py`;
+**chain/sprocket + weld-group ratings** — issue #175, `machine_elements.py`;
+**materials DB electrical layer** — issue #175; **nonlinear structural** — CCX
 plasticity / large deflection, issue #90 / PR #94, `analysis/nonlinear.py`,
 SIMULATION_NEXT Tier B ✅; **RF/wave EM** — openEMS full-wave, issue #93,
 `analysis/em_fullwave.py`.)*

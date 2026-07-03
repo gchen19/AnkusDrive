@@ -3204,6 +3204,53 @@ def seal_check(
 
 
 @mcp.tool()
+def chain_drive(
+    teeth_small: int,
+    speed_rpm: float,
+    chain_pitch_mm: float | None = None,
+    chain_number: str | None = None,
+    strands: int = 1,
+    power_w: float | None = None,
+) -> dict:
+    """Rate an ANSI roller-chain drive (ASME B29.1). Rated at the lower of the
+    link-plate-fatigue (HP1=0.004*N1^1.08*n1^0.9*P^(3-0.07P), low speed) and
+    roller-impact (HP2=1000*Kr*N1^1.5*P^0.8/n1^1.5, high speed) envelopes, P in
+    inches. Give chain_pitch_mm (matching add_sprocket) OR a chain_number
+    ("40","60",...) for pitch+Kr; strands scale by the B29.1 factor. Powers in W.
+    Returns {rated_power_w, type1_power_w, type2_power_w, governing, strands,
+    strand_factor, ..., power_sf?, pass}."""
+    params = {"teeth_small": teeth_small, "speed_rpm": speed_rpm, "strands": strands}
+    for k, v in (("chain_pitch_mm", chain_pitch_mm), ("chain_number", chain_number),
+                 ("power_w", power_w)):
+        if v is not None:
+            params[k] = v
+    return _call("chain_drive", **params)
+
+
+@mcp.tool()
+def weld_group(
+    segments: list,
+    force_n: list,
+    load_point_mm: list,
+    leg_mm: float | None = None,
+    allowable_shear_mpa: float = 96.0,
+) -> dict:
+    """Rate a planar fillet-weld group by Blodgett's treat-weld-as-a-line method.
+    segments=[((x1,y1),(x2,y2)),...] (mm); an in-plane force_n=[Fx,Fy] at
+    load_point_mm=[px,py] gives direct shear f=F/L plus torsional f=T*r/J from the
+    eccentric moment about the weld centroid, added vectorially at the worst end.
+    required_leg = f_r/(0.707*allowable); given leg_mm, throat stress f_r/(0.707*leg)
+    is checked vs allowable. Returns {weld_length_mm, centroid_mm, Ix_mm3, Iy_mm3,
+    J_mm3, direct_shear_n_per_mm, max_shear_n_per_mm, worst_point_mm,
+    required_leg_mm, throat_stress_mpa?, shear_sf?, pass}."""
+    params = {"segments": segments, "force_n": force_n, "load_point_mm": load_point_mm,
+              "allowable_shear_mpa": allowable_shear_mpa}
+    if leg_mm is not None:
+        params["leg_mm"] = leg_mm
+    return _call("weld_group", **params)
+
+
+@mcp.tool()
 def tolerance_stackup(
     chain: list,
     method: str = "worstcase",
@@ -5131,21 +5178,28 @@ def beam_modal(
 
 @mcp.tool()
 def dfm_check(
-    faces: list,
+    faces: list | None = None,
+    handle: str | None = None,
     pull_axis: str = "+z",
     process: str = "injection",
     min_wall_mm: float | None = None,
     min_draft_deg: float = 1.0,
 ) -> dict:
-    """Screen a part for manufacturability against a pull/tool axis. `faces` is a
-    list of {name, draft_deg, wall_mm?} — draft_deg relative to pull_axis (0 = a
-    vertical wall needing draft; <0 = a re-entrant undercut). draft_violations are
-    0≤draft<min_draft_deg, undercut_faces are draft<0, min_wall_violations are
-    wall_mm<min_wall_mm (defaults by process: injection 1.0, cnc 0.5, sheet/fdm
-    0.8). Returns {process, pull_axis, min_wall_mm, draft_violations, undercut_faces,
-    min_wall_violations, score, pass}."""
-    params = {"faces": faces, "pull_axis": pull_axis, "process": process,
-              "min_draft_deg": min_draft_deg}
+    """Screen a part for manufacturability against a pull/tool axis. Give a
+    hand-built `faces` list of {name, draft_deg, wall_mm?} — draft_deg relative to
+    pull_axis (0 = a vertical wall needing draft; <0 = a re-entrant undercut) — OR
+    a live `handle`, whose per-face descriptors are read off the solid (draft vs
+    the pull axis + a ray-cast undercut test + inward-chord wall sampling) and
+    scored identically (v2 Shape wiring). draft_violations are 0≤draft<min_draft_deg,
+    undercut_faces are draft<0, min_wall_violations are wall_mm<min_wall_mm
+    (defaults by process: injection 1.0, cnc 0.5, sheet/fdm 0.8). Returns {process,
+    pull_axis, min_wall_mm, draft_violations, undercut_faces, min_wall_violations,
+    score, pass} (plus n_faces + wall_thickness_stats on the handle path)."""
+    params = {"pull_axis": pull_axis, "process": process, "min_draft_deg": min_draft_deg}
+    if faces is not None:
+        params["faces"] = faces
+    if handle is not None:
+        params["handle"] = handle
     if min_wall_mm is not None:
         params["min_wall_mm"] = min_wall_mm
     return _call("dfm_check", **params)

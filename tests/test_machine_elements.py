@@ -183,6 +183,103 @@ def test_seal_check_squeeze_and_fill():
     assert tight["within_fill"] is False and tight["pass"] is False
 
 
+def test_chain_drive_ansi_rating():
+    # #40 chain (P=0.5"), 17-tooth small sprocket at 100 rpm.
+    # Type I (link-plate fatigue): HP1 = 0.004*17^1.08*100^0.9*0.5^(3-0.035)
+    #   17^1.08=21.30, 100^0.9=63.10, 0.5^2.965=0.1280 -> HP1 = 0.688 HP
+    #   -> 0.688*745.7 = 513 W. Manufacturer #40/17T/100rpm catalog ~0.69 HP.
+    r = me.chain_drive(teeth_small=17, speed_rpm=100.0, chain_number="40")
+    hp1 = 0.004 * 17 ** 1.08 * 100 ** 0.9 * 0.5 ** (3.0 - 0.07 * 0.5)
+    assert abs(r["type1_power_w"] - hp1 * 745.699872) < 1.0, r["type1_power_w"]
+    assert abs(r["type1_power_w"] - 513.0) < 3.0, r["type1_power_w"]
+    # at 100 rpm the link-plate envelope is far below the roller-impact one,
+    # so it governs and sets the rating.
+    assert r["governing"] == "link_plate_fatigue"
+    assert r["rated_power_w"] == r["type1_power_w"]
+    assert abs(r["chain_pitch_mm"] - 12.7) < 1e-6
+    # metric pitch and the named chain must agree (same source of geometry)
+    r_mm = me.chain_drive(17, 100.0, chain_pitch_mm=12.7)
+    assert abs(r_mm["rated_power_w"] - r["rated_power_w"]) < 0.5
+
+
+def test_chain_drive_speed_crossover_and_strands():
+    # Type II (roller impact) falls as n^-1.5 while Type I rises as n^0.9, so at
+    # high speed the roller-impact envelope governs and rating drops.
+    fast = me.chain_drive(17, 3000.0, chain_number="40")
+    assert fast["governing"] == "roller_impact"
+    assert fast["rated_power_w"] == fast["type2_power_w"]
+    # multi-strand scales by the B29.1 factor (2 strands -> 1.7x, not 2x)
+    single = me.chain_drive(17, 500.0, chain_number="40")
+    double = me.chain_drive(17, 500.0, chain_number="40", strands=2)
+    assert abs(double["rated_power_w"] / single["rated_power_w"] - 1.7) < 1e-6
+    # required-power gating: a demand above the rating fails
+    loaded = me.chain_drive(17, 500.0, chain_number="40",
+                            power_w=single["rated_power_w"] * 2.0)
+    assert loaded["pass"] is False and loaded["power_sf"] < 1.0
+    # bad inputs raise
+    for bad in (lambda: me.chain_drive(2, 100, chain_number="40"),
+                lambda: me.chain_drive(17, 0, chain_number="40"),
+                lambda: me.chain_drive(17, 100, chain_number="99")):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError on bad chain input")
+
+
+def test_weld_group_line_properties_rectangle():
+    # Rectangle 100x100 welded on all 4 sides, treat-as-a-line. Blodgett's closed
+    # form for a box b x d: J_w = (b+d)^3/6 = 200^3/6 = 1.3333e6 mm^3 (unit throat),
+    # Ix = Iy = J/2 = 6.6667e5 by symmetry.
+    seg = [((0, 0), (100, 0)), ((100, 0), (100, 100)),
+           ((100, 100), (0, 100)), ((0, 100), (0, 0))]
+    r = me.weld_group(seg, force_n=[0, 0], load_point_mm=[50, 50])
+    assert abs(r["weld_length_mm"] - 400.0) < 1e-6
+    assert r["centroid_mm"] == [50.0, 50.0]
+    assert abs(r["J_mm3"] - (200.0 ** 3 / 6.0)) < 1.0, r["J_mm3"]
+    assert abs(r["Ix_mm3"] - r["J_mm3"] / 2.0) < 1.0, r["Ix_mm3"]
+    assert abs(r["Iy_mm3"] - r["J_mm3"] / 2.0) < 1.0
+
+
+def test_weld_group_direct_and_torsional_shear():
+    # Two vertical 200 mm welds 100 mm apart, load 50 kN downward on the centroid
+    # line but offset 150 mm horizontally -> direct + torsional shear.
+    # Group: centroid at (50,100). L=400. Ix (about x) = 2*(200^3/12)=1.333e6;
+    # Iy = 2*(200*50^2)=1.0e6; J=2.333e6.
+    seg = [((0, 0), (0, 200)), ((100, 0), (100, 200))]
+    r = me.weld_group(seg, force_n=[0, -50000.0], load_point_mm=[200, 100],
+                      leg_mm=8.0, allowable_shear_mpa=96.0)
+    assert abs(r["weld_length_mm"] - 400.0) < 1e-6
+    assert r["centroid_mm"] == [50.0, 100.0]
+    assert abs(r["J_mm3"] - (1.0e6 + 1.0e6 / 3.0 * 4.0)) < 5.0, r["J_mm3"]
+    # direct shear = 50000/400 = 125 N/mm
+    assert abs(r["direct_shear_n_per_mm"] - 125.0) < 1e-3, r["direct_shear_n_per_mm"]
+    # eccentric moment T = (200-50)*(-50000) = -7.5e6 N*mm; worst corner is a top
+    # or bottom outer end where torsion adds to direct shear.
+    # f_tx = -T*(y-yc)/J, f_ty = T*(x-xc)/J at (100,200):
+    T = (200 - 50) * (-50000.0)
+    J = r["J_mm3"]
+    ftx = -T * (200 - 100) / J
+    fty = T * (100 - 50) / J
+    fr = ((0 + ftx) ** 2 + (-125.0 + fty) ** 2) ** 0.5
+    assert abs(r["max_shear_n_per_mm"] - fr) < 0.5, (r["max_shear_n_per_mm"], fr)
+    # throat stress = f_r/(0.707*leg); SF vs allowable
+    throat = fr / (0.707 * 8.0)
+    assert abs(r["throat_stress_mpa"] - throat) < 0.1, r["throat_stress_mpa"]
+    assert abs(r["shear_sf"] - 96.0 / throat) < 0.01
+    # required leg with no leg given
+    r2 = me.weld_group(seg, force_n=[0, -50000.0], load_point_mm=[200, 100])
+    assert abs(r2["required_leg_mm"] - fr / (0.707 * 96.0)) < 1e-3
+    # empty geometry raises
+    try:
+        me.weld_group([], force_n=[0, -1], load_point_mm=[0, 0])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for empty weld group")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
