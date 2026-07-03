@@ -326,6 +326,100 @@ def test_missing_fillet_radius_under():
                            {"type": "Diameter", "value": 3.0}, {}), False)
 
 
+# --------------------------------------------------------------------------- #
+# Tolerance necessity (issue #173) — over/under-toleranced flagging, advisory.
+# Golden: the plate/cbblock demo dimension set is QUIET when nothing forces
+# precision; seeding one deliberately over- and one under-toleranced dim on it
+# flags exactly those two.
+# --------------------------------------------------------------------------- #
+def test_necessity_clean_is_quiet():
+    print("test_necessity_clean_is_quiet")
+    # the golden plate demo, no functional features declared, no tolerances at all
+    rep = dg.tolerance_necessity_report(_prismatic_features(),
+                                        _prismatic_complete_dims(), process=dg.PRISMATIC)
+    _check("clean drawing is quiet", rep["violations"], [])
+    _check("clean report ok", rep["ok"], True)
+    _check("no over-toleranced", rep["over_toleranced"], 0)
+    _check("no under-toleranced", rep["under_toleranced"], 0)
+
+
+def _necessity_seeded_dims():
+    """The golden dim set with ONE over-toleranced free dim (overall width W held to
+    ±0.005, ~IT5, far tighter than IT7@50mm) and ONE under-toleranced functional dim
+    (the Ø6 hole diameter carries no tolerance though the hole is a declared fit).
+    The hole's location dims ARE toleranced, so they are correctly not flagged."""
+    dims = _prismatic_complete_dims()
+    for d in dims:
+        if d["name"] == "W":                    # free overall extent, over-tight
+            d["plus"], d["minus"] = 0.005, -0.005
+        elif d["name"] in ("LocX", "LocY"):     # functional but toleranced -> fine
+            d["plus"], d["minus"] = 0.05, -0.05
+        # "Dia" deliberately left with NO tolerance -> under (hole is functional)
+    return dims
+
+
+def test_necessity_flags_over_and_under():
+    print("test_necessity_flags_over_and_under")
+    functional = {"H1": "declared fit H7/g6"}
+    v = dg.check_tolerance_necessity(_prismatic_features(), _necessity_seeded_dims(),
+                                     functional, dg.PRISMATIC)
+    _check("both verdicts flagged", _codes(v), ["over_toleranced", "under_toleranced"])
+    over = [f for f in v if f["code"] == "over_toleranced"][0]
+    under = [f for f in v if f["code"] == "under_toleranced"][0]
+    _check("over is the overall width dim", over["dim"], "W")
+    _check("over is on the free bbox", over["feature"], "BBOX")
+    _check("over relaxes to IT7", over["relax_to"]["grade"], 7)
+    _check("under is the hole diameter dim", under["dim"], "Dia")
+    _check("under is on the functional hole", under["feature"], "H1")
+    _check("under cites the fit backing", "H7/g6" in under["backing"], True)
+
+
+def test_necessity_it7_threshold_band():
+    print("test_necessity_it7_threshold_band")
+    # IT7 at a 50 mm nominal (ISO 286 band 30–50 mm) is 25 µm = 0.025 mm total.
+    _check("IT7 band at 50 mm is 0.025 mm", dg._it_band_mm(50.0, 7), 0.025)
+    # a free dim held to exactly the IT7 band is NOT over-toleranced (threshold is
+    # strict), one tighter IS.
+    dims = _prismatic_complete_dims()
+    for d in dims:
+        if d["name"] == "W":
+            d["plus"], d["minus"] = 0.0125, -0.0125   # 0.025 total == IT7 -> ok
+    at = dg.check_tolerance_necessity(_prismatic_features(), dims, {}, dg.PRISMATIC)
+    _check("at the IT7 band: not over", _codes(at), [])
+    for d in dims:
+        if d["name"] == "W":
+            d["plus"], d["minus"] = 0.010, -0.010     # 0.020 total < IT7 -> over
+    tighter = dg.check_tolerance_necessity(_prismatic_features(), dims, {}, dg.PRISMATIC)
+    _check("tighter than IT7: over", _codes(tighter), ["over_toleranced"])
+
+
+def test_necessity_functional_with_tolerance_ok():
+    print("test_necessity_functional_with_tolerance_ok")
+    # a functional hole whose diameter DOES carry a tolerance is not under-toleranced
+    dims = _prismatic_complete_dims()
+    for d in dims:
+        if d["name"] == "Dia":
+            d["plus"], d["minus"] = 0.012, 0.0        # H7-ish on Ø6
+    v = dg.check_tolerance_necessity(_prismatic_features(), dims,
+                                     {"H1": "declared fit H7/g6"}, dg.PRISMATIC)
+    _check("toleranced functional hole is quiet", v, [])
+
+
+def test_necessity_strict_mode_fails_gate():
+    print("test_necessity_strict_mode_fails_gate")
+    rep = dg.tolerance_necessity_report(
+        _prismatic_features(), _necessity_seeded_dims(),
+        {"H1": "declared fit H7/g6"}, dg.PRISMATIC, strict=True)
+    _check("strict mode reports not-ok", rep["ok"], False)
+    _check("advisory report by default", rep["advisory"], True)
+    # ...but the same findings are only warnings in the default (non-strict) mode
+    rep2 = dg.tolerance_necessity_report(
+        _prismatic_features(), _necessity_seeded_dims(),
+        {"H1": "declared fit H7/g6"}, dg.PRISMATIC)
+    _check("default mode stays ok (warnings only)", rep2["ok"], True)
+    _check("default mode still lists findings", len(rep2["violations"]), 2)
+
+
 def test_legibility_clean():
     print("test_legibility_clean")
     labels = [
