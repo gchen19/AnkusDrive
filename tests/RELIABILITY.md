@@ -161,18 +161,21 @@ This is the test that determines whether an agent can self-correct during
 a design iteration. If the model can't tell when its own output diverges
 from the spec, it can't fix mistakes.
 
-### Future: Layer D — full agent tool-use
+### Layer D — full agent tool-use (`tests/test_reliability_tasks.py`)
 
-Layer C tests *visual judgment under spec* — it doesn't actually let the
-model call DriftPin tools. A fuller test would:
-1. Hand the model a spec via MCP.
-2. Let it call `make_body` / `pad` / `pocket` / etc. autonomously.
-3. Render the result.
-4. Self-evaluate.
-5. Compare self-eval AND the actual built geometry to ground truth.
+**Shipped.** Layer C tests *visual judgment under spec* — it doesn't let the
+model call DriftPin tools. Layer D tests the other half: *can the model DRIVE the
+tools to produce geometry that meets a goal.* The agent gets an English design
+goal and the DriftPin tool surface, runs a real tool-use loop against a real
+FreeCAD worker (via `orchestration/agentkit.py`), then the resulting SOLID is
+graded with DriftPin's own Tier-3 inspection tools (`bounding_box` /
+`check_shape` / `min_clearance` / `mass_properties`) as the ground-truth oracle.
+We never assert *which* tools it called — only that the artifact is correct.
 
-Layer D needs an agent-runtime wrapper (Anthropic SDK with MCP tool
-binding). Deferred until Layer C baselines look reasonable.
+Same gating as B/C: real runs need `RUN_RELIABILITY=1` + `ANTHROPIC_API_KEY`; the
+scripted `ScriptedClient` path runs free as the harness self-test / grader
+negative-control. Multi-trial (pass *rate*, not pass/fail) × multi-model
+(haiku/sonnet/opus), with per-miss tool-trace + oracle-reason capture.
 
 ---
 

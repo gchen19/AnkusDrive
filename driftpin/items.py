@@ -44,11 +44,11 @@ from the **file** (the .FCStd/STEP artifact). One item may map to several files.
 significant numbers run out of digit space and "become wrong" when a part changes
 category. All significance is pushed into the queryable `metadata` object.
 
-**`rev` and `lifecycle` are reserved here, not implemented.** C1 only holds the
-fields (with cheap shape validation) so #141 (revision + lifecycle state machine)
-and #142 (ECO/where-used) extend the schema without a migration. The transition
-rules, the Form/Fit/Function predicate, and immutability are explicitly #141/#142
-scope — this module never interprets a transition.
+**`rev` and `lifecycle` are held here but interpreted elsewhere.** C1 only holds
+the fields (with cheap shape validation); the transition rules, the Form/Fit/
+Function predicate, and immutability now live in `lifecycle.py` (shipped #141) and
+the ECO/where-used change record in `change.py` (shipped #142). This module still
+never interprets a transition — it just carries the fields those modules read.
 
 --- The item-reference form (how a manifest points at an item, not a bare path) ---
 

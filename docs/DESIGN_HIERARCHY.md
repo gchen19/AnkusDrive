@@ -1,5 +1,21 @@
 # Design Hierarchy, Variants & Design Control — scoping
 
+> **✅ Shipped design record (epic #135, closed 2026-07).** This began as a
+> *scoping* doc — the §0 verdict below reads "not yet" because that was true when
+> it was written (2026-06-28). Every gap it identified has since shipped and the
+> verdict is now **yes**:
+> [#136 part recipes](../driftpin/recipes.py) (PR #151) ·
+> [#137 driving/driven relation DAG](../driftpin/relations.py) (PR #153) ·
+> [#138 variant families / design tables](../driftpin/families.py) (PR #156) ·
+> [#139 declared-input feature templates](../driftpin/feature_templates.py) (PR #157) ·
+> [#140 item model + part numbering](../driftpin/items.py) (PR #150) ·
+> [#141 revision + lifecycle state machine](../driftpin/lifecycle.py) (PR #154) ·
+> [#142 ECO / where-used / baselines](../driftpin/change.py) (PR #160) ·
+> [#143 project container + ref-integrity](../driftpin/project.py) (PR #158).
+> Runnable showcase: `example/design_hierarchy_*` (PRs #163, #164). Read the §0
+> table below as the *original problem statement*; the "Today" column is a
+> historical snapshot, not current state.
+
 Written 2026-06-28. Companion to [`MULTI_AGENT.md`](MULTI_AGENT.md) (which solves
 *partition + merge* across a team) and [`ROADMAP.md`](ROADMAP.md) (deepening a
 single agent). This doc scopes the **third axis**: making a *design* (not just a

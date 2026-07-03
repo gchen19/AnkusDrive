@@ -84,10 +84,12 @@ prefix.
 - `_content_bbox` (used during save_document) crashed on PartDesign feature
   objects whose `.Shape` is a `PartDesign.Feature` (no `isNull` method) —
   added `hasattr` guards.
-- TechDraw `exportPageAsPdf` doesn't exist in this build; PDF/SVG export
-  needs `TechDrawGui` which is GUI-only. Reframed `export_drawing` as
-  `NotImplementedError` with a clear message; tests now verify the page
-  builds + persists in saved FCStd, with PDF export deferred.
+- TechDraw `exportPageAsPdf` / `TechDrawGui` are GUI-only, so headless PDF was
+  first stubbed as `NotImplementedError`. **Now shipped** (TechDraw export
+  kickoff): `export_drawing` rasterises the console TechDraw SVG to PDF/SVG/DXF
+  via pure-Python `svglib` + `reportlab` (`worker.py` ~L6700), no GUI. Tests
+  verify PDF-on-disk `> 1 KB` with `%PDF` magic, plus the page builds + persists
+  in the saved FCStd.
 
 **Original goal text (preserved for reference):**
 
