@@ -17,6 +17,7 @@ Run:  python3 tests/test_render.py
 import base64
 import hashlib
 import io
+import shutil
 import sys
 import time
 import traceback
@@ -256,6 +257,198 @@ def test_multi_view_returns_distinct_images():
             png = _render(w, box["handle"], view=v, width=200, height=200)
             hashes.add(hashlib.sha256(png).hexdigest())
         assert len(hashes) == 3, f"expected 3 distinct view renders, got {len(hashes)}"
+
+
+# --- issue #174: FEM colormap, custom camera, AA, feature edges ---------------
+
+def test_fem_colormap_monotonic_gradient():
+    """render_fem_results colors a mesh by a per-vertex scalar via viridis with
+    barycentric interpolation. Feed a beam a SYNTHETIC 'stress' that is hot
+    (high) at the fixed end and cold (low) at the tip; the rendered viridis
+    'heat' (yellow = high value: big R+G, small B) must decrease monotonically
+    along the beam axis. A flat / reversed / non-interpolating renderer fails.
+
+    Pure-render test (no solver): the field is synthetic, exercising only the
+    colormap + barycentric rasterizer path."""
+    with Worker() as w:
+        w.call("new_document", name="beam")
+        beam = w.call("add_primitive", kind="box", w=100, d=10, h=10)
+        mesh = w.call("tessellate", handle=beam["handle"], deflection=0.5)
+        V = np.asarray(mesh["vertices"])
+        xmin, xmax = V[:, 0].min(), V[:, 0].max()
+        # Hot at the fixed end (x=xmin), cold at the free tip (x=xmax).
+        values = (xmax - V[:, 0]).tolist()
+
+        png = r.render_fem_results(
+            mesh["vertices"], mesh["triangles"], values,
+            view="front", width=400, height=200,
+            field_label="von Mises", units="MPa",
+            colorbar=False, supersample=1,
+        )
+        arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGB")).astype(np.float64)
+        mask = r.foreground_mask(png)
+        # front view: world +x → screen +x, so the hot fixed end sits at LEFT.
+        proxy = arr[..., 0] + arr[..., 1] - arr[..., 2]  # viridis heat proxy
+        _h, wpx = mask.shape
+
+        nb = 6
+        means = []
+        for i in range(nb):
+            x0, x1 = int(wpx * i / nb), int(wpx * (i + 1) / nb)
+            strip = mask[:, x0:x1]
+            if strip.sum() < 20:
+                continue
+            means.append(proxy[:, x0:x1][strip].mean())
+        assert len(means) >= 4, f"too few populated strips: {means}"
+        assert means[0] > means[-1] + 40, (
+            f"no hot→cold gradient along the beam axis: {means}"
+        )
+        diffs = np.diff(means)
+        assert np.all(diffs < 5), (
+            f"heat proxy not monotonically decreasing fixed-end→tip: {means}"
+        )
+
+
+def test_custom_camera_matches_iso_preset():
+    """A custom (azimuth, elevation) camera at (45, 35.26) reproduces the 'iso'
+    preset: cam dir (1,1,1)/√3 ⇒ azimuth 45°, elevation atan(1/√2)=35.26°. Their
+    silhouettes must nearly coincide (IoU > 0.9), while a clearly different
+    camera must NOT — proving the custom-camera path is honored, not ignored."""
+    with Worker() as w:
+        box = _make_box(w, dims=(20, 20, 20))
+        mesh = w.call("tessellate", handle=box["handle"], deflection=0.5)
+
+        def mask_for(view):
+            png = r.render_mesh(
+                mesh["vertices"], mesh["triangles"],
+                width=256, height=256, view=view,
+            )
+            return r.foreground_mask(png)
+
+        def iou(a, b):
+            return (a & b).sum() / max((a | b).sum(), 1)
+
+        m_iso = mask_for("iso")
+        m_cam = mask_for((45.0, 35.264))
+        iou_match = iou(m_iso, m_cam)
+        assert iou_match > 0.9, (
+            f"custom (45,35.26) camera should match iso preset; IoU={iou_match:.3f}"
+        )
+
+        m_off = mask_for((120.0, 10.0))
+        iou_off = iou(m_iso, m_off)
+        assert iou_off < iou_match, (
+            f"an off-axis custom camera matched iso too well "
+            f"(match={iou_match:.3f}, off={iou_off:.3f}) — view param not respected"
+        )
+
+
+def test_antialiasing_smooths_edges():
+    """Supersampling + bilinear downsample softens hard bg→face steps at the
+    silhouette. The 99.5th-percentile per-pixel luma gradient (dominated by the
+    silhouette edge) must be LOWER with AA than without."""
+    with Worker() as w:
+        box = _make_box(w, dims=(20, 20, 20))
+        mesh = w.call("tessellate", handle=box["handle"], deflection=0.5)
+
+        def edge_step(ss):
+            png = r.render_mesh(
+                mesh["vertices"], mesh["triangles"],
+                width=256, height=256, view="iso", supersample=ss, edges=False,
+            )
+            g = np.asarray(Image.open(io.BytesIO(png)).convert("L")).astype(np.float64)
+            grad = np.concatenate([
+                np.abs(np.diff(g, axis=1)).ravel(),
+                np.abs(np.diff(g, axis=0)).ravel(),
+            ])
+            return np.percentile(grad, 99.5)
+
+        no_aa = edge_step(1)
+        aa = edge_step(4)
+        assert aa < no_aa, (
+            f"anti-aliasing did not soften edges: no-AA p99.5={no_aa:.1f}, AA={aa:.1f}"
+        )
+
+
+def test_feature_edges_kill_diagonal_forest():
+    """Feature-edge-only inking: on a finely tessellated cylinder side, adjacent
+    facet normals differ by less than the 20° threshold, so NO interior lines
+    are drawn across the smooth curved wall — only the sharp cap rims and the
+    silhouette survive. With the threshold at 0° (every edge inked, the old
+    behavior) the body fills with a 'forest' of triangulation lines.
+
+    Measured on the mid-body band (rows 30–70%, excluding the legitimate top/
+    bottom rim circles): the feature-edge render must be essentially free of
+    interior line pixels there, while the all-edges render is dense with them."""
+    with Worker() as w:
+        w.call("new_document", name="cyl")
+        cyl = w.call("add_primitive", kind="cylinder", r=10, h=40)
+        mesh = w.call("tessellate", handle=cyl["handle"], deflection=0.05)
+
+        def render(fa):
+            return r.render_mesh(
+                mesh["vertices"], mesh["triangles"],
+                width=256, height=256, view="front",
+                feature_angle_deg=fa, supersample=1,
+            )
+
+        def midband_line_pixels(png):
+            arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGB")).astype(np.int16)
+            d = np.abs(arr - np.array(r._LINE_COLOR)).max(axis=2)
+            h = arr.shape[0]
+            band = d[int(h * 0.3):int(h * 0.7)]
+            return int((band < 30).sum())
+
+        png_feat = render(20.0)
+        png_forest = render(0.0)
+        feat = midband_line_pixels(png_feat)
+        forest = midband_line_pixels(png_forest)
+
+        assert r.foreground_mask(png_feat).sum() > 1000, "feature render is blank"
+        assert feat < 20, (
+            f"feature-edge render still has a diagonal forest on the smooth side: "
+            f"{feat} interior line px (expected ~0)"
+        )
+        assert forest > 5 * max(feat, 1) and forest > 100, (
+            f"all-edges render should show the forest: feature-only={feat}px, "
+            f"all-edges={forest}px"
+        )
+
+
+def _ccx_available():
+    return any(
+        shutil.which(b) for b in ("ccx", "ccx_2.19", "ccx_2.20", "ccx_2.21")
+    )
+
+
+def test_fem_field_surface_real_solve():
+    """End-to-end on a REAL CalculiX solve: run the cantilever demo, pull its
+    von-Mises surface field from the worker, and render it. Skips gracefully
+    when ccx is absent. Checks the surface peak tracks the global max and the
+    field render is a non-blank, color-varied PNG."""
+    if not _ccx_available():
+        print("    SKIP — ccx not available")
+        return
+    with Worker() as w:
+        demo = w.call("fem_cantilever_demo", mesh_size=800, force=9000)
+        surf = w.call("fem_field_surface", analysis=demo["analysis"], field="vonmises")
+        assert surf["triangle_count"] > 0 and surf["node_count"] > 0
+        # Peak stress is on the (fixed-end) surface, so the surface max tracks
+        # the global max the volume result reports.
+        assert 0.0 < surf["max"] <= demo["max_vonmises_mpa"] * 1.05, (
+            f"surface max {surf['max']} vs global {demo['max_vonmises_mpa']}"
+        )
+        assert surf["displacements"] is not None
+
+        png = r.render_fem_results(
+            surf["vertices"], surf["triangles"], surf["values"],
+            displacements=surf["displacements"], view="iso",
+            field_label=surf["field"], units=surf["units"],
+            width=480, height=360,
+        )
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
+        assert arr.std() > 8, f"field render looks blank (stdev={arr.std():.1f})"
 
 
 # --- runner -------------------------------------------------------------------

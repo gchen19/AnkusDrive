@@ -2277,6 +2277,67 @@ def render_views(
 
 
 @mcp.tool()
+def render_fem_results(
+    analysis: str,
+    field: str = "vonmises",
+    view: str = "iso",
+    deformation_scale: str | float = "auto",
+    width: int = 640,
+    height: int = 512,
+    edges: bool = True,
+) -> dict:
+    """Render a completed FEM result's surface, colored by a per-vertex field.
+
+    Pulls the result surface (boundary triangulation + per-node field values +
+    displacement vectors) from the worker, then colors it with a viridis
+    colormap (barycentrically interpolated), overlays the deformed shape, and
+    draws a colorbar with the field min/max — the "agent eyes" for a stress /
+    displacement / thermal solve.
+
+    field: 'vonmises' (default) | 'displacement' | 'temperature'.
+    view: a preset ('iso'|'top'|'front'|…) or a custom '(azimuth,elevation)'
+        camera passed as e.g. "45,35".
+    deformation_scale: 'auto' scales the peak displacement to ~8% of the model
+        diagonal; a number is used verbatim; '0' disables the deformed overlay.
+
+    Returns {png_base64, width, height, field, units, min, max, view,
+    node_count, triangle_count}.
+    """
+    surf = _call("fem_field_surface", analysis=analysis, field=field)
+
+    # A custom camera may arrive as "az,el"; presets stay strings.
+    cam: object = view
+    if isinstance(view, str) and "," in view:
+        parts = view.split(",")
+        cam = (float(parts[0]), float(parts[1]))
+
+    scale: object = deformation_scale
+    if isinstance(deformation_scale, str) and deformation_scale != "auto":
+        scale = float(deformation_scale)
+
+    png = _render.render_fem_results(
+        surf["vertices"], surf["triangles"], surf["values"],
+        displacements=surf.get("displacements"),
+        view=cam, deformation_scale=scale,
+        width=width, height=height,
+        field_label=surf["field"], units=surf.get("units", ""),
+        edges=edges,
+    )
+    return {
+        "png_base64": base64.b64encode(png).decode("ascii"),
+        "width": width,
+        "height": height,
+        "field": surf["field"],
+        "units": surf.get("units", ""),
+        "min": surf["min"],
+        "max": surf["max"],
+        "view": view,
+        "node_count": surf["node_count"],
+        "triangle_count": surf["triangle_count"],
+    }
+
+
+@mcp.tool()
 def render_photoreal(
     handle: str,
     renderer: str = "Povray",
