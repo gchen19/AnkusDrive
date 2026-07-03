@@ -2719,6 +2719,68 @@ def test_add_spring():
             assert "outer_diameter" in str(e), e
 
 
+def test_dfm_check_handle_matches_hand_built_descriptor():
+    # issue #175 DfX v2 Shape wiring: dfm_check reading a LIVE handle must produce
+    # the same finding as the hand-built descriptor it produces today. A 20 mm cube
+    # pulled +z has 4 vertical side walls (0 deg draft -> draft violations) and a
+    # flat top+bottom (90 deg -> fine); no undercuts.
+    with Worker() as w:
+        w.call("new_document", name="dfm_wire")
+        box = _ws_box(w)  # 20mm cube
+        live = w.call("dfm_check", handle=box, pull_axis="+z", process="injection")
+        # the hand-built descriptor for the same cube (what a caller writes today)
+        hand = w.call("dfm_check", faces=[
+            {"name": "s0", "draft_deg": 0.0, "wall_mm": 20.0},
+            {"name": "s1", "draft_deg": 0.0, "wall_mm": 20.0},
+            {"name": "s2", "draft_deg": 0.0, "wall_mm": 20.0},
+            {"name": "s3", "draft_deg": 0.0, "wall_mm": 20.0},
+            {"name": "top", "draft_deg": 90.0, "wall_mm": 20.0},
+            {"name": "bot", "draft_deg": 90.0, "wall_mm": 20.0},
+        ], pull_axis="+z", process="injection")
+        # PARITY: the two paths agree on the finding (counts, score, verdict).
+        assert len(live["draft_violations"]) == len(hand["draft_violations"]) == 4, (live, hand)
+        assert len(live["undercut_faces"]) == len(hand["undercut_faces"]) == 0, (live, hand)
+        assert live["min_wall_violations"] == hand["min_wall_violations"] == [], (live, hand)
+        assert abs(live["score"] - hand["score"]) < 1e-9, (live["score"], hand["score"])
+        assert live["pass"] is hand["pass"] is False, (live, hand)
+        # the handle path additionally surfaces the live geometry it read
+        assert live["n_faces"] == 6, live
+        assert live["wall_thickness_stats"]["n"] == 6, live
+        assert abs(live["wall_thickness_stats"]["mean_mm"] - 20.0) < 0.01, live
+
+
+def test_add_spring_squared_ground_ends():
+    # Squared-and-ground compression spring (issue #175): the last coil at each
+    # end is closed (inactive), so active coils Na = Nt - 2, solid height = d*Nt,
+    # and the rate uses the ACTIVE coils. Nt=10, d=2.5, OD=25, L0=60.
+    with Worker() as w:
+        w.call("new_document", name="spring_sg")
+        r = w.call("add_spring", wire_diameter=2.5, outer_diameter=25.0,
+                   free_length=60.0, coils=10, kind="compression")
+        assert r["end_type"] == "squared_ground", r
+        # handbook: Na = Nt - 2 = 8
+        assert abs(r["active_coils"] - 8.0) < 1e-6, r
+        assert abs(r["total_coils"] - 10.0) < 1e-6, r
+        # solid height Ls = d*Nt = 2.5*10 = 25.0
+        assert abs(r["solid_height"] - 25.0) < 1e-6, r
+        # active-coil pitch p = (L0 - 2d)/Na = (60 - 5)/8 = 6.875, and it
+        # reconstructs the free length L0 = p*Na + 2d = 60
+        assert abs(r["active_pitch_mm"] - 6.875) < 1e-3, r
+        assert abs(r["active_pitch_mm"] * r["active_coils"] + 2 * 2.5 - 60.0) < 1e-3, r
+        # rate uses ACTIVE coils: k = G d^4/(8 D^3 Na), D = 22.5
+        D = 22.5
+        k = 79300.0 * 2.5 ** 4 / (8.0 * D ** 3 * 8.0)
+        assert abs(r["spring_rate_n_per_mm"] - round(k, 4)) < 1e-3, (r, k)
+        assert r["volume"] > 0
+        # a free length at/under the solid height is unphysical -> ValueError
+        try:
+            w.call("add_spring", wire_diameter=2.5, outer_diameter=25.0,
+                   free_length=20.0, coils=10)
+            assert False, "expected ValueError for free_length <= solid_height"
+        except Exception as e:
+            assert "solid_height" in str(e) or "free_length" in str(e), e
+
+
 def test_add_fastener():
     with Worker() as w:
         w.call("new_document", name="fastener_test")

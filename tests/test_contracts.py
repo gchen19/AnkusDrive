@@ -34,11 +34,16 @@ ANALYSIS_DIR = REPO / "driftpin" / "analysis"
 #     every allowlisted name still exists, so stale entries get flagged) -------
 
 # Tools that legitimately do NOT dispatch to a worker handler via _call(...).
-_NO_DISPATCH = {"restart_worker"}  # tears down / respawns the worker process itself
+_NO_DISPATCH = {
+    "restart_worker",   # tears down / respawns the worker process itself
+    # host-side workspace-pool management (issue #167) — no worker handler
+    "use_workspace", "list_workspaces", "close_workspace",
+}
 
 # Tools whose function name intentionally differs from the handler they call.
 _NAME_DIFFERS_OK = {
     "render_view", "render_views",   # both call "tessellate", rasterize host-side
+    "render_fem_results",            # calls "fem_field_surface" (#174), rasterizes host-side
     "granular_screen",               # public DFx screen → closed-form "granular_oracle" handler
 }
 

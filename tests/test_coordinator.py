@@ -60,7 +60,9 @@ def _housing_steps():
 
 
 def _is_review(task):
-    return task.startswith("Component '")
+    # the review slice is the rendered builder brief (driftpin.builder_brief/1),
+    # which opens "You are building component '<id>' ..."; a build task opens "Build".
+    return task.startswith("You are building component '")
 
 
 def _build_for(task):
@@ -106,7 +108,7 @@ def _hier_brief():
 def test_round0_review_amends_then_builds():
     def script(task, turn):
         if _is_review(task):
-            if task.startswith("Component 'peg'"):   # match the id, not the brief name
+            if "component 'peg'" in task:   # match the id, not the brief name
                 return [tool_use("r", "emit_review", {
                     "verdict": "amend", "reason": "clarify the diameter math",
                     "patch": {"task_note": "Note: diametral clearance 0.4 -> peg Ø15.6."}})]

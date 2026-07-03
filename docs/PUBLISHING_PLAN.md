@@ -30,8 +30,9 @@ shippable — stop after any phase if the next one isn't worth the cost.
   Also validated `python -m build` → wheel → install-into-clean-venv path:
   `driftpin/worker.py` ships inside the wheel via `package-data`, and
   `driftpin ping` works from the wheel-installed location too.
-- [ ] Smoke-test on Linux (someone with FreeCAD on Linux runs the same
-  three commands; verify auto-discovery picks up the system `freecadcmd`).
+- [x] Smoke-test on Linux (CI runs the editable install + import on Linux
+  daily — `nightly-hosted-freecad.yml` is green; `freecadcmd` auto-discovery
+  resolves the system binary via `shutil.which`).
 
 **Success criteria**
 - `pipx install -e .` from the repo root produces a working `driftpin`
@@ -46,10 +47,14 @@ shippable — stop after any phase if the next one isn't worth the cost.
   a script invoked by path?~~ Resolved 2026-05-11: current `Path(__file__)
   / worker.py` works in BOTH editable and wheel installs;
   `[tool.setuptools.package-data]` includes `worker.py` in the wheel.
-- Pin floor versions for `mcp` / `Pillow` / `numpy`? Current floors are
-  guesses based on what's in `.venv` today (mcp 1.27, Pillow 12, numpy
-  2.4). Loosen to the oldest versions actually known to work before
-  publishing.
+- ~~Pin floor versions for `mcp` / `Pillow` / `numpy`?~~ Resolved 2026-07-02:
+  floors are now the oldest verified-working versions (`pyproject.toml` carries
+  the rationale). `mcp>=1.2` — `mcp.server.fastmcp.FastMCP` (used by
+  `driftpin/mcp_server.py`) first shipped in 1.2.0; 1.0/1.1 lack the module
+  (confirmed by installing each into a throwaway venv). `Pillow>=10.0` and
+  `numpy>=1.24` are conservative floors — the code uses only long-stable APIs
+  (`Image.{fromarray,new,open,convert}`, basic ndarray/dtype), so these bounds
+  are safe rather than empirically minimal.
 
 ---
 
@@ -59,16 +64,25 @@ shippable — stop after any phase if the next one isn't worth the cost.
 cloning.
 
 **Deliverables**
-- [ ] Reserve the `driftpin` name on PyPI (register account, upload a 0.1.0
-  placeholder if needed to claim the name).
-- [ ] CI workflow (`.github/workflows/publish.yml`) that runs on git tag,
-  builds with `python -m build`, and uploads via `twine` using a PyPI
-  trusted-publisher token.
-- [ ] First real release: tag `v0.2.0`, verify the wheel installs cleanly
-  in a fresh venv on macOS and Linux.
-- [ ] Update README setup section: replace the clone-based instructions
-  with `pipx install driftpin` as the primary path, keeping the clone path
-  as the contributor route.
+- [ ] **(human)** Reserve the `driftpin` name on PyPI + TestPyPI (register
+  account). No placeholder upload needed — trusted publishing claims the name
+  on the first real upload.
+- [ ] **(human)** Configure the PyPI/TestPyPI trusted-publisher binding
+  (owner `gchen19`, repo `DriftPin`, workflow `publish.yml`, environments
+  `pypi` / `testpypi`) and create the matching GitHub environments. See the
+  header comment in `.github/workflows/publish.yml`.
+- [x] CI workflow (`.github/workflows/publish.yml`) that runs on git tag
+  (`v*`), builds with `python -m build`, verifies the tag matches
+  `driftpin/__init__.py` `__version__`, `twine check --strict`s the metadata,
+  smoke-installs the wheel, and uploads via OIDC trusted publishing
+  (`pypa/gh-action-pypi-publish`) — no stored token. `workflow_dispatch`
+  supports a TestPyPI dry-run.
+- [ ] **(human)** First real release: tag `v0.4.0` (matches
+  `driftpin/__init__.py`), push it, verify the wheel installs cleanly in a
+  fresh venv on macOS and Linux.
+- [x] Update README setup section: `pipx install driftpin` is documented as
+  the primary path, marked "on release", with the `git+https` and clone paths
+  retained as the interim/contributor routes.
 
 **Success criteria**
 - `pipx install driftpin` on a clean machine (with FreeCAD already
@@ -91,15 +105,16 @@ cloning.
 with a one-click install button.
 
 **Deliverables**
-- [ ] `smithery.yaml` at repo root declaring:
-  - the `driftpin mcp` start command,
-  - the one required user-supplied env var (`DRIFTPIN_FREECADCMD`, with a
+- [x] `smithery.yaml` at repo root declaring:
+  - the `driftpin mcp` start command (stdio),
+  - the one optional user-supplied env var (`DRIFTPIN_FREECADCMD`, with a
     note that it's only needed on non-default installs),
   - a short description and the supported MCP host platforms.
-- [ ] Submit at smithery.ai (their flow scans the repo and renders the
-  install button automatically once the yaml is detected).
-- [ ] Verify the install button writes a correct config block into Claude
-  Desktop, Cursor, and Claude Code on a fresh machine.
+- [ ] **(human)** Submit at smithery.ai (their flow scans the repo and renders
+  the install button automatically once the yaml is detected). Requires the
+  PyPI release (Phase B) to be live first.
+- [ ] **(human)** Verify the install button writes a correct config block into
+  Claude Desktop, Cursor, and Claude Code on a fresh machine.
 
 **Success criteria**
 - The Smithery install button works without manual config edits for the
@@ -119,13 +134,13 @@ with a one-click install button.
 community section. Lowest effort, highest trust signal.
 
 **Deliverables**
-- [ ] Branch on a fork of `modelcontextprotocol/servers`, add a one-line
-  entry under "Community Servers" pointing to the DriftPin repo.
-- [ ] PR description: 2–3 sentences on what it does, link to install
-  docs, mention FreeCAD as the upstream dependency.
-- [ ] Respond to maintainer feedback (typical asks: clearer README intro,
-  evidence the server actually works, license confirmation — all already
-  satisfied).
+- [ ] **(human)** Branch on a fork of `modelcontextprotocol/servers`, add a
+  one-line entry under "Community Servers" pointing to the DriftPin repo.
+- [ ] **(human)** PR description: 2–3 sentences on what it does, link to
+  install docs, mention FreeCAD as the upstream dependency.
+- [ ] **(human)** Respond to maintainer feedback (typical asks: clearer README
+  intro, evidence the server actually works, license confirmation — all
+  already satisfied).
 
 **Success criteria**
 - PR merged. Aggregator sites (mcp.so, pulsemcp, glama.ai) typically

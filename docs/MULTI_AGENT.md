@@ -280,6 +280,25 @@ plus the single dispatch loop would still serialize every operation anyway, so t
 "parallelism" would be illusory. Partition gives real parallelism *and* deletes all of
 that machinery.
 
+**Two ways to give each builder its own worker (issue #167).** "One worker per
+builder" has two equivalent bindings, and a host picks by whether it can spawn
+processes:
+
+- **Own MCP server** — the classic model: each builder runs its own `driftpin mcp`
+  process, so it gets its own worker and file with true OS-level parallelism. This
+  is what Appendix B assumes.
+- **Own named workspace on a shared server** — when a host runs a *single* MCP
+  server for all its agents, each builder calls `use_workspace("<component-id>")`
+  once up front to claim its own freecadcmd process inside that server. Handles and
+  documents do **not** cross workspaces; `list_workspaces` shows the pool and
+  `close_workspace` frees a slot (cap `DRIFTPIN_MAX_WORKSPACES`, default 4; idle
+  reap `DRIFTPIN_WORKSPACE_IDLE_S`). A client that never calls `use_workspace` sees
+  the historical single-worker behavior unchanged.
+
+Either way the invariant is the same: **a handle from one builder is meaningless to
+another** — the only cross-builder currency is the saved `.FCStd` and its published
+frames.
+
 Two practical isolation rules for orchestration templates:
 
 - **Each builder gets its own working directory** (its component file plus scratch
@@ -498,13 +517,13 @@ gate already exists as a tool or as an M2 gate helper waiting to be promoted int
 
 | `kind` | contract fields | gate | status |
 |---|---|---|---|
-| `bore_fit` | min/max clearance band | `min_clearance` (overlap → too tight; gap < min → too tight, **incl. exact-touch**; gap > max → too loose) | ✅ shipped |
-| `gear_mesh` | module, center distance, ratio | pitch-radii-sum + as-placed axis distance + ratio (the `kin_gearbox` oracle, promoted) | ✅ shipped |
+| `bore_fit` | min/max clearance band **or** named ISO fit class (`fit_class` + `basic_size_mm`) | `min_clearance` (overlap → too tight; gap < min → too tight, **incl. exact-touch**; gap > max → too loose); a named clearance class resolves through `fit_class` (diametral → radial), an interference class is rejected here | ✅ shipped (class #170) |
+| `gear_mesh` | module, center distance, ratio, `a_internal`/`b_internal` | pitch-radii **sum** (external) or **difference** (internal/planetary ring) + as-placed axis distance + ratio (the `kin_gearbox` oracle, promoted) | ✅ shipped (internal #170) |
 | `frame_orientation` | child/parent frames, max angle | angle between published frame axes — the orientation `interface_align` does *not* check | ✅ shipped |
+| `thread` | per-side callout (`M6x1`) + role + engagement | callout pairing: major Ø + pitch match, one internal + one external, engagement ≥ min (default 0.8·Ø); pure callout logic, no geometry read | ✅ shipped (#170) |
+| `press_fit` | named interference class + shaft/hub Ø + engagement + `min_torque_nm?` | `fit_class` → interference band → `press_fit_stress`: hub yield at max interference, guaranteed retention at min interference; a clearance class is rejected | ✅ shipped (#170) |
+| `sliding` | shaft/bore, `min_clearance_mm` **or** running fit class | a MIN-clearance gate (not a band) for a pair meant to move — overlap or gap < min (incl. exact-touch) fails | ✅ shipped (#170) |
 | `bolt_circle` | count, pitch, thread | frame mate + alignment check (shipped) | future |
-| `thread` | callout, min engagement | the `thread_engagement` toy gate | future |
-| `press_fit` | interference band | `press_fit_stress` | future |
-| `sliding` / `kinematic` | axis, travel, DOF | `_sweep_clear` posed-interference sweep | future |
 
 **Shipped 2026-06-12** (`driftpin/worker.py`): the manifest gains a `checks` list,
 and `merge_assembly` dispatches each entry to its `kind`'s gate, folding the
@@ -546,9 +565,23 @@ two-sided gate-validated free in `tests/test_typed_interfaces.py` (reference
 passes; every negative — wrong size, wrong placement, wrong ratio, exact touch,
 tilt — caught), in `run_all.sh`, no key.
 
-Still future for §11.2: `bore_fit` carrying a named ISO fit *class* (resolving to
-a clearance band via `fit_check`) rather than explicit mm; the internal-gear
-mesh (planetary ring); and `thread` / `press_fit` / `sliding` from the table.
+**Typed interfaces v2 shipped (#170):** `bore_fit` now also carries a named ISO fit
+*class* (`fit_class` + `basic_size_mm`, e.g. `"H7/g6"`), resolved to a clearance
+band via `fit_class` at merge — the manifest carries the design intent, the numbers
+are derived (diametral clearance halved to the radial gap the gate measures; an
+interference class is rejected on `bore_fit`). `gear_mesh` gains the internal /
+planetary-ring mesh (`a_internal`/`b_internal`): centre distance is the pitch-radii
+*difference* rather than the external sum. Three new kinds join the dispatch:
+`thread` (internal/external callout pairing — major Ø + pitch match, one internal +
+one external, adequate engagement; pure callout logic), `press_fit` (a named
+interference class handed to `press_fit_stress` — hub yield at the max interference,
+guaranteed retention torque at the min), and `sliding` (a running-clearance
+min-gate for a bore/shaft pair meant to move). All six are two-sided gate-validated
+in `tests/test_typed_interfaces.py` (reference passes; every negative — out-of-band
+fit, wrong centre distance, pitch mismatch, hub yield, too-tight clearance — caught).
+
+Still future for §11.2: `bolt_circle` from the table; a `sliding` posed-interference
+travel *sweep* (today's gate is a static min-clearance check, not a swept envelope).
 
 ### 11.3 `verify_contract` — shift failure left *(shipped)*
 
@@ -669,7 +702,16 @@ works." The manifest gains an optional `requirements` block gated at merge:
   "density_kg_mm3": 7.9e-6,                          // material for the mass budget
   "max_mass_g": 450,
   "cg_window": { "min": [30,30,0], "max": [50,50,20] },
-  "min_first_mode_hz": 120        // physics tier — deferred (reported as skipped)
+
+  // physics tier (#172): a bare number is still skipped (no assumptions declared);
+  // an object with a fixture + bonding runs the FEM modal gate on the merged tree.
+  "min_first_mode_hz": {
+    "value": 120,                                 // required minimum f1 (Hz)
+    "fixture": { "clamp": { "axis": "z", "side": "min" } },  // boundary condition
+    "bonding": "fused",                           // v1: fused (union) | tied (reserved)
+    "material": { "YoungsModulus": "210000 MPa",
+                  "PoissonRatio": "0.30", "Density": "7900 kg/m^3" }
+  }
 }
 ```
 
@@ -685,16 +727,34 @@ never a silent pass** — the same "don't drop a contract silently" discipline a
 typed gates.
 
 The **physics tier** (`min_first_mode_hz` via FEM modal on the merged tree) is
-*deferred*: FEM is proven on *single* agent-built parts (the `thermo_structural`
-capstone runs thermal + structural CalculiX on one), but a modal gate on a merged
-*assembly* opens real modelling questions — part bonding/contact and where the
-product is fixed (boundary conditions) — that a clean v0 shouldn't fake. It is
-reserved in the schema and reported as `skipped` so it can't be mistaken for met.
+**shipped 2026-07-02** (issue #172, `driftpin/worker.py`). The modelling questions a
+modal gate on an *assembly* opens — how the parts are bonded, and where the product
+is fixed — aren't faked; the requirement must *declare* them, or it stays skipped:
 
-Two-sided gate-validated free in `tests/test_requirements_gates.py` (mass and CG
-measured correctly; an over-budget mass and an off-window CG each caught; mass
-without density loud; the physics tier surfaced as skipped; absent `requirements`
-= back-compat), in `run_all.sh`, no key.
+- **`fixture`** — the boundary condition. Either `{"clamp": {"axis","side","tol_mm"}}`
+  (the extreme face-plane of the fused solid along an axis — a bolted-down base) or
+  `{"interface": {"instance","name"}}` (the plane through a published interface frame
+  on a placed instance). Resolved **geometrically** on the fused solid, so it survives
+  the boolean union (no stale per-component face tags).
+- **`bonding`** — `fused` (v1) boolean-unions the merged leaves into one solid before
+  meshing; `tied` (CCX tie constraints across component faces) is **reserved/stubbed**
+  and surfaces as skipped rather than silently downgrading to `fused`.
+- **`material`** — `{YoungsModulus, PoissonRatio, Density}` for the solve.
+
+Given those, the gate fuses the leaves, meshes with **2nd-order tets** (1st-order tets
+shear-lock on modal — memory), runs a CalculiX frequency extraction in a scratch
+document (nothing lands in the merged `.FCStd`), and fails the merge if mode 1 is below
+the floor. The measured `first_mode` (f1, the mode spectrum, the mesh, the assumptions
+used) rides in `report["requirements"]["report"]`. It **never raises**: a bare number,
+no fixture, or `bonding: tied` → `skipped`; a *declared-but-unsolvable* requirement
+(missing material, a fixture matching no faces) → a **loud violation**, never a silent
+pass.
+
+Two-sided gate-validated in `tests/test_requirements_gates.py` (tier-1: mass/CG) and
+`tests/test_merge_modal_gate.py` (physics tier: a two-box "tuning-fork" whose clamped
+prongs the `beam_modal` closed-form cantilever brackets to ~3% — a stiff fork clears a
+600 Hz floor, a floppy fork is rejected by it; the skip/stub/loud-failure paths run
+without a solver), in `run_all.sh`, no key.
 
 ### 11.7 Manifest formalization *(shipped)*
 
@@ -765,6 +825,58 @@ derivation* reliably breaks whoever holds it (tchain, twopin). So split along
 coupled constraints, resolve them coordinator-side first (§11.1), and lean on
 hierarchy (§11.4) rather than width when the contract grows.
 
+### 11.11 Host-agnostic component-builder contract *(shipped)*
+
+Phases 0–3 proved the *substrate* is host-agnostic (any MCP host can call
+`merge_assembly` and the gates), but the *builder* role was still reachable only
+through the bundled Anthropic-API loop in `orchestration/agentkit.py::run_builder`,
+which hands a builder a deliberately tiny 6-tool surface. Issue #169 lifts the
+builder contract out of that loop so **any MCP-connected agent** — a Claude Code
+subagent, a Cursor task, a shell — can build a component with the **full 240+ tool
+surface**, and gate it locally before merge.
+
+Two pieces, both shipped:
+
+- **The builder brief — contract as data** (`driftpin/builder_brief.py`,
+  `driftpin.builder_brief/1`). The slice a builder receives is now a standalone,
+  versioned schema, not prose buried in the coordinator: `component` id, `assembly`,
+  a self-contained NL `task`, an `output` path, a keep-out `envelope`, the
+  `interfaces` it must publish (name → frame), plus optional `shared_parameters`,
+  `material`, and DFx `constraints`. `validate_builder_brief` fails a malformed
+  brief at the door; `builder_brief_text` renders the slice any host drops into a
+  subagent prompt; `brief_from_slice` projects a coordinator brief onto the schema.
+  The reference coordinator **converges onto it** — `coordinator._slice_text` now
+  emits a rendered `driftpin.builder_brief/1`, so the harness and any other host
+  speak the same contract.
+
+- **`component_contract_check` — the builder-side half of the merge gate** (an MCP
+  tool + worker handler, pure core in `builder_brief.evaluate_contract`). A builder
+  calls it on its OWN part before saving, against its brief: **watertight**
+  (`check_shape`), **inside the local envelope**, and **every required interface
+  published with a sane frame** (and in tol of a pinned origin/axis). It returns
+  `{ok, checks, reasons}`, never raises, and mirrors exactly what `merge_assembly`
+  re-runs at fan-in — so a green self-check strongly predicts a green merge, and a
+  violation is caught for the price of a local call instead of a build → merge →
+  gate-fail → rebuild cycle. The judgement lives in a FreeCAD-free pure function, so
+  it is tested with synthetic inputs (`tests/test_component_contract_check.py`,
+  two-sided) as well as against real geometry.
+
+**Runnable proof (falsifiable "done").**
+[`example/host_agnostic_builder_demo.py`](../example/host_agnostic_builder_demo.py)
+is a plain-code orchestrator — no LLM — that decomposes a 3-component stacked
+bracket (base plate, spacer, cap) into three builder briefs, builds each in its own
+worker (the bundled-worker analog of a claimed workspace), self-gates each with
+`component_contract_check`, then merges and asserts the integrated result passes
+`interference_check`, the envelope gate, and `interface_align_check` (secondary pin
+datums coincide), and that `assembly_lock` / `assembly_lock_check` read the tree as
+clean. It exits non-zero on any failing gate, so the whole recipe is a check, not a
+claim. The [`parallel-build`](../skills/parallel-build/SKILL.md) skill is its prose
+companion — the recipe a host follows to fan out its own build.
+
+**The reference harness stays** (`orchestration/` — §11.8). It is the eval baseline
+and the one worked binding of the roles for a host that has no agent-spawning of its
+own; #169 only converges it onto the shared brief schema, it does not replace it.
+
 ---
 
 ## 12. Phased roadmap
@@ -793,8 +905,10 @@ hierarchy (§11.4) rather than width when the contract grows.
   propagates staleness up the tree); standard parts (11.5) **✅ shipped
   2026-06-12** (`library` components generated from a spec at merge — no owner,
   lock keyed by spec hash); requirements gates (11.6) **✅ tier-1 shipped
-  2026-06-12** (mass + CG over the merged product; physics/FEM tier deferred,
-  reported as skipped); schema formalization (11.7) **✅ shipped 2026-06-12**
+  2026-06-12** (mass + CG over the merged product) **+ physics tier shipped
+  2026-07-02** (#172: `min_first_mode_hz` via FEM modal on the fused merged tree,
+  opt-in on a declared fixture + bonding; still skipped when undeclared); schema
+  formalization (11.7) **✅ shipped 2026-06-12**
   (`driftpin.manifest/1` stamp + load-time validation + `validate_manifest` tool +
   lockfile `manifest_hash` for contract-drift detection); shipped, pipelined
   orchestration (11.8) **✅ shipped 2026-06-12** (`orchestration/` — round-0
@@ -830,10 +944,16 @@ Still open:
 - **Interface conflict resolution** — when two components both need a *shared*
   interface to change, who wins, and how does the coordinator mediate without a
   human? Round 0 amendments (§8) surface the conflict early but don't arbitrate it.
-- **Requirements-gate cost** — FEM at merge is minutes, not milliseconds. When is a
-  physics gate part of the loop vs a final-candidate check, and does a failed
-  physics requirement re-dispatch components the way a fit failure does (whose
-  part made it too heavy)?
+- **Requirements-gate cost** — FEM at merge is seconds-to-minutes, not milliseconds.
+  When is a physics gate part of the loop vs a final-candidate check? **Partly settled
+  by #172:** a failed physics gate does **not** auto-re-dispatch components in v1 —
+  unlike a fit failure (which localizes to a clashing pair), "the assembly is too
+  floppy" has no single owning part to blame, so the gate fails the *merge report* and
+  leaves the re-dispatch decision to the coordinator/human. It's also opt-in per
+  requirement (only runs on a declared fixture), so a caller chooses loop vs
+  final-candidate by where they put the requirement. Still open: attributing a modal
+  failure to specific components (a sensitivity/where-used analysis) so re-dispatch
+  *could* be targeted.
 - **Resolve-step expressiveness** — 11.1 starts with sums/equalities/grids. Where
   is the line before it becomes a constraint solver the coordinator can't reason
   about deterministically?
@@ -853,13 +973,16 @@ binding. `orchestration/coordinator.py` implements the same loop host-side.
    and returns accept/amend. Amendments fold back into the manifest before any
    geometry is built.
 3. **Fan out.** One subagent per leaf component (the `Agent` tool, or a `Workflow`
-   `pipeline` stage), each prompted with *only* its resolved slice. Each runs against
-   its own DriftPin MCP server → its own worker → its own file, in its own working
-   directory (§7).
+   `pipeline` stage), each prompted with *only* its resolved slice — a standalone
+   `driftpin.builder_brief/1` (§11.11), rendered by `builder_brief_text`. Each runs
+   against its own DriftPin MCP server → its own worker → its own file (or its own
+   `use_workspace` on a shared server, §7), with the full tool surface.
 4. **Build & self-verify.** Each component agent builds to contract, calls
-   `publish_interface` for its mating frames, self-checks with `verify_contract`
-   (§11.3 — envelope, contracted interfaces, features, intent; plus a `render_views`
-   look), saves, and returns its file path + status.
+   `publish_interface` for its mating frames, then self-gates with
+   `component_contract_check(handle, brief)` (§11.11 — watertight + envelope +
+   required interfaces, the builder-side half of the merge gate) and optionally
+   `verify_contract` (§11.3 — plus per-feature/intent checks and a `render_views`
+   look), repairs any failing check, saves, and returns its file path + status.
 5. **Fan in per node, pipelined.** Each subassembly merges and gates as soon as its
    own children land (`merge_assembly` on the child manifest, §11.4); the root merges
    last. A leaf failure re-dispatches that leaf while unrelated branches keep going.

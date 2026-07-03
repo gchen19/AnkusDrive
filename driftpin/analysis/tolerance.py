@@ -225,16 +225,44 @@ _IT = {
     11: (60, 75, 90, 110, 130, 160, 190, 220, 250, 290, 320, 360, 400),
 }
 
-# Shaft fundamental deviation = the *upper* deviation es (µm) for clearance
-# letters, by band. ei = es - IT. Source: ISO 286-1 Table 2 (curated v1 set —
-# the common clearance fits; interference letters raise NotImplementedError).
+# Clearance-letter shafts (a..h): the fundamental deviation is the *upper*
+# deviation es (µm), by _BANDS index. ei = es - IT. These letters sit on or
+# below the zero line, so es is constant across each IT band.
+# Source: ISO 286-1 Table 2 (curated clearance set).
 _SHAFT_ES = {
     "h": (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
     "g": (-2, -4, -5, -6, -7, -9, -10, -12, -14, -15, -17, -18, -20),
     "f": (-6, -10, -13, -16, -20, -25, -30, -36, -43, -50, -56, -62, -68),
     "e": (-14, -20, -25, -32, -40, -50, -60, -72, -85, -100, -110, -125, -135),
 }
-_SUPPORTED = "hole H<grade>; shaft " + ", ".join(f"{c}<grade>" for c in _SHAFT_ES)
+
+# Transition / interference-letter shafts (js, k, m, n, p, r, s): the
+# fundamental deviation is the *lower* deviation ei (µm); es = ei + IT. Above
+# ~50 mm the ei of r and s subdivides finer than the IT bands, so ei is
+# tabulated on the finer _FINE_BANDS grid below (k..p simply repeat their value
+# across the sub-segments). Source: ISO 286-1 Table 2 / ISO 286-2 shaft limits.
+#
+# Note on k: the tabulated ei holds for grades IT4–IT7 (the usual interference
+# pairings, incl. the k6 goldens); ISO sets k's ei to 0 outside that range. We
+# apply that rule in :func:`_shaft_ei`. All other letters here are
+# grade-independent.
+_FINE_BANDS = (3, 6, 10, 14, 18, 24, 30, 40, 50, 65, 80, 100, 120,
+               140, 160, 180, 200, 225, 250, 280, 315, 355, 400, 450, 500)
+_SHAFT_EI = {
+    "js": None,  # symmetric: ei = -IT/2, es = +IT/2 (handled specially)
+    "k":  (0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 5, 5),
+    "m":  (2, 4, 6, 7, 7, 8, 8, 9, 9, 11, 11, 13, 13, 15, 15, 15, 17, 17, 17, 20, 20, 21, 21, 23, 23),
+    "n":  (4, 8, 10, 12, 12, 15, 15, 17, 17, 20, 20, 23, 23, 27, 27, 27, 31, 31, 31, 34, 34, 37, 37, 40, 40),
+    "p":  (6, 12, 15, 18, 18, 22, 22, 26, 26, 32, 32, 37, 37, 43, 43, 43, 50, 50, 50, 56, 56, 62, 62, 68, 68),
+    "r":  (10, 15, 19, 23, 23, 28, 28, 34, 34, 41, 43, 51, 54, 63, 65, 68, 77, 80, 84, 94, 98, 108, 114, 126, 132),
+    "s":  (14, 19, 23, 28, 28, 35, 35, 43, 43, 53, 59, 71, 79, 92, 100, 108, 122, 130, 140, 158, 170, 190, 208, 232, 252),
+}
+_CLEAR_LETTERS = ", ".join(f"{c}<grade>" for c in _SHAFT_ES)
+_INTF_LETTERS = ", ".join(f"{c}<grade>" for c in _SHAFT_EI)
+_SUPPORTED = (
+    f"hole-basis H only; shaft clearance letters {_CLEAR_LETTERS}; "
+    f"shaft transition/interference letters {_INTF_LETTERS}"
+)
 
 
 def _band_index(basic_size: float) -> int:
@@ -244,6 +272,30 @@ def _band_index(basic_size: float) -> int:
         if basic_size <= hi:
             return i
     raise ValueError(f"basic_size {basic_size} mm exceeds ISO 286 table (>500 mm)")
+
+
+def _fine_band_index(basic_size: float) -> int:
+    if basic_size <= 0:
+        raise ValueError("basic_size must be > 0 mm")
+    for i, hi in enumerate(_FINE_BANDS):
+        if basic_size <= hi:
+            return i
+    raise ValueError(f"basic_size {basic_size} mm exceeds ISO 286 table (>500 mm)")
+
+
+def _shaft_ei(letter: str, grade: int, basic_size: float) -> float:
+    """Lower deviation ei (mm) for a transition/interference shaft letter.
+
+    ``js`` is symmetric (ei = -IT/2). ``k``'s tabulated ei applies for IT4–IT7;
+    ISO 286-1 sets it to 0 for grades outside that range."""
+    idx = _band_index(basic_size)
+    if letter == "js":
+        return -_it(grade, idx) / 2000.0
+    fine = _fine_band_index(basic_size)
+    ei_um = _SHAFT_EI[letter][fine]
+    if letter == "k" and not (4 <= grade <= 7):
+        ei_um = 0
+    return ei_um / 1000.0
 
 
 def _it(grade: int, idx: int) -> int:
@@ -263,12 +315,24 @@ def _parse_code(code: str) -> tuple[str, int]:
 def fit_class(basic_size: float, fit: str = "H7/g6") -> dict:
     """ISO 286 limits for a hole/shaft fit code (e.g. ``'H7/g6'``), in mm.
 
-    v1 covers a **hole-basis H** with shaft clearance letters (h, g, f, e). The
-    deviations are looked up from the ISO 286-1 IT-grade + fundamental-deviation
-    tables, then run through :func:`fit_check`. Returns {basic_size, fit,
-    hole:{upper_dev,lower_dev,min,max}, shaft:{...}, ...fit_check fields}.
-    Raises ValueError/NotImplementedError on an out-of-table size or an
-    unsupported code (e.g. an interference shaft letter)."""
+    **Hole-basis H** (the dominant convention — a reamer/standard tool defines
+    the hole, and the shaft letter selects the fit). Supported shaft letters:
+
+    - clearance: ``h, g, f, e`` (line-to-line to loose),
+    - transition: ``js, k, m, n`` (may clear or interfere),
+    - interference: ``p, r, s`` (shaft always larger — a press/shrink fit).
+
+    Deviations come from the ISO 286-1 IT-grade + fundamental-deviation tables
+    (ei tabulated on the finer size grid used for r/s), then run through
+    :func:`fit_check`. For a transition or interference result the ``clearance``
+    band goes negative; the returned ``interference`` block restates it as an
+    interference band and hands off to :func:`press_fit_stress` (feed
+    ``interference_mm`` from that band to size contact pressure / torque).
+
+    Returns {basic_size, fit, hole:{upper_dev,lower_dev,min,max}, shaft:{...},
+    ...fit_check fields, interference:{...} (transition/interference only)}.
+    Non-H holes and unknown letters raise NotImplementedError naming the
+    supported set; out-of-table sizes raise ValueError."""
     idx = _band_index(basic_size)
     try:
         hole_code, shaft_code = fit.split("/")
@@ -279,18 +343,24 @@ def fit_class(basic_size: float, fit: str = "H7/g6") -> dict:
 
     if h_letter != "H":
         raise NotImplementedError(
-            f"v1 supports hole-basis H only, got hole {h_letter!r}. ({_SUPPORTED})"
+            f"hole basis must be H, got hole {h_letter!r}. ({_SUPPORTED}) — "
+            f"shaft-basis systems (hole letters K, N, P, S…) need the ISO 286 "
+            f"delta rule and are out of scope; specify the equivalent H-basis fit."
         )
     hole_es = _it(h_grade, idx) / 1000.0   # +IT
     hole_ei = 0.0
 
     s_letter_l = s_letter.lower()
-    if s_letter_l not in _SHAFT_ES:
+    if s_letter_l in _SHAFT_ES:              # clearance letter: es is fundamental
+        shaft_upper = _SHAFT_ES[s_letter_l][idx] / 1000.0
+        shaft_lower = shaft_upper - _it(s_grade, idx) / 1000.0
+    elif s_letter_l in _SHAFT_EI:            # transition/interference: ei is fundamental
+        shaft_lower = _shaft_ei(s_letter_l, s_grade, basic_size)
+        shaft_upper = shaft_lower + _it(s_grade, idx) / 1000.0
+    else:
         raise NotImplementedError(
-            f"shaft letter {s_letter!r} not in v1 set. ({_SUPPORTED})"
+            f"shaft letter {s_letter!r} not supported. ({_SUPPORTED})"
         )
-    shaft_upper = _SHAFT_ES[s_letter_l][idx] / 1000.0
-    shaft_lower = shaft_upper - _it(s_grade, idx) / 1000.0
 
     hole = {"nominal": basic_size, "plus": hole_es, "minus": hole_ei}
     shaft = {"nominal": basic_size, "plus": shaft_upper, "minus": shaft_lower}
@@ -305,6 +375,21 @@ def fit_class(basic_size: float, fit: str = "H7/g6") -> dict:
                   "min": round(basic_size + shaft_lower, 6),
                   "max": round(basic_size + shaft_upper, 6)},
     })
+    if result["fit_class"] in ("transition", "interference"):
+        # interference = -clearance. Tightest fit (min clearance) is the largest
+        # interference; loosest fit (max clearance) the smallest. A transition
+        # fit's min_interference is negative (some assemblies clear).
+        min_intf = -result["max_clearance"]
+        max_intf = -result["min_clearance"]
+        result["interference"] = {
+            "min_mm": round(min_intf, 6),
+            "max_mm": round(max_intf, 6),
+            "next": "press_fit_stress",
+            "hint": (
+                "diametral interference band for press_fit_stress(interference_mm=…); "
+                "use max(0, min_mm) as the lower bound for a guaranteed press fit"
+            ),
+        }
     return result
 
 

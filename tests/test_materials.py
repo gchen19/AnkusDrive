@@ -569,6 +569,24 @@ def test_dedup_preserves_seed_values_and_inherits_fcmat_fields():
     assert "Aluminum 6061-T6" not in names
 
 
+def test_electrical_layer_folds_em_conductor_table():
+    """issue #175: em.py's handbook conductor table (σ, µ_r) now lives in the DB
+    with provenance, so em_* tools and material_get share one source of truth."""
+    from driftpin.analysis import em
+    # every conductor em ships resolves to a card carrying the handbook σ + µ_r
+    for name, sigma in em._FALLBACK_CONDUCTORS.items():
+        card = materials.get(name)
+        assert abs(_num(card, "electrical_conductivity_s_m") - sigma) < 1.0, (name, card["name"])
+        assert _num(card, "relative_permeability") is not None, name
+        # electrical provenance rides alongside the mechanical basis/source
+        assert card.get("electrical_basis") == "handbook", card["name"]
+        assert card.get("electrical_source"), card["name"]
+    # the accessor returns None (not a crash) for a card with no electrical data
+    assert _num(materials.get("ABS"), "electrical_conductivity_s_m") is None
+    # copper is the annealed 100% IACS handbook anchor
+    assert abs(_num(materials.get("copper"), "electrical_conductivity_s_m") - 5.80e7) < 1e3
+
+
 # --- runner (mirrors tests/test_contracts.py) ---------------------------------
 
 def _discover():

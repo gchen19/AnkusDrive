@@ -1,13 +1,34 @@
 """
 DriftPin MCP server — exposes the worker handlers as MCP tools over stdio.
 
-One Worker is spawned at server startup and reused across tool calls, so
-ActiveDocument state persists across an MCP session (the whole point).
+A Worker (a freecadcmd process with its own App.ActiveDocument + handle
+registry) is spawned lazily and reused across tool calls, so document state
+persists across an MCP session (the whole point).
+
+**Concurrency (issue #167).** FastMCP runs sync tools in an anyio thread pool,
+so a client can have several tool calls in flight at once. Two safeguards keep
+that from corrupting the single-worker protocol:
+
+  * Worker.call() is internally serialized (see client.py), so two threads can
+    never interleave stdin writes / stdout reads on one process.
+  * The server keeps a *pool* of named workspaces — `dict[str, Worker]`. Each
+    concurrent agent claims its own workspace via `use_workspace(name)` and gets
+    an isolated freecadcmd process; handles and documents do NOT cross
+    workspaces. A client that never calls `use_workspace` sees exactly the old
+    single-worker behavior (everything routes to the "default" workspace).
+
+The pool is capped (DRIFTPIN_MAX_WORKSPACES, default 4) and idle-reaped
+(DRIFTPIN_WORKSPACE_IDLE_S, default 900s) so abandoned workspaces don't leak
+freecadcmd processes. See `use_workspace` / `list_workspaces` / `close_workspace`
+and docs/MULTI_AGENT.md.
 
 Run:   .venv/bin/python3 -m driftpin mcp
 """
 import atexit
 import base64
+import os
+import threading
+import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -18,14 +39,90 @@ from . import render as _render
 
 mcp = FastMCP("driftpin")
 
-_worker: Worker | None = None
+# --- workspace pool -----------------------------------------------------------
+#
+# Each workspace name maps to its own Worker (freecadcmd process). The default
+# workspace preserves the historical single-agent behavior byte-for-byte: a
+# client that never touches use_workspace only ever hits "default".
+
+DEFAULT_WORKSPACE = "default"
+
+# Explicit, env-overridable knobs (issue #167 scoping) — no silent magic number.
+# Cap: how many concurrent workspaces (freecadcmd processes) may be live at once.
+# Idle reap: a workspace untouched for this many seconds is shut down on the next
+# pool access (0 disables reaping). The default workspace is never reaped.
+_MAX_WORKSPACES = max(1, int(os.environ.get("DRIFTPIN_MAX_WORKSPACES", "4")))
+_IDLE_REAP_S = float(os.environ.get("DRIFTPIN_WORKSPACE_IDLE_S", "900"))
+
+_workers: dict[str, Worker] = {}
+_last_used: dict[str, float] = {}
+_pool_lock = threading.Lock()
+
+# The workspace subsequent tool calls route to. Process-global and mutated by
+# use_workspace(); the single-client MCP model is "an agent claims its workspace,
+# then works in it". Concurrent calls to the *same* workspace are made safe by
+# Worker.call()'s internal lock.
+_current_workspace = DEFAULT_WORKSPACE
 
 
-def _ensure_worker() -> Worker:
-    global _worker
-    if _worker is None or _worker.proc.poll() is not None:
-        _worker = Worker()
-    return _worker
+def _drop_locked(name: str) -> bool:
+    """Shut down and forget one workspace's worker. Caller holds _pool_lock.
+    Returns True if a worker existed."""
+    w = _workers.pop(name, None)
+    _last_used.pop(name, None)
+    if w is None:
+        return False
+    try:
+        w.shutdown(timeout=3.0)
+    except Exception:
+        pass
+    if w.proc.poll() is None:
+        try:
+            w.proc.kill()
+            w.proc.wait(timeout=2.0)
+        except Exception:
+            pass
+    return True
+
+
+def _reap_idle_locked(now: float, protect: str) -> None:
+    """Reap workspaces idle longer than _IDLE_REAP_S. Never reaps the default
+    workspace or `protect` (the one about to be used). Caller holds _pool_lock."""
+    if _IDLE_REAP_S <= 0:
+        return
+    for name in list(_workers):
+        if name in (DEFAULT_WORKSPACE, protect):
+            continue
+        if now - _last_used.get(name, now) > _IDLE_REAP_S:
+            _drop_locked(name)
+
+
+def _ensure_worker(name: str | None = None) -> Worker:
+    """Return the live Worker for `name` (default: the current workspace),
+    spawning it if needed. Double-checked locking: the common hit path takes no
+    lock; creation / dead-worker replacement is serialized under _pool_lock and
+    enforces the pool cap (after first reaping anything idle)."""
+    name = name or _current_workspace
+    w = _workers.get(name)
+    if w is not None and w.proc.poll() is None:
+        _last_used[name] = time.monotonic()
+        return w
+    with _pool_lock:
+        now = time.monotonic()
+        _reap_idle_locked(now, protect=name)
+        w = _workers.get(name)
+        if w is not None and w.proc.poll() is not None:
+            _drop_locked(name)          # worker died — clear the slot to respawn
+            w = None
+        if w is None:
+            if name not in _workers and len(_workers) >= _MAX_WORKSPACES:
+                raise RuntimeError(
+                    f"workspace pool full ({len(_workers)}/{_MAX_WORKSPACES}); "
+                    f"close an idle workspace with close_workspace, or raise "
+                    f"DRIFTPIN_MAX_WORKSPACES")
+            w = _workers[name] = Worker()
+        _last_used[name] = now
+        return w
 
 
 def _call(_method: str, _timeout: float | None = None, **params: Any) -> Any:
@@ -42,13 +139,9 @@ def _call(_method: str, _timeout: float | None = None, **params: Any) -> Any:
 
 @atexit.register
 def _cleanup():
-    global _worker
-    if _worker is not None:
-        try:
-            _worker.shutdown(timeout=3.0)
-        except Exception:
-            pass
-        _worker = None
+    with _pool_lock:
+        for name in list(_workers):
+            _drop_locked(name)
 
 
 # --- tools --------------------------------------------------------------------
@@ -61,22 +154,71 @@ def ping() -> str:
 
 @mcp.tool()
 def restart_worker() -> dict:
-    """Kill the FreeCAD worker process and spawn a fresh one. Use when the worker
-    is wedged (e.g. App.ActiveDocument desynced from internal state). All open
-    documents, unsaved changes, and handles are lost — save first if needed.
-    Returns {restarted: True, freecad: [...]}."""
-    global _worker
-    if _worker is not None:
-        try:
-            _worker.shutdown(timeout=3.0)
-        except Exception:
-            pass
-        if _worker.proc.poll() is None:
-            _worker.proc.kill()
-            _worker.proc.wait()
-        _worker = None
-    w = _ensure_worker()
-    return {"restarted": True, "freecad": w.freecad_version}
+    """Kill the current workspace's FreeCAD worker process and spawn a fresh one.
+    Use when the worker is wedged (e.g. App.ActiveDocument desynced from internal
+    state). All open documents, unsaved changes, and handles in THIS workspace are
+    lost — save first if needed. Other workspaces are untouched.
+    Returns {restarted: True, workspace: <name>, freecad: [...]}."""
+    name = _current_workspace
+    with _pool_lock:
+        _drop_locked(name)
+    w = _ensure_worker(name)
+    return {"restarted": True, "workspace": name, "freecad": w.freecad_version}
+
+
+@mcp.tool()
+def use_workspace(name: str) -> dict:
+    """Claim (creating if needed) an isolated workspace and make it the target of
+    subsequent tool calls. Each workspace is its own freecadcmd process with its
+    own ActiveDocument and handle registry — handles do NOT cross workspaces. This
+    is how concurrent agents share one MCP server without clobbering each other's
+    documents: each agent calls use_workspace with a unique name once, up front.
+
+    The pool is capped (DRIFTPIN_MAX_WORKSPACES, default 4) and idle workspaces are
+    reaped (DRIFTPIN_WORKSPACE_IDLE_S, default 900s); claiming a workspace beyond a
+    full pool raises — close an idle one first. Pass "default" to return to the
+    baseline single-agent workspace.
+    Returns {workspace: <name>, freecad: [...], workspaces: [names]}."""
+    if not name or not isinstance(name, str):
+        raise RuntimeError("workspace name must be a non-empty string")
+    global _current_workspace
+    w = _ensure_worker(name)          # spawn now so a full-pool error surfaces here
+    _current_workspace = name
+    return {"workspace": name, "freecad": w.freecad_version,
+            "workspaces": sorted(_workers)}
+
+
+@mcp.tool()
+def list_workspaces() -> dict:
+    """List the live workspaces (freecadcmd processes) and the pool limits. Each
+    entry is {name, alive, idle_s, current}. Use to see who is holding a slot
+    before claiming or closing one.
+    Returns {current, max, idle_reap_s, workspaces: [...]}."""
+    now = time.monotonic()
+    with _pool_lock:
+        entries = [
+            {"name": n, "alive": w.proc.poll() is None,
+             "idle_s": round(now - _last_used.get(n, now), 1),
+             "current": n == _current_workspace}
+            for n, w in sorted(_workers.items())
+        ]
+    return {"current": _current_workspace, "max": _MAX_WORKSPACES,
+            "idle_reap_s": _IDLE_REAP_S, "workspaces": entries}
+
+
+@mcp.tool()
+def close_workspace(name: str) -> dict:
+    """Shut down a workspace's worker and free its pool slot. All of that
+    workspace's documents, unsaved changes, and handles are lost. Closing the
+    workspace you are currently in returns you to the "default" workspace. The
+    default workspace can be closed too (its worker respawns clean on next use).
+    Returns {closed: <bool>, workspace: <name>, current: <name>}."""
+    global _current_workspace
+    with _pool_lock:
+        existed = _drop_locked(name)
+    if _current_workspace == name:
+        _current_workspace = DEFAULT_WORKSPACE
+    return {"closed": existed, "workspace": name, "current": _current_workspace}
 
 
 @mcp.tool()
@@ -1887,6 +2029,32 @@ def verify_contract(handle: str, contract: dict) -> dict:
 
 
 @mcp.tool()
+def component_contract_check(handle: str, brief: dict) -> dict:
+    """Builder-side contract gate for one component (issue #169) — the local half of
+    the gate merge_assembly re-runs at fan-in. Any MCP host builds a component with
+    the full DriftPin tool surface, then calls this on its part BEFORE saving,
+    against its `builder brief` (a driftpin.builder_brief/1 slice), and repairs any
+    failing check. Catching a violation here turns the expensive loop (build → merge
+    → gate-fail → rebuild) into a cheap local one. Never raises on a failing check.
+
+    handle: the component's shaped object.
+    brief:  a builder brief. Only two of its keys drive checks (the rest guide the
+            build, not the gate):
+      envelope   {min:[x,y,z], max:[x,y,z]}   the part's LOCAL bbox must fit inside.
+      interfaces {name: {origin?:[x,y,z], z_axis?:[x,y,z], tol_mm?, angle_tol_deg?}}
+                 each named frame must be PUBLISHED (publish_interface) with a sane
+                 frame, and within tolerance of a pinned origin/axis if the brief
+                 gives one.
+
+    Checks run: watertight (check_shape's one-clean-solid verdict), envelope (local
+    bbox inside the keep-out box), interface:<name> (published + sane + in tol).
+
+    Returns {handle, ok, checks:[{check, passed, detail}], reasons:[...]} — ok True
+    iff every check passed; reasons is the failing checks' details."""
+    return _call("component_contract_check", handle=handle, brief=brief)
+
+
+@mcp.tool()
 def interface_align_check(assembly: str, pairs: list, tol_mm: float = 1e-3) -> list:
     """Gate: verify declared interface pairs coincide in world space — the
     "do the OTHER interfaces line up?" check for multi-interface mates. After the
@@ -2274,6 +2442,67 @@ def render_views(
             "height": height,
         }
     return {"views": out, "vertices": len(mesh["vertices"]), "triangles": len(mesh["triangles"])}
+
+
+@mcp.tool()
+def render_fem_results(
+    analysis: str,
+    field: str = "vonmises",
+    view: str = "iso",
+    deformation_scale: str | float = "auto",
+    width: int = 640,
+    height: int = 512,
+    edges: bool = True,
+) -> dict:
+    """Render a completed FEM result's surface, colored by a per-vertex field.
+
+    Pulls the result surface (boundary triangulation + per-node field values +
+    displacement vectors) from the worker, then colors it with a viridis
+    colormap (barycentrically interpolated), overlays the deformed shape, and
+    draws a colorbar with the field min/max — the "agent eyes" for a stress /
+    displacement / thermal solve.
+
+    field: 'vonmises' (default) | 'displacement' | 'temperature'.
+    view: a preset ('iso'|'top'|'front'|…) or a custom '(azimuth,elevation)'
+        camera passed as e.g. "45,35".
+    deformation_scale: 'auto' scales the peak displacement to ~8% of the model
+        diagonal; a number is used verbatim; '0' disables the deformed overlay.
+
+    Returns {png_base64, width, height, field, units, min, max, view,
+    node_count, triangle_count}.
+    """
+    surf = _call("fem_field_surface", analysis=analysis, field=field)
+
+    # A custom camera may arrive as "az,el"; presets stay strings.
+    cam: object = view
+    if isinstance(view, str) and "," in view:
+        parts = view.split(",")
+        cam = (float(parts[0]), float(parts[1]))
+
+    scale: object = deformation_scale
+    if isinstance(deformation_scale, str) and deformation_scale != "auto":
+        scale = float(deformation_scale)
+
+    png = _render.render_fem_results(
+        surf["vertices"], surf["triangles"], surf["values"],
+        displacements=surf.get("displacements"),
+        view=cam, deformation_scale=scale,
+        width=width, height=height,
+        field_label=surf["field"], units=surf.get("units", ""),
+        edges=edges,
+    )
+    return {
+        "png_base64": base64.b64encode(png).decode("ascii"),
+        "width": width,
+        "height": height,
+        "field": surf["field"],
+        "units": surf.get("units", ""),
+        "min": surf["min"],
+        "max": surf["max"],
+        "view": view,
+        "node_count": surf["node_count"],
+        "triangle_count": surf["triangle_count"],
+    }
 
 
 @mcp.tool()
@@ -2972,6 +3201,53 @@ def seal_check(
     return _call("seal_check", cross_section_dia_mm=cross_section_dia_mm,
                  groove_depth_mm=groove_depth_mm, groove_width_mm=groove_width_mm,
                  application=application, max_gland_fill_pct=max_gland_fill_pct)
+
+
+@mcp.tool()
+def chain_drive(
+    teeth_small: int,
+    speed_rpm: float,
+    chain_pitch_mm: float | None = None,
+    chain_number: str | None = None,
+    strands: int = 1,
+    power_w: float | None = None,
+) -> dict:
+    """Rate an ANSI roller-chain drive (ASME B29.1). Rated at the lower of the
+    link-plate-fatigue (HP1=0.004*N1^1.08*n1^0.9*P^(3-0.07P), low speed) and
+    roller-impact (HP2=1000*Kr*N1^1.5*P^0.8/n1^1.5, high speed) envelopes, P in
+    inches. Give chain_pitch_mm (matching add_sprocket) OR a chain_number
+    ("40","60",...) for pitch+Kr; strands scale by the B29.1 factor. Powers in W.
+    Returns {rated_power_w, type1_power_w, type2_power_w, governing, strands,
+    strand_factor, ..., power_sf?, pass}."""
+    params = {"teeth_small": teeth_small, "speed_rpm": speed_rpm, "strands": strands}
+    for k, v in (("chain_pitch_mm", chain_pitch_mm), ("chain_number", chain_number),
+                 ("power_w", power_w)):
+        if v is not None:
+            params[k] = v
+    return _call("chain_drive", **params)
+
+
+@mcp.tool()
+def weld_group(
+    segments: list,
+    force_n: list,
+    load_point_mm: list,
+    leg_mm: float | None = None,
+    allowable_shear_mpa: float = 96.0,
+) -> dict:
+    """Rate a planar fillet-weld group by Blodgett's treat-weld-as-a-line method.
+    segments=[((x1,y1),(x2,y2)),...] (mm); an in-plane force_n=[Fx,Fy] at
+    load_point_mm=[px,py] gives direct shear f=F/L plus torsional f=T*r/J from the
+    eccentric moment about the weld centroid, added vectorially at the worst end.
+    required_leg = f_r/(0.707*allowable); given leg_mm, throat stress f_r/(0.707*leg)
+    is checked vs allowable. Returns {weld_length_mm, centroid_mm, Ix_mm3, Iy_mm3,
+    J_mm3, direct_shear_n_per_mm, max_shear_n_per_mm, worst_point_mm,
+    required_leg_mm, throat_stress_mpa?, shear_sf?, pass}."""
+    params = {"segments": segments, "force_n": force_n, "load_point_mm": load_point_mm,
+              "allowable_shear_mpa": allowable_shear_mpa}
+    if leg_mm is not None:
+        params["leg_mm"] = leg_mm
+    return _call("weld_group", **params)
 
 
 @mcp.tool()
@@ -4902,21 +5178,28 @@ def beam_modal(
 
 @mcp.tool()
 def dfm_check(
-    faces: list,
+    faces: list | None = None,
+    handle: str | None = None,
     pull_axis: str = "+z",
     process: str = "injection",
     min_wall_mm: float | None = None,
     min_draft_deg: float = 1.0,
 ) -> dict:
-    """Screen a part for manufacturability against a pull/tool axis. `faces` is a
-    list of {name, draft_deg, wall_mm?} — draft_deg relative to pull_axis (0 = a
-    vertical wall needing draft; <0 = a re-entrant undercut). draft_violations are
-    0≤draft<min_draft_deg, undercut_faces are draft<0, min_wall_violations are
-    wall_mm<min_wall_mm (defaults by process: injection 1.0, cnc 0.5, sheet/fdm
-    0.8). Returns {process, pull_axis, min_wall_mm, draft_violations, undercut_faces,
-    min_wall_violations, score, pass}."""
-    params = {"faces": faces, "pull_axis": pull_axis, "process": process,
-              "min_draft_deg": min_draft_deg}
+    """Screen a part for manufacturability against a pull/tool axis. Give a
+    hand-built `faces` list of {name, draft_deg, wall_mm?} — draft_deg relative to
+    pull_axis (0 = a vertical wall needing draft; <0 = a re-entrant undercut) — OR
+    a live `handle`, whose per-face descriptors are read off the solid (draft vs
+    the pull axis + a ray-cast undercut test + inward-chord wall sampling) and
+    scored identically (v2 Shape wiring). draft_violations are 0≤draft<min_draft_deg,
+    undercut_faces are draft<0, min_wall_violations are wall_mm<min_wall_mm
+    (defaults by process: injection 1.0, cnc 0.5, sheet/fdm 0.8). Returns {process,
+    pull_axis, min_wall_mm, draft_violations, undercut_faces, min_wall_violations,
+    score, pass} (plus n_faces + wall_thickness_stats on the handle path)."""
+    params = {"pull_axis": pull_axis, "process": process, "min_draft_deg": min_draft_deg}
+    if faces is not None:
+        params["faces"] = faces
+    if handle is not None:
+        params["handle"] = handle
     if min_wall_mm is not None:
         params["min_wall_mm"] = min_wall_mm
     return _call("dfm_check", **params)

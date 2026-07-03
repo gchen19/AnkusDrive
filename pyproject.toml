@@ -39,8 +39,19 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Physics",
 ]
+# Host-side runtime deps. Floors are the OLDEST versions verified to work:
+#   mcp>=1.2   — driftpin/mcp_server.py imports `mcp.server.fastmcp.FastMCP`,
+#                which was first shipped in mcp 1.2.0; 1.0/1.1 lack that module
+#                (empirically confirmed) so an older pin would install and then
+#                fail to boot the MCP server.
+#   Pillow>=10 — render path uses only Image.{fromarray,new,open,convert}
+#                (driftpin/render.py), stable since Pillow 9; 10.0 is a safe
+#                conservative floor with wheels for py3.10–3.13.
+#   numpy>=1.24 — basic ndarray/dtype usage only, no post-1.24 APIs; a lower
+#                bound (pip still selects a py3.13-compatible newer numpy where
+#                needed). 1.24 is the conservative floor.
 dependencies = [
-    "mcp>=1.0",
+    "mcp>=1.2",
     "Pillow>=10.0",
     "numpy>=1.24",
 ]

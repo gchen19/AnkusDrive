@@ -258,6 +258,10 @@ echo "== Requirements gates (RFC 11.6, mass / CG over the merged product, no key
 $VENV_PY tests/test_requirements_gates.py
 
 echo
+echo "== Merge-time physics gate (RFC 11.6 physics tier, #172 — min_first_mode_hz via FEM modal, live ccx) =="
+python3 tests/test_merge_modal_gate.py
+
+echo
 echo "== Manifest schema + validation (RFC 11.7, contract-drift detection, no key) =="
 $VENV_PY tests/test_manifest_schema.py
 
@@ -284,6 +288,11 @@ echo "== Modularity eval ladder (E1, #148 — Layer M1: family regen / substitut
 $VENV_PY tests/test_modularity_eval.py
 echo "== Change orders + where-used impact + baselines (C3, #142 — ECO record + §9 blast radius + reproducible-rebuild baseline; no key, no FreeCAD) =="
 python3 tests/test_change.py
+
+echo
+echo "== Host-agnostic builder contract (RFC 11.11, #169 — builder brief + component_contract_check, no key) =="
+$VENV_PY tests/test_component_contract_check.py
+$VENV_PY example/host_agnostic_builder_demo.py
 
 echo
 echo "== Orchestration coordinator (RFC 11.8 — round-0 review, pipelined fan-in, isolation) =="

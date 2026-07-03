@@ -9,11 +9,19 @@ answer.
 Kinds covered:
   bore_fit          — clearance band; CLOSES the exact-touch blind spot (§6:
                       interference reads zero for tangent solids, so a slip fit
-                      must gate on min clearance, not non-interference).
-  gear_mesh         — external pair; pitch radii sum to centre distance, placed
-                      axes at that distance, ratio on target (gearbox oracle).
+                      must gate on min clearance, not non-interference). Also by a
+                      named ISO fit CLASS (#170) resolved through fit_class.
+  gear_mesh         — external pair (pitch radii SUM to centre distance) and the
+                      internal / planetary-ring mesh (#170, radii DIFFERENCE);
+                      placed axes at that distance, ratio on target (gearbox oracle).
   frame_orientation — published frames angularly aligned, not just origin-
                       coincident (the gap interface_align does not cover).
+  thread            — internal/external callout pairing (#170): major Ø + pitch
+                      match, one internal + one external, adequate engagement.
+  press_fit         — named interference class (#170) → press_fit_stress for the
+                      retention/stress numbers (hub yield + guaranteed torque).
+  sliding           — running-clearance pair (#170): a min-clearance gate (not a
+                      band) meant to move; overlap or too-tight fails.
 
 Run: .venv/bin/python3 tests/test_typed_interfaces.py
 """
@@ -278,6 +286,212 @@ def test_gear_mesh_bored_gears_compound():
                      not typed, typed, None)
 
 
+# --- bore_fit by a named ISO fit class (#170) --------------------------------
+
+def test_bore_fit_named_class():
+    """bore_fit resolving a named ISO fit CLASS to a clearance band (the manifest
+    carries the intent 'H7/g6', not derived mm). Ø20 H7/g6 → diametral clearance
+    [0.007, 0.041] mm → RADIAL band [0.0035, 0.0205] mm the gate measures."""
+    BASE = 20.0
+    check = [{"kind": "bore_fit", "pin": "peg", "bore": "plate",
+              "fit_class": "H7/g6", "basic_size_mm": BASE}]
+    # (label, bore Ø, peg Ø, expect_ok, sub) — radial gap = (bore-peg)/2
+    cases = [
+        ("H7/g6 in-band (radial 0.012)", 20.024, 20.0, True, None),
+        ("too tight exact-touch", 20.0, 20.0, False, "< min"),
+        ("out of band, too loose (radial 0.03)", 20.06, 20.0, False, "too loose"),
+    ]
+    for label, bore_d, peg_d, expect_ok, sub in cases:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            with Worker() as w:
+                _plate_with_hole(w, tmp / "plate.FCStd", bore_d)
+            with Worker() as w:
+                _peg(w, tmp / "peg.FCStd", peg_d)
+            rep = _merge(
+                tmp,
+                {"plate": {"file": "plate.FCStd"}, "peg": {"file": "peg.FCStd"}},
+                [{"component": "plate", "name": "plate", "placement": [0, 0, 0]},
+                 {"component": "peg", "name": "peg", "placement": [30, 30, -5]}],
+                check)
+            typed = rep["gates"].get("typed", [])
+            _assert_case("bore_fit(class)", label, expect_ok, not typed, typed, sub)
+    # an interference class on a bore_fit is a loud error (belongs on press_fit)
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        with Worker() as w:
+            _plate_with_hole(w, tmp / "plate.FCStd", 20.0)
+        with Worker() as w:
+            _peg(w, tmp / "peg.FCStd", 20.0)
+        rep = _merge(
+            tmp, {"plate": {"file": "plate.FCStd"}, "peg": {"file": "peg.FCStd"}},
+            [{"component": "plate", "name": "plate", "placement": [0, 0, 0]},
+             {"component": "peg", "name": "peg", "placement": [30, 30, -5]}],
+            [{"kind": "bore_fit", "pin": "peg", "bore": "plate",
+              "fit_class": "H7/p6", "basic_size_mm": 20.0}])
+        typed = rep["gates"].get("typed", [])
+        assert typed and "interference fit" in typed[0].get("error", ""), typed
+        print("  PASS bore_fit(class)    H7/p6 interference class rejected on bore_fit")
+
+
+# --- internal / planetary-ring gear mesh (#170) ------------------------------
+
+def _ring_gear(w, path, teeth, module=2.0):
+    w.call("new_document", name="ring")
+    w.call("add_gear", teeth=int(teeth), module=module, height=6, external=False,
+           name="ring")
+    w.call("save_document", path=str(path))
+
+
+def test_gear_mesh_internal():
+    """Internal mesh (planet inside a ring): centre distance = rp_ring − rp_planet
+    (radii DIFFERENCE), not the external sum. Ring 36T + planet 12T @ module 2 →
+    C = 36 − 12 = 24 mm."""
+    M, C = 2.0, 24.0
+    check = [{"kind": "gear_mesh", "a": "ring", "b": "planet", "a_internal": True,
+              "module_mm": M, "center_distance_mm": C, "tol_mm": 0.5}]
+    # (label, ring teeth, planet teeth, planet x, expect_ok, sub)
+    cases = [
+        ("ring 36T + planet 12T @ C=24", 36, 12, 24.0, True, None),
+        ("placed at C=28 not 24", 36, 12, 28.0, False, "centre distance"),
+        ("wrong sizing 30T ring (diff 18)", 30, 12, 24.0, False, "will not mesh"),
+    ]
+    for label, tr, tp, px, expect_ok, sub in cases:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            with Worker() as w:
+                _ring_gear(w, tmp / "ring.FCStd", tr, M)
+            with Worker() as w:
+                _gear(w, tmp / "planet.FCStd", tp, M)
+            rep = _merge(
+                tmp,
+                {"ring": {"file": "ring.FCStd"}, "planet": {"file": "planet.FCStd"}},
+                [{"component": "ring", "name": "ring", "placement": [0, 0, 0]},
+                 {"component": "planet", "name": "planet", "placement": [px, 0, 0]}],
+                check)
+            typed = rep["gates"].get("typed", [])
+            _assert_case("gear_mesh(int)", label, expect_ok, not typed, typed, sub)
+
+
+# --- thread (#170) -----------------------------------------------------------
+
+def test_thread():
+    """Thread-pairing callout gate: an internal + external thread mate only if the
+    major Ø and pitch match and the engagement is adequate. No geometry read."""
+    def chk(desig_a, role_a, desig_b, role_b, eng, min_eng=None):
+        c = {"kind": "thread", "a": "bolt", "b": "nut",
+             "thread_a": {"designation": desig_a, "role": role_a},
+             "thread_b": {"designation": desig_b, "role": role_b},
+             "engagement_mm": eng}
+        if min_eng is not None:
+            c["min_engagement_mm"] = min_eng
+        return [c]
+    # (label, check, expect_ok, sub)
+    cases = [
+        ("M6x1 ext/int, engage 8", chk("M6x1", "external", "M6x1", "internal", 8.0),
+         True, None),
+        ("M6 coarse == M6x1", chk("M6", "external", "M6x1", "internal", 8.0),
+         True, None),
+        ("pitch mismatch M6x1 vs M6x1.25",
+         chk("M6x1", "external", "M6x1.25", "internal", 8.0), False, "pitch mismatch"),
+        ("diameter mismatch M6 vs M8",
+         chk("M6", "external", "M8", "internal", 8.0), False, "major"),
+        ("two externals (not a pair)",
+         chk("M6x1", "external", "M6x1", "external", 8.0), False, "internal + one external"),
+        ("insufficient engagement 3 mm",
+         chk("M6x1", "external", "M6x1", "internal", 3.0), False, "will strip"),
+    ]
+    for label, check, expect_ok, sub in cases:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            with Worker() as w:
+                _peg(w, tmp / "bolt.FCStd", 6)
+            with Worker() as w:
+                _peg(w, tmp / "nut.FCStd", 12)
+            rep = _merge(
+                tmp, {"bolt": {"file": "bolt.FCStd"}, "nut": {"file": "nut.FCStd"}},
+                [{"component": "bolt", "name": "bolt", "placement": [0, 0, 0]},
+                 {"component": "nut", "name": "nut", "placement": [50, 0, 0]}],
+                check)
+            typed = rep["gates"].get("typed", [])
+            _assert_case("thread", label, expect_ok, not typed, typed, sub)
+
+
+# --- press_fit (#170) --------------------------------------------------------
+
+def test_press_fit():
+    """Press-fit gate: a named interference class → press_fit_stress. Ø20 H7/p6
+    (interference 0.001–0.035 mm) into a steel hub. A thick hub survives; a thin
+    hub yields at max interference; a clearance class is rejected; an over-demanding
+    retention torque fails at the guaranteed (min-interference) grip."""
+    def chk(fit, hub_od, min_torque=None):
+        c = {"kind": "press_fit", "shaft": "shaft", "hub": "hub",
+             "fit_class": fit, "basic_size_mm": 20.0, "hub_outer_dia_mm": hub_od,
+             "engagement_length_mm": 20.0, "material": "Steel-A36"}
+        if min_torque is not None:
+            c["min_torque_nm"] = min_torque
+        return [c]
+    cases = [
+        ("H7/p6 thick hub Ø40", chk("H7/p6", 40.0), True, None),
+        ("H7/p6 thin hub Ø22 yields", chk("H7/p6", 22.0), False, "hub yields"),
+        ("clearance class H7/g6 rejected", chk("H7/g6", 40.0), False,
+         "not an interference fit"),
+        ("retention 50 N·m unmet", chk("H7/p6", 40.0, 50.0), False, "may slip"),
+    ]
+    for label, check, expect_ok, sub in cases:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            with Worker() as w:
+                _peg(w, tmp / "shaft.FCStd", 20)
+            with Worker() as w:
+                _peg(w, tmp / "hub.FCStd", 40)
+            rep = _merge(
+                tmp, {"shaft": {"file": "shaft.FCStd"}, "hub": {"file": "hub.FCStd"}},
+                [{"component": "shaft", "name": "shaft", "placement": [0, 0, 0]},
+                 {"component": "hub", "name": "hub", "placement": [60, 0, 0]}],
+                check)
+            typed = rep["gates"].get("typed", [])
+            _assert_case("press_fit", label, expect_ok, not typed, typed, sub)
+
+
+# --- sliding (#170) ----------------------------------------------------------
+
+def test_sliding():
+    """Sliding / running-clearance gate: a bore/shaft pair meant to move. A MIN-
+    clearance gate (not a band) — enough clearance to run, else it binds. Driven by
+    an explicit min or a named running fit class."""
+    # explicit-min cases
+    exp = [{"kind": "sliding", "shaft": "shaft", "bore": "plate",
+            "min_clearance_mm": 0.05}]
+    # running-fit-class cases (H8/f7 Ø20 → radial min 0.01 mm)
+    cls = [{"kind": "sliding", "shaft": "shaft", "bore": "plate",
+            "fit_class": "H8/f7", "basic_size_mm": 20.0}]
+    # (label, check, bore Ø, shaft Ø, expect_ok, sub)
+    cases = [
+        ("explicit min 0.05, gap 0.1", exp, 20.2, 20.0, True, None),
+        ("explicit min 0.05, gap 0.02 too tight", exp, 20.04, 20.0, False,
+         "running clearance"),
+        ("interference (shaft bigger)", exp, 20.0, 20.2, False, "interferes"),
+        ("H8/f7 running fit, gap 0.025", cls, 20.05, 20.0, True, None),
+        ("H8/f7, gap 0.005 too tight", cls, 20.01, 20.0, False, "running clearance"),
+    ]
+    for label, check, bore_d, shaft_d, expect_ok, sub in cases:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            with Worker() as w:
+                _plate_with_hole(w, tmp / "plate.FCStd", bore_d)
+            with Worker() as w:
+                _peg(w, tmp / "shaft.FCStd", shaft_d)
+            rep = _merge(
+                tmp,
+                {"plate": {"file": "plate.FCStd"}, "shaft": {"file": "shaft.FCStd"}},
+                [{"component": "plate", "name": "plate", "placement": [0, 0, 0]},
+                 {"component": "shaft", "name": "shaft", "placement": [30, 30, -5]}],
+                check)
+            typed = rep["gates"].get("typed", [])
+            _assert_case("sliding", label, expect_ok, not typed, typed, sub)
+
+
 def _assert_case(kind, label, expect_ok, ok, typed, sub):
     if ok != expect_ok:
         raise AssertionError(
@@ -293,8 +507,11 @@ def _assert_case(kind, label, expect_ok, ok, typed, sub):
 
 
 def main():
-    tests = [test_bore_fit, test_gear_mesh, test_gear_mesh_bored_gears_compound,
-             test_frame_orientation, test_mesh_exclusion_is_targeted,
+    tests = [test_bore_fit, test_bore_fit_named_class,
+             test_gear_mesh, test_gear_mesh_bored_gears_compound,
+             test_gear_mesh_internal, test_frame_orientation,
+             test_thread, test_press_fit, test_sliding,
+             test_mesh_exclusion_is_targeted,
              test_unknown_kind_is_violation,
              test_ok_reflects_typed_and_no_checks_is_backcompat]
     failed = 0

@@ -341,13 +341,23 @@ caps = solvers.capabilities()
 print(f"  platform: {caps['platform']}")
 for name in solvers.known_solvers():
     info = caps["solvers"][name]
-    mark = "ok " if info["available"] else "-- "
-    where = info.get("path") or info.get("module") or "(absent)"
+    status = info.get("status", "ok" if info["available"] else "absent")
+    mark = {"ok": "ok     ", "unwired": "unwired", "absent": "--     "}.get(status, "--     ")
+    if status == "unwired":
+        # installed-but-unwired (issue #177): show WHERE it was found + the wire-up fix
+        where = f"{info.get('found_at', '')}  ({info.get('wire_hint', '')})"
+    else:
+        where = info.get("path") or info.get("module") or "(absent)"
     extra = f"  [pip install 'driftpin[{info['extra']}]']" if info["extra"] else "  [system package]"
-    print(f"  {mark}{name:10s} {info['kind']:6s} family={info['family']:18s} {where}{'' if info['available'] else extra}")
+    print(f"  {mark} {name:10s} {info['kind']:6s} family={info['family']:18s} {where}{'' if info['available'] or status == 'unwired' else extra}")
 print()
 for fam, fi in sorted(caps["families"].items()):
-    state = "READY" if fi["any_available"] else "no solver"
+    if fi["any_available"]:
+        state = "READY"
+    elif fi.get("unwired"):
+        state = "unwired (" + ", ".join(fi["unwired"]) + ")"
+    else:
+        state = "no solver"
     print(f"  family {fam:18s} {state}  (solvers: {', '.join(fi['solvers'])})")
 PYEOF
 }

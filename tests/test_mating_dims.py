@@ -71,15 +71,18 @@ def test_spring_and_thread_mating_dims():
     with Worker() as w:
         w.call("new_document", name="md_spring_thread")
 
-        # SPRING: mean = OD - d; solid_height = coils*d;
-        #         rate = G*d^4 / (8*D^3*coils), G(steel)=79300 MPa -> N/mm
+        # SPRING (compression, squared-and-ground ends — issue #175):
+        #   mean = OD - d; solid_height Ls = Nt*d (all turns close to the wire);
+        #   the two end coils are inactive, so active coils Na = Nt - 2, and the
+        #   rate uses Na: rate = G*d^4 / (8*D^3*Na), G(steel)=79300 MPa -> N/mm.
         G = 79300.0
         for d, od, fl, coils in [(2.0, 20.0, 40.0, 8.0), (1.5, 15.0, 30.0, 6.0), (3.0, 25.0, 50.0, 10.0)]:
             r = w.call("add_spring", wire_diameter=d, outer_diameter=od, free_length=fl, coils=coils)
             mean = od - d
+            active = coils - 2.0  # squared-and-ground: Na = Nt - 2
             _close(r["mean_diameter"], mean, label=f"spring mean d={d} od={od}")
             _close(r["solid_height"], coils * d, label=f"spring sh d={d} coils={coils}")
-            rate = G * d ** 4 / (8.0 * mean ** 3 * coils)
+            rate = G * d ** 4 / (8.0 * mean ** 3 * active)
             _close(r["spring_rate_n_per_mm"], rate, tol=1e-2, label=f"spring k d={d} od={od}")
 
         # THREAD: major = diameter; minor = diameter - 1.0825*pitch (ISO 60-deg)

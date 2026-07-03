@@ -38,6 +38,7 @@ both the fast static contract lane and the FreeCAD determinism lane can import i
 EXACT_TOOLS = {
     # machine elements
     "bearing_life", "gear_rating", "belt_drive", "bolted_joint_check", "spring_check",
+    "chain_drive", "weld_group",
     # fits / tolerance / GD&T
     "fit_class", "fit_check", "tolerance_stackup", "gdt_check",
     # thermal
@@ -110,6 +111,8 @@ NOT_YET_CLASSIFIED = {
     'add_rib', 'add_section_view', 'add_sketch_constraint', 'add_sketch_external',
     'add_sketch_geometry', 'add_spring', 'add_sprocket', 'add_thread', 'add_thumbnail',
     'annotate_face', 'assembly_lock', 'assembly_lock_check', 'bom_extract', 'boolean_op',
+    'component_contract_check',  # builder-side gate (#169): watertight + envelope + interfaces
+    'render_fem_results',        # FEM-field render (#174), host-side raster like render_view*
     'bounding_box', 'chamfer_edges', 'check_airtight_path', 'check_shape',
     'classify_face_sides', 'close_document', 'close_sketch', 'contact_setup', 'copy_shape',
     'declare_intent', 'draft', 'drawing_gate', 'drawing_legibility', 'em_field',
@@ -141,7 +144,8 @@ NOT_YET_CLASSIFIED = {
     'scaffold_project',
     'register_handle', 'render_capabilities', 'render_job',
     'render_photoreal', 'render_view', 'render_views', 'resolve_edge', 'resolve_face',
-    'restart_worker', 'revolve', 'run_script', 'save_document', 'scale_shape', 'seal_check',
+    'restart_worker', 'use_workspace', 'list_workspaces', 'close_workspace',
+    'revolve', 'run_script', 'save_document', 'scale_shape', 'seal_check',
     'section_view', 'set_active_document', 'set_property', 'set_title_block',
     'set_visibility', 'shell_solid', 'solve_capabilities', 'substitutability_check',
     'sweep', 'thickness',
@@ -172,6 +176,9 @@ ANALYSIS_SWEEP = [
     ("bolted_joint_check", dict(bolt_dia_mm=10.0, torque_nm=50.0, k_factor=0.2)),
     ("spring_check", dict(wire_dia_mm=2.0, coil_mean_dia_mm=16.0, active_coils=10,
                           force_n=50.0)),
+    ("chain_drive", dict(teeth_small=17, speed_rpm=500.0, chain_number="40")),
+    ("weld_group", dict(segments=[((0, 0), (0, 200)), ((100, 0), (100, 200))],
+                        force_n=[0, -50000.0], load_point_mm=[200, 100], leg_mm=8.0)),
     # --- laminate / composite-stack closed-form ---
     ("laminate_properties", dict(
         layers=[{"material": "Steel-A36", "thickness": 1.0},

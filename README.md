@@ -29,6 +29,8 @@ own bundled Python — DriftPin doesn't touch it.
 #    (macOS: drag to /Applications; Linux: distro package or AppImage)
 
 # 2. Install DriftPin. Pick one:
+pipx install driftpin                                       # on release — from PyPI, `driftpin` on PATH
+# until the first PyPI upload (v0.4.0), install straight from the repo:
 pipx install git+https://github.com/gchen19/DriftPin.git    # isolated app, `driftpin` on PATH
 # or for development from a clone:
 git clone https://github.com/gchen19/DriftPin.git && cd DriftPin
@@ -39,8 +41,9 @@ driftpin ping
 # → ping=pong freecad=1.1.1
 ```
 
-A PyPI release (`pipx install driftpin`) is staged behind v0.3.0 — see
-[`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md).
+The `pipx install driftpin` path lights up with the first PyPI release
+(v0.4.0), tracked in [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md); until
+then use the `git+https://…` or clone paths above.
 
 ### Telling DriftPin where FreeCAD lives
 
@@ -341,6 +344,19 @@ whole back up with the joints actually fitting. The design is written up in
 [`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md); it targets **partition + merge**,
 not shared co-editing of one live document (a single worker = one
 `App.ActiveDocument`, so concurrent mutation is a non-goal for now).
+
+**Concurrent agents on one MCP server — workspaces.** FastMCP runs sync tools in
+a thread pool, so a host can have several tool calls in flight at once. The
+server keeps a *pool* of named **workspaces**, each its own freecadcmd process
+with its own `App.ActiveDocument` and handle registry. Each concurrent agent
+claims its own workspace with `use_workspace(name)` at the start of its session;
+**handles and documents do not cross workspaces**. A client that never calls
+`use_workspace` sees the historical single-worker behavior byte-for-byte
+(everything routes to the `default` workspace). `Worker.call()` is internally
+serialized so two threads can never interleave the stdin/stdout protocol on one
+process. The pool is capped (`DRIFTPIN_MAX_WORKSPACES`, default 4) and idle
+workspaces are reaped (`DRIFTPIN_WORKSPACE_IDLE_S`, default 900s) so abandoned
+sessions don't leak processes; `list_workspaces` / `close_workspace` manage it.
 
 The split of responsibilities is deliberate:
 

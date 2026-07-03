@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 from driftpin import Worker
+from driftpin import builder_brief
 from driftpin.manifest import resolve_constraints, resolve_manifest
 from . import agentkit
 
@@ -297,17 +298,17 @@ def _implicated(brief, gates, placed):
 # full build → merge → gate-fail → rebuild cycle. Sub-brief nodes are reviewed by
 # their own round 0 when they orchestrate, so they are skipped here.
 
+def builder_brief_for(brief, cid):
+    """The standalone builder brief (driftpin.builder_brief/1) for one component of
+    a coordinator brief — the shared schema this reference harness converges onto
+    (issue #169). Any MCP host can hand this same brief to a subagent."""
+    return builder_brief.brief_from_slice(brief, cid)
+
+
 def _slice_text(brief, cid):
-    spec = brief["components"][cid]
-    parts = [f"Component '{cid}' of assembly '{brief.get('name', 'assembly')}'.",
-             f"Task: {spec['task']}"]
-    if brief.get("shared_parameters"):
-        parts.append(f"Shared parameters every component must honor: "
-                     f"{brief['shared_parameters']}")
-    if spec.get("envelope"):
-        parts.append(f"Declared keep-out envelope your bbox must fit inside: "
-                     f"{spec['envelope']}")
-    return "\n".join(parts)
+    """The self-contained slice a builder reads, rendered from the shared builder
+    brief so the coordinator no longer owns a private slice format."""
+    return builder_brief.builder_brief_text(builder_brief_for(brief, cid))
 
 
 def round0_review(client, model, brief, log=print):

@@ -622,16 +622,56 @@ def _h_add_pulley(p):
             "teeth": teeth, "width": width, "flanged": flanged}
 
 
+def _spring_squared_ground_solid(wire_diameter, Rm, free_length, total_coils,
+                                 active_coils, active_pitch):
+    """Swept solid for a squared-and-ground compression spring: two closed end
+    coils (pitch = wire diameter, so the end turns sit flat/touching) bracket the
+    active coils (pitch = active_pitch). Built as one continuous helical spine so
+    the swept solid is boolean-clean. Returns a Part.Solid, or raises."""
+    d = wire_diameter
+    # bottom closed coil: 1 turn at pitch d (z: 0..d)
+    h1 = Part.makeHelix(d, d, Rm)
+    # active coils: active_coils turns at active_pitch (z: d..d+p*Na), starting at
+    # angle 0 to meet the bottom coil's end at (Rm, 0, d)
+    h2 = Part.makeHelix(active_pitch, active_pitch * active_coils, Rm)
+    h2.translate(App.Vector(0, 0, d))
+    # top closed coil: 1 turn at pitch d, rotated to meet the active coil's end
+    # angle so the spine stays position-continuous
+    h3 = Part.makeHelix(d, d, Rm)
+    h3.rotate(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360.0 * active_coils)
+    h3.translate(App.Vector(0, 0, d + active_pitch * active_coils))
+    spine = Part.Wire(Part.__sortEdges__(h1.Edges + h2.Edges + h3.Edges))
+    e0 = spine.Edges[0]
+    p0 = e0.valueAt(e0.FirstParameter)
+    t0 = e0.tangentAt(e0.FirstParameter)
+    profile = Part.Wire(Part.Circle(App.Vector(p0), App.Vector(t0), d / 2.0).toShape())
+    sol = spine.makePipeShell([profile], True, True)
+    sol = sol.Solids[0] if sol.Solids else sol
+    if not sol.isValid() or sol.Volume <= 0:
+        raise RuntimeError("squared-ground sweep produced an invalid/empty solid")
+    return sol
+
+
 @handler("add_spring")
 def _h_add_spring(p):
     """Helical compression spring: a circular wire-section swept along a helix.
-    Units: all lengths mm. wire_diameter (d), outer_diameter (OD), free_length,
-    coils (turns, may be fractional). kind: 'compression' (only mode for v1).
-    Spring rate computed for steel (G = 79.3 GPa = 79300 MPa) via
-    k = G*d^4 / (8*D^3*Na), D = mean coil diameter, Na = active coils (= coils),
-    yielding k in N/mm. Returns the solid's handle plus the mating/reference
-    dimensions {mean_diameter, free_length, coils, solid_height, spring_rate_n_per_mm}.
-    """
+    Units: all lengths mm. wire_diameter (d), outer_diameter (OD), free_length (L0),
+    coils (TOTAL turns Nt, may be fractional).
+
+    kind='compression' (default) models **squared-and-ground** ends: the last coil
+    at each end is closed (swept at pitch = d so the end turns sit flat) and the
+    two end coils are inactive, so active coils Na = Nt - 2 (handbook). This fixes
+    the reference numbers to the standard squared+ground forms:
+        solid_height  Ls = d * Nt          (all turns close to the wire diameter)
+        free_length   L0 = p * Na + 2*d    (p = active-coil pitch, an output)
+    The spring rate uses the ACTIVE coils: k = G*d^4/(8*D^3*Na) with G = 79.3 GPa
+    (steel), D the mean coil diameter, yielding k in N/mm. Any other `kind`, or a
+    spring too short/few-coiled for squared ends, falls back to a plain open helix.
+
+    free_length must exceed solid_height (a spring cannot sit shorter free than
+    solid). Returns the solid's handle plus {mean_diameter, free_length, coils,
+    total_coils, active_coils, end_type, active_pitch_mm, solid_height,
+    spring_rate_n_per_mm}."""
     doc = _active_doc()
     wire_diameter = float(p["wire_diameter"])
     outer_diameter = float(p["outer_diameter"])
@@ -651,22 +691,49 @@ def _h_add_spring(p):
 
     # Mean coil radius: centreline of the wire sits half a wire-diameter inside the OD.
     Rm = (outer_diameter - wire_diameter) / 2.0
-    pitch = free_length / coils
-    helix = Part.makeHelix(pitch, free_length, Rm)
+    D = Rm * 2.0
+    G = 79300.0
 
-    # Profile must lie in the plane normal to the helix's start tangent, else the
-    # swept section is skewed; makePipeShell with is_frenet keeps it normal along.
-    e0 = helix.Edges[0]
-    p0 = e0.valueAt(e0.FirstParameter)
-    t0 = e0.tangentAt(e0.FirstParameter)
-    circ = Part.Circle(App.Vector(p0), App.Vector(t0), wire_diameter / 2.0)
-    profile = Part.Wire(circ.toShape())
-    # makePipeShell(profiles, make_solid=True, is_frenet=True) -> closed swept solid.
-    sol = Part.Wire(helix.Edges).makePipeShell([profile], True, True)
-    if not sol.isValid() or sol.Volume <= 0:
-        raise RuntimeError("spring sweep produced an invalid/empty solid; check dimensions")
-    # TODO: kind=="compression" could flatten/grind the end coils (squared ends);
-    # v1 leaves open ends — solid_height below still uses the closed-coil estimate.
+    # Squared-and-ground compression spring: two inactive end coils, Na = Nt - 2.
+    squared = (kind == "compression" and coils > 2.0)
+    end_type = "plain"
+    active_coils = coils
+    active_pitch = free_length / coils
+    solid_height = coils * wire_diameter
+    sol = None
+    if squared:
+        na = coils - 2.0
+        solid_height = coils * wire_diameter                 # Ls = d * Nt
+        if free_length <= solid_height:
+            raise ValueError(
+                f"free_length ({free_length}) must exceed solid_height "
+                f"({round(solid_height, 4)} = d*Nt) for a squared-ground spring")
+        # L0 = p*Na + 2d  ->  active-coil pitch p (the two end coils add 2d)
+        p_active = (free_length - 2.0 * wire_diameter) / na
+        try:
+            sol = _spring_squared_ground_solid(
+                wire_diameter, Rm, free_length, coils, na, p_active)
+            end_type = "squared_ground"
+            active_coils = na
+            active_pitch = p_active
+        except Exception:
+            sol = None                                       # fall back to plain
+
+    if sol is None:
+        # Plain open helix over the full free length (fallback / non-compression).
+        end_type = "plain"
+        active_coils = coils
+        active_pitch = free_length / coils
+        solid_height = coils * wire_diameter
+        helix = Part.makeHelix(active_pitch, free_length, Rm)
+        e0 = helix.Edges[0]
+        p0 = e0.valueAt(e0.FirstParameter)
+        t0 = e0.tangentAt(e0.FirstParameter)
+        profile = Part.Wire(
+            Part.Circle(App.Vector(p0), App.Vector(t0), wire_diameter / 2.0).toShape())
+        sol = Part.Wire(helix.Edges).makePipeShell([profile], True, True)
+        if not sol.isValid() or sol.Volume <= 0:
+            raise RuntimeError("spring sweep produced an invalid/empty solid; check dimensions")
 
     obj = doc.addObject("Part::Feature", p.get("name", "Spring"))
     obj.Shape = sol
@@ -676,13 +743,13 @@ def _h_add_spring(p):
     doc.recompute()
     h = _register("spring", obj)
 
-    # Spring rate, steel: G in MPa, d/D in mm -> k in N/mm.
-    G = 79300.0
-    D = Rm * 2.0
-    k = G * wire_diameter ** 4 / (8.0 * D ** 3 * coils)
+    # Spring rate, steel: G in MPa, d/D in mm -> k in N/mm, using the ACTIVE coils.
+    k = G * wire_diameter ** 4 / (8.0 * D ** 3 * active_coils)
     return {"handle": h, "name": obj.Name, "volume": round(obj.Shape.Volume, 4),
             "mean_diameter": round(D, 4), "free_length": free_length, "coils": coils,
-            "kind": kind, "solid_height": round(coils * wire_diameter, 4),
+            "total_coils": coils, "active_coils": round(active_coils, 4),
+            "end_type": end_type, "active_pitch_mm": round(active_pitch, 4),
+            "kind": kind, "solid_height": round(solid_height, 4),
             "spring_rate_n_per_mm": round(k, 4)}
 
 
@@ -4553,6 +4620,65 @@ def _h_verify_contract(p):
     return {"handle": handle, "ok": ok, "results": results}
 
 
+# --- component_contract_check: the builder-side half of the merge gate (#169) --
+#
+# A builder (any MCP host — a Claude Code subagent, a Cursor task) calls this on
+# its OWN part before saving, against its standalone *builder brief* (a
+# driftpin.builder_brief/1 slice). It runs exactly the three checks merge_assembly
+# re-runs at fan-in — watertight (check_shape), inside the declared envelope, and
+# every required interface published with a sane frame — so a contract violation is
+# caught locally and cheaply instead of after the merge. The judgement lives in the
+# pure, FreeCAD-free driftpin.builder_brief.evaluate_contract, so it is testable
+# with synthetic inputs; this handler only extracts the three primitives from the
+# geometry and hands them over. Like verify_contract it NEVER raises on a failing
+# check (a failure is a passed=False row), so a builder can call it in a repair loop.
+
+@handler("component_contract_check")
+def _h_component_contract_check(p):
+    """Builder-side contract gate for one component (issue #169). Run it on your
+    part before save, against your builder brief; repair any failing check.
+
+    handle: the component's shaped object.
+    brief:  a driftpin.builder_brief/1 slice (see driftpin.builder_brief). Only
+            `envelope` and `interfaces` drive gate checks; other keys are ignored
+            here (the NL `task` etc. guide the build, not the gate).
+
+    Checks (mirrors what merge_assembly verifies for this part at fan-in):
+      watertight  — check_shape says one clean watertight solid.
+      envelope    — the part's LOCAL bounding box fits inside brief.envelope.
+      interface:* — every name in brief.interfaces is published, with a sane frame,
+                    and within tol of the pinned origin/axis when the brief gives one.
+
+    Returns {handle, ok, checks:[{check, passed, detail}], reasons:[...]} and never
+    raises on a failing check."""
+    from driftpin import builder_brief as _bb
+    handle = p["handle"]
+    brief = dict(p.get("brief") or {})
+    obj, shape = _shape_of(handle)
+
+    # 1) watertight verdict via the same logic check_shape reports.
+    try:
+        cs = _h_check_shape({"handle": handle})
+        watertight = bool(cs.get("watertight_solid"))
+    except Exception:
+        watertight = None
+
+    # 2) local bounding box.
+    try:
+        bb = shape.BoundBox
+        bbox = {"min": [bb.XMin, bb.YMin, bb.ZMin],
+                "max": [bb.XMax, bb.YMax, bb.ZMax]}
+    except Exception:
+        bbox = None
+
+    # 3) published interface frames.
+    published = _read_interfaces(obj)
+
+    verdict = _bb.evaluate_contract(brief, watertight=watertight, bbox=bbox,
+                                    published=published)
+    return {"handle": handle, **verdict}
+
+
 def _apply_mate(link, parent_link, child_iface, parent_iface):
     """Place `link` so its child_iface frame coincides with parent_link's
     parent_iface frame in world space: LinkPlacement = Pp · Fp · Fc⁻¹."""
@@ -5240,11 +5366,37 @@ def _parallel_axis_distance(shape_a, dir_a, shape_b):
     return (dv - dir_a.multiply(dv.dot(dir_a))).Length
 
 
+def _resolve_fit_band(chk):
+    """Resolve a bore_fit / sliding check's clearance band. A check may carry an
+    explicit ``min_clearance_mm`` (+ optional ``max_clearance_mm``), OR a named ISO
+    fit class (``fit_class`` e.g. ``"H7/g6"`` + ``basic_size_mm``) which is resolved
+    through :func:`tolerance.fit_class`. The fit-class clearances are DIAMETRAL
+    (hole Ø − shaft Ø); the geometric gate measures the RADIAL gap (surface-to-
+    surface), so they are halved here. Returns ``(lo, hi, source)`` where ``hi`` may
+    be None. Raises ValueError if a named fit class is not a clearance fit (a
+    transition/interference class belongs on ``press_fit``, not ``bore_fit``)."""
+    if "fit_class" in chk:
+        from driftpin.analysis import tolerance as _tol
+        if "basic_size_mm" not in chk:
+            raise ValueError("fit_class needs a basic_size_mm (the nominal Ø)")
+        fc = _tol.fit_class(float(chk["basic_size_mm"]), chk["fit_class"])
+        if fc["fit_class"] != "clearance":
+            raise ValueError(
+                f"fit class {chk['fit_class']!r} is a {fc['fit_class']} fit, not a "
+                f"clearance fit — use a `press_fit` check for an interference class")
+        return fc["min_clearance"] / 2.0, fc["max_clearance"] / 2.0, chk["fit_class"]
+    return float(chk["min_clearance_mm"]), chk.get("max_clearance_mm"), "explicit"
+
+
 def _gate_bore_fit(by_name, links_by_inst, chk):
     """Clearance-fit gate: the pin must sit in the bore with clearance inside the
     contracted band. Closes the exact-touch blind spot (§6) — interference_check
     reads ZERO for tangent solids, so a slip fit MUST be gated on minimum
-    clearance, not on non-interference. min_clearance_mm required; max optional."""
+    clearance, not on non-interference. The band is either an explicit
+    ``min_clearance_mm`` (+ optional ``max_clearance_mm``), or a named ISO fit class
+    (``fit_class`` + ``basic_size_mm``, e.g. ``"H7/g6"``) resolved via
+    :func:`tolerance.fit_class` (#170) — the manifest carries the design intent, the
+    numbers are derived at merge."""
     pin = by_name.get(links_by_inst.get(chk["pin"], chk["pin"]))
     bore = by_name.get(links_by_inst.get(chk["bore"], chk["bore"]))
     if pin is None or bore is None:
@@ -5252,8 +5404,10 @@ def _gate_bore_fit(by_name, links_by_inst, chk):
     sp, sb = _link_world_shape(pin), _link_world_shape(bore)
     if sp is None or sb is None:
         return [{**chk, "error": "pin/bore has no shape"}]
-    lo = float(chk["min_clearance_mm"])
-    hi = chk.get("max_clearance_mm")
+    try:
+        lo, hi, _src = _resolve_fit_band(chk)
+    except (ValueError, NotImplementedError) as e:
+        return [{**chk, "error": str(e)}]
     try:
         overlap = sp.common(sb).Volume
     except Exception:
@@ -5277,30 +5431,39 @@ def _gate_bore_fit(by_name, links_by_inst, chk):
 
 
 def _gate_gear_mesh(by_name, links_by_inst, chk):
-    """Gear-mesh gate (external pair): the two gears' pitch radii must sum to the
-    contracted centre distance, the as-placed axes must actually sit at that
-    distance, and (if given) the ratio must hit target. The canonical
-    shared-constraint partition — each builder sizes its gear so the pair meshes
-    at one shared C (the M2 gearbox oracle, promoted)."""
+    """Gear-mesh gate. For an EXTERNAL pair the two gears' pitch radii must SUM to
+    the contracted centre distance; for an INTERNAL mesh (a planet inside a ring —
+    set ``a_internal``/``b_internal`` on the toothed ring) the centre distance is
+    the DIFFERENCE of the pitch radii instead. In both cases the as-placed axes must
+    actually sit at that distance, and (if given) the ratio must hit target. The
+    canonical shared-constraint partition — each builder sizes its gear so the pair
+    meshes at one shared C (the M2 gearbox oracle, promoted; #170 adds the planetary
+    ring)."""
     a = by_name.get(links_by_inst.get(chk["a"], chk["a"]))
     b = by_name.get(links_by_inst.get(chk["b"], chk["b"]))
     if a is None or b is None:
         return [{**chk, "error": "gear link not found"}]
-    if chk.get("a_internal") or chk.get("b_internal"):
-        return [{**chk, "error": "internal-gear mesh not supported in v0 "
-                                 "(external pair only)"}]
+    a_int, b_int = bool(chk.get("a_internal")), bool(chk.get("b_internal"))
+    if a_int and b_int:
+        return [{**chk, "error": "internal-internal is not a valid gear pairing "
+                                 "(exactly one gear may be an internal/ring gear)"}]
     la, lb = _link_local_shape(a), _link_local_shape(b)
     if la is None or lb is None:
         return [{**chk, "error": "gear has no shape"}]
     m = float(chk["module_mm"])
     C = float(chk["center_distance_mm"])
     tol = float(chk.get("tol_mm", 0.5))
-    rpa = _gear_pitch_radius(la, m)
-    rpb = _gear_pitch_radius(lb, m)
+    rpa = _gear_pitch_radius(la, m, a_int)
+    rpb = _gear_pitch_radius(lb, m, b_int)
+    internal = a_int or b_int
+    # external pair: C = rp_a + rp_b; internal (ring/planet): C = |rp_ring - rp_planet|
+    expected = abs(rpa - rpb) if internal else (rpa + rpb)
     out = []
-    if abs((rpa + rpb) - C) > tol:
+    if abs(expected - C) > tol:
+        rel = "difference" if internal else "sum"
         out.append({**chk, "rp_a": round(rpa, 4), "rp_b": round(rpb, 4),
-                    "reason": f"pitch radii sum {rpa+rpb:.3f} != centre distance "
+                    "internal": internal,
+                    "reason": f"pitch-radii {rel} {expected:.3f} != centre distance "
                               f"{C:g} mm (pair will not mesh)"})
     _, da = _axis_world(a)
     measured_C = _parallel_axis_distance(_link_world_shape(a), da,
@@ -5343,6 +5506,185 @@ def _gate_frame_orientation(by_name, links_by_inst, chk):
         return [{**chk, "angle_deg": round(ang, 4),
                  "reason": f"{chk['child']}.{ci} axis off {chk['parent']}.{pi} "
                            f"by {ang:.2f}° (> {lim}°)"}]
+    return []
+
+
+# --- typed interfaces v2 (issue #170): thread / press_fit / sliding ----------
+#
+# Three more kinds that carry design INTENT (a thread callout, a named ISO fit
+# class) and derive their numbers at merge, rather than re-specifying mm ad hoc.
+# thread and sliding are pure pairing/clearance checks; press_fit hands the
+# resolved interference band to press_fit_stress for the retention/stress numbers.
+
+# ISO 261 coarse-pitch series (mm) — the default pitch when a callout omits it
+# (e.g. "M6" means M6×1.0). A fine callout states its pitch ("M8×1").
+_COARSE_PITCH_MM = {
+    3: 0.5, 4: 0.7, 5: 0.8, 6: 1.0, 8: 1.25, 10: 1.5, 12: 1.75,
+    14: 2.0, 16: 2.0, 20: 2.5, 24: 3.0, 30: 3.5, 36: 4.0,
+}
+
+_THREAD_RE = re.compile(r"^M\s*(\d+(?:\.\d+)?)\s*(?:[x×]\s*(\d+(?:\.\d+)?))?$", re.I)
+
+
+def _parse_thread(designation):
+    """Parse an ISO metric thread callout ``"M6"`` / ``"M6x1"`` / ``"M8×1.25"`` to
+    ``{major_mm, pitch_mm}``. A callout without an explicit pitch takes the ISO 261
+    coarse pitch. Raises ValueError on a malformed callout or an unknown coarse
+    diameter (state the pitch explicitly for a non-tabulated diameter)."""
+    if not isinstance(designation, str):
+        raise ValueError(f"thread designation must be a string, got {designation!r}")
+    m = _THREAD_RE.match(designation.strip())
+    if not m:
+        raise ValueError(
+            f"malformed thread designation {designation!r} (want 'M6', 'M6x1', "
+            f"'M8×1.25')")
+    major = float(m.group(1))
+    if m.group(2) is not None:
+        pitch = float(m.group(2))
+    else:
+        key = int(major) if major == int(major) else None
+        if key not in _COARSE_PITCH_MM:
+            raise ValueError(
+                f"no ISO 261 coarse pitch tabulated for M{major:g}; state the pitch "
+                f"explicitly, e.g. 'M{major:g}x1'")
+        pitch = _COARSE_PITCH_MM[key]
+    return {"major_mm": major, "pitch_mm": pitch}
+
+
+def _gate_thread(by_name, links_by_inst, chk):
+    """Thread-pairing gate (#170): an internal thread (tapped hole / nut) and an
+    external thread (bolt / stud) mate only if their callouts agree — same nominal
+    MAJOR diameter and PITCH — and the ENGAGEMENT length is adequate. The check
+    carries a callout per side (``thread_a`` / ``thread_b`` = {designation, role})
+    and an ``engagement_mm``; ``min_engagement_mm`` overrides the default rule of
+    thumb (0.8·major, the ~one-diameter steel-into-steel guideline). Pure callout +
+    length logic — no geometry read (a thread's helix is not reliably recoverable
+    from a tessellated solid)."""
+    ta_spec = chk.get("thread_a") or {}
+    tb_spec = chk.get("thread_b") or {}
+    try:
+        ta = _parse_thread(ta_spec.get("designation"))
+        tb = _parse_thread(tb_spec.get("designation"))
+    except ValueError as e:
+        return [{**chk, "error": str(e)}]
+    out = []
+    if abs(ta["major_mm"] - tb["major_mm"]) > 1e-6:
+        out.append({**chk, "major_a_mm": ta["major_mm"], "major_b_mm": tb["major_mm"],
+                    "reason": f"thread major Ø mismatch: {chk['a']} M{ta['major_mm']:g} "
+                              f"vs {chk['b']} M{tb['major_mm']:g} (will not mate)"})
+    if abs(ta["pitch_mm"] - tb["pitch_mm"]) > 1e-6:
+        out.append({**chk, "pitch_a_mm": ta["pitch_mm"], "pitch_b_mm": tb["pitch_mm"],
+                    "reason": f"thread pitch mismatch: {chk['a']} {ta['pitch_mm']:g} mm "
+                              f"vs {chk['b']} {tb['pitch_mm']:g} mm (will cross-thread)"})
+    role_a = str(ta_spec.get("role", "")).lower()
+    role_b = str(tb_spec.get("role", "")).lower()
+    if {role_a, role_b} != {"internal", "external"}:
+        out.append({**chk, "role_a": role_a, "role_b": role_b,
+                    "reason": f"thread pairing needs one internal + one external "
+                              f"(got {role_a or '?'} / {role_b or '?'})"})
+    if "engagement_mm" in chk:
+        eng = float(chk["engagement_mm"])
+        min_eng = float(chk.get("min_engagement_mm", 0.8 * ta["major_mm"]))
+        if eng < min_eng - 1e-6:
+            out.append({**chk, "engagement_mm": eng, "min_engagement_mm": round(min_eng, 4),
+                        "reason": f"engagement {eng:g} mm < minimum {min_eng:g} mm "
+                                  f"(thread will strip / pull out)"})
+    return out
+
+
+def _gate_press_fit(by_name, links_by_inst, chk):
+    """Press-fit gate (#170): a named interference class resolved through
+    :func:`tolerance.fit_class`, then handed to :func:`press_fit_stress` for the
+    retention/stress numbers at merge. The check carries ``fit_class`` (e.g.
+    ``"H7/p6"``) + ``basic_size_mm`` (shaft Ø), ``hub_outer_dia_mm``,
+    ``engagement_length_mm``, optional ``material`` / ``friction_coef`` /
+    ``min_torque_nm``. Fails if the class is NOT an interference fit, if the hub
+    yields at the MAX interference (worst-case stress), or if the guaranteed
+    retention torque at the MIN interference (worst-case grip) is below
+    ``min_torque_nm``. An analysis gate — the shaft/hub refs are for provenance, the
+    numbers come from the fit + Lamé theory, not a geometry read."""
+    from driftpin.analysis import tolerance as _tol
+    from driftpin.analysis import machine_elements as _me
+    try:
+        if "basic_size_mm" not in chk:
+            raise ValueError("press_fit needs a basic_size_mm (the shaft Ø)")
+        fc = _tol.fit_class(float(chk["basic_size_mm"]), chk["fit_class"])
+    except (ValueError, NotImplementedError, KeyError) as e:
+        return [{**chk, "error": f"press_fit fit-class resolution failed: {e}"}]
+    if fc["fit_class"] != "interference" or "interference" not in fc:
+        return [{**chk, "fit_class": chk.get("fit_class"), "resolved": fc["fit_class"],
+                 "reason": f"{chk.get('fit_class')!r} resolves to a {fc['fit_class']} "
+                           f"fit, not an interference fit — no guaranteed press "
+                           f"(use `bore_fit`/`sliding` for a clearance class)"}]
+    band = fc["interference"]              # diametral interference band, mm
+    min_intf = max(0.0, band["min_mm"])    # guaranteed grip: worst-case min interference
+    max_intf = band["max_mm"]              # worst-case hub stress: max interference
+    shaft_d = float(chk["basic_size_mm"])
+    hub_d = float(chk["hub_outer_dia_mm"])
+    length = float(chk["engagement_length_mm"])
+    mat = chk.get("material", "Steel-A36")
+    mu = float(chk.get("friction_coef", 0.15))
+    try:
+        worst_stress = _me.press_fit_stress(shaft_d, hub_d, max_intf, length,
+                                            material=mat, friction_coef=mu)
+        min_grip = _me.press_fit_stress(shaft_d, hub_d, min_intf, length,
+                                        material=mat, friction_coef=mu)
+    except ValueError as e:
+        return [{**chk, "error": f"press_fit_stress: {e}"}]
+    out = []
+    if not worst_stress["pass"]:
+        out.append({**chk, "interference_band_mm": [band["min_mm"], band["max_mm"]],
+                    "hub_hoop_stress_mpa": worst_stress["hub_hoop_stress_mpa"],
+                    "hub_yield_sf": worst_stress["hub_yield_sf"],
+                    "reason": f"hub yields at max interference {max_intf:g} mm "
+                              f"(hoop {worst_stress['hub_hoop_stress_mpa']} MPa, "
+                              f"SF {worst_stress['hub_yield_sf']} < 1)"})
+    if "min_torque_nm" in chk:
+        need = float(chk["min_torque_nm"])
+        got = min_grip["torque_capacity_nm"]
+        if got < need - 1e-9:
+            out.append({**chk, "torque_capacity_nm": got, "min_torque_nm": need,
+                        "reason": f"guaranteed retention {got} N·m (at min "
+                                  f"interference {min_intf:g} mm) < required "
+                                  f"{need} N·m — joint may slip"})
+    return out
+
+
+def _gate_sliding(by_name, links_by_inst, chk):
+    """Sliding / running-clearance gate (#170): a bore/shaft pair MEANT to move.
+    Unlike ``bore_fit`` this is a minimum-clearance gate, not a two-sided band — a
+    sliding fit just needs enough clearance to run freely (too loose is not a merge
+    failure). The minimum is either an explicit ``min_clearance_mm`` or the tightest
+    (min) clearance of a named running fit class (``fit_class`` + ``basic_size_mm``,
+    e.g. ``"H8/f7"``). Interference (overlap) or a gap below the minimum — including
+    exact-touch — fails."""
+    shaft = by_name.get(links_by_inst.get(chk["shaft"], chk["shaft"]))
+    bore = by_name.get(links_by_inst.get(chk["bore"], chk["bore"]))
+    if shaft is None or bore is None:
+        return [{**chk, "error": "shaft/bore link not found"}]
+    ss, sb = _link_world_shape(shaft), _link_world_shape(bore)
+    if ss is None or sb is None:
+        return [{**chk, "error": "shaft/bore has no shape"}]
+    try:
+        lo, _hi, _src = _resolve_fit_band(chk)
+    except (ValueError, NotImplementedError) as e:
+        return [{**chk, "error": str(e)}]
+    try:
+        overlap = ss.common(sb).Volume
+    except Exception:
+        overlap = 0.0
+    if overlap > 1e-9:
+        return [{**chk, "status": "interference", "clearance_mm": 0.0,
+                 "overlap_mm3": round(overlap, 4),
+                 "reason": f"{chk['shaft']} interferes with {chk['bore']} — a sliding "
+                           f"pair must have ≥{lo:g} mm running clearance"}]
+    gap = round(ss.distToShape(sb)[0], 6)
+    if gap < lo - 1e-6:
+        return [{**chk, "status": "clear" if gap > 1e-7 else "contact",
+                 "clearance_mm": gap,
+                 "reason": f"{chk['shaft']}↔{chk['bore']} running clearance "
+                           f"{gap:.4f} mm < min {lo:g} mm"
+                           + (" (exact-touch — will bind)" if gap <= 1e-7 else "")}]
     return []
 
 
@@ -5457,6 +5799,9 @@ _TYPED_GATES = {
     "dog_ring": _gate_dog_ring,
     "bore_keying": _gate_bore_keying,
     "interleave": _gate_interleave,
+    "thread": _gate_thread,
+    "press_fit": _gate_press_fit,
+    "sliding": _gate_sliding,
 }
 
 # --- interface-type CONFORMANCE gate (issue #146, RFC §6.3) — append-only ----
@@ -5565,7 +5910,9 @@ _TYPED_GATES["interface_conformance"] = _gate_interface_conformance
 # contact_band (§11.10) is authoritative for an engaged dog clutch / press band: it
 # bounds the overlap rather than forbidding it, so it owns its pair here. interleave
 # (§11.10) likewise relates an engaged dog-clutch pair that meets at the meshing teeth.
-_CONTACT_KINDS = {"gear_mesh", "contact_band", "interleave"}
+# press_fit (#170) is an interference joint — the shaft is deliberately larger than
+# the bore, so a nominal-geometry model overlaps; the typed gate owns that pair.
+_CONTACT_KINDS = {"gear_mesh", "contact_band", "interleave", "press_fit"}
 
 
 def _check_pair(chk):
@@ -5576,6 +5923,10 @@ def _check_pair(chk):
         return chk["a"], chk["b"]
     if "pin" in chk and "bore" in chk:
         return chk["pin"], chk["bore"]
+    if "shaft" in chk and "bore" in chk:       # sliding (running-clearance) pair
+        return chk["shaft"], chk["bore"]
+    if "shaft" in chk and "hub" in chk:        # press_fit (interference) pair
+        return chk["shaft"], chk["hub"]
     if "child" in chk and "parent" in chk:
         return chk["child"], chk["parent"]
     if "part" in chk:                          # single-part check (dog_ring, bore_keying)
@@ -5680,15 +6031,26 @@ def _generate_library_part(tool, spec, path):
 # window (mass_properties + the recursive leaf walk). Returns {report, violations}:
 # `report` is the measured numbers (so a coordinator sees them on a pass too),
 # `violations` is the failing requirements (empty == all met). An unrecognised
-# requirement key is reported as `skipped`, never silently dropped — the
-# expensive physics tier (min_first_mode_hz via FEM, with its bonding / boundary-
-# condition modelling) is deferred, so naming it here surfaces as skipped, not as
-# a silent pass.
+# requirement key is reported as `skipped`, never silently dropped.
+#
+# The expensive PHYSICS tier (`min_first_mode_hz` via FEM modal on the merged tree,
+# issue #172) is opt-in: it evaluates only when the requirement declares its own
+# modelling assumptions — a `fixture` (a clamp plane, or a published interface frame
+# on a named instance) and `bonding` (v1: `fused` = boolean-union the assembly into
+# one solid before meshing; `tied` = CCX tie constraints, reserved/stubbed). Given a
+# fixture it fuses the leaves, meshes with 2nd-order tets (1st-order tets shear-lock
+# on modal), runs a CalculiX frequency extraction, and compares mode 1 against the
+# floor. A bare `min_first_mode_hz` number (or one with no fixture, or bonding other
+# than `fused`) still surfaces as `skipped` — the assumptions aren't declared, so the
+# gate won't fake them. It NEVER raises: a modelling/solve failure is reported as a
+# loud violation (like a mass budget with no density), never a silent pass.
 
 _TIER1_REQ_KEYS = {"max_mass_g", "cg_window", "density_kg_mm3"}
+_PHYSICS_REQ_KEYS = {"min_first_mode_hz"}
+_AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
 
 
-def _requirements_gate(assembly_handle, req):
+def _requirements_gate(assembly_handle, req, links_by_inst=None):
     """Evaluate the manifest `requirements` block over the merged assembly's
     world-space leaves. Returns {report, violations, skipped}."""
     asm = _resolve(assembly_handle)
@@ -5739,8 +6101,231 @@ def _requirements_gate(assembly_handle, req):
                                    "window": win, "axes": bad,
                                    "reason": f"CG {cg} outside window on {bad}"})
 
-    skipped = sorted(set(req) - _TIER1_REQ_KEYS)
+    skipped = sorted(set(req) - _TIER1_REQ_KEYS - _PHYSICS_REQ_KEYS)
+
+    # §11.6 physics tier (issue #172): min_first_mode_hz via FEM modal on the
+    # (fused) merged assembly. Opt-in on a declared fixture; self-skips otherwise.
+    if "min_first_mode_hz" in req:
+        fm = _first_mode_requirement(assembly_handle, req["min_first_mode_hz"],
+                                     shapes, links_by_inst)
+        if fm.get("skipped"):
+            skipped.append("min_first_mode_hz")
+        if fm.get("report") is not None:
+            report["first_mode"] = fm["report"]
+        if fm.get("violation") is not None:
+            violations.append(fm["violation"])
+        skipped = sorted(skipped)
+
     return {"report": report, "violations": violations, "skipped": skipped}
+
+
+def _faces_on_world_plane(shape, point, normal, tol):
+    """Face labels ('FaceN') of `shape` lying in the world plane (point, normal):
+    a face qualifies when every one of its vertices is within `tol` mm of the
+    plane. Robust to a boolean-fused solid whose face count/order is not the
+    components' — the fixture is resolved geometrically, not by a stale tag."""
+    n = App.Vector(float(normal[0]), float(normal[1]), float(normal[2]))
+    if n.Length < 1e-12:
+        return []
+    n.normalize()
+    p0 = App.Vector(float(point[0]), float(point[1]), float(point[2]))
+    out = []
+    for i, f in enumerate(shape.Faces):
+        vs = f.Vertexes
+        if vs and all(abs((App.Vector(v.X, v.Y, v.Z) - p0).dot(n)) <= tol
+                      for v in vs):
+            out.append(f"Face{i + 1}")
+    return out
+
+
+def _fixture_world_plane(fixture, fused, links_by_inst):
+    """Resolve a `fixture` spec to a (point, normal, tol_mm) world clamp plane, or
+    None if it can't be resolved. Two forms:
+
+      {"clamp": {"axis": "z", "side": "min", "tol_mm": 0.5}}
+          the extreme face plane of the fused solid's bounding box along an axis.
+      {"interface": {"instance": "base", "name": "mount", "tol_mm": 0.5}}
+          the plane through a published interface frame on a placed instance
+          (origin + its z-axis), via the same locating-frame math the mate/typed
+          gates use."""
+    tol = float(fixture.get("tol_mm", 0.5))
+    if "clamp" in fixture:
+        c = fixture["clamp"]
+        axis = c["axis"].lower()
+        if axis not in _AXIS_INDEX:
+            return None
+        side = c.get("side", "min").lower()
+        tol = float(c.get("tol_mm", tol))
+        bb = fused.BoundBox
+        lo = (bb.XMin, bb.YMin, bb.ZMin)[_AXIS_INDEX[axis]]
+        hi = (bb.XMax, bb.YMax, bb.ZMax)[_AXIS_INDEX[axis]]
+        coord = lo if side == "min" else hi
+        centre = [bb.Center.x, bb.Center.y, bb.Center.z]
+        centre[_AXIS_INDEX[axis]] = coord
+        normal = [0.0, 0.0, 0.0]
+        normal[_AXIS_INDEX[axis]] = 1.0
+        return centre, normal, tol
+    if "interface" in fixture and links_by_inst is not None:
+        spec = fixture["interface"]
+        iname = spec.get("instance") or spec.get("component")
+        link_name = links_by_inst.get(iname)
+        if link_name is None:
+            return None
+        link = App.ActiveDocument.getObject(link_name)
+        if link is None:
+            return None
+        origin, zdir = _iface_locating_frame(link, spec.get("name"))
+        return ([origin.x, origin.y, origin.z], [zdir.x, zdir.y, zdir.z],
+                float(spec.get("tol_mm", tol)))
+    return None
+
+
+def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
+    """Physics-tier gate (issue #172): the merged assembly's first natural
+    frequency vs a floor, via FEM modal on the FUSED solid.
+
+    `spec` is either a bare Hz number (always skipped — no modelling assumptions
+    declared) or an object:
+
+        {"value": 300,                       # required minimum f1 (Hz)
+         "fixture": {"clamp": {"axis": "z", "side": "min"}},   # boundary condition
+         "bonding": "fused",                 # v1: fused | tied (tied reserved)
+         "material": {"YoungsModulus": "210000 MPa",
+                      "PoissonRatio": "0.30", "Density": "7900 kg/m^3"},
+         "mesh_size_mm": 3.5, "n_modes": 6}  # optional
+
+    Returns {skipped, report, violation}. NEVER raises: a modelling or solve
+    failure comes back as a loud violation, not a silent pass. On a `skipped`
+    result the requirement rides in the gate's `skipped` list (never met, never
+    dropped). A failed physics gate does NOT auto-re-dispatch components in v1
+    (RFC §13) — it fails the merge report; re-dispatch is the coordinator's call."""
+    if not isinstance(spec, dict):
+        return {"skipped": True, "report": {
+            "skipped_reason": "min_first_mode_hz is a bare number — declare a "
+            "`fixture` and `bonding` to run the FEM modal gate"}}
+    value = spec.get("value")
+    fixture = spec.get("fixture")
+    bonding = spec.get("bonding", "fused")
+    if value is None or fixture is None:
+        return {"skipped": True, "report": {
+            "skipped_reason": "min_first_mode_hz needs both `value` and `fixture` "
+            "to run the FEM modal gate"}}
+    if bonding != "fused":
+        # `tied` (CCX tie constraints between component faces) is reserved — a
+        # merged assembly held by contact/tie is a real modelling step v1 doesn't
+        # fake. Surface it rather than silently applying `fused`.
+        return {"skipped": True, "report": {
+            "skipped_reason": f"bonding={bonding!r} not implemented (v1 = 'fused'); "
+            "tied is reserved"}}
+
+    material = spec.get("material")
+    if not material:
+        return {"violation": {"requirement": "min_first_mode_hz",
+                              "error": "needs a `material` "
+                              "{YoungsModulus, PoissonRatio, Density} for the modal solve"},
+                "report": {"min_hz": value, "bonding": bonding}}
+
+    try:
+        solids = [s for _, s in shapes if s is not None and not s.isNull()]
+        if not solids:
+            raise RuntimeError("merged assembly has no solids to fuse")
+        fused = solids[0]
+        for s in solids[1:]:
+            fused = fused.fuse(s)
+        try:
+            fused = fused.removeSplitter()   # merge coplanar seams for clean faces
+        except Exception:
+            pass
+
+        plane = _fixture_world_plane(fixture, fused, links_by_inst)
+        if plane is None:
+            return {"skipped": True, "report": {
+                "min_hz": value, "bonding": bonding,
+                "skipped_reason": f"fixture {fixture!r} could not be resolved to a "
+                "clamp plane"}}
+        point, normal, tol = plane
+        fix_faces = _faces_on_world_plane(fused, point, normal, tol)
+        if not fix_faces:
+            return {"violation": {"requirement": "min_first_mode_hz",
+                                  "error": "fixture plane matched no faces on the "
+                                  "fused assembly (check axis/side/tol_mm)"},
+                    "report": {"min_hz": value, "bonding": bonding,
+                               "fixture": fixture}}
+
+        f1, freqs, mesh_info = _solve_fused_first_mode(
+            fused, fix_faces, material, spec, assembly_handle)
+
+        passed = f1 >= float(value)
+        rep = {"measured_first_mode_hz": round(f1, 2),
+               "min_hz": value, "pass": passed, "bonding": bonding,
+               "fixture": fixture, "fixed_faces": fix_faces,
+               "frequencies_hz": [round(x, 2) for x in freqs],
+               "material": material, "mesh": mesh_info}
+        viol = None
+        if not passed:
+            viol = {"requirement": "min_first_mode_hz",
+                    "measured_hz": round(f1, 2), "min_hz": value,
+                    "reason": f"first mode {f1:.1f} Hz < floor {value} Hz "
+                              f"(too floppy)"}
+        return {"report": rep, "violation": viol}
+    except Exception as e:  # never raise out of a gate
+        return {"violation": {"requirement": "min_first_mode_hz",
+                              "error": f"modal gate failed to evaluate: {e}"},
+                "report": {"min_hz": value, "bonding": bonding,
+                           "fixture": fixture}}
+
+
+def _solve_fused_first_mode(fused, fix_faces, material, spec, assembly_handle):
+    """Mesh the fused solid with 2nd-order tets, clamp `fix_faces`, run a CalculiX
+    frequency extraction, and return (first_mode_hz, all_freqs, mesh_info). Runs in
+    a scratch document so nothing lands in the merged assembly's saved .FCStd; the
+    active document is restored on the way out."""
+    import tempfile as _tempfile
+    prev = App.ActiveDocument.Name if App.ActiveDocument is not None else None
+    doc = App.newDocument("_modal_gate")
+    App.setActiveDocument(doc.Name)
+    workdir = _tempfile.mkdtemp(prefix="driftpin_modal_gate_")
+    try:
+        feat = doc.addObject("Part::Feature", "FusedAssembly")
+        feat.Shape = fused
+        doc.recompute()
+        body_h = _register("fused", feat)
+
+        bb = fused.BoundBox
+        thin = min(bb.XLength, bb.YLength, bb.ZLength) or 1.0
+        mesh_size = float(spec.get("mesh_size_mm", max(1.0, min(thin / 1.5, 8.0))))
+        n_modes = int(spec.get("n_modes", 6))
+
+        analysis = HANDLERS["fem_new_analysis"]({"name": "ModalGate"})["handle"]
+        HANDLERS["fem_set_solver"]({
+            "analysis": analysis, "kind": "ccx",
+            "tunables": {"GeometricalNonlinearity": "linear",
+                         "MatrixSolverType": "default",
+                         "IterationsControlParameterTimeUse": False}})
+        HANDLERS["fem_set_material"]({"analysis": analysis, "body": body_h,
+                                      "material": material})
+        HANDLERS["fem_add_constraint"]({
+            "analysis": analysis, "kind": "fixed",
+            "refs": [{"handle": body_h, "face": f} for f in fix_faces]})
+        mesh_info = HANDLERS["fem_mesh"]({
+            "analysis": analysis, "body": body_h, "char_length": mesh_size,
+            "element_order": "2nd"})
+        HANDLERS["fem_modal"]({"analysis": analysis, "n_modes": n_modes})
+        HANDLERS["fem_run"]({"analysis": analysis, "workdir": workdir})
+        freqs = HANDLERS["fem_modal_results"]({"analysis": analysis})["frequencies_hz"]
+        if not freqs:
+            raise RuntimeError("modal solve produced no frequencies")
+        return freqs[0], freqs, {"nodes": mesh_info["nodes"],
+                                 "tets": mesh_info["tets"],
+                                 "char_length_mm": mesh_size,
+                                 "element_order": "2nd"}
+    finally:
+        try:
+            App.closeDocument(doc.Name)
+        except Exception:
+            pass
+        if prev is not None and prev in App.listDocuments():
+            App.setActiveDocument(prev)
 
 
 def _mobility_gate(man):
@@ -5922,7 +6507,7 @@ def _h_merge_assembly(p):
     # (visible on a pass); only the violations fail the merge.
     req_result = None
     if man.get("requirements"):
-        req_result = _requirements_gate(asm_h, man["requirements"])
+        req_result = _requirements_gate(asm_h, man["requirements"], links_by_inst)
         gates["requirements"] = req_result["violations"]
     # §11.9: motion gate — does the mechanism actually move at the intended ratio?
     # Closed-form (Grübler + ratio consistency), no geometry rebuild; the measured
@@ -7527,6 +8112,14 @@ def _dim_descriptors(page, datum_faces=None):
             value = 0.0
         d = {"name": dim.Name, "type": kind, "value": value,
              "circle": None, "span": None, "from_datum": True}
+        # stamped tolerance (add_dimension) — the tolerance-necessity gate (#173)
+        # reads plus/minus to judge whether a dim's precision matches its function.
+        if hasattr(dim, "DP_TolPlus") and hasattr(dim, "DP_TolMinus"):
+            try:
+                d["plus"] = float(dim.DP_TolPlus)
+                d["minus"] = float(dim.DP_TolMinus)
+            except Exception:
+                pass
         raw = str(getattr(dim, "DP_ModelRef", "") or "")
         if raw:
             try:
@@ -7555,6 +8148,78 @@ def _page_feature_notes(page):
     return out
 
 
+def _feature_for_face(face, feats):
+    """The enumerated feature id a cylindrical face belongs to, matched by shared
+    axis + radius/position; None if it maps to no hole/bore/step. Used to carry a
+    functional face role (annotate_face sealing/mating/datum) onto the feature the
+    tolerance-necessity gate reasons about. Best-effort; never raises."""
+    try:
+        if _surf_kind(face) != "Cylinder":
+            return None
+        surf = face.Surface
+        axis = _axis_canon(surf.Axis)
+        ax = (axis.x, axis.y, axis.z)
+        r = float(surf.Radius)
+        c = surf.Center
+    except Exception:
+        return None
+    for ft in feats:
+        k = ft.get("kind")
+        try:
+            if k == "hole":
+                fa, fc = ft.get("axis"), ft.get("center")
+                if not fa or not fc:
+                    continue
+                if abs(fa[0] * ax[0] + fa[1] * ax[1] + fa[2] * ax[2]) < 0.98:
+                    continue
+                d = [c.x - fc[0], c.y - fc[1], c.z - fc[2]]
+                dot = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2]
+                perp = [d[i] - dot * ax[i] for i in range(3)]
+                if (sum(pp * pp for pp in perp) ** 0.5) <= 0.2 \
+                        and abs(2.0 * r - ft.get("dia", 0.0)) <= 0.1:
+                    return ft["id"]
+            elif k in ("bore", "cyl_step"):
+                if abs(2.0 * r - ft.get("dia", 0.0)) <= 0.1:
+                    return ft["id"]
+        except Exception:
+            continue
+    return None
+
+
+def _functional_features(src, shape, feats, params):
+    """Map declared function onto enumerated feature ids for the tolerance-necessity
+    gate (#173): a feature id -> a human backing string. Sources: annotated
+    sealing/mating/datum faces (annotate_face) coaxial with a cylindrical feature,
+    plus features the caller declares directly via `functional` (list of ids) /
+    `fits` (id -> fit-code map). Best-effort; never raises."""
+    out = {}
+    for fid in (params.get("functional") or []):
+        out[str(fid)] = "declared functional"
+    for fid, code in (params.get("fits") or {}).items():
+        out[str(fid)] = f"declared fit {code}"
+    try:
+        roles = _read_face_roles(src)
+    except Exception:
+        roles = {}
+    if roles:
+        current = {}
+        for f in shape.Faces:
+            try:
+                current[f"f_{_hash_sig(_face_signature(f))}"] = f
+            except Exception:
+                continue
+        for _name, e in roles.items():
+            if e.get("role") not in ("sealing", "mating", "datum"):
+                continue
+            f = current.get(e.get("tag"))
+            if f is None:
+                continue
+            fid = _feature_for_face(f, feats)
+            if fid and fid not in out:
+                out[fid] = f"{e['role']} face role"
+    return out
+
+
 @handler("drawing_gate")
 def _h_drawing_gate(p):
     """Manufacturing-completeness gate for a drawing page (issue #85 Part B): does
@@ -7563,7 +8228,16 @@ def _h_drawing_gate(p):
     (process-aware: prismatic locates holes X/Y from a datum, turned is concentric
     Ø + length), and returns {ok, violations, slots_total, slots_covered, process,
     ...}. Each violation carries a code (under/redundant/conflict/extra/no_datum)
-    and a human reason. `process`: 'auto' (default) | 'prismatic' | 'turned'."""
+    and a human reason. `process`: 'auto' (default) | 'prismatic' | 'turned'.
+
+    Also attaches `tolerance_necessity` (#173, advisory): flags dimensions whose
+    tolerance is not matched to declared function — a functional feature's size
+    dimensioned with NO tolerance (under_toleranced) or a FREE feature toleranced
+    tighter than IT`tolerance_grade` (default 7) with no fit/role/interface/thread
+    backing (over_toleranced, with the ISO 286 band it could relax to). Function is
+    read from annotate_face sealing/mating/datum roles plus optional `functional`
+    (list of feature ids) / `fits` (id->fit-code) params. Warnings only unless
+    `necessity_strict` is set."""
     from driftpin import drawing_gate
     page = _resolve(p["page"])
     doc = _active_doc()
@@ -7597,6 +8271,18 @@ def _h_drawing_gate(p):
     rep["datum_faces"] = len(datum_faces)
     # advisory: does this part need a cross-section to read unambiguously?
     rep["section_recommended"] = drawing_gate.needs_section(feats)
+    # advisory (#173): is each dimension's tolerance matched to the part's declared
+    # function? Warnings only — never fails the completeness gate (opt in with
+    # necessity_strict). Guarded so it can't disturb the pass/fail above.
+    try:
+        functional = _functional_features(src, shape, feats, p)
+        rep["tolerance_necessity"] = drawing_gate.tolerance_necessity_report(
+            feats, dims, functional, process,
+            threshold_grade=int(p.get("tolerance_grade", 7)),
+            strict=bool(p.get("necessity_strict", False)))
+    except Exception as _exc:                                    # pragma: no cover
+        rep["tolerance_necessity"] = {"ok": True, "advisory": True,
+                                      "violations": [], "error": str(_exc)}
     return rep
 
 
@@ -9597,6 +10283,95 @@ def _h_fem_result_probe(p):
     return out
 
 
+_FIELD_KEYS = {
+    "vonmises": "vonmises_mpa",
+    "displacement": "displacement_mm",
+    "temperature": "temperature_c",
+}
+
+
+@handler("fem_field_surface")
+def _h_fem_field_surface(p):
+    """Extract the FEM result's exterior surface as a triangle mesh with a
+    per-vertex scalar field, for host-side colormap rendering (render_fem_results).
+
+    The volume (tet) mesh's boundary is the set of triangular tet-faces that
+    belong to exactly one tet; interior faces (shared by two tets) are dropped.
+    Corner nodes are used (2nd-order tets list corners first), so the surface is
+    a clean first-order triangulation.
+
+    field: 'vonmises' (default) | 'displacement' | 'temperature'. Returns
+    {vertices, triangles, values, displacements|None, field, min, max, units,
+    node_count, triangle_count}. `displacements` (per-vertex [dx,dy,dz]) is
+    included whenever displacement data exists, for a deformed-shape overlay."""
+    from collections import defaultdict
+
+    analysis = _resolve_analysis(p["analysis"])
+    field = p.get("field", "vonmises")
+    if field == "auto":
+        field = "vonmises"
+    if field not in _FIELD_KEYS:
+        raise ValueError(
+            f"unknown field {field!r}; use one of {sorted(_FIELD_KEYS)}"
+        )
+    scalar_key = _FIELD_KEYS[field]
+    units = {"vonmises": "MPa", "displacement": "mm", "temperature": "C"}[field]
+
+    result = _select_final_mech_result(analysis)
+    femmesh = _result_femmesh(analysis, result)
+    # Ask for the requested scalar field plus displacement vectors (overlay).
+    want = "auto" if field != "temperature" else "temperature"
+    maps, vec_map = _result_field_maps(result, want)
+    if scalar_key not in maps:
+        raise ValueError(
+            f"no {field!r} data on this result (have: {sorted(maps)})"
+        )
+    scalar_map = maps[scalar_key]
+
+    # Boundary extraction: a tet face bordering only one tet is on the surface.
+    face_count = defaultdict(int)
+    face_repr = {}
+    for elem in femmesh.Volumes:
+        enodes = femmesh.getElementNodes(elem)
+        if len(enodes) < 4:
+            continue
+        corners = enodes[:4]
+        for a, b, c in ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)):
+            tri = (corners[a], corners[b], corners[c])
+            key = tuple(sorted(tri))
+            face_count[key] += 1
+            face_repr[key] = tri
+    boundary = [face_repr[k] for k, cnt in face_count.items() if cnt == 1]
+    if not boundary:
+        raise RuntimeError("no boundary faces extracted (mesh has no volume elements)")
+
+    coords = femmesh.Nodes  # {node_id: Vector}
+    used = sorted({n for tri in boundary for n in tri})
+    remap = {n: i for i, n in enumerate(used)}
+    vertices = [[coords[n].x, coords[n].y, coords[n].z] for n in used]
+    triangles = [[remap[a], remap[b], remap[c]] for (a, b, c) in boundary]
+    values = [float(scalar_map.get(n, 0.0)) for n in used]
+
+    displacements = None
+    if vec_map:
+        displacements = [
+            list(vec_map.get(n, [0.0, 0.0, 0.0])) for n in used
+        ]
+
+    return {
+        "vertices": vertices,
+        "triangles": triangles,
+        "values": values,
+        "displacements": displacements,
+        "field": field,
+        "units": units,
+        "min": min(values) if values else 0.0,
+        "max": max(values) if values else 0.0,
+        "node_count": len(vertices),
+        "triangle_count": len(triangles),
+    }
+
+
 @handler("fem_mesh_refinement")
 def _h_fem_mesh_refinement(p):
     """Add a local mesh refinement to an existing FEM mesh. mesh: handle of
@@ -9821,6 +10596,9 @@ def _h_fem_cantilever(p):
     disp = list(result.DisplacementLengths)
     stress = list(result.vonMises)
     return {
+        # Register the analysis so callers can feed it to result-reading tools
+        # (fem_results, fem_field_surface, …) after this one-shot solve.
+        "analysis": _register("analysis", analysis),
         "nodes": mesh.FemMesh.NodeCount,
         "tets": mesh.FemMesh.TetraCount,
         "max_displacement_mm": max(disp),
@@ -9904,6 +10682,18 @@ def _h_press_fit_stress(p):
 def _h_seal_check(p):
     from driftpin.analysis import machine_elements as me
     return me.seal_check(**p)
+
+
+@handler("chain_drive")
+def _h_chain_drive(p):
+    from driftpin.analysis import machine_elements as me
+    return me.chain_drive(**p)
+
+
+@handler("weld_group")
+def _h_weld_group(p):
+    from driftpin.analysis import machine_elements as me
+    return me.weld_group(**p)
 
 
 @handler("tolerance_stackup")
@@ -10196,7 +10986,41 @@ def _h_cfd_pipe_flow(p):
 
 @handler("dfm_check")
 def _h_dfm_check(p):
+    """Manufacturability screen (dfx.dfm_check). Two input modes:
+
+    * **hand-built** — pass an explicit `faces` list [{name, draft_deg, wall_mm?}].
+    * **live handle (v2 Shape wiring)** — pass a `handle`/`model` and the per-face
+      descriptors are derived off the live solid via the face-classification
+      machinery (`_dfm_face_descriptors`: draft vs the pull axis + a ray-cast
+      undercut test + inward-chord wall sampling), then scored identically. This
+      is the issue #175 acceptance path: dfm_check(handle) reproduces the finding a
+      hand-built descriptor produces today, plus a wall_thickness_stats block.
+
+    Args: faces OR handle/model; pull_axis ('+z'/… or [x,y,z]), process, min_wall_mm,
+    min_draft_deg. Returns the dfx.dfm_check verdict (with wall_thickness_stats and
+    n_faces added on the handle path)."""
     from driftpin.analysis import dfx
+    p = dict(p)
+    handle = p.pop("model", None) or p.pop("handle", None)
+    if handle and not p.get("faces"):
+        _, shape = _shape_of(handle)
+        pull_axis = p.get("pull_axis", "+z")
+        pull = _pull_vector(pull_axis)
+        min_draft = float(p.get("min_draft_deg", 1.0))
+        faces, walls = _dfm_face_descriptors(shape, pull, min_draft)
+        res = dfx.dfm_check(
+            faces=faces, pull_axis=str(pull_axis),
+            process=p.get("process", "injection"),
+            min_wall_mm=p.get("min_wall_mm"), min_draft_deg=min_draft)
+        res["n_faces"] = len(shape.Faces)
+        if walls:
+            res["wall_thickness_stats"] = {
+                "min_mm": round(min(walls), 4), "mean_mm": round(sum(walls) / len(walls), 4),
+                "max_mm": round(max(walls), 4), "n": len(walls)}
+        else:
+            res["wall_thickness_stats"] = {"min_mm": None, "mean_mm": None,
+                                           "max_mm": None, "n": 0}
+        return res
     return dfx.dfm_check(**p)
 
 
@@ -10370,6 +11194,59 @@ def _ray_hits_solid(shape, start, direction, reach):
     return common.Length > 1e-6
 
 
+def _dfm_face_descriptors(shape, pull, min_draft_deg=1.0):
+    """Derive per-face DfM descriptors {name, draft_deg, wall_mm?} off a LIVE
+    solid, using the same face-classification geometry as the moldability tools:
+    draft_deg = 90 - angle(outward normal, pull) (its sign encodes which mold half
+    releases the face), a re-entrant face the straight pull cannot free in either
+    direction is reported with a negative draft (an undercut for dfx.dfm_check),
+    and an inward chord samples the local wall thickness. Returns (faces, walls)
+    where `walls` is the list of sampled wall thicknesses (mm). This is the v2
+    Shape-wiring bridge: it lets dfx.dfm_check read a handle instead of a
+    hand-built descriptor list (issue #175)."""
+    import math as _math
+
+    import Part
+    bbox = shape.BoundBox
+    reach = bbox.DiagonalLength * 2.0 + 1.0          # comfortably exits the solid
+    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)      # step just off the surface
+    faces = []
+    walls = []
+    for i, face in enumerate(shape.Faces):
+        idx = f"Face{i + 1}"
+        n = _outward_normal(face)
+        if n.Length == 0:
+            continue
+        n = App.Vector(n).normalize()
+        cos = max(-1.0, min(1.0, n.dot(pull)))
+        phi = _math.degrees(_math.acos(cos))         # angle of normal from +pull
+        draft = 90.0 - phi                           # >0 toward pull, <0 against
+
+        c = face.CenterOfMass
+        out_pt = c + App.Vector(n).multiply(eps)
+        releasable_plus = not _ray_hits_solid(shape, out_pt, App.Vector(pull), reach)
+        releasable_minus = not _ray_hits_solid(
+            shape, out_pt, App.Vector(pull).multiply(-1.0), reach)
+        undercut = not (releasable_plus or releasable_minus)
+        draft_deg = -abs(draft) if undercut else abs(draft)
+
+        in_pt = c - App.Vector(n).multiply(eps)
+        wall_mm = None
+        try:
+            chord = shape.common(Part.makeLine(in_pt, in_pt - App.Vector(n).multiply(reach)))
+            if chord.Length > 1e-6:
+                wall_mm = round(chord.Length, 4)
+                walls.append(chord.Length)
+        except Exception:
+            pass
+
+        fdesc = {"name": idx, "draft_deg": round(draft_deg, 4)}
+        if wall_mm is not None:
+            fdesc["wall_mm"] = wall_mm
+        faces.append(fdesc)
+    return faces, walls
+
+
 @handler("optics_moldability_check")
 def _h_optics_moldability_check(p):
     """Moldability screen for an optical (or any) part against a single pull axis —
@@ -10395,50 +11272,7 @@ def _h_optics_moldability_check(p):
     pull = _pull_vector(p.get("pull_axis", "+z"))
     min_draft = float(p.get("min_draft_deg", 1.0))
 
-    bbox = shape.BoundBox
-    reach = bbox.DiagonalLength * 2.0 + 1.0          # comfortably exits the solid
-    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)      # step just off the surface
-
-    faces = []
-    walls = []
-    import math as _math
-    for i, face in enumerate(shape.Faces):
-        idx = f"Face{i + 1}"
-        n = _outward_normal(face)
-        if n.Length == 0:
-            continue
-        n = App.Vector(n).normalize()
-        cos = max(-1.0, min(1.0, n.dot(pull)))
-        phi = _math.degrees(_math.acos(cos))         # angle of normal from +pull
-        draft = 90.0 - phi                           # >0 toward pull, <0 against
-
-        c = face.CenterOfMass
-        out_pt = c + App.Vector(n).multiply(eps)
-        releasable_plus = not _ray_hits_solid(shape, out_pt, App.Vector(pull), reach)
-        releasable_minus = not _ray_hits_solid(
-            shape, out_pt, App.Vector(pull).multiply(-1.0), reach)
-        undercut = not (releasable_plus or releasable_minus)
-        # An undercut face is reported with a negative draft so dfx.dfm_check
-        # classifies it as re-entrant; otherwise carry the geometric draft (its
-        # sign already encodes which mold half releases it).
-        draft_deg = -abs(draft) if undercut else abs(draft)
-
-        # inward chord ~ local wall thickness (face inward to the next boundary)
-        in_pt = c - App.Vector(n).multiply(eps)
-        wall_mm = None
-        try:
-            import Part
-            chord = shape.common(Part.makeLine(in_pt, in_pt - App.Vector(n).multiply(reach)))
-            if chord.Length > 1e-6:
-                wall_mm = round(chord.Length, 4)
-                walls.append(chord.Length)
-        except Exception:
-            pass
-
-        fdesc = {"name": idx, "draft_deg": round(draft_deg, 4)}
-        if wall_mm is not None:
-            fdesc["wall_mm"] = wall_mm
-        faces.append(fdesc)
+    faces, walls = _dfm_face_descriptors(shape, pull, min_draft)
 
     res = dfx.dfm_check(
         faces=faces, pull_axis=str(p.get("pull_axis", "+z")),
