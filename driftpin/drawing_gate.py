@@ -442,6 +442,193 @@ def completeness_report(features, dims, process, *, datums_declared=False, notes
 
 
 # --------------------------------------------------------------------------- #
+# Part B2 — tolerance necessity (issue #173): is every toleranced dimension
+# EARNING its tolerance, and is every functional feature toleranced at all?
+# --------------------------------------------------------------------------- #
+#
+# Advisory tier (like legibility). The completeness gate above decides the drawing
+# PASS/FAIL — does the dimension set reconstruct the part. This layer asks a softer,
+# orthogonal question about each dimension's TOLERANCE, and returns warnings only:
+# the gate never fails on necessity unless the caller opts into strict mode.
+#
+# A feature is FUNCTIONAL when something already on the model says it earns
+# precision — an annotated sealing/mating/datum face role (``annotate_face``), a
+# published interface frame, a declared fit (``fit_check`` inputs), or a thread
+# spec. Everything else is FREE: its size is held only to general tolerances. The
+# two v1 rules:
+#
+#   * a FUNCTIONAL feature dimensioned with NO explicit tolerance -> under_toleranced
+#     (the fit / seal / interface is silently left to general tolerances).
+#   * a FREE feature toleranced TIGHTER than the IT-grade threshold for its size
+#     band (default IT7) -> over_toleranced (precision no function asks for is
+#     needless cost), reported with the ISO 286 band it could relax to.
+#
+# ``functional`` maps feature id -> a human backing string ("sealing face role",
+# "declared fit H7/g6", "published interface bore", "thread M6"); the worker builds
+# it from the roles/interfaces/fits/threads already on the part, the pure core just
+# consults it. A dimension carries a tolerance as signed deviations ``plus``/
+# ``minus`` (or the symmetric shorthand ``tol``), matching :mod:`analysis.tolerance`;
+# absent both -> "no explicit tolerance". The ISO 286 IT tables are reused from
+# :mod:`driftpin.analysis.tolerance` so there is one source of truth for the bands.
+
+
+def _it_band_mm(size, grade):
+    """The ISO 286 IT-grade band width in mm for a nominal ``size`` (mm), reusing
+    the tabulated grades in :mod:`analysis.tolerance`. ``None`` when the size is
+    off-table (>500 mm or <=0) or the grade is not tabulated (v1: IT4–IT11)."""
+    from driftpin.analysis import tolerance
+    try:
+        idx = tolerance._band_index(abs(float(size)))
+        return tolerance._it(int(grade), idx) / 1000.0
+    except Exception:
+        return None
+
+
+def _it_grade_of(size, tol_width):
+    """The finest ISO 286 IT grade whose band still contains ``tol_width`` (mm) at
+    ``size`` — an approximate read of "how tight is this tolerance". Returns an int
+    grade, ``None`` off-table, or the finest tabulated grade when the tolerance is
+    even tighter than that (reported as "finer than ITn" by callers)."""
+    from driftpin.analysis import tolerance
+    try:
+        idx = tolerance._band_index(abs(float(size)))
+    except Exception:
+        return None
+    for g in sorted(tolerance._IT):
+        if tolerance._IT[g][idx] / 1000.0 >= tol_width - 1e-9:
+            return g
+    return min(tolerance._IT)   # tighter than the finest tabulated grade
+
+
+def _dim_tol_width(dim):
+    """A dimension's total tolerance band (mm) from signed ``plus``/``minus`` or a
+    symmetric ``tol``; ``None`` when the dimension carries no explicit tolerance."""
+    if dim.get("plus") is not None or dim.get("minus") is not None:
+        return abs(float(dim.get("plus", 0.0)) - float(dim.get("minus", 0.0)))
+    if dim.get("tol") is not None:
+        return abs(2.0 * float(dim["tol"]))
+    return None
+
+
+def _dim_feature_map(features, dims, process):
+    """Best-effort map ``id(dim) -> {"feats": {fid,...}, "kinds": {"size"|"location"}}``:
+    which feature(s) each dimension references and whether it pins a SIZE or a
+    LOCATION degree of freedom. Reuses the completeness gate's slot assignment (value
+    + geometric reference matching), so it needs no new heuristics — a dim binds to a
+    feature exactly when it would help pin one of that feature's degrees of freedom.
+    The size/location split matters because a fit/seal/thread backs a feature's SIZE,
+    not where it sits (positional tolerancing is a separate GD&T concern)."""
+    slots = required_slots(features, process)
+    coverage, _leftover, _noted = assign_dimensions(features, slots, dims)
+    by_slot = {s["id"]: s for s in slots}
+    out = {}
+    for sid, covering in coverage.items():
+        s = by_slot[sid]
+        kind = "size" if s["kind"] == "size" else "location"
+        for d in covering:
+            e = out.setdefault(id(d), {"feats": set(), "kinds": set()})
+            e["feats"].add(s["feature"])
+            e["kinds"].add(kind)
+    return out
+
+
+def check_tolerance_necessity(features, dims, functional=None, process=PRISMATIC,
+                              *, threshold_grade=7):
+    """Flag dimensions whose tolerance is not matched to the part's declared
+    function. Advisory: returns a realize-style finding list (empty == quiet), each
+    with ``code`` in {under_toleranced, over_toleranced}, the ``dim`` name, the
+    ``feature`` it references, a ``verdict``, and a ``suggestion``.
+
+    ``functional`` — ``{feature_id: backing_str}`` for features some existing model
+    fact makes functional (face role / interface / fit / thread). ``process`` picks
+    the completeness slot scheme used to attribute each dim to a feature.
+    ``threshold_grade`` — the IT grade a FREE feature may be held to before it reads
+    as over-toleranced (default 7)."""
+    functional = functional or {}
+    fmap = _dim_feature_map(features, dims, process)
+    out = []
+    for d in dims:
+        if d.get("feature"):
+            feats = {str(d["feature"])}
+            kinds = set(d.get("kinds") or ["size"])
+        else:
+            entry = fmap.get(id(d))
+            if not entry:
+                continue   # pins no feature DOF — the completeness gate owns 'extra'
+            feats, kinds = entry["feats"], entry["kinds"]
+        func_fid, backing = None, None
+        for fid in sorted(feats):
+            if fid in functional:
+                func_fid, backing = fid, functional[fid]
+                break
+        name = d.get("name", "?")
+        nominal = abs(float(d.get("value", 0.0)))
+        tol_width = _dim_tol_width(d)
+
+        # a fit/seal/thread governs a feature's SIZE, so only an untoleranced SIZE
+        # dimension of a functional feature is under-toleranced — its position is a
+        # separate (GD&T) concern the necessity gate does not pin in v1.
+        if backing is not None and tol_width is None and "size" in kinds:
+            out.append({
+                "code": "under_toleranced", "verdict": "under_toleranced",
+                "dim": name, "feature": func_fid, "backing": backing,
+                "nominal": round(nominal, 4),
+                "suggestion": f"add an explicit tolerance sized to its function "
+                              f"({backing})",
+                "reason": f"{func_fid} is functional ({backing}) but dimension "
+                          f"{name} (nominal {nominal:.3f} mm) carries no explicit "
+                          f"tolerance — under-toleranced; the fit/interface is left "
+                          f"to general tolerances"})
+            continue
+
+        if backing is None and tol_width is not None:
+            thr = _it_band_mm(nominal, threshold_grade)
+            if thr is None or tol_width >= thr - 1e-9:
+                continue
+            fid = sorted(feats)[0]
+            grade = _it_grade_of(nominal, tol_width)
+            grade_txt = f"~IT{grade}" if grade is not None else "very tight"
+            out.append({
+                "code": "over_toleranced", "verdict": "over_toleranced",
+                "dim": name, "feature": fid,
+                "nominal": round(nominal, 4), "tol_width": round(tol_width, 4),
+                "grade": grade,
+                "relax_to": {"grade": threshold_grade, "band_mm": round(thr, 4)},
+                "suggestion": f"open to IT{threshold_grade} (±{thr / 2.0:.3f} mm / "
+                              f"{thr * 1000.0:.0f} µm total) or a general ISO 2768 "
+                              f"tolerance",
+                "reason": f"dimension {name} on free feature {fid} is held to "
+                          f"{tol_width * 1000.0:.0f} µm ({grade_txt}) but no fit, "
+                          f"face role, interface, or thread requires it — "
+                          f"over-toleranced; open to IT{threshold_grade} "
+                          f"({thr * 1000.0:.0f} µm)"})
+    return out
+
+
+def tolerance_necessity_report(features, dims, functional=None, process=PRISMATIC,
+                               *, threshold_grade=7, strict=False):
+    """:func:`check_tolerance_necessity` plus counts, mirroring the other reports.
+    ``ok`` is always True in the default advisory mode (necessity is a warning, not
+    a manufacturability failure); ``strict=True`` makes ``ok`` reflect the findings
+    for callers who want to fail the gate on them."""
+    findings = check_tolerance_necessity(features, dims, functional, process,
+                                         threshold_grade=threshold_grade)
+    under = sum(1 for f in findings if f["code"] == "under_toleranced")
+    over = sum(1 for f in findings if f["code"] == "over_toleranced")
+    return {
+        "ok": (not findings) if strict else True,
+        "advisory": True,
+        "strict": strict,
+        "violations": findings,
+        "under_toleranced": under,
+        "over_toleranced": over,
+        "threshold_grade": threshold_grade,
+        "functional_features": sorted(functional or {}),
+        "dimensions": len(dims),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # drawings-next — does this part need a cross-section to be understood?
 # --------------------------------------------------------------------------- #
 def needs_section(features):

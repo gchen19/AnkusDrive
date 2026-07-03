@@ -7527,6 +7527,14 @@ def _dim_descriptors(page, datum_faces=None):
             value = 0.0
         d = {"name": dim.Name, "type": kind, "value": value,
              "circle": None, "span": None, "from_datum": True}
+        # stamped tolerance (add_dimension) — the tolerance-necessity gate (#173)
+        # reads plus/minus to judge whether a dim's precision matches its function.
+        if hasattr(dim, "DP_TolPlus") and hasattr(dim, "DP_TolMinus"):
+            try:
+                d["plus"] = float(dim.DP_TolPlus)
+                d["minus"] = float(dim.DP_TolMinus)
+            except Exception:
+                pass
         raw = str(getattr(dim, "DP_ModelRef", "") or "")
         if raw:
             try:
@@ -7555,6 +7563,78 @@ def _page_feature_notes(page):
     return out
 
 
+def _feature_for_face(face, feats):
+    """The enumerated feature id a cylindrical face belongs to, matched by shared
+    axis + radius/position; None if it maps to no hole/bore/step. Used to carry a
+    functional face role (annotate_face sealing/mating/datum) onto the feature the
+    tolerance-necessity gate reasons about. Best-effort; never raises."""
+    try:
+        if _surf_kind(face) != "Cylinder":
+            return None
+        surf = face.Surface
+        axis = _axis_canon(surf.Axis)
+        ax = (axis.x, axis.y, axis.z)
+        r = float(surf.Radius)
+        c = surf.Center
+    except Exception:
+        return None
+    for ft in feats:
+        k = ft.get("kind")
+        try:
+            if k == "hole":
+                fa, fc = ft.get("axis"), ft.get("center")
+                if not fa or not fc:
+                    continue
+                if abs(fa[0] * ax[0] + fa[1] * ax[1] + fa[2] * ax[2]) < 0.98:
+                    continue
+                d = [c.x - fc[0], c.y - fc[1], c.z - fc[2]]
+                dot = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2]
+                perp = [d[i] - dot * ax[i] for i in range(3)]
+                if (sum(pp * pp for pp in perp) ** 0.5) <= 0.2 \
+                        and abs(2.0 * r - ft.get("dia", 0.0)) <= 0.1:
+                    return ft["id"]
+            elif k in ("bore", "cyl_step"):
+                if abs(2.0 * r - ft.get("dia", 0.0)) <= 0.1:
+                    return ft["id"]
+        except Exception:
+            continue
+    return None
+
+
+def _functional_features(src, shape, feats, params):
+    """Map declared function onto enumerated feature ids for the tolerance-necessity
+    gate (#173): a feature id -> a human backing string. Sources: annotated
+    sealing/mating/datum faces (annotate_face) coaxial with a cylindrical feature,
+    plus features the caller declares directly via `functional` (list of ids) /
+    `fits` (id -> fit-code map). Best-effort; never raises."""
+    out = {}
+    for fid in (params.get("functional") or []):
+        out[str(fid)] = "declared functional"
+    for fid, code in (params.get("fits") or {}).items():
+        out[str(fid)] = f"declared fit {code}"
+    try:
+        roles = _read_face_roles(src)
+    except Exception:
+        roles = {}
+    if roles:
+        current = {}
+        for f in shape.Faces:
+            try:
+                current[f"f_{_hash_sig(_face_signature(f))}"] = f
+            except Exception:
+                continue
+        for _name, e in roles.items():
+            if e.get("role") not in ("sealing", "mating", "datum"):
+                continue
+            f = current.get(e.get("tag"))
+            if f is None:
+                continue
+            fid = _feature_for_face(f, feats)
+            if fid and fid not in out:
+                out[fid] = f"{e['role']} face role"
+    return out
+
+
 @handler("drawing_gate")
 def _h_drawing_gate(p):
     """Manufacturing-completeness gate for a drawing page (issue #85 Part B): does
@@ -7563,7 +7643,16 @@ def _h_drawing_gate(p):
     (process-aware: prismatic locates holes X/Y from a datum, turned is concentric
     Ø + length), and returns {ok, violations, slots_total, slots_covered, process,
     ...}. Each violation carries a code (under/redundant/conflict/extra/no_datum)
-    and a human reason. `process`: 'auto' (default) | 'prismatic' | 'turned'."""
+    and a human reason. `process`: 'auto' (default) | 'prismatic' | 'turned'.
+
+    Also attaches `tolerance_necessity` (#173, advisory): flags dimensions whose
+    tolerance is not matched to declared function — a functional feature's size
+    dimensioned with NO tolerance (under_toleranced) or a FREE feature toleranced
+    tighter than IT`tolerance_grade` (default 7) with no fit/role/interface/thread
+    backing (over_toleranced, with the ISO 286 band it could relax to). Function is
+    read from annotate_face sealing/mating/datum roles plus optional `functional`
+    (list of feature ids) / `fits` (id->fit-code) params. Warnings only unless
+    `necessity_strict` is set."""
     from driftpin import drawing_gate
     page = _resolve(p["page"])
     doc = _active_doc()
@@ -7597,6 +7686,18 @@ def _h_drawing_gate(p):
     rep["datum_faces"] = len(datum_faces)
     # advisory: does this part need a cross-section to read unambiguously?
     rep["section_recommended"] = drawing_gate.needs_section(feats)
+    # advisory (#173): is each dimension's tolerance matched to the part's declared
+    # function? Warnings only — never fails the completeness gate (opt in with
+    # necessity_strict). Guarded so it can't disturb the pass/fail above.
+    try:
+        functional = _functional_features(src, shape, feats, p)
+        rep["tolerance_necessity"] = drawing_gate.tolerance_necessity_report(
+            feats, dims, functional, process,
+            threshold_grade=int(p.get("tolerance_grade", 7)),
+            strict=bool(p.get("necessity_strict", False)))
+    except Exception as _exc:                                    # pragma: no cover
+        rep["tolerance_necessity"] = {"ok": True, "advisory": True,
+                                      "violations": [], "error": str(_exc)}
     return rep
 
 
