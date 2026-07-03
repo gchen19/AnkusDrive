@@ -45,6 +45,32 @@ def test_skin_depth_copper_50hz_handbook():
     assert abs(r3["skin_depth_m"] - r["skin_depth_m"] / 10.0) < 1e-12
 
 
+def test_conductors_come_from_materials_db():
+    # issue #175: σ / µ_r now live in the Materials DB electrical layer, one source
+    # of truth. Every conductor name em ships must resolve to a DB card whose
+    # electrical_conductivity equals the handbook value (and the offline fallback
+    # mirror must match it exactly, so the two can never drift).
+    from driftpin.analysis import materials as M
+    for name, sigma in em._FALLBACK_CONDUCTORS.items():
+        card = M.get(name)                                   # alias -> card
+        db = M.numeric(card, "electrical_conductivity_s_m")
+        assert db == sigma, (name, db, sigma)
+        assert em._db_conductivity(name) == sigma, name
+        # provenance rides along like the mechanical cards' basis/source
+        assert card.get("electrical_basis") == "handbook", card.get("name")
+        assert card.get("electrical_source"), card.get("name")
+        # and the analytic core reads the DB value (not a private table)
+        r = em.dc_resistance(1000.0, 1.0, conductor=name)
+        assert abs(r["conductivity_s_m"] - sigma) < 1.0, (name, r)
+    # an unknown conductor still raises through the DB path
+    try:
+        em.skin_depth(50.0, conductor="unobtainium")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for an unknown conductor")
+
+
 def test_dc_resistance_ohm_joule_pair():
     # 1 m of 1 mm² copper: the handbook ~17.2 mΩ
     r = em.dc_resistance(1000.0, 1.0, conductor="copper", voltage_v=1.0)

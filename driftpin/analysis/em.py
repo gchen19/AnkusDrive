@@ -23,8 +23,12 @@ Two Elmer gates, both validated live to <0.2 %:
   1.000 of δ for copper at 50 Hz). This is the induction-heating anchor — the
   Joule deposition profile is |J|² ∝ e^(−2x/δ).
 
-Units SI; conductivities S/m (a small handbook table of common conductors ships
-here — the Materials DB carries no electrical data yet). See ``tests/test_em.py``.
+Units SI; conductivities S/m. The conductor σ / µ_r values now live in the
+Materials DB (``driftpin.analysis.materials`` — the electrical layer added in
+issue #175, carrying ``electrical_conductivity`` + ``relative_permeability`` with
+provenance), so ``em_*`` tools and ``material_get`` share ONE source of truth.
+``_FALLBACK_CONDUCTORS`` below is a mirror used only when the DB can't be loaded.
+See ``tests/test_em.py``.
 """
 from __future__ import annotations
 
@@ -33,9 +37,11 @@ import os
 
 MU_0 = 4.0e-7 * math.pi  # vacuum permeability, H/m
 
-# Handbook DC conductivities (S/m) near 20 °C — CRC/IACS values. The Materials DB
-# has no electrical layer yet; this small table covers the common conductors.
-CONDUCTORS = {
+# Offline fallback ONLY (used when the Materials DB is unavailable). The DB is the
+# source of truth — test_em.py::test_conductors_come_from_materials_db asserts each
+# of these equals the DB value so the mirror can never silently drift. Handbook DC
+# conductivities (S/m) near 20 °C — CRC / IACS values.
+_FALLBACK_CONDUCTORS = {
     "silver": 6.14e7,
     "copper": 5.80e7,          # annealed, 100% IACS
     "gold": 4.10e7,
@@ -45,18 +51,42 @@ CONDUCTORS = {
     "stainless-304": 1.39e6,
 }
 
+# The conductor names em ships. material_get resolves each to a DB card via the
+# aliases seeded in issue #175 (e.g. 'copper' -> 'Copper Generic').
+CONDUCTOR_NAMES = tuple(_FALLBACK_CONDUCTORS)
+
+
+def _db_conductivity(conductor: str) -> float | None:
+    """σ (S/m) for a named conductor from the Materials DB electrical layer, or
+    None if the DB / card / electrical field is unavailable. Never raises."""
+    try:
+        from . import materials
+        card = materials.get(conductor)
+        return materials.numeric(card, "electrical_conductivity_s_m")
+    except Exception:
+        return None
+
+
+def conductor_conductivity(conductor: str) -> float:
+    """Public: resolve a conductor name to σ (S/m) — DB first, handbook fallback
+    otherwise. Raises ValueError for an unknown conductor."""
+    sigma = _db_conductivity(conductor)
+    if sigma is None:
+        sigma = _FALLBACK_CONDUCTORS.get(conductor.strip().lower())
+    if sigma is None:
+        raise ValueError(
+            f"unknown conductor {conductor!r}; known: {sorted(_FALLBACK_CONDUCTORS)} "
+            "(or pass conductivity_s_m)")
+    return sigma
+
 
 def _conductivity(conductivity_s_m, conductor: str | None) -> float:
-    """Resolve σ (S/m) from an explicit value or the CONDUCTORS table."""
+    """Resolve σ (S/m) from an explicit value or a named conductor (Materials DB
+    electrical layer, handbook fallback)."""
     if conductivity_s_m is not None:
         sigma = float(conductivity_s_m)
     elif conductor:
-        key = conductor.strip().lower()
-        if key not in CONDUCTORS:
-            raise ValueError(
-                f"unknown conductor {conductor!r}; known: {sorted(CONDUCTORS)} "
-                "(or pass conductivity_s_m)")
-        sigma = CONDUCTORS[key]
+        sigma = conductor_conductivity(conductor)
     else:
         raise ValueError("provide conductivity_s_m or a conductor name")
     if sigma <= 0:

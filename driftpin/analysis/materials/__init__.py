@@ -55,6 +55,9 @@ _NUMERIC = {
     "elongation_pct":        ("elongation", 1.0, "%"),
     "refractive_index":      ("refractive_index", 1.0, ""),
     "abbe":                  ("abbe_number", 1.0, ""),
+    # --- electrical layer (folds em.py's handbook conductor table, issue #175) ---
+    "electrical_conductivity_s_m": ("electrical_conductivity", 1.0, "S/m"),
+    "relative_permeability":       ("relative_permeability", 1.0, ""),
     # --- process / rheology layer (injection molding, issue #106) ---
     "melt_temp_c":           ("melt_temp_c", 1.0, "C"),
     "mold_temp_c":           ("mold_temp_c", 1.0, "C"),
