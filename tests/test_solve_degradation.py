@@ -39,6 +39,11 @@ class _force:
     def __enter__(self):
         self._mod = solvers._module_available
         self._bin = solvers._binary_path
+        self._unwired = solvers._unwired_found
+        # neutralize the installed-but-unwired probe (#177): "truly absent" means no
+        # standard-location bashrc / dedicated venv on the box counts as evidence, so
+        # the two-state contract stays deterministic regardless of the test host.
+        solvers._unwired_found = lambda name, spec: None
         if self.available:
             solvers._module_available = lambda m: True
             solvers._binary_path = lambda name, spec: "/fake/bin/" + name
@@ -50,6 +55,7 @@ class _force:
     def __exit__(self, *exc):
         solvers._module_available = self._mod
         solvers._binary_path = self._bin
+        solvers._unwired_found = self._unwired
         return False
 
 
@@ -70,11 +76,14 @@ def test_absent_solver_returns_clean_dict():
             r = solvers.require_solver(name)
             assert r["ok"] is False, (name, r)
             assert r["solver"] == name, (name, r)
+            assert r["status"] == "absent", (name, r)
             assert r["reason"] == "solver not installed", (name, r)
             assert r["install"] and isinstance(r["install"], str), (name, r)
+            assert "found_at" not in r, (name, r)
             # find_solver agrees and carries the hint, not a path/module
             info = solvers.find_solver(name)
             assert info["available"] is False, (name, info)
+            assert info["status"] == "absent", (name, info)
             assert "install_hint" in info and "path" not in info and "module" not in info
 
 
@@ -88,6 +97,7 @@ def test_present_solver_resolves():
             assert r["name"] == name and "reason" not in r, (name, r)
             assert ("path" in r) or ("module" in r), (name, r)
             assert solvers.is_available(name) is True, name
+            assert solvers.find_solver(name)["status"] == "ok", name
 
 
 def test_capabilities_never_raises_either_way():
@@ -96,10 +106,12 @@ def test_capabilities_never_raises_either_way():
     with _force(available=False):
         caps = solvers.capabilities()
         assert caps["available"] == [], caps["available"]
+        assert caps["unwired"] == [], caps["unwired"]
         assert set(caps["solvers"]) == set(solvers.known_solvers())
         for fam, fi in caps["families"].items():
             assert fi["any_available"] is False, (fam, fi)
             assert fi["available"] == [], (fam, fi)
+            assert fi["unwired"] == [], (fam, fi)
         # extras map names a pip extra to its wheel solvers
         assert "mbd" in caps["extras"] and "pybullet" in caps["extras"]["mbd"]
 
@@ -151,6 +163,127 @@ def test_binary_env_override_resolves_real_path():
         else:
             os.environ["DRIFTPIN_ELMER_PATH"] = prev
         os.unlink(fake)
+
+
+class _absent_binaries_and_wheels:
+    """Force the primitive resolvers absent WITHOUT touching the installed-but-unwired
+    probe — so the #177 third state can be exercised deterministically on any host."""
+
+    def __enter__(self):
+        self._mod = solvers._module_available
+        self._bin = solvers._binary_path
+        solvers._module_available = lambda m: False
+        solvers._binary_path = lambda name, spec: None
+        return self
+
+    def __exit__(self, *exc):
+        solvers._module_available = self._mod
+        solvers._binary_path = self._bin
+        return False
+
+
+def _clear_env(*names):
+    """Temporarily clear env vars; returns a restorer callable."""
+    saved = {n: os.environ.pop(n, None) for n in names}
+
+    def restore():
+        for n, v in saved.items():
+            if v is None:
+                os.environ.pop(n, None)
+            else:
+                os.environ[n] = v
+    return restore
+
+
+def test_openfoam_unwired_from_standard_bashrc():
+    """#177: OpenFOAM's binary is only on PATH after sourcing etc/bashrc, so a bare
+    shell can't resolve it — but a standard-location bashrc proves it's installed.
+    Fake one in a tmp dir via the DRIFTPIN_OPENFOAM_DIRS discovery override and assert
+    the third state `unwired` + the specific 'set DRIFTPIN_OPENFOAM_BASHRC=' hint."""
+    tmp = tempfile.mkdtemp(prefix="fake-openfoam-")
+    os.makedirs(os.path.join(tmp, "etc"))
+    bashrc = os.path.join(tmp, "etc", "bashrc")
+    with open(bashrc, "w") as fh:
+        fh.write("# fake OpenFOAM bashrc\n")
+    restore = _clear_env("DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_BASHRC")
+    os.environ["DRIFTPIN_OPENFOAM_DIRS"] = tmp
+    try:
+        with _absent_binaries_and_wheels():
+            info = solvers.find_solver("openfoam")
+            assert info["available"] is False, info
+            assert info["status"] == "unwired", info
+            assert info["found_at"] == bashrc, info
+            assert info["wire_hint"] == f"set DRIFTPIN_OPENFOAM_BASHRC={bashrc} (or source it)", info
+
+            r = solvers.require_solver("openfoam")
+            assert r["ok"] is False and r["status"] == "unwired", r
+            assert r["reason"] == "solver installed but env not wired in this shell", r
+            assert r["found_at"] == bashrc, r
+            assert r["install"] == info["wire_hint"], r
+
+            caps = solvers.capabilities()
+            assert "openfoam" in caps["unwired"], caps["unwired"]
+            assert "openfoam" not in caps["available"], caps["available"]
+            assert "openfoam" in caps["families"]["cfd"]["unwired"], caps["families"]["cfd"]
+    finally:
+        os.environ.pop("DRIFTPIN_OPENFOAM_DIRS", None)
+        restore()
+        os.unlink(bashrc)
+        os.rmdir(os.path.join(tmp, "etc"))
+        os.rmdir(tmp)
+
+
+def test_openems_unwired_from_dedicated_venv():
+    """#177: openEMS lives in a dedicated .venv-openems, not this interpreter, so
+    find_spec reports it absent. Fake the venv beside a tmp repo root (DRIFTPIN_REPO_ROOT
+    discovery override) and assert `unwired` + the 'set DRIFTPIN_OPENEMS_PYTHON=' hint."""
+    tmp = tempfile.mkdtemp(prefix="fake-repo-")
+    venv = os.path.join(tmp, ".venv-openems")
+    os.makedirs(os.path.join(venv, "bin"))
+    with open(os.path.join(venv, "bin", "python3"), "w") as fh:
+        fh.write("#!/bin/sh\n")
+    restore = _clear_env("DRIFTPIN_OPENEMS_PYTHON")
+    os.environ["DRIFTPIN_REPO_ROOT"] = tmp
+    try:
+        with _absent_binaries_and_wheels():
+            info = solvers.find_solver("openems")
+            assert info["status"] == "unwired", info
+            assert info["found_at"] == venv, info
+            assert info["wire_hint"] == f"set DRIFTPIN_OPENEMS_PYTHON={venv}/bin/python3", info
+            # bempp (also a dedicated-venv solver) has no .venv-bempp here -> stays absent
+            bempp = solvers.find_solver("bempp")
+            assert bempp["status"] == "absent", bempp
+            assert "found_at" not in bempp, bempp
+    finally:
+        os.environ.pop("DRIFTPIN_REPO_ROOT", None)
+        restore()
+        os.unlink(os.path.join(venv, "bin", "python3"))
+        os.rmdir(os.path.join(venv, "bin"))
+        os.rmdir(venv)
+        os.rmdir(tmp)
+
+
+def test_truly_absent_solver_still_reports_absent_with_install_hint():
+    """#177 guard: with NO unwired evidence on the box, an env-scoped solver still
+    reports plain `absent` and hands back the full install hint (not a wire hint)."""
+    restore = _clear_env("DRIFTPIN_OPENFOAM_DIRS", "DRIFTPIN_REPO_ROOT",
+                         "DRIFTPIN_OPENFOAM_BASHRC", "DRIFTPIN_OPENFOAM_PATH")
+    # point the repo-root probe at an empty tmp dir so no real .venv-* is discovered
+    empty = tempfile.mkdtemp(prefix="empty-repo-")
+    os.environ["DRIFTPIN_REPO_ROOT"] = empty
+    try:
+        with _absent_binaries_and_wheels():
+            for name in ("openems", "bempp"):
+                info = solvers.find_solver(name)
+                assert info["status"] == "absent", (name, info)
+                assert "found_at" not in info and "wire_hint" not in info, (name, info)
+                r = solvers.require_solver(name)
+                assert r["status"] == "absent" and r["reason"] == "solver not installed", (name, r)
+                assert r["install"] == solvers._SOLVERS[name]["install_hint"], (name, r)
+    finally:
+        os.environ.pop("DRIFTPIN_REPO_ROOT", None)
+        restore()
+        os.rmdir(empty)
 
 
 # --- runner -------------------------------------------------------------------
