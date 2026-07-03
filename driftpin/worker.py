@@ -622,16 +622,56 @@ def _h_add_pulley(p):
             "teeth": teeth, "width": width, "flanged": flanged}
 
 
+def _spring_squared_ground_solid(wire_diameter, Rm, free_length, total_coils,
+                                 active_coils, active_pitch):
+    """Swept solid for a squared-and-ground compression spring: two closed end
+    coils (pitch = wire diameter, so the end turns sit flat/touching) bracket the
+    active coils (pitch = active_pitch). Built as one continuous helical spine so
+    the swept solid is boolean-clean. Returns a Part.Solid, or raises."""
+    d = wire_diameter
+    # bottom closed coil: 1 turn at pitch d (z: 0..d)
+    h1 = Part.makeHelix(d, d, Rm)
+    # active coils: active_coils turns at active_pitch (z: d..d+p*Na), starting at
+    # angle 0 to meet the bottom coil's end at (Rm, 0, d)
+    h2 = Part.makeHelix(active_pitch, active_pitch * active_coils, Rm)
+    h2.translate(App.Vector(0, 0, d))
+    # top closed coil: 1 turn at pitch d, rotated to meet the active coil's end
+    # angle so the spine stays position-continuous
+    h3 = Part.makeHelix(d, d, Rm)
+    h3.rotate(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 360.0 * active_coils)
+    h3.translate(App.Vector(0, 0, d + active_pitch * active_coils))
+    spine = Part.Wire(Part.__sortEdges__(h1.Edges + h2.Edges + h3.Edges))
+    e0 = spine.Edges[0]
+    p0 = e0.valueAt(e0.FirstParameter)
+    t0 = e0.tangentAt(e0.FirstParameter)
+    profile = Part.Wire(Part.Circle(App.Vector(p0), App.Vector(t0), d / 2.0).toShape())
+    sol = spine.makePipeShell([profile], True, True)
+    sol = sol.Solids[0] if sol.Solids else sol
+    if not sol.isValid() or sol.Volume <= 0:
+        raise RuntimeError("squared-ground sweep produced an invalid/empty solid")
+    return sol
+
+
 @handler("add_spring")
 def _h_add_spring(p):
     """Helical compression spring: a circular wire-section swept along a helix.
-    Units: all lengths mm. wire_diameter (d), outer_diameter (OD), free_length,
-    coils (turns, may be fractional). kind: 'compression' (only mode for v1).
-    Spring rate computed for steel (G = 79.3 GPa = 79300 MPa) via
-    k = G*d^4 / (8*D^3*Na), D = mean coil diameter, Na = active coils (= coils),
-    yielding k in N/mm. Returns the solid's handle plus the mating/reference
-    dimensions {mean_diameter, free_length, coils, solid_height, spring_rate_n_per_mm}.
-    """
+    Units: all lengths mm. wire_diameter (d), outer_diameter (OD), free_length (L0),
+    coils (TOTAL turns Nt, may be fractional).
+
+    kind='compression' (default) models **squared-and-ground** ends: the last coil
+    at each end is closed (swept at pitch = d so the end turns sit flat) and the
+    two end coils are inactive, so active coils Na = Nt - 2 (handbook). This fixes
+    the reference numbers to the standard squared+ground forms:
+        solid_height  Ls = d * Nt          (all turns close to the wire diameter)
+        free_length   L0 = p * Na + 2*d    (p = active-coil pitch, an output)
+    The spring rate uses the ACTIVE coils: k = G*d^4/(8*D^3*Na) with G = 79.3 GPa
+    (steel), D the mean coil diameter, yielding k in N/mm. Any other `kind`, or a
+    spring too short/few-coiled for squared ends, falls back to a plain open helix.
+
+    free_length must exceed solid_height (a spring cannot sit shorter free than
+    solid). Returns the solid's handle plus {mean_diameter, free_length, coils,
+    total_coils, active_coils, end_type, active_pitch_mm, solid_height,
+    spring_rate_n_per_mm}."""
     doc = _active_doc()
     wire_diameter = float(p["wire_diameter"])
     outer_diameter = float(p["outer_diameter"])
@@ -651,22 +691,49 @@ def _h_add_spring(p):
 
     # Mean coil radius: centreline of the wire sits half a wire-diameter inside the OD.
     Rm = (outer_diameter - wire_diameter) / 2.0
-    pitch = free_length / coils
-    helix = Part.makeHelix(pitch, free_length, Rm)
+    D = Rm * 2.0
+    G = 79300.0
 
-    # Profile must lie in the plane normal to the helix's start tangent, else the
-    # swept section is skewed; makePipeShell with is_frenet keeps it normal along.
-    e0 = helix.Edges[0]
-    p0 = e0.valueAt(e0.FirstParameter)
-    t0 = e0.tangentAt(e0.FirstParameter)
-    circ = Part.Circle(App.Vector(p0), App.Vector(t0), wire_diameter / 2.0)
-    profile = Part.Wire(circ.toShape())
-    # makePipeShell(profiles, make_solid=True, is_frenet=True) -> closed swept solid.
-    sol = Part.Wire(helix.Edges).makePipeShell([profile], True, True)
-    if not sol.isValid() or sol.Volume <= 0:
-        raise RuntimeError("spring sweep produced an invalid/empty solid; check dimensions")
-    # TODO: kind=="compression" could flatten/grind the end coils (squared ends);
-    # v1 leaves open ends — solid_height below still uses the closed-coil estimate.
+    # Squared-and-ground compression spring: two inactive end coils, Na = Nt - 2.
+    squared = (kind == "compression" and coils > 2.0)
+    end_type = "plain"
+    active_coils = coils
+    active_pitch = free_length / coils
+    solid_height = coils * wire_diameter
+    sol = None
+    if squared:
+        na = coils - 2.0
+        solid_height = coils * wire_diameter                 # Ls = d * Nt
+        if free_length <= solid_height:
+            raise ValueError(
+                f"free_length ({free_length}) must exceed solid_height "
+                f"({round(solid_height, 4)} = d*Nt) for a squared-ground spring")
+        # L0 = p*Na + 2d  ->  active-coil pitch p (the two end coils add 2d)
+        p_active = (free_length - 2.0 * wire_diameter) / na
+        try:
+            sol = _spring_squared_ground_solid(
+                wire_diameter, Rm, free_length, coils, na, p_active)
+            end_type = "squared_ground"
+            active_coils = na
+            active_pitch = p_active
+        except Exception:
+            sol = None                                       # fall back to plain
+
+    if sol is None:
+        # Plain open helix over the full free length (fallback / non-compression).
+        end_type = "plain"
+        active_coils = coils
+        active_pitch = free_length / coils
+        solid_height = coils * wire_diameter
+        helix = Part.makeHelix(active_pitch, free_length, Rm)
+        e0 = helix.Edges[0]
+        p0 = e0.valueAt(e0.FirstParameter)
+        t0 = e0.tangentAt(e0.FirstParameter)
+        profile = Part.Wire(
+            Part.Circle(App.Vector(p0), App.Vector(t0), wire_diameter / 2.0).toShape())
+        sol = Part.Wire(helix.Edges).makePipeShell([profile], True, True)
+        if not sol.isValid() or sol.Volume <= 0:
+            raise RuntimeError("spring sweep produced an invalid/empty solid; check dimensions")
 
     obj = doc.addObject("Part::Feature", p.get("name", "Spring"))
     obj.Shape = sol
@@ -676,13 +743,13 @@ def _h_add_spring(p):
     doc.recompute()
     h = _register("spring", obj)
 
-    # Spring rate, steel: G in MPa, d/D in mm -> k in N/mm.
-    G = 79300.0
-    D = Rm * 2.0
-    k = G * wire_diameter ** 4 / (8.0 * D ** 3 * coils)
+    # Spring rate, steel: G in MPa, d/D in mm -> k in N/mm, using the ACTIVE coils.
+    k = G * wire_diameter ** 4 / (8.0 * D ** 3 * active_coils)
     return {"handle": h, "name": obj.Name, "volume": round(obj.Shape.Volume, 4),
             "mean_diameter": round(D, 4), "free_length": free_length, "coils": coils,
-            "kind": kind, "solid_height": round(coils * wire_diameter, 4),
+            "total_coils": coils, "active_coils": round(active_coils, 4),
+            "end_type": end_type, "active_pitch_mm": round(active_pitch, 4),
+            "kind": kind, "solid_height": round(solid_height, 4),
             "spring_rate_n_per_mm": round(k, 4)}
 
 
@@ -9906,6 +9973,18 @@ def _h_seal_check(p):
     return me.seal_check(**p)
 
 
+@handler("chain_drive")
+def _h_chain_drive(p):
+    from driftpin.analysis import machine_elements as me
+    return me.chain_drive(**p)
+
+
+@handler("weld_group")
+def _h_weld_group(p):
+    from driftpin.analysis import machine_elements as me
+    return me.weld_group(**p)
+
+
 @handler("tolerance_stackup")
 def _h_tolerance_stackup(p):
     from driftpin.analysis import tolerance
@@ -10196,7 +10275,41 @@ def _h_cfd_pipe_flow(p):
 
 @handler("dfm_check")
 def _h_dfm_check(p):
+    """Manufacturability screen (dfx.dfm_check). Two input modes:
+
+    * **hand-built** — pass an explicit `faces` list [{name, draft_deg, wall_mm?}].
+    * **live handle (v2 Shape wiring)** — pass a `handle`/`model` and the per-face
+      descriptors are derived off the live solid via the face-classification
+      machinery (`_dfm_face_descriptors`: draft vs the pull axis + a ray-cast
+      undercut test + inward-chord wall sampling), then scored identically. This
+      is the issue #175 acceptance path: dfm_check(handle) reproduces the finding a
+      hand-built descriptor produces today, plus a wall_thickness_stats block.
+
+    Args: faces OR handle/model; pull_axis ('+z'/… or [x,y,z]), process, min_wall_mm,
+    min_draft_deg. Returns the dfx.dfm_check verdict (with wall_thickness_stats and
+    n_faces added on the handle path)."""
     from driftpin.analysis import dfx
+    p = dict(p)
+    handle = p.pop("model", None) or p.pop("handle", None)
+    if handle and not p.get("faces"):
+        _, shape = _shape_of(handle)
+        pull_axis = p.get("pull_axis", "+z")
+        pull = _pull_vector(pull_axis)
+        min_draft = float(p.get("min_draft_deg", 1.0))
+        faces, walls = _dfm_face_descriptors(shape, pull, min_draft)
+        res = dfx.dfm_check(
+            faces=faces, pull_axis=str(pull_axis),
+            process=p.get("process", "injection"),
+            min_wall_mm=p.get("min_wall_mm"), min_draft_deg=min_draft)
+        res["n_faces"] = len(shape.Faces)
+        if walls:
+            res["wall_thickness_stats"] = {
+                "min_mm": round(min(walls), 4), "mean_mm": round(sum(walls) / len(walls), 4),
+                "max_mm": round(max(walls), 4), "n": len(walls)}
+        else:
+            res["wall_thickness_stats"] = {"min_mm": None, "mean_mm": None,
+                                           "max_mm": None, "n": 0}
+        return res
     return dfx.dfm_check(**p)
 
 
@@ -10370,6 +10483,59 @@ def _ray_hits_solid(shape, start, direction, reach):
     return common.Length > 1e-6
 
 
+def _dfm_face_descriptors(shape, pull, min_draft_deg=1.0):
+    """Derive per-face DfM descriptors {name, draft_deg, wall_mm?} off a LIVE
+    solid, using the same face-classification geometry as the moldability tools:
+    draft_deg = 90 - angle(outward normal, pull) (its sign encodes which mold half
+    releases the face), a re-entrant face the straight pull cannot free in either
+    direction is reported with a negative draft (an undercut for dfx.dfm_check),
+    and an inward chord samples the local wall thickness. Returns (faces, walls)
+    where `walls` is the list of sampled wall thicknesses (mm). This is the v2
+    Shape-wiring bridge: it lets dfx.dfm_check read a handle instead of a
+    hand-built descriptor list (issue #175)."""
+    import math as _math
+
+    import Part
+    bbox = shape.BoundBox
+    reach = bbox.DiagonalLength * 2.0 + 1.0          # comfortably exits the solid
+    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)      # step just off the surface
+    faces = []
+    walls = []
+    for i, face in enumerate(shape.Faces):
+        idx = f"Face{i + 1}"
+        n = _outward_normal(face)
+        if n.Length == 0:
+            continue
+        n = App.Vector(n).normalize()
+        cos = max(-1.0, min(1.0, n.dot(pull)))
+        phi = _math.degrees(_math.acos(cos))         # angle of normal from +pull
+        draft = 90.0 - phi                           # >0 toward pull, <0 against
+
+        c = face.CenterOfMass
+        out_pt = c + App.Vector(n).multiply(eps)
+        releasable_plus = not _ray_hits_solid(shape, out_pt, App.Vector(pull), reach)
+        releasable_minus = not _ray_hits_solid(
+            shape, out_pt, App.Vector(pull).multiply(-1.0), reach)
+        undercut = not (releasable_plus or releasable_minus)
+        draft_deg = -abs(draft) if undercut else abs(draft)
+
+        in_pt = c - App.Vector(n).multiply(eps)
+        wall_mm = None
+        try:
+            chord = shape.common(Part.makeLine(in_pt, in_pt - App.Vector(n).multiply(reach)))
+            if chord.Length > 1e-6:
+                wall_mm = round(chord.Length, 4)
+                walls.append(chord.Length)
+        except Exception:
+            pass
+
+        fdesc = {"name": idx, "draft_deg": round(draft_deg, 4)}
+        if wall_mm is not None:
+            fdesc["wall_mm"] = wall_mm
+        faces.append(fdesc)
+    return faces, walls
+
+
 @handler("optics_moldability_check")
 def _h_optics_moldability_check(p):
     """Moldability screen for an optical (or any) part against a single pull axis —
@@ -10395,50 +10561,7 @@ def _h_optics_moldability_check(p):
     pull = _pull_vector(p.get("pull_axis", "+z"))
     min_draft = float(p.get("min_draft_deg", 1.0))
 
-    bbox = shape.BoundBox
-    reach = bbox.DiagonalLength * 2.0 + 1.0          # comfortably exits the solid
-    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)      # step just off the surface
-
-    faces = []
-    walls = []
-    import math as _math
-    for i, face in enumerate(shape.Faces):
-        idx = f"Face{i + 1}"
-        n = _outward_normal(face)
-        if n.Length == 0:
-            continue
-        n = App.Vector(n).normalize()
-        cos = max(-1.0, min(1.0, n.dot(pull)))
-        phi = _math.degrees(_math.acos(cos))         # angle of normal from +pull
-        draft = 90.0 - phi                           # >0 toward pull, <0 against
-
-        c = face.CenterOfMass
-        out_pt = c + App.Vector(n).multiply(eps)
-        releasable_plus = not _ray_hits_solid(shape, out_pt, App.Vector(pull), reach)
-        releasable_minus = not _ray_hits_solid(
-            shape, out_pt, App.Vector(pull).multiply(-1.0), reach)
-        undercut = not (releasable_plus or releasable_minus)
-        # An undercut face is reported with a negative draft so dfx.dfm_check
-        # classifies it as re-entrant; otherwise carry the geometric draft (its
-        # sign already encodes which mold half releases it).
-        draft_deg = -abs(draft) if undercut else abs(draft)
-
-        # inward chord ~ local wall thickness (face inward to the next boundary)
-        in_pt = c - App.Vector(n).multiply(eps)
-        wall_mm = None
-        try:
-            import Part
-            chord = shape.common(Part.makeLine(in_pt, in_pt - App.Vector(n).multiply(reach)))
-            if chord.Length > 1e-6:
-                wall_mm = round(chord.Length, 4)
-                walls.append(chord.Length)
-        except Exception:
-            pass
-
-        fdesc = {"name": idx, "draft_deg": round(draft_deg, 4)}
-        if wall_mm is not None:
-            fdesc["wall_mm"] = wall_mm
-        faces.append(fdesc)
+    faces, walls = _dfm_face_descriptors(shape, pull, min_draft)
 
     res = dfx.dfm_check(
         faces=faces, pull_axis=str(p.get("pull_axis", "+z")),
