@@ -342,6 +342,19 @@ whole back up with the joints actually fitting. The design is written up in
 not shared co-editing of one live document (a single worker = one
 `App.ActiveDocument`, so concurrent mutation is a non-goal for now).
 
+**Concurrent agents on one MCP server — workspaces.** FastMCP runs sync tools in
+a thread pool, so a host can have several tool calls in flight at once. The
+server keeps a *pool* of named **workspaces**, each its own freecadcmd process
+with its own `App.ActiveDocument` and handle registry. Each concurrent agent
+claims its own workspace with `use_workspace(name)` at the start of its session;
+**handles and documents do not cross workspaces**. A client that never calls
+`use_workspace` sees the historical single-worker behavior byte-for-byte
+(everything routes to the `default` workspace). `Worker.call()` is internally
+serialized so two threads can never interleave the stdin/stdout protocol on one
+process. The pool is capped (`DRIFTPIN_MAX_WORKSPACES`, default 4) and idle
+workspaces are reaped (`DRIFTPIN_WORKSPACE_IDLE_S`, default 900s) so abandoned
+sessions don't leak processes; `list_workspaces` / `close_workspace` manage it.
+
 The split of responsibilities is deliberate:
 
 - **DriftPin ships the thin, tool-agnostic primitives** that make a merge

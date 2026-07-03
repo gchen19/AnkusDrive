@@ -1,13 +1,34 @@
 """
 DriftPin MCP server — exposes the worker handlers as MCP tools over stdio.
 
-One Worker is spawned at server startup and reused across tool calls, so
-ActiveDocument state persists across an MCP session (the whole point).
+A Worker (a freecadcmd process with its own App.ActiveDocument + handle
+registry) is spawned lazily and reused across tool calls, so document state
+persists across an MCP session (the whole point).
+
+**Concurrency (issue #167).** FastMCP runs sync tools in an anyio thread pool,
+so a client can have several tool calls in flight at once. Two safeguards keep
+that from corrupting the single-worker protocol:
+
+  * Worker.call() is internally serialized (see client.py), so two threads can
+    never interleave stdin writes / stdout reads on one process.
+  * The server keeps a *pool* of named workspaces — `dict[str, Worker]`. Each
+    concurrent agent claims its own workspace via `use_workspace(name)` and gets
+    an isolated freecadcmd process; handles and documents do NOT cross
+    workspaces. A client that never calls `use_workspace` sees exactly the old
+    single-worker behavior (everything routes to the "default" workspace).
+
+The pool is capped (DRIFTPIN_MAX_WORKSPACES, default 4) and idle-reaped
+(DRIFTPIN_WORKSPACE_IDLE_S, default 900s) so abandoned workspaces don't leak
+freecadcmd processes. See `use_workspace` / `list_workspaces` / `close_workspace`
+and docs/MULTI_AGENT.md.
 
 Run:   .venv/bin/python3 -m driftpin mcp
 """
 import atexit
 import base64
+import os
+import threading
+import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -18,14 +39,90 @@ from . import render as _render
 
 mcp = FastMCP("driftpin")
 
-_worker: Worker | None = None
+# --- workspace pool -----------------------------------------------------------
+#
+# Each workspace name maps to its own Worker (freecadcmd process). The default
+# workspace preserves the historical single-agent behavior byte-for-byte: a
+# client that never touches use_workspace only ever hits "default".
+
+DEFAULT_WORKSPACE = "default"
+
+# Explicit, env-overridable knobs (issue #167 scoping) — no silent magic number.
+# Cap: how many concurrent workspaces (freecadcmd processes) may be live at once.
+# Idle reap: a workspace untouched for this many seconds is shut down on the next
+# pool access (0 disables reaping). The default workspace is never reaped.
+_MAX_WORKSPACES = max(1, int(os.environ.get("DRIFTPIN_MAX_WORKSPACES", "4")))
+_IDLE_REAP_S = float(os.environ.get("DRIFTPIN_WORKSPACE_IDLE_S", "900"))
+
+_workers: dict[str, Worker] = {}
+_last_used: dict[str, float] = {}
+_pool_lock = threading.Lock()
+
+# The workspace subsequent tool calls route to. Process-global and mutated by
+# use_workspace(); the single-client MCP model is "an agent claims its workspace,
+# then works in it". Concurrent calls to the *same* workspace are made safe by
+# Worker.call()'s internal lock.
+_current_workspace = DEFAULT_WORKSPACE
 
 
-def _ensure_worker() -> Worker:
-    global _worker
-    if _worker is None or _worker.proc.poll() is not None:
-        _worker = Worker()
-    return _worker
+def _drop_locked(name: str) -> bool:
+    """Shut down and forget one workspace's worker. Caller holds _pool_lock.
+    Returns True if a worker existed."""
+    w = _workers.pop(name, None)
+    _last_used.pop(name, None)
+    if w is None:
+        return False
+    try:
+        w.shutdown(timeout=3.0)
+    except Exception:
+        pass
+    if w.proc.poll() is None:
+        try:
+            w.proc.kill()
+            w.proc.wait(timeout=2.0)
+        except Exception:
+            pass
+    return True
+
+
+def _reap_idle_locked(now: float, protect: str) -> None:
+    """Reap workspaces idle longer than _IDLE_REAP_S. Never reaps the default
+    workspace or `protect` (the one about to be used). Caller holds _pool_lock."""
+    if _IDLE_REAP_S <= 0:
+        return
+    for name in list(_workers):
+        if name in (DEFAULT_WORKSPACE, protect):
+            continue
+        if now - _last_used.get(name, now) > _IDLE_REAP_S:
+            _drop_locked(name)
+
+
+def _ensure_worker(name: str | None = None) -> Worker:
+    """Return the live Worker for `name` (default: the current workspace),
+    spawning it if needed. Double-checked locking: the common hit path takes no
+    lock; creation / dead-worker replacement is serialized under _pool_lock and
+    enforces the pool cap (after first reaping anything idle)."""
+    name = name or _current_workspace
+    w = _workers.get(name)
+    if w is not None and w.proc.poll() is None:
+        _last_used[name] = time.monotonic()
+        return w
+    with _pool_lock:
+        now = time.monotonic()
+        _reap_idle_locked(now, protect=name)
+        w = _workers.get(name)
+        if w is not None and w.proc.poll() is not None:
+            _drop_locked(name)          # worker died — clear the slot to respawn
+            w = None
+        if w is None:
+            if name not in _workers and len(_workers) >= _MAX_WORKSPACES:
+                raise RuntimeError(
+                    f"workspace pool full ({len(_workers)}/{_MAX_WORKSPACES}); "
+                    f"close an idle workspace with close_workspace, or raise "
+                    f"DRIFTPIN_MAX_WORKSPACES")
+            w = _workers[name] = Worker()
+        _last_used[name] = now
+        return w
 
 
 def _call(_method: str, _timeout: float | None = None, **params: Any) -> Any:
@@ -42,13 +139,9 @@ def _call(_method: str, _timeout: float | None = None, **params: Any) -> Any:
 
 @atexit.register
 def _cleanup():
-    global _worker
-    if _worker is not None:
-        try:
-            _worker.shutdown(timeout=3.0)
-        except Exception:
-            pass
-        _worker = None
+    with _pool_lock:
+        for name in list(_workers):
+            _drop_locked(name)
 
 
 # --- tools --------------------------------------------------------------------
@@ -61,22 +154,71 @@ def ping() -> str:
 
 @mcp.tool()
 def restart_worker() -> dict:
-    """Kill the FreeCAD worker process and spawn a fresh one. Use when the worker
-    is wedged (e.g. App.ActiveDocument desynced from internal state). All open
-    documents, unsaved changes, and handles are lost — save first if needed.
-    Returns {restarted: True, freecad: [...]}."""
-    global _worker
-    if _worker is not None:
-        try:
-            _worker.shutdown(timeout=3.0)
-        except Exception:
-            pass
-        if _worker.proc.poll() is None:
-            _worker.proc.kill()
-            _worker.proc.wait()
-        _worker = None
-    w = _ensure_worker()
-    return {"restarted": True, "freecad": w.freecad_version}
+    """Kill the current workspace's FreeCAD worker process and spawn a fresh one.
+    Use when the worker is wedged (e.g. App.ActiveDocument desynced from internal
+    state). All open documents, unsaved changes, and handles in THIS workspace are
+    lost — save first if needed. Other workspaces are untouched.
+    Returns {restarted: True, workspace: <name>, freecad: [...]}."""
+    name = _current_workspace
+    with _pool_lock:
+        _drop_locked(name)
+    w = _ensure_worker(name)
+    return {"restarted": True, "workspace": name, "freecad": w.freecad_version}
+
+
+@mcp.tool()
+def use_workspace(name: str) -> dict:
+    """Claim (creating if needed) an isolated workspace and make it the target of
+    subsequent tool calls. Each workspace is its own freecadcmd process with its
+    own ActiveDocument and handle registry — handles do NOT cross workspaces. This
+    is how concurrent agents share one MCP server without clobbering each other's
+    documents: each agent calls use_workspace with a unique name once, up front.
+
+    The pool is capped (DRIFTPIN_MAX_WORKSPACES, default 4) and idle workspaces are
+    reaped (DRIFTPIN_WORKSPACE_IDLE_S, default 900s); claiming a workspace beyond a
+    full pool raises — close an idle one first. Pass "default" to return to the
+    baseline single-agent workspace.
+    Returns {workspace: <name>, freecad: [...], workspaces: [names]}."""
+    if not name or not isinstance(name, str):
+        raise RuntimeError("workspace name must be a non-empty string")
+    global _current_workspace
+    w = _ensure_worker(name)          # spawn now so a full-pool error surfaces here
+    _current_workspace = name
+    return {"workspace": name, "freecad": w.freecad_version,
+            "workspaces": sorted(_workers)}
+
+
+@mcp.tool()
+def list_workspaces() -> dict:
+    """List the live workspaces (freecadcmd processes) and the pool limits. Each
+    entry is {name, alive, idle_s, current}. Use to see who is holding a slot
+    before claiming or closing one.
+    Returns {current, max, idle_reap_s, workspaces: [...]}."""
+    now = time.monotonic()
+    with _pool_lock:
+        entries = [
+            {"name": n, "alive": w.proc.poll() is None,
+             "idle_s": round(now - _last_used.get(n, now), 1),
+             "current": n == _current_workspace}
+            for n, w in sorted(_workers.items())
+        ]
+    return {"current": _current_workspace, "max": _MAX_WORKSPACES,
+            "idle_reap_s": _IDLE_REAP_S, "workspaces": entries}
+
+
+@mcp.tool()
+def close_workspace(name: str) -> dict:
+    """Shut down a workspace's worker and free its pool slot. All of that
+    workspace's documents, unsaved changes, and handles are lost. Closing the
+    workspace you are currently in returns you to the "default" workspace. The
+    default workspace can be closed too (its worker respawns clean on next use).
+    Returns {closed: <bool>, workspace: <name>, current: <name>}."""
+    global _current_workspace
+    with _pool_lock:
+        existed = _drop_locked(name)
+    if _current_workspace == name:
+        _current_workspace = DEFAULT_WORKSPACE
+    return {"closed": existed, "workspace": name, "current": _current_workspace}
 
 
 @mcp.tool()
