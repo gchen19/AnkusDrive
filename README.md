@@ -1,10 +1,5 @@
 # DriftPin
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="logo/wordmark/driftpin-wordmark-dark-1280.png">
-  <img src="logo/wordmark/driftpin-wordmark-1280.png" alt="DriftPin" width="420">
-</picture>
-
 A CLI + MCP server that drives [FreeCAD](https://www.freecad.org/) through its Python API so LLMs (and humans at a terminal) can design mechanical parts and run FEM simulations without clicking through the GUI.
 
 ## Why
