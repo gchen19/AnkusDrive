@@ -26,6 +26,11 @@ py -m venv .venv
   fits, standards) — platform-agnostic. ✅
 - **pip-wheel solvers** (PyBullet, MuJoCo, topopt/solidspy, rayoptics, optiland,
   CoolProp) — Windows wheels exist; `pip install 'driftpin[...]'` works. ✅
+- **Molding warpage** (CalculiX thermo-elastic) — the bundled `ccx.exe` is auto-discovered,
+  so `molding_warpage_submit` solves natively (verified: `rc=0`, real bow). ✅
+- **Slicing** (PrusaSlicer) and **CFD discovery** (SU2) — self-contained native binaries;
+  `scripts\install-solvers.ps1 prusaslicer su2` downloads + wires them (a live PrusaSlicer
+  slice is verified; the SU2 *solve* runner still needs bash — see below). ✅/⚠️
 
 ## How DriftPin finds FreeCAD
 
@@ -108,17 +113,59 @@ running the other OS's shell scripts. The `Windows`/`Linux` labels are applied
 automatically by the Actions runner from the host OS. The FreeCAD-free `fast-checks.yml`
 (ruff + contracts) stays on a GitHub-hosted Ubuntu runner and covers both.
 
+## Installing the extra solvers (one script)
+
+[`scripts/install-solvers.ps1`](../scripts/install-solvers.ps1) is the Windows analog of
+`scripts/install-solvers.sh` — it automates the two install shapes that need no compiler
+or WSL, and prints guidance for the rest.
+
+```powershell
+pwsh scripts\install-solvers.ps1                    # pip-wheel extras (mbd, topology, optics, fluids)
+pwsh scripts\install-solvers.ps1 su2 prusaslicer    # download portable binaries + wire env for this shell
+pwsh scripts\install-solvers.ps1 su2 prusaslicer -Persist   # ...and setx so they survive new shells / MCP hosts
+pwsh scripts\install-solvers.ps1 list               # == driftpin doctor
+```
+
+- **pip-wheel families** (`mbd`, `topology`, `optics`, `fluids`) install into the `.venv`
+  that runs `driftpin mcp` — a plain `pip install '.[extra]'`, best-effort/independent so
+  one missing wheel doesn't abort the rest.
+- **Portable binaries** (`su2`, `prusaslicer`) download as a zip into
+  `%LOCALAPPDATA%\DriftPin\solvers`, extract, and wire `DRIFTPIN_<SOLVER>_PATH`. No
+  installer, no admin.
+- **CalculiX** is never installed here — it rides on FreeCAD's bundled `ccx.exe`, which
+  `driftpin/solvers.py` auto-discovers (see the `warpage` row below).
+
+### Verified on this box (Windows 11 + FreeCAD 1.1.1, Python 3.13.14)
+
+Every result below is a real solve/run on the machine, not a dry check:
+
+| Family | Solver | How | Verified result |
+|---|---|---|---|
+| **warpage** | CalculiX (bundled `ccx.exe` 2.22) | auto-discovered — no install | thin-plate thermo-elastic solve: `rc=0`, 4981 nodes / 2424 tets, warp 7.0 mm vs 3.5 mm analytic, gate computed |
+| **FEM modal** | CalculiX (bundled) | auto-discovered | `test_merge_modal_gate` live modal solve: FEM f₁=304.6 Hz vs 308.5 Hz oracle (ratio 0.99), 17/17 |
+| **mbd** | PyBullet 3.2.7 | `pip install '.[mbd]'` | wheel installs on 3.13, `test_mbd` runs |
+| **slicing** | PrusaSlicer 2.9.6 | portable zip + `DRIFTPIN_PRUSASLICER_PATH` | live slice: 20 mm cube → 8.06 cm³ @100% infill (exact 8.0, ratio 1.008), 99 layers, 10/10 |
+| **cfd** | SU2 8.5.0 | portable zip + `DRIFTPIN_SU2_PATH` | `SU2_CFD.exe` runs; `cfd` resolves — but the solve runner needs bash (see the row below) |
+| **optics** | optiland + rayoptics | `pip install '.[optics]'` | ready |
+| **topology** | solidspy | `pip install '.[topology]'` | ready |
+| **fluids** | CoolProp 8.0.0 | `pip install '.[fluids]'` | ready (in-process f(T,P)) |
+
+The bundled-`ccx` auto-discovery means the two live-CalculiX tests that used to skip on
+Windows (`test_merge_modal_gate`, `test_render::test_fem_colormap_monotonic_gradient`) now
+run the **real** solve — their gates consult `driftpin.solvers.ccx_bin()`, which finds
+FreeCAD's bundled `ccx.exe` even though it isn't on PATH.
+
 ## Per-solver Windows reality
 
 | Family | Solver | Windows status |
 |---|---|---|
-| Core FEM | CalculiX `ccx` | ✅ **bundled** in FreeCAD's `bin\ccx.exe` — nothing to install |
-| MBD | PyBullet / MuJoCo | ⚠️ `pip install 'driftpin[mbd]'` — PyBullet ships **no wheel for Python 3.13** (source-build needs a C++ compiler). Use Python **3.11/3.12**, or `pip install mujoco` (the registry's alternative, which has 3.13 wheels). Absent → `test_mbd` skips |
+| Core FEM / warpage | CalculiX `ccx` | ✅ **bundled** in FreeCAD's `bin\ccx.exe` (v2.22 in FreeCAD 1.1) — **nothing to install**. `driftpin/solvers.py` auto-discovers it in FreeCAD's bin, so the `warpage` family and the live-ccx tests resolve it with no PATH entry or env var |
+| MBD | PyBullet / MuJoCo | ✅ `pip install 'driftpin[mbd]'` — PyBullet now ships a **Python 3.13 wheel** (3.2.7, verified installing on 3.13.14). `pip install mujoco` is the registry's alternative if a future Python lacks a PyBullet wheel |
 | Topology | topopt / solidspy | ✅ `pip install 'driftpin[topology]'` |
 | Optics (sequential) | optiland / rayoptics | ✅ `pip install 'driftpin[optics]'` |
 | Optics (non-seq) | KrakenOS (GPL) | ✅ `pip install 'driftpin[optics_gpl]'`, run out-of-process |
 | Fluids properties | CoolProp | ✅ pip wheel |
-| CFD (steady) | SU2 | ✅ official [Windows binary](https://su2code.github.io/download.html); put `SU2_CFD.exe` on PATH or set `DRIFTPIN_SU2_PATH` |
+| CFD (steady) | SU2 | ⚠️ the [Windows binary](https://su2code.github.io/download.html) installs and **runs** natively (`SU2_CFD.exe`), and DriftPin *resolves* it (`cfd` shows available) — but DriftPin's CFD **case-runner** (`_run_foam`) shells through `bash`, so an end-to-end `cfd_*_flow` solve still needs WSL/Git-bash. Set `DRIFTPIN_SU2_PATH` |
 | Transient/radiation thermal | Elmer | ✅ good native Windows installer ([elmerfem.org](https://www.elmerfem.org/)); `DRIFTPIN_ELMER_PATH` if not on PATH |
 | Slicing | PrusaSlicer | ✅ Windows installer; `DRIFTPIN_PRUSASLICER_PATH` |
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD; dedicated venv (`DRIFTPIN_BEMPP_PYTHON`) |
@@ -146,9 +193,9 @@ Until then, on native Windows these families report "not available" via clean de
 ## Known Windows gaps (tracked)
 
 - **Provisioning/build scripts** ([#194](https://github.com/gchen19/DriftPin/issues/194)) —
-  `scripts/*.sh` are bash + Linux-x86_64; no PowerShell wrappers yet. The pip-wheel extras
-  install fine with a plain `pip install 'driftpin[...]'`; the shell scripts are only needed
-  for the source-built GPL families.
+  the Windows-viable path is now covered by [`scripts/install-solvers.ps1`](../scripts/install-solvers.ps1)
+  (pip-wheel extras + portable SU2/PrusaSlicer). The `scripts/*.sh` builders remain
+  bash + Linux-x86_64 and are only needed for the source-built GPL families (WSL).
 - **Persistent config file** ([#199](https://github.com/gchen19/DriftPin/issues/199)) — env
   vars don't survive MCP-host launches; a `%APPDATA%\driftpin\config.toml` resolution layer
   is planned so paths persist without `setx`.

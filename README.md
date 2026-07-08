@@ -158,9 +158,11 @@ oracles, and the MCP surface. The heavy simulation families each shell out to an
 (`$DRIFTPIN_<SOLVER>_PATH` → `PATH` → standard install dirs). A family whose solver is
 absent degrades to a clean `{ok: false, reason, install}` dict instead of crashing — check
 what currently resolves with **`driftpin doctor`** (cross-platform, no server boot needed),
-the `solve_capabilities` MCP tool, or `scripts/install-solvers.sh --list` (bash-only). The
-install script installs the pip-wheel solvers and prints the apt/conda commands for the
-system ones.
+the `solve_capabilities` MCP tool, or the install script's `list`. The install script
+installs the pip-wheel solvers and provisions the native ones —
+`scripts/install-solvers.sh` on Linux/macOS (apt/conda + source builds), and
+[`scripts/install-solvers.ps1`](scripts/install-solvers.ps1) on Windows (pip extras +
+portable SU2/PrusaSlicer downloads; CalculiX auto-detected from FreeCAD's bundle).
 
 **Platform note:** the solver *discovery* layer is fully cross-platform (per-OS install
 dirs, Windows `PATHEXT`/`.exe`, env overrides), so `driftpin doctor` gives an honest report
