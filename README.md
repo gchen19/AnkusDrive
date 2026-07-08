@@ -17,8 +17,8 @@ FreeCAD exposes almost everything it does through a Python API — create docume
 
 ## Target environment
 
-- FreeCAD 1.1.x (default tested path: `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`; override via `$DRIFTPIN_FREECADCMD` or rely on PATH).
-- Bundled Python, `ccx` (CalculiX), and `gmsh` already ship inside the `.app` — no extra install needed for basic FEM.
+- FreeCAD 1.1.x. The `freecadcmd` binary is auto-discovered per-OS (macOS `.app` bundle, Linux `/usr/bin` etc., **Windows** `C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe` — version-globbed); override via `$DRIFTPIN_FREECADCMD` or rely on PATH. Run `driftpin doctor` to see exactly what resolved.
+- Bundled Python, `ccx` (CalculiX), and `gmsh` already ship **inside every FreeCAD install** — the macOS `.app`, the Linux package, and the Windows `bin\` — so core CAD + structural FEM work on all three with no extra install.
 - Host-side rendering needs `Pillow` and `numpy`; both are installed by DriftPin as regular pip deps.
 - **One optional exception:** drawing **PDF/SVG** export (`export_drawing`) renders inside FreeCAD's *bundled* Python, so it needs `reportlab` + `svglib` installed **there** — see [Drawing export (PDF/SVG)](#drawing-export-pdfsvg). DXF export and everything else leave FreeCAD's Python untouched.
 
@@ -31,7 +31,8 @@ own bundled Python — DriftPin doesn't touch it.
 
 ```bash
 # 1. Install FreeCAD 1.1.x from https://www.freecad.org/
-#    (macOS: drag to /Applications; Linux: distro package or AppImage)
+#    (macOS: drag to /Applications; Linux: distro package or AppImage;
+#     Windows: run the installer — default C:\Program Files\FreeCAD 1.1)
 
 # 2. Install DriftPin. Pick one:
 pipx install driftpin                                       # on release — from PyPI, `driftpin` on PATH
@@ -41,10 +42,17 @@ pipx install git+https://github.com/gchen19/DriftPin.git    # isolated app, `dri
 git clone https://github.com/gchen19/DriftPin.git && cd DriftPin
 python3 -m venv .venv && .venv/bin/pip install -e .         # `.venv/bin/driftpin`
 
-# 3. Smoke-test that the worker can reach FreeCAD
-driftpin ping
-# → ping=pong freecad=1.1.1
+# 3. Smoke-test that the worker can reach FreeCAD, and see the full setup report
+driftpin ping        # → ping=pong freecad=1.1.1
+driftpin doctor      # per-item FreeCAD + solver checklist with the exact fix each
 ```
+
+> **Windows (PowerShell):** the clone path is `py -m venv .venv` then
+> `.venv\Scripts\pip install -e .`, and the resulting entry point is
+> `.venv\Scripts\driftpin.exe`. FreeCAD's own `freecadcmd.exe` needs nothing on
+> PATH — DriftPin globs `C:\Program Files\FreeCAD *\bin\` automatically. Everything
+> in step 3 works from a stock FreeCAD 1.1 install (verified: core CAD + a
+> CalculiX cantilever solve via the bundled `ccx.exe`).
 
 The `pipx install driftpin` path lights up with the first PyPI release
 (v0.4.0), tracked in [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md); until
@@ -53,13 +61,28 @@ then use the `git+https://…` or clone paths above.
 ### Telling DriftPin where FreeCAD lives
 
 DriftPin auto-discovers `freecadcmd` in this order: `$DRIFTPIN_FREECADCMD`,
-then `shutil.which("freecadcmd")` on PATH, then a small list of standard
-locations (macOS app bundle, `/usr/bin`, `/usr/local/bin`, snap). For
-non-default installs, set:
+then `shutil.which(...)` on PATH (trying `freecadcmd`, `FreeCADCmd`, and
+`freecad.cmd`), then a **per-OS** list of standard install locations:
+
+| OS | Auto-discovered locations (newest version wins) |
+|---|---|
+| macOS | `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd` |
+| Linux | `/usr/bin`, `/usr/local/bin`, `/snap/bin/freecad.cmd`, `~/.local/bin` |
+| Windows | `C:\Program Files\FreeCAD *\bin\freecadcmd.exe` (version-globbed), `C:\Program Files (x86)\…`, `%LOCALAPPDATA%\Programs\FreeCAD *\bin\…` |
+
+So a stock installer on any of the three needs **no configuration**. For a
+non-default install, point DriftPin at the binary directly:
 
 ```bash
-export DRIFTPIN_FREECADCMD=/path/to/freecadcmd
+export DRIFTPIN_FREECADCMD=/path/to/freecadcmd            # macOS/Linux
 ```
+```powershell
+$env:DRIFTPIN_FREECADCMD = "D:\Apps\FreeCAD\bin\freecadcmd.exe"   # Windows
+```
+
+`driftpin doctor` prints which of the three layers (env / PATH / auto) actually
+resolved FreeCAD, plus every candidate it checked — the fastest way to debug a
+"FreeCAD not found" on a new box.
 
 ### Drawing export (PDF/SVG)
 
@@ -134,9 +157,19 @@ oracles, and the MCP surface. The heavy simulation families each shell out to an
 **external solver**, discovered at runtime by [`driftpin/solvers.py`](driftpin/solvers.py)
 (`$DRIFTPIN_<SOLVER>_PATH` → `PATH` → standard install dirs). A family whose solver is
 absent degrades to a clean `{ok: false, reason, install}` dict instead of crashing — check
-what currently resolves with the `solve_capabilities` MCP tool or
-`scripts/install-solvers.sh --list`. That script installs the pip-wheel solvers and prints
-the apt/conda commands for the system ones.
+what currently resolves with **`driftpin doctor`** (cross-platform, no server boot needed),
+the `solve_capabilities` MCP tool, or `scripts/install-solvers.sh --list` (bash-only). The
+install script installs the pip-wheel solvers and prints the apt/conda commands for the
+system ones.
+
+**Platform note:** the solver *discovery* layer is fully cross-platform (per-OS install
+dirs, Windows `PATHEXT`/`.exe`, env overrides), so `driftpin doctor` gives an honest report
+on macOS/Linux/Windows. The **pip-wheel** families (MBD, topology, optics, fluids) install
+identically everywhere. The **native-binary** families differ by OS — CalculiX ships inside
+every FreeCAD install; SU2/Elmer/PrusaSlicer have good Windows/macOS binaries; the
+**OpenFOAM-backed** families (CFD, FSI, injection molding) still rely on a Linux shell +
+linker glue and are Linux/WSL/Docker for now. See
+[`docs/WINDOWS.md`](docs/WINDOWS.md) for the full per-solver Windows reality and setup.
 
 The review-video demos under [`scratch/`](scratch/) turn a solver result into a GIF a human
 can watch — the **real exported geometry** in motion with the matching oracle overlaid on
@@ -457,7 +490,7 @@ versioned interfaces, projects).
 - **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer (`render_view` / `render_views` return PNGs as MCP `ImageContent`), plus photoreal `render_photoreal` via the FreeCAD Render addon + an external renderer (POV-Ray / LuxCore / Appleseed / Cycles / OSPRay / PBRT). Support matrix, install, and limitations: [`docs/RENDERING.md`](docs/RENDERING.md).
 - **Simulation surface** — engineering-analysis oracles (machine elements, structural, durability, thermal, tolerance/GD&T) plus external-solver families that shell out to OpenFOAM / Elmer / CalculiX / openEMS / YADE / KrakenOS, discovered at runtime by [`driftpin/solvers.py`](driftpin/solvers.py) and degrading cleanly when absent. Long solves use an async submit→poll job pattern (`*_submit` + `job_status`/`job_result`/`job_list`). Catalog and result schemas: [`docs/SIMULATION_TOOLS.md`](docs/SIMULATION_TOOLS.md); proof harness: [`docs/SIMULATION_EXAMPLES.md`](docs/SIMULATION_EXAMPLES.md). Materials/fluids back these via `material_*` and `fluid_props` (mechanical-property / molding / CoolProp corpora).
 - **Design-control (PLM) layer** — recipes + a relations DAG (parametric regen), feature templates, variant families from a design table, item/part-number identity, a lifecycle/revision state machine, ECO change records with where-used/impact + baselines, a versioned interface registry + Liskov substitutability gate, and project containers with reference-integrity guards. Scoping + rationale: [`docs/DESIGN_HIERARCHY.md`](docs/DESIGN_HIERARCHY.md). See [Designs, not just parts](#designs-not-just-parts--the-design-control-layer).
-- **Tests** — ~980 test functions across ~90 files (worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent / simulation families / molding / PLM layer), runnable via `tests/run_all.sh`. Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](tests/RELIABILITY.md).
+- **Tests** — ~980 test functions across ~90 files (worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent / simulation families / molding / PLM layer), runnable via `tests/run_all.sh` (Linux/macOS) or `tests/run_all.ps1` (Windows — single-interpreter, skips the Linux-only solver families; see [`docs/WINDOWS.md`](docs/WINDOWS.md)). Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](tests/RELIABILITY.md).
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and remaining
 backlog (FEM contact/spring/tie refinements, fully async `fem_run`,

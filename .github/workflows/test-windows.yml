@@ -1,0 +1,60 @@
+name: Tests (Windows)
+
+# Windows counterpart of test.yml. It runs the DriftPin suite on a SELF-HOSTED
+# Windows runner that already has FreeCAD 1.1 installed (bundling ccx.exe + gmsh.exe,
+# so structural FEM solves for real). This lane is deliberately its own thing rather
+# than a reuse of test.yml because the Linux lane is bash + AppImage + a two-interpreter
+# split that has no Windows meaning:
+#
+#   - Setup is tests/setup_local.ps1 (PowerShell): one .venv from `pip install -e .`,
+#     no AppImage extraction, no PATH symlinks. FreeCAD is discovered by
+#     driftpin/client.py under 'C:\Program Files\FreeCAD *\bin\freecadcmd.exe' and run
+#     as a subprocess, so the driver interpreter never imports FreeCAD.
+#   - The suite is tests/run_all.ps1, which skips the Linux-only external-solver
+#     families (OpenFOAM / YADE / openEMS / bempp / preCICE — no native Windows build)
+#     and runs the Windows-native FreeCAD-resolution contract (test_windows_support.py).
+#
+# Both self-hosted runners share the `driftpin` label, so this workflow pins `Windows`
+# and test.yml/heavy-solves.yml pin `Linux` — otherwise a job could land on the wrong OS
+# and run the other OS's shell scripts. The `Windows`/`Linux` labels are applied
+# automatically by the Actions runner from the host OS.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+# One run per ref needs the single self-hosted Windows box — supersede, don't queue.
+concurrency:
+  group: tests-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-windows:
+    name: Test suite (FreeCAD 1.1, self-hosted Windows)
+    runs-on: [self-hosted, driftpin, Windows]
+    # The Windows suite (no live external solves) is a few minutes; this only bounds a
+    # wedged freecadcmd.exe worker so it can't hold the runner indefinitely.
+    timeout-minutes: 30
+    defaults:
+      run:
+        # Only Windows PowerShell 5.1 is guaranteed on the box (pwsh/Core is not
+        # installed), so use `powershell`. The scripts are 5.1-compatible.
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up venv + FreeCAD-viable deps (no download; reuses installed FreeCAD)
+        run: .\tests\setup_local.ps1
+
+      - name: Sanity check — driftpin resolves FreeCAD
+        run: |
+          .\.venv\Scripts\python.exe -m driftpin doctor --no-boot
+          # doctor exits nonzero if FreeCAD is unresolved -> the run fails fast here.
+
+      - name: Run Windows test suite
+        run: .\tests\run_all.ps1

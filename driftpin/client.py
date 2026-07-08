@@ -8,8 +8,10 @@ Usage:
         box = w.call("add_primitive", kind="box", w=10, d=20, h=5)
         print(box["volume"])
 """
+import glob
 import json
 import os
+import platform
 import shutil
 import signal
 import subprocess
@@ -17,23 +19,67 @@ import threading
 from pathlib import Path
 
 
-_DEFAULT_FREECADCMD_CANDIDATES = (
-    "/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd",
-    "/usr/bin/freecadcmd",
-    "/usr/local/bin/freecadcmd",
-    "/snap/bin/freecad.cmd",
-)
+# The console binary is `freecadcmd` on POSIX and `freecadcmd.exe` / `FreeCADCmd.exe`
+# on Windows. `shutil.which` (below) tries every name against PATH (honoring Windows
+# PATHEXT), so these names are also what we look for by name; the per-OS lists here are
+# the fallback fixed/globbed install locations when the binary isn't on PATH.
+_FREECADCMD_NAMES = ("freecadcmd", "FreeCADCmd", "freecad.cmd")
+
+# Per-OS default install locations, most-preferred first. Windows and Linux entries may
+# contain glob wildcards (versioned dirs like ``FreeCAD 1.1``); macOS is a fixed bundle
+# path. Resolution: DRIFTPIN_FREECADCMD env → PATH (any name) → these globbed candidates.
+_DEFAULT_FREECADCMD_CANDIDATES = {
+    "Darwin": (
+        "/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd",
+    ),
+    "Linux": (
+        "/usr/bin/freecadcmd",
+        "/usr/local/bin/freecadcmd",
+        "/snap/bin/freecad.cmd",
+        # AppImage extractions / manual installs commonly land here.
+        os.path.expanduser("~/.local/bin/freecadcmd"),
+    ),
+    "Windows": (
+        # Program Files installer layout, version-globbed (FreeCAD 1.1, 1.0, 0.21, …).
+        r"C:\Program Files\FreeCAD *\bin\freecadcmd.exe",
+        r"C:\Program Files\FreeCAD*\bin\freecadcmd.exe",
+        r"C:\Program Files (x86)\FreeCAD *\bin\freecadcmd.exe",
+        # Per-user install (winget / "install for me only").
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\FreeCAD *\bin\freecadcmd.exe"),
+    ),
+}
+
+
+def _freecadcmd_candidates():
+    """Every default install-location candidate for this OS, glob-expanded and
+    sorted newest-version-last so the highest version wins. Pure lookup — the
+    caller filters for existence."""
+    out = []
+    for pat in _DEFAULT_FREECADCMD_CANDIDATES.get(platform.system(), ()):
+        if any(ch in pat for ch in "*?["):
+            out.extend(sorted(glob.glob(pat)))   # e.g. FreeCAD 1.0 < FreeCAD 1.1
+        else:
+            out.append(pat)
+    # Overlapping globs (``FreeCAD *`` and ``FreeCAD*``) can name the same install;
+    # order-preserving dedup so we don't probe/report a path twice.
+    return list(dict.fromkeys(out))
 
 
 def _resolve_freecadcmd():
     if env := os.environ.get("DRIFTPIN_FREECADCMD"):
         return env
-    if found := shutil.which("freecadcmd"):
-        return found
-    for p in _DEFAULT_FREECADCMD_CANDIDATES:
+    for name in _FREECADCMD_NAMES:
+        if found := shutil.which(name):     # PATH lookup (Windows PATHEXT-aware)
+            return found
+    candidates = _freecadcmd_candidates()
+    for p in reversed(candidates):          # highest globbed version first
         if os.path.isfile(p):
             return p
-    return _DEFAULT_FREECADCMD_CANDIDATES[0]
+    # Nothing resolved: return a best-effort placeholder so the eventual Popen
+    # error names a plausible path. Prefer the last (newest) glob candidate if the
+    # OS had any pattern, else the bare binary name (which surfaces a clean
+    # "not found" rather than a wrong-OS path).
+    return candidates[-1] if candidates else _FREECADCMD_NAMES[0]
 
 
 FREECADCMD = _resolve_freecadcmd()
@@ -67,6 +113,14 @@ class Worker:
         # …) inherit that group. Orphaning on worker death does NOT change a process's
         # group, so shutdown() can still sweep them with a single group kill — without
         # it, a render in flight when the worker dies leaks a 100%-CPU orphan.
+        #
+        # Windows has no process groups/sessions in the POSIX sense; the equivalent is
+        # CREATE_NEW_PROCESS_GROUP so freecadcmd roots a new group, and _reap_tree()
+        # sweeps the tree with `taskkill /T` on shutdown (see below). Without it a
+        # renderer in flight when the worker dies is orphaned exactly as on POSIX.
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
         self.proc = subprocess.Popen(
             [freecadcmd, worker_script],
             stdin=subprocess.PIPE,
@@ -75,9 +129,11 @@ class Worker:
             bufsize=1,
             text=True,
             start_new_session=(os.name == "posix"),
+            creationflags=creationflags,
         )
         # The session leader's PGID equals its PID; capture it now so we can group-kill
-        # later even after self.proc has been reaped (getpgid would then fail).
+        # later even after self.proc has been reaped (getpgid would then fail). On
+        # Windows there is no PGID — _reap_tree() keys off self.proc.pid directly.
         self._pgid = self.proc.pid if os.name == "posix" else None
         if capture_stderr:
             self._stderr_thread = threading.Thread(
@@ -158,16 +214,35 @@ class Worker:
             return resp["result"]
 
     def _reap_group(self):
-        """SIGKILL the worker's whole process group, sweeping any renderer
-        subprocesses it spawned and left behind (e.g. an async render still running
-        when the worker exited). Safe to call repeatedly; a no-op if the group is
-        already empty. Run AFTER the worker leader itself is gone."""
+        """Kill the worker's whole process tree, sweeping any renderer subprocesses it
+        spawned and left behind (e.g. an async render still running when the worker
+        exited). Safe to call repeatedly; a no-op if the tree is already gone. Run AFTER
+        the worker leader itself is gone. POSIX uses a single group SIGKILL; Windows has
+        no process groups, so it walks the tree with `taskkill /T /F`."""
+        if os.name == "nt":
+            self._reap_tree_windows()
+            return
         if self._pgid is None:
             return
         try:
             os.killpg(self._pgid, signal.SIGKILL)
         except (ProcessLookupError, OSError):
             pass  # group already empty, or not permitted — nothing to clean
+
+    def _reap_tree_windows(self):
+        """Windows counterpart of the POSIX group-kill: `taskkill /PID <pid> /T /F`
+        terminates the worker and every descendant it spawned (/T = tree), forcefully
+        (/F). Best-effort — if the tree is already gone taskkill exits non-zero, which
+        we swallow. Uses the captured pid so it works even after self.proc is reaped."""
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(self.proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except (OSError, ValueError):
+            pass  # taskkill missing (unlikely) or pid unusable — nothing we can do
 
     def shutdown(self, timeout=5.0):
         if self.proc.poll() is not None:

@@ -80,6 +80,26 @@ def cmd_mcp(args):
     run()
 
 
+def cmd_doctor(args):
+    """Resolve FreeCAD + every solver family and print a per-item health checklist.
+    Exits non-zero when FreeCAD is unresolved so it doubles as a CI/setup preflight."""
+    from . import doctor
+    # Install hints carry non-ASCII (em-dashes, arrows); force UTF-8 so they render on
+    # a Windows console (cp1252 default) instead of mojibake. Best-effort — older
+    # streams without reconfigure() just keep their default encoding.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+    report = doctor.build_report(probe_version=not args.no_boot)
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(doctor.render(report))
+    if not report["freecad"]["available"]:
+        sys.exit(1)
+
+
 def cmd_fem_cantilever(args):
     params = {
         "length": args.length,
@@ -143,6 +163,20 @@ def build_parser():
 
     pm = sub.add_parser("mcp", help="Start the MCP server over stdio.")
     pm.set_defaults(func=cmd_mcp)
+
+    pd = sub.add_parser(
+        "doctor",
+        help="Resolve FreeCAD + every solver family and print a setup/health "
+             "checklist with the exact fix per item. Exits non-zero if FreeCAD "
+             "is unresolved (usable as a CI/setup preflight).",
+    )
+    pd.add_argument("--json", action="store_true", help="emit the report as JSON")
+    pd.add_argument(
+        "--no-boot", action="store_true",
+        help="skip booting FreeCAD to read its version (resolve the path only; "
+             "faster, and the solver half never needs a boot)",
+    )
+    pd.set_defaults(func=cmd_doctor)
 
     pf = sub.add_parser("fem", help="FEM subcommands.")
     fsub = pf.add_subparsers(dest="fem_command", required=True)
