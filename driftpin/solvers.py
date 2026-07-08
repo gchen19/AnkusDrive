@@ -355,10 +355,12 @@ _SOLVERS: dict = {
         # bundled bin after the standard install dirs. (Verified on Windows: FreeCAD 1.1
         # bundles ccx 2.22 in `…\FreeCAD 1.1\bin\ccx.exe`.)
         "freecad_bundled": True,
-        "install_hint": "auto-detected from FreeCAD's bundled ccx when FreeCAD is "
-                        "installed; otherwise 'apt install calculix-ccx' (Linux), "
-                        "'brew install calculix' (macOS) — then ensure ccx is on PATH "
-                        "or set DRIFTPIN_CALCULIX_PATH",
+        # NB: there is NO `calculix` formula in core Homebrew (issue #192) — on macOS the
+        # bundled FreeCAD ccx (auto-detected above) is the path, so don't suggest brew.
+        "install_hint": "auto-detected from FreeCAD's bundled ccx (every FreeCAD install "
+                        "ships it, all OSes) when FreeCAD is installed; otherwise "
+                        "'apt install calculix-ccx' (Linux) or point DRIFTPIN_CALCULIX_PATH "
+                        "at a ccx binary",
     },
 }
 
