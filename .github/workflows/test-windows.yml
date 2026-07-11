@@ -14,10 +14,13 @@ name: Tests (Windows)
 #     families (OpenFOAM / YADE / openEMS / bempp / preCICE — no native Windows build)
 #     and runs the Windows-native FreeCAD-resolution contract (test_windows_support.py).
 #
-# Both self-hosted runners share the `driftpin` label, so this workflow pins `Windows`
-# and test.yml/heavy-solves.yml pin `Linux` — otherwise a job could land on the wrong OS
-# and run the other OS's shell scripts. The `Windows`/`Linux` labels are applied
-# automatically by the Actions runner from the host OS.
+# This workflow pins `Windows` and test.yml/heavy-solves.yml pin `Linux` — otherwise a
+# job could land on the wrong OS and run the other OS's shell scripts. The
+# `Windows`/`Linux` labels are applied automatically by the Actions runner from the host
+# OS. NOTE: unlike the Linux box, the Windows runner is registered WITHOUT the custom
+# `driftpin` label, so requiring it here leaves the job queued forever (that is exactly
+# how the first run of this lane died — 24 h in `queued`, then cancelled).
+# `[self-hosted, Windows]` uniquely selects the one Windows box in this repo.
 
 on:
   push:
@@ -36,7 +39,7 @@ permissions:
 jobs:
   test-windows:
     name: Test suite (FreeCAD 1.1, self-hosted Windows)
-    runs-on: [self-hosted, driftpin, Windows]
+    runs-on: [self-hosted, Windows]
     # The Windows suite (no live external solves) is a few minutes; this only bounds a
     # wedged freecadcmd.exe worker so it can't hold the runner indefinitely.
     timeout-minutes: 30
