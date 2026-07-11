@@ -140,11 +140,17 @@ $ErrorActionPreference = 'Continue'
 # import), so a broken wheel is reported as an AVAILABLE family and its test
 # FAILS instead of skipping. Probe the real import and uninstall what doesn't
 # survive, so the family degrades cleanly instead.
+# probe MODULE must be the deepest import the tests actually perform (probing bare
+# `rayoptics` passed while the suite's `rayoptics.environment` still died — its
+# qtgui chain imports Qt directly, matplotlib backend aside); each probe removes
+# only ITS package, so e.g. optiland keeps the optics family alive when
+# rayoptics' Qt half is broken in this venv.
 $extraProbes = @{
-    mbd      = @{ modules = @('pybullet');              packages = @('pybullet') }
-    topology = @{ modules = @('solidspy');              packages = @('solidspy') }
-    optics   = @{ modules = @('rayoptics', 'optiland'); packages = @('rayoptics', 'optiland') }
-    fluids   = @{ modules = @('CoolProp');              packages = @('CoolProp') }
+    mbd      = @(@{ module = 'pybullet';              package = 'pybullet' })
+    topology = @(@{ module = 'solidspy';              package = 'solidspy' })
+    optics   = @(@{ module = 'rayoptics.environment'; package = 'rayoptics' },
+                 @{ module = 'optiland';              package = 'optiland' })
+    fluids   = @(@{ module = 'CoolProp';              package = 'CoolProp' })
 }
 foreach ($extra in 'mbd', 'topology', 'optics', 'fluids') {
     & $venvPy -m pip install --quiet -e ".[$extra]" *> $null
@@ -152,13 +158,14 @@ foreach ($extra in 'mbd', 'topology', 'optics', 'fluids') {
         Write-Warning "  extra [$extra]: no Windows wheel for this Python - skipped (its tests degrade cleanly)"
         continue
     }
-    $probe = ($extraProbes[$extra].modules | ForEach-Object { "import $_" }) -join '; '
-    & $venvPy -c $probe *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  extra [$extra]: installed"
-    } else {
-        & $venvPy -m pip uninstall --quiet --yes @($extraProbes[$extra].packages) *> $null
-        Write-Warning "  extra [$extra]: installed but does not import in this venv - removed (its tests degrade cleanly)"
+    foreach ($probe in $extraProbes[$extra]) {
+        & $venvPy -c "import $($probe.module)" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  extra [$extra]: $($probe.package) installed"
+        } else {
+            & $venvPy -m pip uninstall --quiet --yes $probe.package *> $null
+            Write-Warning "  extra [$extra]: $($probe.package) does not import in this venv - removed (its tests degrade cleanly)"
+        }
     }
 }
 $ErrorActionPreference = $prevEAP
