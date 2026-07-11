@@ -48,16 +48,36 @@ def _freecad_fix_hint() -> str:
 
 
 def _resolution_source() -> str:
-    """Which resolution layer produced the FreeCAD path: env override, PATH, or an
-    auto-discovered default install location. Mirrors _resolve_freecadcmd's order."""
-    if os.environ.get("DRIFTPIN_FREECADCMD"):
+    """Which resolution layer produced the FreeCAD path: env override, the config
+    file, PATH, or an auto-discovered default install location. Mirrors
+    _resolve_freecadcmd's order (issue #199)."""
+    from . import config as _config
+    _, src = _config.lookup("DRIFTPIN_FREECADCMD")
+    if src == "env":
         return "env (DRIFTPIN_FREECADCMD)"
+    if src == "config":
+        return f"config ({_config.config_path()})"
     import shutil
 
     from .client import _FREECADCMD_NAMES
     if any(shutil.which(n) for n in _FREECADCMD_NAMES):
         return "PATH"
     return "auto (default install location)"
+
+
+def config_report() -> dict:
+    """The persistent-config layer's state: where the file is expected, whether it
+    exists, and which DRIFTPIN_* equivalents it currently supplies (issue #199)."""
+    from . import config as _config
+    path = _config.config_path()
+    data = _config.load()
+    keys = []
+    if isinstance(data.get("freecadcmd"), str):
+        keys.append("freecadcmd")
+    solvers_tbl = data.get("solvers")
+    if isinstance(solvers_tbl, dict):
+        keys += [f"solvers.{k}" for k in sorted(solvers_tbl)]
+    return {"path": path, "present": os.path.isfile(path), "keys": keys}
 
 
 def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> dict:
@@ -100,6 +120,7 @@ def build_report(probe_version: bool = True) -> dict:
     return {
         "platform": {"system": platform.system(), "machine": platform.machine()},
         "freecad": freecad_report(probe_version=probe_version),
+        "config": config_report(),
         "solvers": solvers.capabilities(),
     }
 
@@ -156,6 +177,12 @@ def render(report: dict) -> str:
     caps = report["solvers"]
     out = [f"platform: {plat['system']} ({plat['machine']})", ""]
     out += _fmt_freecad(report["freecad"])
+    cfg = report.get("config")
+    if cfg:
+        state = ("supplies: " + ", ".join(cfg["keys"])
+                 if cfg["present"] and cfg["keys"]
+                 else ("present, no keys set" if cfg["present"] else "not present"))
+        out.append(f"config: {cfg['path']} ({state})")
     out.append("")
     out.append("Solver families:")
     out += _fmt_solvers(caps)

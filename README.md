@@ -164,6 +164,13 @@ installs the pip-wheel solvers and provisions the native ones —
 [`scripts/install-solvers.ps1`](scripts/install-solvers.ps1) on Windows (pip extras +
 portable SU2/Elmer/PrusaSlicer downloads; CalculiX auto-detected from FreeCAD's bundle).
 
+**Persistent config:** every `DRIFTPIN_*` path can instead live in
+`~/.config/driftpin/config.toml` (`%APPDATA%\driftpin\config.toml` on Windows;
+`DRIFTPIN_CONFIG` overrides): `freecadcmd = "..."` at top level, one lowercased key per
+solver var under `[solvers]` (`su2_path`, `elmer_path`, `openfoam_bashrc`, ...). Env vars
+still win when set; the file is the layer that survives an MCP host's minimal launch
+environment. `driftpin doctor` reports the file and which layer resolved each value.
+
 **Platform note:** the solver *discovery* layer is fully cross-platform (per-OS install
 dirs, Windows `PATHEXT`/`.exe`, env overrides), so `driftpin doctor` gives an honest report
 on macOS/Linux/Windows. The **pip-wheel** families (MBD, topology, optics, fluids) install
