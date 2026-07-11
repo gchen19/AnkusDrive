@@ -20,8 +20,9 @@
     * CalculiX (warpage) - already auto-detected: FreeCAD BUNDLES ccx.exe in its bin\, and
       driftpin/solvers.py discovers it there. Nothing to install; `driftpin doctor` shows
       `warpage ... ready` once FreeCAD is installed.
-    * Elmer (transient/radiation thermal) - has a good native installer but it is
-      interactive/winget; this script prints the command rather than running it.
+    * Elmer (thermal/CHT/EM/acoustic FEM: CFD-adjacent families) is ALSO a portable
+      zip now - the 'elmer' target downloads the no-GUI build and wires
+      DRIFTPIN_ELMER_PATH (there is no Elmer winget package).
     * OpenFOAM families (CFD solve / FSI / injection molding), YADE, openEMS, bempp - need
       Linux mechanisms (bash, .so, LD_LIBRARY_PATH); use WSL/Docker (see docs/WINDOWS.md).
 
@@ -63,6 +64,10 @@ $SU2_VER  = '8.5.0'
 $SU2_URL  = "https://github.com/su2code/SU2/releases/download/v$SU2_VER/SU2-v$SU2_VER-win64-omp.zip"
 $PRUSA_VER = '2.9.6'
 $PRUSA_URL = "https://github.com/prusa3d/PrusaSlicer/releases/download/version_$PRUSA_VER/PrusaSlicer-$PRUSA_VER.zip"
+# Elmer ships a PORTABLE no-GUI zip (no installer, no admin; there is NO winget package
+# despite older guidance). nogui-nompi is all DriftPin needs: ElmerSolver + ElmerGrid +
+# ViewFactors as plain subprocesses.
+$ELMER_URL = 'https://www.nic.funet.fi/pub/sci/physics/elmer/bin/windows/ElmerFEM-nogui-nompi-Windows-AMD64.zip'
 
 $venvPy = Join-Path $repo '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPy)) {
@@ -116,8 +121,6 @@ function Install-SU2 {
     if (-not $exe) { throw "SU2_CFD.exe not found under $d" }
     Write-Host "  SU2_CFD.exe -> $($exe.FullName)"
     Set-SolverEnv 'DRIFTPIN_SU2_PATH' $exe.FullName
-    Write-Host "  NOTE: SU2 RESOLVES natively, but DriftPin's CFD case-runner shells through"
-    Write-Host "        bash, so an end-to-end cfd_*_flow solve still needs WSL/Git-bash."
 }
 
 function Install-Prusa {
@@ -129,10 +132,18 @@ function Install-Prusa {
     Set-SolverEnv 'DRIFTPIN_PRUSASLICER_PATH' $exe.FullName
 }
 
-function Show-Elmer {
-    Write-Host '== Elmer (transient / radiation thermal) - manual =='
-    Write-Host '  winget install CSC-IT.Elmer   (or the installer at https://www.elmerfem.org/)'
-    Write-Host '  then:  setx DRIFTPIN_ELMER_PATH "C:\Program Files\Elmer <ver>\bin\ElmerSolver.exe"'
+function Install-Elmer {
+    Write-Host '== Elmer (transient/radiation thermal, CHT, low-freq EM, acoustic/harmonic FEM) =='
+    $d = Get-Portable 'Elmer nogui-nompi' $ELMER_URL 'ElmerFEM-nogui-nompi'
+    $exe = Get-ChildItem -Path $d -Recurse -Filter 'ElmerSolver.exe' | Select-Object -First 1
+    if (-not $exe) { throw "ElmerSolver.exe not found under $d" }
+    Write-Host "  ElmerSolver.exe -> $($exe.FullName)"
+    foreach ($companion in 'ElmerGrid.exe', 'ViewFactors.exe') {
+        if (-not (Test-Path (Join-Path $exe.DirectoryName $companion))) {
+            Write-Warning "  $companion not found next to ElmerSolver.exe"
+        }
+    }
+    Set-SolverEnv 'DRIFTPIN_ELMER_PATH' $exe.FullName
 }
 
 function Show-List {
@@ -147,8 +158,8 @@ foreach ($t in $Targets) {
         'su2'         { Install-SU2; $did = $true }
         'prusaslicer' { Install-Prusa; $did = $true }
         'prusa'       { Install-Prusa; $did = $true }
-        'elmer'       { Show-Elmer; $did = $true }
-        'all'         { Install-Pip; Install-SU2; Install-Prusa; Show-Elmer; $did = $true }
+        'elmer'       { Install-Elmer; $did = $true }
+        'all'         { Install-Pip; Install-SU2; Install-Prusa; Install-Elmer; $did = $true }
         'list'        { Show-List; $did = $true }
         default       { Write-Warning "unknown target '$t' (use: pip su2 prusaslicer elmer all list)" }
     }

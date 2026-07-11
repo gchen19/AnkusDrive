@@ -162,7 +162,7 @@ the `solve_capabilities` MCP tool, or the install script's `list`. The install s
 installs the pip-wheel solvers and provisions the native ones —
 `scripts/install-solvers.sh` on Linux/macOS (apt/conda + source builds), and
 [`scripts/install-solvers.ps1`](scripts/install-solvers.ps1) on Windows (pip extras +
-portable SU2/PrusaSlicer downloads; CalculiX auto-detected from FreeCAD's bundle).
+portable SU2/Elmer/PrusaSlicer downloads; CalculiX auto-detected from FreeCAD's bundle).
 
 **Platform note:** the solver *discovery* layer is fully cross-platform (per-OS install
 dirs, Windows `PATHEXT`/`.exe`, env overrides), so `driftpin doctor` gives an honest report
