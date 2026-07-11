@@ -80,6 +80,24 @@ def cmd_mcp(args):
     run()
 
 
+def cmd_setup(args):
+    """Interactive (or --yes scripted) provisioner: FreeCAD path -> config.toml,
+    opt-in pip-wheel extras, MCP registration snippet (issues #200/#201)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+    from . import setup_cmd
+    if args.print_mcp_config:
+        print(setup_cmd.mcp_config_text())
+        return
+    sys.exit(setup_cmd.run_setup(
+        assume_yes=args.yes,
+        extras=args.extras.split(",") if args.extras is not None else None,
+        freecadcmd=args.freecadcmd,
+    ))
+
+
 def cmd_doctor(args):
     """Resolve FreeCAD + every solver family and print a per-item health checklist.
     Exits non-zero when FreeCAD is unresolved so it doubles as a CI/setup preflight."""
@@ -177,6 +195,25 @@ def build_parser():
              "faster, and the solver half never needs a boot)",
     )
     pd.set_defaults(func=cmd_doctor)
+
+    ps = sub.add_parser(
+        "setup",
+        help="Interactive provisioner: confirm/persist the FreeCAD path to the "
+             "config file, opt into pip-wheel solver extras, and print the MCP "
+             "registration snippet. --yes for scripted use.",
+    )
+    ps.add_argument("--yes", action="store_true",
+                    help="no prompts: accept the resolved FreeCAD path, install "
+                         "only what --extras names")
+    ps.add_argument("--extras", default=None, metavar="A,B",
+                    help="comma-separated pip-wheel extras to install "
+                         "(mbd,topology,optics,fluids)")
+    ps.add_argument("--freecadcmd", default=None, metavar="PATH",
+                    help="persist this freecadcmd path instead of auto-resolving")
+    ps.add_argument("--print-mcp-config", action="store_true",
+                    help="print only the MCP host registration block "
+                         "(mcpServers JSON + claude mcp add one-liner) and exit")
+    ps.set_defaults(func=cmd_setup)
 
     pf = sub.add_parser("fem", help="FEM subcommands.")
     fsub = pf.add_subparsers(dest="fem_command", required=True)
