@@ -45,7 +45,16 @@ def _check(label, got, want):
 
 
 def _ccx_present():
-    return any(shutil.which(n) for n in ("ccx", "ccx_2.21", "ccx_2.20", "ccx_2.19"))
+    # ccx on PATH, OR reachable via DriftPin's resolver — which finds FreeCAD's bundled
+    # ccx (Windows/macOS ship it in FreeCAD's bin, off PATH), so the live solve runs there
+    # too instead of skipping.
+    if any(shutil.which(n) for n in ("ccx", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_2.19")):
+        return True
+    try:
+        from driftpin import solvers
+        return solvers.ccx_bin() is not None
+    except Exception:
+        return False
 
 
 def _box(w, path, name, dx, dy, dz):

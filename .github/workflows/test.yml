@@ -39,7 +39,10 @@ permissions:
 jobs:
   test:
     name: Test suite (FreeCAD 1.1, self-hosted)
-    runs-on: [self-hosted, driftpin]
+    # Pin `Linux`: this box's Windows sibling shares the `driftpin` label, and this job's
+    # steps are bash + AppImage + a Linux two-interpreter split. The Windows suite is a
+    # separate lane (.github/workflows/test-windows.yml). The OS label is auto-applied.
+    runs-on: [self-hosted, driftpin, Linux]
     # The suite is ~1 min; this only bounds a wedged freecadcmd worker so it
     # can't hold the self-hosted runner indefinitely.
     timeout-minutes: 20

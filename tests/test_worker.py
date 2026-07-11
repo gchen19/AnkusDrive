@@ -2749,6 +2749,50 @@ def test_dfm_check_handle_matches_hand_built_descriptor():
         assert abs(live["wall_thickness_stats"]["mean_mm"] - 20.0) < 0.01, live
 
 
+def test_tolerance_stackup_handle_matches_hand_built_chain():
+    # issue #175 tolerance v2 Shape wiring: tolerance_stackup reading a LIVE
+    # handle must produce the same stack a hand-built chain produces today. A
+    # stepped block (20 mm cube + a smaller 10 mm boss fused on top — same
+    # section would fuse into one plain box and erase the step) measured along
+    # +z has step faces at z=0/20/30 -> links of 20 and 10 mm; ISO 2768-m puts
+    # both in the 6-30 band (+/-0.2).
+    with Worker() as w:
+        w.call("new_document", name="tol_wire")
+        base = _ws_box(w)                                   # 20mm cube at origin
+        cap = w.call("add_primitive", kind="box", w=10, d=10, h=10,
+                     placement=[5, 5, 20])["handle"]
+        step = w.call("boolean_op", op="fuse", base=base, tool=cap)["handle"]
+        live = w.call("tolerance_stackup", handle=step, axis="+z", method="rss")
+        hand = w.call("tolerance_stackup", chain=[
+            {"name": "base", "nominal": 20.0, "plus": 0.2, "minus": -0.2},
+            {"name": "cap", "nominal": 10.0, "plus": 0.2, "minus": -0.2},
+        ], method="rss")
+        # PARITY: the two paths agree on every stack number.
+        assert abs(live["nominal"] - hand["nominal"]) < 1e-9, (live, hand)
+        assert live["worstcase"] == hand["worstcase"], (live, hand)
+        assert live["rss"] == hand["rss"], (live, hand)
+        # the handle path additionally surfaces the chain it derived
+        assert len(live["chain"]) == 2, live
+        assert abs(live["chain"][0]["nominal"] - 20.0) < 1e-6, live
+        assert abs(live["chain"][1]["nominal"] - 10.0) < 1e-6, live
+        assert live["chain"][0]["plus"] == 0.2, live        # ISO 2768-m, 6-30
+        assert live["axis"] == "+z", live
+        assert live["n_step_faces"] >= 3, live
+        # explicit default_tol overrides the general-tolerance class
+        tight = w.call("tolerance_stackup", handle=step, axis="+z",
+                       default_tol=0.05)
+        assert tight["chain"][0]["plus"] == 0.05, tight
+        assert abs(tight["worstcase"]["spread"] - 0.2) < 1e-9, tight
+        # a solid with no step faces along the axis is a clean error
+        w.call("new_document", name="tol_wire_err")
+        ball = w.call("add_primitive", kind="sphere", r=10)["handle"]
+        try:
+            w.call("tolerance_stackup", handle=ball, axis="+z")
+            assert False, "expected an error for a stepless solid"
+        except Exception as e:
+            assert "dimension chain" in str(e), e
+
+
 def test_add_spring_squared_ground_ends():
     # Squared-and-ground compression spring (issue #175): the last coil at each
     # end is closed (inactive), so active coils Na = Nt - 2, solid height = d*Nt,

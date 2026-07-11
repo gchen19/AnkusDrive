@@ -416,9 +416,14 @@ def test_feature_edges_kill_diagonal_forest():
 
 
 def _ccx_available():
-    return any(
-        shutil.which(b) for b in ("ccx", "ccx_2.19", "ccx_2.20", "ccx_2.21")
-    )
+    # PATH, or DriftPin's resolver (finds FreeCAD's bundled ccx — off PATH on Win/macOS).
+    if any(shutil.which(b) for b in ("ccx", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_2.19")):
+        return True
+    try:
+        from driftpin import solvers
+        return solvers.ccx_bin() is not None
+    except Exception:
+        return False
 
 
 def test_fem_field_surface_real_solve():

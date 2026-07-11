@@ -384,7 +384,11 @@ process. Several reuse existing DriftPin tools directly.
   live `handle` — per-face draft/undercut/wall descriptors are derived off the
   solid (`_dfm_face_descriptors`, the moldability face-classification machinery)
   and scored identically, with a golden parity test vs the hand-built descriptor.
-  `tolerance_stackup` off a live handle remains the open half.
+  The tolerance half shipped too: `tolerance_stackup` reads a live `handle` —
+  planar step faces perpendicular to the measurement `axis` become
+  station-to-station links (ISO 2768-1 general tolerances by default,
+  `default_tol` to override), stacked identically, with the same parity-test
+  pattern (`test_worker.py::test_tolerance_stackup_handle_matches_hand_built_chain`).
 - **Tier A screens (SIMULATION_NEXT):** `molding_screen`
   (`analysis/molding.py` — exact one-term cooling time t ∝ s² + the ±30 %
   spiral-flow fill check, per-polymer defaults, feeding dfm/cost) and
@@ -540,12 +544,13 @@ immediately useful:
 
 **Remaining stubs** (the only unbuilt items in this catalog; each family section
 names its own):
-- Tolerance **v2 Shape wiring** — `tolerance_stackup` reading a dimension chain
-  off a live handle (§9, Appendix A). *(the DfX half shipped: `dfm_check` now
-  reads a live handle, issue #175.)*
 - Horizon table row (§11) — machining toolpaths — on concrete need only.
 
-*(Shipped since this list was last pruned: **fit_class** interference/transition
+*(Shipped since this list was last pruned: **tolerance v2 Shape wiring** —
+`tolerance_stackup` reading a dimension chain off a live handle (planar step
+faces along the measurement axis → station-to-station links, ISO 2768 general
+tolerances as the untoleranced default), issue #175, closing the catalog's last
+stub pair with the DfX half; **fit_class** interference/transition
 shaft letters — k/m/n/p/r/s, issue #168, `analysis/tolerance.py`;
 **chain/sprocket + weld-group ratings** — issue #175, `machine_elements.py`;
 **materials DB electrical layer** — issue #175; **nonlinear structural** — CCX
