@@ -784,6 +784,45 @@ def openinjmoldsim_bashrc() -> str | None:
     return None
 
 
+def run_argvs(case_dir: str, argv_list) -> tuple:
+    """Run a sequence of solver argv lists directly in ``case_dir`` — no shell.
+
+    The native counterpart of the worker's bash-based OpenFOAM chain, for solvers
+    that need no environment sourcing (SU2 today — issue #203): each ``argv`` is
+    passed straight to ``subprocess.run`` with ``cwd=case_dir``, so Windows paths
+    survive untouched and neither ``bash`` nor WSL is required. Apps run
+    left-to-right, stopping at the first failure. Returns
+    ``(returncode, combined_output_tail)`` — the same contract as the worker's
+    ``_run_foam``."""
+    import subprocess
+    out, rc = "", 0
+    for argv in argv_list:
+        proc = subprocess.run([str(a) for a in argv], cwd=case_dir,
+                              capture_output=True, text=True)
+        out += (proc.stdout or "") + (proc.stderr or "")
+        rc = proc.returncode
+        if rc != 0:
+            break
+    return rc, out[-2000:]
+
+
+def su2_case_config(case_dir: str) -> str | None:
+    """The SU2 ``.cfg`` a prepared ``case_dir`` should be solved with.
+
+    ``SU2_CFD`` takes its config filename as a positional argument (there is no
+    default), so the native runner must name one. Preference: the conventional
+    names, then a lone ``*.cfg``. Returns ``None`` when the case has no config —
+    or several ambiguous ones — and the caller lets SU2 print its own usage
+    error."""
+    import glob as _glob
+    cfgs = sorted(os.path.basename(p)
+                  for p in _glob.glob(os.path.join(case_dir, "*.cfg")))
+    for name in ("config.cfg", "su2.cfg", "case.cfg"):
+        if name in cfgs:
+            return name
+    return cfgs[0] if len(cfgs) == 1 else None
+
+
 def capabilities() -> dict:
     """Report which P2 solvers (and which families) are usable *right now* —
     the ``solve_capabilities`` tool's payload, the solver twin of
