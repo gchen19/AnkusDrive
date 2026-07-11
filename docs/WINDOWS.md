@@ -28,9 +28,14 @@ py -m venv .venv
   CoolProp) — Windows wheels exist; `pip install 'driftpin[...]'` works. ✅
 - **Molding warpage** (CalculiX thermo-elastic) — the bundled `ccx.exe` is auto-discovered,
   so `molding_warpage_submit` solves natively (verified: `rc=0`, real bow). ✅
-- **Slicing** (PrusaSlicer) and **CFD discovery** (SU2) — self-contained native binaries;
-  `scripts\install-solvers.ps1 prusaslicer su2` downloads + wires them (a live PrusaSlicer
-  slice is verified; the SU2 *solve* runner still needs bash — see below). ✅/⚠️
+- **Slicing** (PrusaSlicer) and **CFD** (SU2) — self-contained native binaries;
+  `scripts\install-solvers.ps1 prusaslicer su2` downloads + wires them. Live PrusaSlicer
+  slice AND an end-to-end native SU2 solve are verified (#203: the SU2 branch of the CFD
+  runner is bash-free). ✅
+- **Transient/radiation thermal, CHT, low-frequency EM, acoustic/harmonic FEM** (Elmer) —
+  portable no-GUI zip; `scripts\install-solvers.ps1 elmer` downloads + wires it. All five
+  Elmer-backed suites verified live natively, including the ViewFactors radiation legs and
+  the FreeCAD geometry bridge (#205). ✅
 
 ## How DriftPin finds FreeCAD
 
@@ -145,7 +150,8 @@ Every result below is a real solve/run on the machine, not a dry check:
 | **FEM modal** | CalculiX (bundled) | auto-discovered | `test_merge_modal_gate` live modal solve: FEM f₁=304.6 Hz vs 308.5 Hz oracle (ratio 0.99), 17/17 |
 | **mbd** | PyBullet 3.2.7 | `pip install '.[mbd]'` | wheel installs on 3.13, `test_mbd` runs |
 | **slicing** | PrusaSlicer 2.9.6 | portable zip + `DRIFTPIN_PRUSASLICER_PATH` | live slice: 20 mm cube → 8.06 cm³ @100% infill (exact 8.0, ratio 1.008), 99 layers, 10/10 |
-| **cfd** | SU2 8.5.0 | portable zip + `DRIFTPIN_SU2_PATH` | `SU2_CFD.exe` runs; `cfd` resolves — but the solve runner needs bash (see the row below) |
+| **cfd** | SU2 8.5.0 | portable zip + `DRIFTPIN_SU2_PATH` | `SU2_CFD.exe` runs; end-to-end `cfd_*_flow_submit` solve verified native — no bash (#203) |
+| **thermal_transient** | Elmer 26.2 | portable no-GUI zip + `DRIFTPIN_ELMER_PATH` | ElmerSolver/ElmerGrid/ViewFactors verified live: thermal, radiation, CHT, EM, acoustic + harmonic FEM, geometry bridge (#205) |
 | **optics** | optiland + rayoptics | `pip install '.[optics]'` | ready |
 | **topology** | solidspy | `pip install '.[topology]'` | ready |
 | **fluids** | CoolProp 8.0.0 | `pip install '.[fluids]'` | ready (in-process f(T,P)) |
@@ -165,8 +171,8 @@ FreeCAD's bundled `ccx.exe` even though it isn't on PATH.
 | Optics (sequential) | optiland / rayoptics | ✅ `pip install 'driftpin[optics]'` |
 | Optics (non-seq) | KrakenOS (GPL) | ✅ `pip install 'driftpin[optics_gpl]'`, run out-of-process |
 | Fluids properties | CoolProp | ✅ pip wheel |
-| CFD (steady) | SU2 | ⚠️ the [Windows binary](https://su2code.github.io/download.html) installs and **runs** natively (`SU2_CFD.exe`), and DriftPin *resolves* it (`cfd` shows available) — but DriftPin's CFD **case-runner** (`_run_foam`) shells through `bash`, so an end-to-end `cfd_*_flow` solve still needs WSL/Git-bash. Set `DRIFTPIN_SU2_PATH` |
-| Transient/radiation thermal | Elmer | ✅ good native Windows installer ([elmerfem.org](https://www.elmerfem.org/)); `DRIFTPIN_ELMER_PATH` if not on PATH |
+| CFD (steady) | SU2 | ✅ fully native: the [Windows binary](https://su2code.github.io/download.html) runs and the CFD runner's SU2 branch is a direct subprocess — no bash/WSL (#203). Set `DRIFTPIN_SU2_PATH` (or use the provisioner; `%LOCALAPPDATA%\DriftPin\solvers` is auto-discovered) |
+| Transient/radiation thermal | Elmer | ✅ verified native (26.2, portable no-GUI zip via `install-solvers.ps1 elmer` — note: no winget package exists); covers CHT, low-frequency EM, acoustic + harmonic FEM and the geometry bridge (#205) |
 | Slicing | PrusaSlicer | ✅ Windows installer; `DRIFTPIN_PRUSASLICER_PATH` |
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD; dedicated venv (`DRIFTPIN_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ prebuilt Windows binaries exist upstream, but not yet wired into the installer scripts |

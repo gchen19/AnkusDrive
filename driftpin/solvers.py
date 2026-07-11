@@ -416,7 +416,18 @@ def _binary_candidates(name: str, spec: dict) -> list:
         for binname in spec["binaries"]:
             for exe in (binname, binname + ".exe"):
                 candidates.append(os.path.join(d, exe))
-    if spec.get("freecad_bundled"):                  # 4) FreeCAD's bundled bin/ (ccx, gmsh)
+    # 4) the Windows provisioner's portable extracts: scripts/install-solvers.ps1
+    #    unzips SU2/PrusaSlicer/Elmer under %LOCALAPPDATA%\DriftPin\solvers, so a
+    #    provisioned box resolves them with NO env var — the way an MCP host with
+    #    a minimal environment launches `driftpin mcp` (issue #205 / #199).
+    if platform.system() == "Windows" and (lad := os.environ.get("LOCALAPPDATA")):
+        import glob as _glob
+        base = os.path.join(lad, "DriftPin", "solvers")
+        for binname in spec["binaries"]:
+            candidates.extend(sorted(_glob.glob(
+                os.path.join(base, "*", "**", binname + ".exe"),
+                recursive=True), reverse=True))       # newest versioned dir first
+    if spec.get("freecad_bundled"):                  # 5) FreeCAD's bundled bin/ (ccx, gmsh)
         for d in _freecad_bundled_bin_dirs():
             for binname in spec["binaries"]:
                 for exe in (binname, binname + ".exe"):
@@ -837,6 +848,22 @@ def run_argvs(case_dir: str, argv_list) -> tuple:
         if rc != 0:
             break
     return rc, out[-2000:]
+
+
+def sibling_bin(main_bin: str, name: str) -> str:
+    """Resolve a companion executable that ships next to ``main_bin`` (ElmerGrid /
+    ViewFactors next to ElmerSolver): PATH first, then the sibling path — with the
+    ``.exe`` suffix Windows needs (a bare ``os.path.join(dir, name)`` never passes
+    ``isfile`` there, which silently skipped the ViewFactors/ElmerGrid legs on an
+    otherwise-complete native Windows Elmer install; issue #205). Existence is the
+    caller's check — the returned path may not exist."""
+    found = shutil.which(name)
+    if found:
+        return found
+    cand = os.path.join(os.path.dirname(main_bin), name)
+    if os.name == "nt" and not os.path.isfile(cand):
+        cand += ".exe"
+    return cand
 
 
 def su2_case_config(case_dir: str) -> str | None:

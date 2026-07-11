@@ -12777,6 +12777,53 @@ def _resolve_thermal_props(p):
     return k, rho, cp
 
 
+def _sibling_bin(main_bin, name):
+    """Companion executable next to ``main_bin`` (ElmerGrid/ViewFactors next to
+    ElmerSolver) — delegates to ``solvers.sibling_bin`` (which handles the ``.exe``
+    suffix Windows needs; issue #205)."""
+    from driftpin import solvers
+    return solvers.sibling_bin(main_bin, name)
+
+
+def _ensure_unv_face_groups(unv_path, femmesh):
+    """Make sure the exported UNV carries the per-face element groups the geometry
+    bridge's boundary contract rides on (tag i == shape.Faces[i-1]).
+
+    The Windows FreeCAD 1.1.1 SMESH build DROPS mesh groups from ``FemMesh.write``
+    UNV export (the FemMesh itself has them — GroupCount > 0 — but no dataset 2467
+    is written). ElmerGrid then invents boundary numbers geometrically, the
+    convective BC lands on arbitrary faces, and the solve returns ok:true with
+    wrong physics (a corner-cooled cube instead of a plane wall — 12 % hot at the
+    Heisler gate, found live on the #205 verification). When the dataset is
+    missing, rebuild it from the FemMesh group API in the exact layout the Linux
+    export produces (10-wide int fields, entity code 8 = element, two entities
+    per row). Returns True when groups are present (already or after repair)."""
+    with open(unv_path, encoding="utf-8", errors="replace") as f:
+        has_2467 = any(line.strip() == "2467" for line in f)
+    if has_2467:
+        return True
+    face_groups = []
+    for gid in femmesh.Groups:
+        name = femmesh.getGroupName(gid)
+        if (name.startswith("Face") and name[4:].isdigit()
+                and femmesh.getGroupElementType(gid) == "Face"):
+            face_groups.append((int(name[4:]), name, femmesh.getGroupElements(gid)))
+    if not face_groups:
+        return False
+    face_groups.sort()
+    lines = ["    -1", f"{2467:6d}"]
+    for gnum, (_idx, name, elems) in enumerate(face_groups, start=1):
+        lines.append(f"{gnum:10d}" + f"{0:10d}" * 6 + f"{len(elems):10d}")
+        lines.append(name)
+        for i in range(0, len(elems), 2):
+            lines.append("".join(f"{8:10d}{e:10d}{0:10d}{0:10d}"
+                                 for e in elems[i:i + 2]))
+    lines.append("    -1")
+    with open(unv_path, "a", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    return True
+
+
 def _thermal_body_submit(p, info):
     """Geometry-driven transient thermal — the P3 M4 bridge. Gmsh-meshes a FreeCAD
     solid on the MAIN thread (FemMesh + UNV export; the jobs.py contract keeps all
@@ -12785,7 +12832,6 @@ def _thermal_body_submit(p, info):
     groups, so `convection_faces` are the solid's 1-based face indices (boundary
     tag i == shape.Faces[i-1], verified live); every unlisted face is adiabatic.
     Degrades to {ok:false, reason, install} when ElmerGrid is missing."""
-    import shutil
     import tempfile
 
     from femmesh.gmshtools import GmshTools
@@ -12794,8 +12840,7 @@ def _thermal_body_submit(p, info):
     from driftpin.analysis import meshbridge as _mb
 
     elmer_bin = info["path"]
-    elmergrid = (shutil.which("ElmerGrid")
-                 or os.path.join(os.path.dirname(elmer_bin), "ElmerGrid"))
+    elmergrid = _sibling_bin(elmer_bin, "ElmerGrid")
     if not os.path.isfile(elmergrid):
         return {"ok": False,
                 "reason": "ElmerGrid not found (converts the Gmsh UNV mesh for Elmer)",
@@ -12862,7 +12907,13 @@ def _thermal_body_submit(p, info):
                         f"~{achieved_h:.3g} mm elements ({tets} tets) on a "
                         f"{obj.Shape.Volume:.0f} mm³ body. The mesh is too coarse to "
                         f"trust the solve; re-run (serial meshing is deterministic).")
-            mesh.FemMesh.write(os.path.join(case_dir, "body.unv"))
+            unv_path = os.path.join(case_dir, "body.unv")
+            mesh.FemMesh.write(unv_path)
+            if not _ensure_unv_face_groups(unv_path, mesh.FemMesh):
+                raise RuntimeError(
+                    "UNV export carries no face groups and the FemMesh has none "
+                    "to rebuild them from — the convective faces cannot be "
+                    "identified (boundary contract tag i == Faces[i-1] broken)")
         finally:
             doc.removeObject(mesh.Name)
             doc.recompute()
@@ -12899,6 +12950,15 @@ def _thermal_body_submit(p, info):
                               "faces would bind to nothing (adiabatic). The mesh's face "
                               "groups did not survive UNV import; check the solid/mesh.",
                     "stdout_tail": ((grid.stdout or "") + (grid.stderr or ""))[-2000:]}
+        # ElmerGrid v26 renumbers the UNV face groups (mesh.names carries its
+        # Face-name -> boundary-number mapping), so retarget the convection BC
+        # at the numbers it actually assigned; older ElmerGrids write no
+        # mesh.names and preserve tag order (the legacy contract).
+        name_map = _mb.boundary_name_map(case_dir, built["mesh_name"])
+        if name_map:
+            _mb.retarget_convection_boundaries(
+                case_dir, built["sif"],
+                [name_map.get(f"Face{i}", i) for i in conv])
         proc = subprocess.run([elmer_bin, built["sif"]], cwd=case_dir,
                               capture_output=True, text=True)
         out = {
@@ -13270,15 +13330,13 @@ def _h_thermal_radiation_submit(p):
     job_result for {ok, returncode, solver, case_dir, stdout_tail} plus, for the plate
     case, {flux_w_m2, q_net_w, two_plate_flux_w_m2, oracle_ratio, t1_c, t2_c,
     emissivity_1, emissivity_2}."""
-    import shutil
 
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
     from driftpin import jobs
     elmer_bin = info["path"]
-    vf_bin = shutil.which("ViewFactors") or os.path.join(
-        os.path.dirname(elmer_bin), "ViewFactors")
+    vf_bin = _sibling_bin(elmer_bin, "ViewFactors")
     case_dir = p.get("case_dir")
 
     if case_dir:                                     # --- prepared case directory ---

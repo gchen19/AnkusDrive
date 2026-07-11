@@ -210,6 +210,53 @@ def mesh_boundary_count(case_dir: str, mesh_name: str) -> int:
         return 0
 
 
+def boundary_name_map(case_dir: str, mesh_name: str) -> dict:
+    """The boundary numbers ElmerGrid actually assigned to the UNV face groups,
+    parsed from ``<mesh_name>/mesh.names`` (``$ Face1 = 6`` lines under the
+    "names for boundaries" section).
+
+    ElmerGrid v26 RENUMBERS the groups during UNV import (Face4 → boundary 1,
+    …), so a SIF that targets ``Face i`` as ``boundary i`` binds the convective
+    BC to arbitrary faces — the corner-cooled-cube failure found live on the
+    #205 Windows verification. Older ElmerGrids (the apt v9 the Linux lane uses)
+    preserve group order and write no mesh.names — then this returns {} and the
+    legacy tag-order contract stands. Keys are group names, values boundary
+    numbers."""
+    import re
+    path = os.path.join(case_dir, mesh_name, "mesh.names")
+    if not os.path.isfile(path):
+        return {}
+    out = {}
+    in_boundaries = False
+    for line in open(path, encoding="utf-8", errors="replace"):
+        if "names for boundaries" in line:
+            in_boundaries = True
+            continue
+        if line.startswith("!"):
+            in_boundaries = False if "names for" in line else in_boundaries
+            continue
+        m = re.match(r"\$\s*(\w+)\s*=\s*(\d+)", line)
+        if m and in_boundaries:
+            out[m.group(1)] = int(m.group(2))
+    return out
+
+
+def retarget_convection_boundaries(case_dir: str, sif: str, tags: list) -> None:
+    """Rewrite the (single) convection BC's ``Target Boundaries`` list in the
+    already-written SIF with the boundary numbers ElmerGrid actually assigned
+    (see ``boundary_name_map``)."""
+    import re
+    path = os.path.join(case_dir, sif)
+    text = open(path, encoding="utf-8").read()
+    tag_txt = " ".join(str(t) for t in sorted(tags))
+    new = f"Target Boundaries({len(tags)}) = {tag_txt}"
+    text, n = re.subn(r"Target Boundaries\(\d+\)\s*=\s*[\d ]+", new, text)
+    if n != 1:
+        raise RuntimeError(f"expected exactly one Target Boundaries line, found {n}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
 def parse_minmax_scalars(case_dir: str, scalars: str = "scalars.dat") -> dict | None:
     """Read the SaveScalars history of a bridged solve: last-row max/min Temperature.
 
