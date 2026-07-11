@@ -66,8 +66,11 @@ def _freecadcmd_candidates():
 
 
 def _resolve_freecadcmd():
-    if env := os.environ.get("DRIFTPIN_FREECADCMD"):
-        return env
+    # env override -> config file (~/.config/driftpin/config.toml `freecadcmd`;
+    # the persistent layer MCP hosts' minimal env can't strip, issue #199)
+    from driftpin import config as _config
+    if explicit := _config.get("DRIFTPIN_FREECADCMD"):
+        return explicit
     for name in _FREECADCMD_NAMES:
         if found := shutil.which(name):     # PATH lookup (Windows PATHEXT-aware)
             return found

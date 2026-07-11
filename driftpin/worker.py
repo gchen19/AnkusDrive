@@ -8930,7 +8930,8 @@ def _renderer_exec_candidates(renderer, spec):
     import platform
     key = spec["param_key"]
     candidates = []
-    if env_path := os.environ.get(f"DRIFTPIN_{renderer.upper()}_PATH"):
+    from driftpin import config as _config
+    if env_path := _config.get(f"DRIFTPIN_{renderer.upper()}_PATH"):
         candidates.append(env_path)                  # 1) explicit env override
     if existing := App.ParamGet(_RENDER_PARAM_GROUP).GetString(key, ""):
         candidates.append(existing)                  # 2) already set in prefs
@@ -11611,7 +11612,8 @@ def _optics_gpl_python():
     import subprocess
 
     candidates = []
-    if env := os.environ.get("DRIFTPIN_OPTICS_GPL_PYTHON"):
+    from driftpin import config as _config
+    if env := _config.get("DRIFTPIN_OPTICS_GPL_PYTHON"):
         candidates.append(env)
     try:
         spec = importlib.util.find_spec("KrakenOS")
@@ -11773,7 +11775,8 @@ def _em_fullwave_gpl_python():
     import subprocess
 
     candidates = []
-    if env := os.environ.get("DRIFTPIN_OPENEMS_PYTHON"):
+    from driftpin import config as _config
+    if env := _config.get("DRIFTPIN_OPENEMS_PYTHON"):
         candidates.append(env)
     try:
         spec = importlib.util.find_spec("openEMS")
@@ -12247,7 +12250,8 @@ def _bempp_python():
     import subprocess
 
     candidates = []
-    if env := os.environ.get("DRIFTPIN_BEMPP_PYTHON"):
+    from driftpin import config as _config
+    if env := _config.get("DRIFTPIN_BEMPP_PYTHON"):
         candidates.append(env)
     try:
         spec = importlib.util.find_spec("bempp_cl")

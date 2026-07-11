@@ -34,6 +34,8 @@ import os
 import platform
 import shutil
 
+from driftpin import config as _config
+
 # Registry of the P2 external solvers, keyed by the name agents pass (and the
 # DRIFTPIN_<NAME>_PATH env override is the upper-cased key). Ordered by the
 # milestone sequence in docs/archive/SIMULATION_P2_KICKOFF.md. Each family lists every
@@ -407,8 +409,8 @@ def _binary_candidates(name: str, spec: dict) -> list:
     lookup — no side effects, no existence check (the caller filters). Mirrors
     worker.py's _renderer_exec_candidates, minus the FreeCAD prefs step."""
     candidates = []
-    if env_path := os.environ.get(f"DRIFTPIN_{name.upper()}_PATH"):
-        candidates.append(env_path)                  # 1) explicit env override
+    if env_path := _config.get(f"DRIFTPIN_{name.upper()}_PATH"):
+        candidates.append(env_path)                  # 1) env override -> config file
     for binname in spec["binaries"]:                 # 2) PATH (honors Windows PATHEXT)
         if found := shutil.which(binname):
             candidates.append(found)
@@ -446,7 +448,7 @@ def _repo_root() -> str:
     """Repo root used to locate the dedicated per-solver venvs (``.venv-openems``,
     ``.venv-bempp``) beside the checkout. Honors ``DRIFTPIN_REPO_ROOT`` — a read-only
     discovery override tests point at a tmp dir — else the checkout holding this file."""
-    return os.environ.get("DRIFTPIN_REPO_ROOT") or \
+    return _config.get("DRIFTPIN_REPO_ROOT") or \
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -456,7 +458,7 @@ def _standard_bashrc(cfg: dict):
     a read-only discovery override tests point at a tmp dir) is searched first, each
     prefix for ``<prefix>/etc/bashrc``; then the entry's standard-location globs.
     Returns the bashrc path or None. Side-effect-free."""
-    roots = os.environ.get("DRIFTPIN_OPENFOAM_DIRS")
+    roots = _config.get("DRIFTPIN_OPENFOAM_DIRS")
     if roots:
         for root in roots.split(os.pathsep):
             cand = os.path.join(root, "etc", "bashrc")
@@ -615,7 +617,7 @@ def openfoam_bashrc() -> str | None:
     build layout next to the resolved binary (``<foamdir>/platforms/.../bin`` ->
     ``<foamdir>/etc/bashrc``) -> common install dirs (incl. the apt
     ``/usr/share/openfoam`` layout). Returns the path, or None when none resolves."""
-    env = os.environ.get("DRIFTPIN_OPENFOAM_BASHRC")
+    env = _config.get("DRIFTPIN_OPENFOAM_BASHRC")
     if env and os.path.isfile(env):
         return env
     wm = os.environ.get("WM_PROJECT_DIR")
@@ -652,7 +654,7 @@ def ccx_precice_bin() -> str | None:
     """The preCICE-enabled CalculiX solver (``ccx_preCICE``) — the solid
     participant. DRIFTPIN_CCX_PRECICE / DRIFTPIN_PRECICE_PATH env -> the registry
     binary resolution (~/calculix-adapter/bin etc.). Returns the path or None."""
-    env = os.environ.get("DRIFTPIN_CCX_PRECICE")
+    env = _config.get("DRIFTPIN_CCX_PRECICE")
     if env and os.path.isfile(env):
         return env
     return find_solver("precice").get("path")
@@ -662,7 +664,7 @@ def precice_lib_dir() -> str | None:
     """Directory holding ``libprecice.so`` (the serial, MPI-off build that the
     adapters link). DRIFTPIN_PRECICE_LIB env -> the conda-forge env lib ->
     the documented source-build prefix. Returns the dir or None."""
-    env = os.environ.get("DRIFTPIN_PRECICE_LIB")
+    env = _config.get("DRIFTPIN_PRECICE_LIB")
     if env and os.path.isdir(env):
         return env
     import glob as _glob
@@ -680,7 +682,7 @@ def openfoam_adapter_lib_dir() -> str | None:
     """Directory holding ``libpreciceAdapterFunctionObject.so`` (the OpenFOAM
     function-object adapter the fluid participant loads). DRIFTPIN_OPENFOAM_ADAPTER_LIB
     env -> the wmake user-lib build prefix. Returns the dir or None."""
-    env = os.environ.get("DRIFTPIN_OPENFOAM_ADAPTER_LIB")
+    env = _config.get("DRIFTPIN_OPENFOAM_ADAPTER_LIB")
     if env and os.path.isdir(env):
         return env
     import glob as _glob
@@ -711,7 +713,7 @@ def fsi_openfoam_bashrc() -> str | None:
     Resolution: ``DRIFTPIN_FSI_OPENFOAM_BASHRC`` env -> the install whose version
     matches the adapter lib path (``~/OpenFOAM/<user>-v2512/...`` -> the
     ``…openfoam2512…`` / ``…-v2512…`` bashrc) -> the general ``openfoam_bashrc()``."""
-    env = os.environ.get("DRIFTPIN_FSI_OPENFOAM_BASHRC")
+    env = _config.get("DRIFTPIN_FSI_OPENFOAM_BASHRC")
     if env and os.path.isfile(env):
         return env
     ofa = openfoam_adapter_lib_dir()
@@ -782,7 +784,7 @@ def openinjmoldsim_bin() -> str | None:
     (``~/opt/openInjMoldSim/...``). Returns the path, or None when it does not
     resolve (the common case until the OF7-org build lands)."""
     for var in ("DRIFTPIN_OPENINJMOLDSIM", "DRIFTPIN_OPENINJMOLDSIM_PATH"):
-        env = os.environ.get(var)
+        env = _config.get(var)
         if env and os.path.isfile(env):
             return env
     found = shutil.which("openInjMoldSim")
@@ -803,7 +805,7 @@ def openinjmoldsim_bashrc() -> str | None:
     ``openInjMoldSim`` — distinct from ``openfoam_bashrc()`` (which resolves the
     ESI v19xx/v25xx build). ``DRIFTPIN_OPENINJMOLDSIM_BASHRC`` env -> the OF7-org
     source-build / apt layouts. Returns the path or None."""
-    env = os.environ.get("DRIFTPIN_OPENINJMOLDSIM_BASHRC")
+    env = _config.get("DRIFTPIN_OPENINJMOLDSIM_BASHRC")
     if env and os.path.isfile(env):
         return env
     import glob as _glob

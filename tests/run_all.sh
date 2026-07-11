@@ -104,6 +104,10 @@ echo "== P2 solver degradation contract (pure-Python; no FreeCAD) =="
 python3 tests/test_solve_degradation.py
 
 echo
+echo "== Persistent config layer (env -> config.toml -> auto; pure-Python; no FreeCAD) =="
+python3 tests/test_config.py
+
+echo
 echo "== Planar-kinematics toys (Grashof / stroke / DOF; pure-Python; no FreeCAD) =="
 python3 tests/test_kinematics.py
 
