@@ -33,7 +33,38 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
-$py = if ($env:DRIFTPIN_PY) { $env:DRIFTPIN_PY } else { 'python' }
+# Resolve the interpreter that builds the venv. `python` alone is not enough on a
+# self-hosted runner: the Actions service runs as NETWORK SERVICE, whose PATH has no
+# per-user install (a Store/WindowsApps python is invisible to it — exactly how the CI
+# lane first failed). Candidates are VALIDATED by running `--version`, which also
+# rejects the 0-byte Store stub. Last resort is FreeCAD's bundled python.exe — always
+# present on a box that can run this suite, and the same trick the Linux lane's venv
+# uses.
+function Find-Python([string]$freecadcmd) {
+    $candidates = @()
+    if ($env:DRIFTPIN_PY) { $candidates += ,@($env:DRIFTPIN_PY) }
+    $candidates += ,@('python')
+    $candidates += ,@('py', '-3')
+    $globs = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python3*\python.exe'),
+        'C:\Program Files\Python3*\python.exe',
+        'C:\Python3*\python.exe'
+    )
+    $globs | ForEach-Object { Get-ChildItem -Path $_ -ErrorAction SilentlyContinue } |
+        Sort-Object FullName | ForEach-Object { $candidates += ,@($_.FullName) }
+    if ($freecadcmd) {
+        $bundled = Join-Path (Split-Path -Parent $freecadcmd) 'python.exe'
+        if (Test-Path $bundled) { $candidates += ,@($bundled) }
+    }
+    foreach ($cand in $candidates) {
+        try {
+            & $cand[0] @($cand | Select-Object -Skip 1) --version *> $null
+            if ($LASTEXITCODE -eq 0) { return $cand }
+        } catch {}
+    }
+    throw ('no working Python found (tried python, py -3, common install dirs, ' +
+           "FreeCAD's bundled python.exe) - install Python 3 or set `$env:DRIFTPIN_PY")
+}
 
 # --- 1. locate FreeCAD (report only; the client resolves it at runtime) ---------
 function Find-Freecadcmd {
@@ -67,9 +98,10 @@ if ($freecadcmd) {
 # --- 2. build/refresh the venv and install the package + lint pin ---------------
 $venvPy = Join-Path $repo '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPy)) {
-    Write-Host "Creating venv (.venv) from '$py'..."
-    & $py -m venv .venv
-    if ($LASTEXITCODE -ne 0) { throw "python -m venv failed (is '$py' a real Python, not the Store stub?)" }
+    $py = Find-Python $freecadcmd
+    Write-Host "Creating venv (.venv) from '$($py -join ' ')'..."
+    & $py[0] @($py | Select-Object -Skip 1) -m venv .venv
+    if ($LASTEXITCODE -ne 0) { throw "python -m venv failed (tried '$($py -join ' ')')" }
 }
 
 Write-Host "Installing driftpin (editable) + ruff + Windows-viable solver extras..."
