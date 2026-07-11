@@ -59,7 +59,12 @@ function Find-Python([string]$freecadcmd) {
     foreach ($cand in $candidates) {
         try {
             & $cand[0] @($cand | Select-Object -Skip 1) --version *> $null
-            if ($LASTEXITCODE -eq 0) { return $cand }
+            # a hashtable survives the return intact — PS 5.1 unrolls returned
+            # ARRAYS, which turned a 1-element candidate into a bare string whose
+            # [0] was its first character ('C') at the call site
+            if ($LASTEXITCODE -eq 0) {
+                return @{ Exe = $cand[0]; Args = @($cand | Select-Object -Skip 1) }
+            }
         } catch {}
     }
     throw ('no working Python found (tried python, py -3, common install dirs, ' +
@@ -99,9 +104,10 @@ if ($freecadcmd) {
 $venvPy = Join-Path $repo '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPy)) {
     $py = Find-Python $freecadcmd
-    Write-Host "Creating venv (.venv) from '$($py -join ' ')'..."
-    & $py[0] @($py | Select-Object -Skip 1) -m venv .venv
-    if ($LASTEXITCODE -ne 0) { throw "python -m venv failed (tried '$($py -join ' ')')" }
+    $pyLabel = (@($py.Exe) + $py.Args) -join ' '
+    Write-Host "Creating venv (.venv) from '$pyLabel'..."
+    & $py.Exe @($py.Args) -m venv .venv
+    if ($LASTEXITCODE -ne 0) { throw "python -m venv failed (tried '$pyLabel')" }
 }
 
 Write-Host "Installing driftpin (editable) + ruff + Windows-viable solver extras..."
