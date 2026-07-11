@@ -50,6 +50,12 @@ if (-not (Test-Path $Py)) {
 $env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONUTF8 = '1'
 
+# Headless CI: pin matplotlib to Agg. With PySide on the box (rayoptics pulls it),
+# matplotlib would otherwise select QtAgg — whose QtCore import dies against the
+# FreeCAD-bundled-python venv's Qt DLLs ("DLL load failed", the 1/80 lane failure
+# in rayoptics' import of its mpl-based environment module).
+$env:MPLBACKEND = 'Agg'
+
 $script:failures = @()
 $script:ran = 0
 
