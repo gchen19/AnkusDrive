@@ -4062,7 +4062,8 @@ def test_geometry_bridge_validation_errors_are_clean():
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from driftpin import solvers
-    if not solvers.is_available("elmer") or not _shutil.which("ElmerGrid"):
+    if not solvers.is_available("elmer") or not os.path.isfile(
+            solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ElmerGrid")):
         print("    SKIP — ElmerSolver/ElmerGrid not installed")
         return
     with Worker() as w:
@@ -4138,7 +4139,8 @@ def test_geometry_bridge_box_end_to_end_matches_heisler():
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from driftpin import solvers
     from driftpin.analysis import thermal as _thermal
-    if not solvers.is_available("elmer") or not _shutil.which("ElmerGrid"):
+    if not solvers.is_available("elmer") or not os.path.isfile(
+            solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ElmerGrid")):
         print("    SKIP — ElmerSolver/ElmerGrid not installed")
         return
     with Worker() as w:

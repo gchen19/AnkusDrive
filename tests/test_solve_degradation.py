@@ -165,6 +165,54 @@ def test_binary_env_override_resolves_real_path():
         os.unlink(fake)
 
 
+def test_windows_provisioner_dir_discovered_without_env():
+    """On Windows, a solver the PowerShell provisioner extracted under
+    %LOCALAPPDATA%\\DriftPin\\solvers resolves with NO env var — the minimal-env
+    way an MCP host launches `driftpin mcp` (issues #205/#199). Skipped elsewhere
+    (the provisioner layout is Windows-only)."""
+    if os.name != "nt":
+        print("    SKIP — Windows provisioner layout only exists on Windows")
+        return
+    prev_lad = os.environ.get("LOCALAPPDATA")
+    prev_env = os.environ.pop("DRIFTPIN_ELMER_PATH", None)
+    tmp = tempfile.mkdtemp(prefix="fake_lad_")
+    try:
+        bin_dir = os.path.join(tmp, "DriftPin", "solvers", "ElmerFake", "bin")
+        os.makedirs(bin_dir)
+        fake = os.path.join(bin_dir, "ElmerSolver.exe")
+        open(fake, "w").close()
+        os.environ["LOCALAPPDATA"] = tmp
+        # guard against a PATH-installed ElmerSolver stealing the resolution
+        info = solvers.find_solver("elmer")
+        assert info["available"] is True, info
+        assert info["path"].startswith(tmp) or os.path.isfile(info["path"]), info
+        if not info["path"].startswith(tmp):
+            print("    NOTE — a real ElmerSolver resolved first; glob step untested here")
+    finally:
+        if prev_lad is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = prev_lad
+        if prev_env is not None:
+            os.environ["DRIFTPIN_ELMER_PATH"] = prev_env
+
+
+def test_sibling_bin_appends_exe_on_windows():
+    """sibling_bin resolves a companion executable next to the main binary,
+    adding the .exe suffix Windows needs (the bare join silently skipped the
+    ViewFactors/ElmerGrid legs of a complete native Elmer install, issue #205)."""
+    d = tempfile.mkdtemp(prefix="sibling_")
+    main = os.path.join(d, "ElmerSolver.exe" if os.name == "nt" else "ElmerSolver")
+    open(main, "w").close()
+    grid = os.path.join(d, "ElmerGrid.exe" if os.name == "nt" else "ElmerGrid")
+    open(grid, "w").close()
+    got = solvers.sibling_bin(main, "ElmerGrid")
+    # PATH may shadow with a real install; both outcomes must be a real file
+    assert os.path.isfile(got), got
+    if got.startswith(d):
+        assert got == grid, (got, grid)
+
+
 class _absent_binaries_and_wheels:
     """Force the primitive resolvers absent WITHOUT touching the installed-but-unwired
     probe — so the #177 third state can be exercised deterministically on any host."""

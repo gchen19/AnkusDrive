@@ -223,8 +223,7 @@ def _run_radiation(t1_c, t2_c, e1, e2, width_m=1.0, gap_m=0.01, n_x=80):
         d, t1_c=t1_c, t2_c=t2_c, emissivity_1=e1, emissivity_2=e2,
         width_m=width_m, gap_m=gap_m, n_x=n_x)
     elmer_bin = solvers.find_solver("elmer")["path"]
-    vf_bin = shutil.which("ViewFactors") or os.path.join(
-        os.path.dirname(elmer_bin), "ViewFactors")
+    vf_bin = solvers.sibling_bin(elmer_bin, "ViewFactors")
     subprocess.run([vf_bin, built["sif"]], cwd=d, capture_output=True, text=True)
     subprocess.run([elmer_bin, built["sif"]], cwd=d, capture_output=True, text=True)
     return elmer.parse_radiation_flux(d, built["scalars"], built["area_1_m2"]), built["area_1_m2"]
@@ -239,9 +238,8 @@ def test_radiation_matches_two_plate_oracle():
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
-    if not (shutil.which("ViewFactors")
-            or os.path.isfile(os.path.join(
-                os.path.dirname(solvers.find_solver("elmer")["path"]), "ViewFactors"))):
+    if not os.path.isfile(solvers.sibling_bin(
+            solvers.find_solver("elmer")["path"], "ViewFactors")):
         print("    SKIP — Elmer ViewFactors binary not found")
         return
     for t1, t2, e1, e2 in ((500, 100, 0.8, 0.8), (450, 50, 0.5, 0.9), (300, 20, 0.9, 1.0)):
@@ -261,9 +259,8 @@ def test_radiation_emissivity_lowers_flux():
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
-    if not (shutil.which("ViewFactors")
-            or os.path.isfile(os.path.join(
-                os.path.dirname(solvers.find_solver("elmer")["path"]), "ViewFactors"))):
+    if not os.path.isfile(solvers.sibling_bin(
+            solvers.find_solver("elmer")["path"], "ViewFactors")):
         print("    SKIP — Elmer ViewFactors binary not found")
         return
     hi, _a = _run_radiation(500, 100, 0.9, 0.9)
