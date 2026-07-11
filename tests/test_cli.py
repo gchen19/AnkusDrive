@@ -115,6 +115,47 @@ def test_fem_cantilever():
         assert key in r.stdout, f"missing {key}: {r.stdout}"
 
 
+def test_setup_print_mcp_config():
+    # issue #201: the registration block is emitted with an ABSOLUTE launcher
+    # (GUI hosts don't inherit shell PATH) and parseable mcpServers JSON.
+    r = dp("setup", "--print-mcp-config")
+    assert r.returncode == 0, r.stderr
+    start, end = r.stdout.index("{"), r.stdout.rindex("}") + 1
+    snippet = json.loads(r.stdout[start:end])
+    server = snippet["mcpServers"]["driftpin"]
+    assert os.path.isabs(server["command"]), server
+    assert os.path.isfile(server["command"]), server
+    assert server["args"][-1] == "mcp", server
+    assert "claude mcp add driftpin" in r.stdout, r.stdout
+
+
+def test_setup_yes_writes_config():
+    # issue #200 acceptance: --yes resolves FreeCAD and persists it to the
+    # config file (pointed at a temp location via DRIFTPIN_CONFIG).
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        cfg = os.path.join(d, "config.toml")
+        env = dict(os.environ, DRIFTPIN_CONFIG=cfg, PYTHONUTF8="1")
+        env.pop("DRIFTPIN_FREECADCMD", None)
+        r = subprocess.run(
+            [sys.executable, "-m", "driftpin", "setup", "--yes"],
+            cwd=str(REPO), capture_output=True, text=True, timeout=300, env=env)
+        assert r.returncode == 0, r.stderr + r.stdout
+        assert "mcpServers" in r.stdout, r.stdout
+        # on a box with FreeCAD resolvable, the path is persisted
+        if "found" in r.stdout:
+            assert os.path.isfile(cfg), r.stdout
+            body = open(cfg, encoding="utf-8").read()
+            assert "freecadcmd = " in body, body
+        # unknown extras are refused cleanly, not installed
+        r2 = subprocess.run(
+            [sys.executable, "-m", "driftpin", "setup", "--yes",
+             "--extras", "bogus"],
+            cwd=str(REPO), capture_output=True, text=True, timeout=300, env=env)
+        assert r2.returncode == 0, r2.stderr + r2.stdout
+        assert "unknown extras skipped: bogus" in r2.stdout, r2.stdout
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

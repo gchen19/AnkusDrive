@@ -131,3 +131,36 @@ def get(env_var: str, default=None):
     """The env-or-config value for ``env_var`` (no source tag), or ``default``."""
     value, _ = lookup(env_var)
     return default if value is None else value
+
+
+def write(values: dict) -> str:
+    """Merge ``{env_var: value}`` pairs into the config file and return its path
+    (``driftpin setup``'s persistence step, issue #200). Existing keys the update
+    doesn't name are preserved; the directory is created if needed. Values are
+    written with forward slashes (valid TOML without escaping, and Windows
+    accepts them)."""
+    path = config_path()
+    data = load()
+    top = dict(data)
+    solvers_tbl = dict(top.pop("solvers", {}) or {})
+    for env_var, value in values.items():
+        key = _config_key(env_var)
+        if len(key) == 1:
+            top[key[0]] = value
+        else:
+            solvers_tbl[key[1]] = value
+    lines = []
+    for k in sorted(top):
+        if isinstance(top[k], str):
+            lines.append(f'{k} = "{top[k].replace(os.sep, "/")}"')
+    if solvers_tbl:
+        lines.append("")
+        lines.append("[solvers]")
+        for k in sorted(solvers_tbl):
+            if isinstance(solvers_tbl[k], str):
+                lines.append(f'{k} = "{solvers_tbl[k].replace(os.sep, "/")}"')
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    _cache.clear()                                   # next load() re-reads
+    return path

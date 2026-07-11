@@ -157,6 +157,24 @@ def test_doctor_reports_config_layer():
         os.unlink(cfg)
 
 
+def test_write_merges_and_persists():
+    # driftpin setup's persistence step (issue #200): write() creates the file
+    # (and directory), later writes MERGE rather than clobber, and values
+    # round-trip through the normal lookup.
+    with tempfile.TemporaryDirectory() as d:
+        with _env(DRIFTPIN_CONFIG=os.path.join(d, "sub", "config.toml"),
+                  DRIFTPIN_FREECADCMD=None, DRIFTPIN_SU2_PATH=None):
+            path = config.write(
+                {"DRIFTPIN_FREECADCMD": os.sep.join(["C:", "fc", "freecadcmd.exe"])})
+            assert os.path.isfile(path), path
+            assert config.get("DRIFTPIN_FREECADCMD") == "C:/fc/freecadcmd.exe"
+            config.write({"DRIFTPIN_SU2_PATH": "/opt/su2/SU2_CFD"})
+            assert config.get("DRIFTPIN_FREECADCMD") == "C:/fc/freecadcmd.exe"
+            assert config.get("DRIFTPIN_SU2_PATH") == "/opt/su2/SU2_CFD"
+            body = open(path, encoding="utf-8").read()
+            assert "[solvers]" in body and 'su2_path = "/opt/su2/SU2_CFD"' in body, body
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
