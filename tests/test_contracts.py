@@ -38,6 +38,8 @@ _NO_DISPATCH = {
     "restart_worker",   # tears down / respawns the worker process itself
     # host-side workspace-pool management (issue #167) — no worker handler
     "use_workspace", "list_workspaces", "close_workspace",
+    # host-side doctor report (issue #202) — reads discovery state, needs no worker
+    "setup_status",
 }
 
 # Tools whose function name intentionally differs from the handler they call.
