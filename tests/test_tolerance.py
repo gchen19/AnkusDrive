@@ -233,6 +233,33 @@ def test_sign_convention_and_empty_chain():
             raise AssertionError("expected ValueError")
 
 
+def test_iso2768_general_tolerances():
+    # ISO 2768-1 Table 1 spot checks: the ± a bare "ISO 2768-<class>" drawing
+    # note assigns. These feed the handle-derived stackup chain (issue #175).
+    assert tol.general_tolerance_mm(20, "m") == 0.2       # 6-30 band, medium
+    assert tol.general_tolerance_mm(20, "f") == 0.1
+    assert tol.general_tolerance_mm(100, "m") == 0.3      # 30-120 band
+    assert tol.general_tolerance_mm(2.0, "c") == 0.2      # 0.5-3 band, coarse
+    assert tol.general_tolerance_mm(350, "v") == 2.5      # 120-400, very coarse
+    assert tol.general_tolerance_mm(4000, "m") == 2.0     # top band inclusive
+    assert tol.general_tolerance_mm(30, "m") == 0.2       # band bound inclusive
+    assert tol.general_tolerance_mm(30.001, "m") == 0.3   # just past the bound
+
+
+def test_iso2768_refuses_uncovered_inputs():
+    for bad in (lambda: tol.general_tolerance_mm(0.4),          # under 0.5 mm
+                lambda: tol.general_tolerance_mm(4001),         # over 4000 mm
+                lambda: tol.general_tolerance_mm(10, "x"),      # unknown class
+                lambda: tol.general_tolerance_mm(3000, "f"),    # f untabulated
+                lambda: tol.general_tolerance_mm(2.0, "v")):    # v untabulated
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

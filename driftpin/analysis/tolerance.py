@@ -393,6 +393,51 @@ def fit_class(basic_size: float, fit: str = "H7/g6") -> dict:
     return result
 
 
+# --- 3b. ISO 2768-1 general tolerances (linear dimensions) ---------------------
+
+# Permissible deviations (± mm) for linear dimensions WITHOUT an individual
+# tolerance indication — the "ISO 2768-<class>" drawing-note default. ISO 2768-1
+# Table 1, by class (f fine / m medium / c coarse / v very coarse) and nominal
+# band (upper bound, mm, inclusive; the first band starts at 0.5 mm — below that
+# the standard requires an individual indication). None marks a band the class
+# does not tabulate.
+_ISO2768_BANDS = (3, 6, 30, 120, 400, 1000, 2000, 4000)
+_ISO2768 = {
+    "f": (0.05, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, None),
+    "m": (0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0),
+    "c": (0.2, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 4.0),
+    "v": (None, 0.5, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0),
+}
+
+
+def general_tolerance_mm(nominal: float, cls: str = "m") -> float:
+    """ISO 2768-1 general tolerance (the ± half-band, mm) for an untoleranced
+    linear dimension of ``nominal`` mm, tolerance class ``cls`` ('f' fine, 'm'
+    medium, 'c' coarse, 'v' very coarse). This is what a "ISO 2768-m" drawing
+    note assigns to every dimension without its own tolerance — and what the
+    handle-derived stackup chain (issue #175 v2 Shape wiring) uses when the
+    caller gives no explicit tolerance. Raises ValueError below 0.5 mm (the
+    standard requires an individual indication), above 4000 mm, for an unknown
+    class, or where the class has no tabulated value."""
+    cls = str(cls).lower()
+    if cls not in _ISO2768:
+        raise ValueError(f"unknown ISO 2768 class {cls!r}: f | m | c | v")
+    nominal = abs(float(nominal))
+    if nominal < 0.5:
+        raise ValueError(
+            "ISO 2768 does not cover dimensions under 0.5 mm — tolerance them "
+            "individually (pass an explicit default_tol)")
+    for i, hi in enumerate(_ISO2768_BANDS):
+        if nominal <= hi:
+            t = _ISO2768[cls][i]
+            if t is None:
+                raise ValueError(
+                    f"ISO 2768-{cls} tabulates no value for {nominal} mm — use "
+                    "another class or an explicit default_tol")
+            return t
+    raise ValueError("ISO 2768 covers nominals up to 4000 mm")
+
+
 # --- 4. GD&T zone check -------------------------------------------------------
 
 # Controls whose 'actual' is a single measured deviation checked against the zone.
