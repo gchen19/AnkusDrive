@@ -184,10 +184,40 @@ async def _test_fem_cantilever_tool(session):
               f"vM_max={data['max_vonmises_mpa']:.2f}MPa")
 
 
+async def _test_setup_surface(session):
+    # issue #202: the agent-guided setup surface — a status tool, a canned prompt,
+    # and a resource, all read-only.
+    status = json.loads(_text_payload(
+        await session.call_tool("setup_status", {})))
+    assert status["platform"]["system"], status
+    assert "freecad" in status and "path" in status["freecad"], status
+    fams = status["solvers"]["families"]
+    assert fams, status
+    for fam, info in fams.items():
+        assert "any_available" in info, (fam, info)
+        if not info["any_available"]:
+            # every unavailable family must carry an actionable fix on its solvers
+            states = [status["solvers"]["solvers"][s] for s in info["solvers"]]
+            assert any(st.get("install_hint") or st.get("wire_hint")
+                       for st in states), (fam, states)
+    prompts = await session.list_prompts()
+    assert "diagnose_setup" in {p.name for p in prompts.prompts}, prompts
+    got = await session.get_prompt("diagnose_setup", {})
+    text = "".join(m.content.text for m in got.messages
+                   if hasattr(m.content, "text"))
+    assert "setup_status" in text, text
+    resources = await session.list_resources()
+    assert any(str(r.uri) == "driftpin://setup" for r in resources.resources), resources
+    read = await session.read_resource("driftpin://setup")
+    body = "".join(c.text for c in read.contents if hasattr(c, "text"))
+    assert "Solver families:" in body and "platform:" in body, body[:400]
+
+
 # --- runner -------------------------------------------------------------------
 
 ASYNC_TESTS = [
     ("test_list_tools", _test_list_tools),
+    ("test_setup_surface", _test_setup_surface),
     ("test_ping", _test_ping),
     ("test_version", _test_version),
     ("test_session_state_persists", _test_session_state_persists),
