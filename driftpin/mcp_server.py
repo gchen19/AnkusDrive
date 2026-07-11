@@ -3252,11 +3252,15 @@ def weld_group(
 
 @mcp.tool()
 def tolerance_stackup(
-    chain: list,
+    chain: list | None = None,
     method: str = "worstcase",
     samples: int = 10000,
     spec_min: float | None = None,
     spec_max: float | None = None,
+    handle: str | None = None,
+    axis: str = "+z",
+    default_tol: float | None = None,
+    general: str = "m",
 ) -> dict:
     """Stack a dimension chain. Each chain entry is {name, nominal, plus, minus}
     with plus/minus the signed upper/lower deviations (plus>=minus; symmetric
@@ -3264,8 +3268,22 @@ def tolerance_stackup(
     method: worstcase | rss | montecarlo (each adds a deeper block). Half-bands
     are read as 3-sigma; cpk/pct_in_spec use spec_min/spec_max if given, else the
     worst-case bounds. Returns {nominal, worstcase:{min,max,spread},
-    rss:{sigma,min_3s,max_3s}, montecarlo:{mean,std,cpk,pct_in_spec,spec}}."""
-    params = {"chain": chain, "method": method, "samples": samples}
+    rss:{sigma,min_3s,max_3s}, montecarlo:{mean,std,cpk,pct_in_spec,spec}}.
+
+    Instead of a hand-built chain, pass a live `handle` (+ `axis`, '+z'/'-x'/… or
+    [x,y,z]) and the chain is derived off the solid: planar step faces
+    perpendicular to the axis become consecutive station-to-station links (the
+    stack a height gauge reads off a stepped part). Per-link tolerance:
+    `default_tol` (± mm), else the ISO 2768-1 `general` class ('f'|'m'|'c'|'v',
+    default 'm' — the drawing-note default for untoleranced dimensions). The
+    result then echoes the derived chain (+ axis, n_step_faces)."""
+    params = {"method": method, "samples": samples}
+    if chain is not None:
+        params["chain"] = chain
+    if handle is not None:
+        params.update({"handle": handle, "axis": axis, "general": general})
+        if default_tol is not None:
+            params["default_tol"] = default_tol
     if spec_min is not None:
         params["spec_min"] = spec_min
     if spec_max is not None:

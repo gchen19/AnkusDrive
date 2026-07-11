@@ -10696,9 +10696,77 @@ def _h_weld_group(p):
     return me.weld_group(**p)
 
 
+def _stackup_chain_from_shape(shape, axis, default_tol=None, general="m"):
+    """Derive a 1-D dimension chain off a LIVE solid — the tolerance half of the
+    issue #175 v2 Shape wiring (the DfX half is ``_dfm_face_descriptors``). Every
+    planar face whose normal is (anti)parallel to the measurement axis is a step
+    surface; the sorted unique face stations along the axis cut the solid's
+    extent into consecutive links — the chain a height gauge reads off a stepped
+    block/shaft along that axis. Each link is toleranced ± ``default_tol`` when
+    given, else with its ISO 2768-1 class-``general`` general tolerance (what an
+    untoleranced dimension carries under a "ISO 2768-m" drawing note). Returns
+    (chain, n_step_faces)."""
+    from driftpin.analysis import tolerance as _tol
+    ax = App.Vector(axis).normalize()
+    stations = []
+    n_step = 0
+    for face in shape.Faces:
+        n = _outward_normal(face)
+        if n.Length == 0 or not isinstance(face.Surface, Part.Plane):
+            continue
+        if abs(App.Vector(n).normalize().dot(ax)) < 0.999:
+            continue
+        n_step += 1
+        stations.append(face.CenterOfMass.dot(ax))
+    uniq = []
+    for s in sorted(stations):
+        if not uniq or s - uniq[-1] > 1e-6:
+            uniq.append(s)
+    if len(uniq) < 2:
+        raise ValueError(
+            "could not derive a dimension chain: the solid has fewer than two "
+            "distinct planar faces perpendicular to the measurement axis")
+    chain = []
+    for lo, hi in zip(uniq, uniq[1:]):
+        nom = hi - lo
+        t = abs(float(default_tol)) if default_tol is not None else \
+            _tol.general_tolerance_mm(nom, general)
+        chain.append({"name": f"{round(lo, 4)}->{round(hi, 4)}",
+                      "nominal": round(nom, 6), "plus": t, "minus": -t})
+    return chain, n_step
+
+
 @handler("tolerance_stackup")
 def _h_tolerance_stackup(p):
+    """Dimension-chain stackup (tolerance.stackup). Two input modes:
+
+    * **hand-built** — pass an explicit `chain` list [{name, nominal, plus,
+      minus | tol, direction?}].
+    * **live handle (v2 Shape wiring, issue #175)** — pass a `handle`/`model`
+      plus an `axis` ('+z'/… or [x,y,z], default '+z') and the chain is derived
+      off the live solid (`_stackup_chain_from_shape`: planar step faces
+      perpendicular to the axis → consecutive station-to-station links), then
+      stacked identically. Tolerances come from `default_tol` (± mm per link)
+      or the ISO 2768-1 `general` class ('f'|'m'|'c'|'v', default 'm').
+
+    Args: chain OR handle/model (+ axis, default_tol, general); method, samples,
+    spec_min, spec_max as in tolerance.stackup. The handle path echoes the
+    derived `chain` (+ axis, n_step_faces) so the caller sees what was read."""
     from driftpin.analysis import tolerance
+    p = dict(p)
+    handle = p.pop("model", None) or p.pop("handle", None)
+    if handle and not p.get("chain"):
+        _, shape = _shape_of(handle)
+        axis = p.pop("axis", "+z")
+        chain, n_step = _stackup_chain_from_shape(
+            shape, _pull_vector(axis),
+            default_tol=p.pop("default_tol", None),
+            general=p.pop("general", "m"))
+        res = tolerance.stackup(chain=chain, **p)
+        res["chain"] = chain
+        res["axis"] = str(axis)
+        res["n_step_faces"] = n_step
+        return res
     return tolerance.stackup(**p)
 
 
