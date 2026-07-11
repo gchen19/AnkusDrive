@@ -2619,6 +2619,57 @@ def solve_capabilities() -> dict:
 
 
 @mcp.tool()
+def setup_status(verify_freecad_boot: bool = False) -> dict:
+    """The machine-readable form of `driftpin doctor` — resolve FreeCAD and every
+    solver family and report, per item, found/missing with the exact fix. Call this
+    when the user asks to set up, diagnose, or finish installing DriftPin, then walk
+    them through the per-item `fix`/`install_hint` commands for their `platform`.
+
+    Read-only and side-effect-free: nothing is executed or installed and no
+    environment is mutated (`verify_freecad_boot=True` additionally boots FreeCAD
+    once, time-boxed, purely to read back its version — leave it False unless the
+    user doubts the install actually runs).
+
+    Returns {platform: {system, machine}, freecad: {available, path, source,
+    version?, fix?}, solvers: {available, unwired, solvers: {name: {..., install_hint
+    | wire_hint}}, families: {family: {solvers, available, unwired, any_available}},
+    extras}} — `families[*].any_available` is what gates each *_submit family, and
+    every unavailable item carries its own fix string."""
+    from driftpin import doctor
+    return doctor.build_report(probe_version=verify_freecad_boot)
+
+
+@mcp.prompt()
+def diagnose_setup() -> str:
+    """Diagnose this DriftPin install and guide the user through finishing it."""
+    return (
+        "Diagnose my DriftPin setup. Call the `setup_status` tool (leave "
+        "verify_freecad_boot at False unless I say FreeCAD itself seems broken), "
+        "then:\n"
+        "1. Summarize what is READY (freecad.available, families with "
+        "any_available true) in one short list.\n"
+        "2. For each family that is unwired or absent, give me the exact fix for "
+        "my platform (the report's `platform.system`), copy-paste ready — use each "
+        "item's `fix`/`install_hint`/`wire_hint` string verbatim; don't invent "
+        "commands. Note that pip-wheel families install into the SAME Python "
+        "environment that runs `driftpin mcp`.\n"
+        "3. Point out anything I explicitly do NOT need to install for my platform "
+        "(e.g. Linux-only source builds on Windows/macOS) so I don't chase it.\n"
+        "4. End with the single highest-value next step.\n"
+        "Do not run installers yourself; give me the commands and stop."
+    )
+
+
+@mcp.resource("driftpin://setup")
+def setup_resource() -> str:
+    """The current setup/health report (the human-readable `driftpin doctor`
+    checklist): FreeCAD + every solver family with per-item fixes. Regenerated on
+    every read; side-effect-free (no FreeCAD boot)."""
+    from driftpin import doctor
+    return doctor.render(doctor.build_report(probe_version=False))
+
+
+@mcp.tool()
 def fem_new_analysis(name: str = "Analysis") -> dict:
     """Create a Fem::FemAnalysis container. Returns {handle, name}."""
     return _call("fem_new_analysis", name=name)

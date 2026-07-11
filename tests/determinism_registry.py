@@ -143,6 +143,7 @@ NOT_YET_CLASSIFIED = {
     'query_faces', 'recipe', 'recipe_list', 'recipe_schema', 'recipe_validate',
     'scaffold_project',
     'register_handle', 'render_capabilities', 'render_job',
+    'setup_status',   # environment probe (issue #202), same nature as *_capabilities
     'render_photoreal', 'render_view', 'render_views', 'resolve_edge', 'resolve_face',
     'restart_worker', 'use_workspace', 'list_workspaces', 'close_workspace',
     'revolve', 'run_script', 'save_document', 'scale_shape', 'seal_check',
