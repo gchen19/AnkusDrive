@@ -69,7 +69,10 @@ permissions:
 jobs:
   heavy-solves:
     name: Live external-solver regressions (self-hosted)
-    runs-on: [self-hosted, driftpin]
+    # Pin `Linux`: these live solvers (OpenFOAM/YADE/openEMS/bempp/preCICE) are Linux-only
+    # and the steps are bash + AppImage. The Windows box shares the `driftpin` label, so
+    # without this an unrelated Windows job could match. OS label is auto-applied.
+    runs-on: [self-hosted, driftpin, Linux]
     # The full suite plus every live solve — molding (~15 min), the openEMS /
     # Bempp / FSI / Elmer / YADE solves on top. 90 min bounds a wedged solver
     # without cutting a real run.

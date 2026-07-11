@@ -343,16 +343,24 @@ _SOLVERS: dict = {
         "extra": None,
         "license": "GPL-2.0",
         "isolation": "subprocess",
-        "binaries": ("ccx", "ccx_2.21", "ccx_2.20", "ccx_2.19", "CalculiX"),
+        "binaries": ("ccx", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_2.19", "CalculiX"),
         "dirs": {
             "Linux":   ("/usr/bin", "/usr/local/bin",
                         os.path.expanduser("~/opt/CalculiX/bin")),
             "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin"),
             "Windows": (r"C:\Program Files\CalculiX\bin",),
         },
-        "install_hint": "'apt install calculix-ccx' (Linux), 'brew install calculix' "
-                        "(macOS), or the bundled FreeCAD ccx — then ensure ccx is on "
-                        "PATH or set DRIFTPIN_CALCULIX_PATH",
+        # FreeCAD SHIPS ccx (+ gmsh) in its own bin/ on every OS, so the warpage family
+        # resolves with no separate CalculiX install — the discovery below adds FreeCAD's
+        # bundled bin after the standard install dirs. (Verified on Windows: FreeCAD 1.1
+        # bundles ccx 2.22 in `…\FreeCAD 1.1\bin\ccx.exe`.)
+        "freecad_bundled": True,
+        # NB: there is NO `calculix` formula in core Homebrew (issue #192) — on macOS the
+        # bundled FreeCAD ccx (auto-detected above) is the path, so don't suggest brew.
+        "install_hint": "auto-detected from FreeCAD's bundled ccx (every FreeCAD install "
+                        "ships it, all OSes) when FreeCAD is installed; otherwise "
+                        "'apt install calculix-ccx' (Linux) or point DRIFTPIN_CALCULIX_PATH "
+                        "at a ccx binary",
     },
 }
 
@@ -372,12 +380,32 @@ def _module_available(module: str) -> bool:
         return False
 
 
+def _freecad_bundled_bin_dirs() -> list:
+    """FreeCAD ships solver binaries (ccx, gmsh) in the SAME ``bin/`` as freecadcmd, on
+    every OS. Reuse the client's cross-platform freecadcmd discovery to locate that bin,
+    so a FreeCAD-bundled solver resolves with no separate install and no env var. Lazy
+    import keeps this module standalone/importable on the no-FreeCAD lane; any failure
+    yields no dirs (clean degradation). Read-only — no execution, no env mutation."""
+    try:
+        from driftpin.client import _freecadcmd_candidates, _resolve_freecadcmd
+    except Exception:
+        return []
+    dirs = []
+    # _resolve_freecadcmd() honours DRIFTPIN_FREECADCMD / PATH / the globbed installs and
+    # returns the real freecadcmd; its candidates cover the not-yet-resolved installs too.
+    for c in [_resolve_freecadcmd(), *_freecadcmd_candidates()]:
+        d = os.path.dirname(c)
+        if d and os.path.isdir(d) and d not in dirs:
+            dirs.append(d)
+    return dirs
+
+
 def _binary_candidates(name: str, spec: dict) -> list:
     """Ordered candidate paths for a binary solver, most-preferred first:
     DRIFTPIN_<NAME>_PATH env override -> PATH (shutil.which) -> common per-OS
-    install dirs. Pure lookup — no side effects, no existence check (the caller
-    filters). Mirrors worker.py's _renderer_exec_candidates, minus the FreeCAD
-    prefs step (solvers aren't FreeCAD-managed)."""
+    install dirs -> FreeCAD's bundled bin/ (for ``freecad_bundled`` solvers). Pure
+    lookup — no side effects, no existence check (the caller filters). Mirrors
+    worker.py's _renderer_exec_candidates, minus the FreeCAD prefs step."""
     candidates = []
     if env_path := os.environ.get(f"DRIFTPIN_{name.upper()}_PATH"):
         candidates.append(env_path)                  # 1) explicit env override
@@ -388,6 +416,11 @@ def _binary_candidates(name: str, spec: dict) -> list:
         for binname in spec["binaries"]:
             for exe in (binname, binname + ".exe"):
                 candidates.append(os.path.join(d, exe))
+    if spec.get("freecad_bundled"):                  # 4) FreeCAD's bundled bin/ (ccx, gmsh)
+        for d in _freecad_bundled_bin_dirs():
+            for binname in spec["binaries"]:
+                for exe in (binname, binname + ".exe"):
+                    candidates.append(os.path.join(d, exe))
     return candidates
 
 
