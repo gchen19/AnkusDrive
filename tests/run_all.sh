@@ -134,6 +134,10 @@ echo "== OpenFOAM pipe CFD (case gen always; blockMesh+simpleFoam gate when pres
 python3 tests/test_openfoam.py
 
 echo
+echo "== SU2 native runner (bash-free chain always; live SU2_CFD gate when present) =="
+python3 tests/test_su2_native.py
+
+echo
 echo "== Geometry bridge (case gen always; ElmerGrid/snappyHexMesh gates when present) =="
 python3 tests/test_meshbridge.py
 

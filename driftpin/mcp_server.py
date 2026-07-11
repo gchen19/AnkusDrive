@@ -4819,8 +4819,10 @@ def cfd_internal_flow_submit(
       for non-convex solids), `stl_tolerance_mm` the tessellation sag. Use the
       developed-profile `pressure_drop_pa`; also pass `diameter_mm`+`length_mm` to get
       an `hp_ratio` reference for pipe-like bodies.
-    - **Run a prepared OpenFOAM `case_dir`** (optionally an `application`, e.g.
-      'simpleFoam'/'foamRun'); the OpenFOAM environment is sourced before the run.
+    - **Run a prepared `case_dir`** (optionally an `application`, e.g.
+      'simpleFoam'/'foamRun'); for OpenFOAM its environment is sourced before the
+      run, while an SU2 case (`*.cfg` + `*.su2` mesh) runs as a direct native
+      subprocess — no bash/WSL needed, including on Windows.
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result.
     Pipe/body cases: {ok, returncode, pressure_drop_pa (developed),
@@ -4876,7 +4878,9 @@ def cfd_external_flow_submit(
       from the converged U field (OpenFOAM's force function objects abort with a 'sha1'
       IOstream error in this build), and returns the solved Cd next to the Blasius
       reference Cf=1.328/√Re_L — the kickoff's external gate (`blasius_ratio`≈1, ~15%).
-    - **Run a prepared OpenFOAM `case_dir`** (optionally an `application`).
+    - **Run a prepared `case_dir`** (optionally an `application`); OpenFOAM runs with
+      its environment sourced, an SU2 case (`*.cfg` + `*.su2` mesh) runs as a direct
+      native subprocess — no bash/WSL needed, including on Windows.
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Flat
     plate: {ok, returncode, reynolds_l, cd, cf_solved, cf_blasius, blasius_ratio,

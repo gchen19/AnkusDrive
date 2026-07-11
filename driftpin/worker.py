@@ -14003,8 +14003,10 @@ def _run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False):
 def _openfoam_submit(p, kind):
     """Shared OpenFOAM/SU2 runner for the prepared-`case_dir` path of the
     cfd_*_flow_submit handlers. Degrades to the structured dict when no CFD solver
-    resolves; otherwise runs the solver app in the prepared case (with the OpenFOAM
-    environment sourced) as a background subprocess. ``kind`` ('internal' | 'external')
+    resolves; otherwise runs the solver app in the prepared case as a background
+    subprocess. OpenFOAM runs through bash with its environment sourced; SU2 is a
+    self-contained binary and runs as a direct native subprocess — no bash/WSL, so
+    it works on native Windows (issue #203). ``kind`` ('internal' | 'external')
     labels the job/meta; force/pressure extraction lives in the case's setup."""
     info = _require_solver("openfoam")
     is_openfoam = info["ok"]
@@ -14028,7 +14030,22 @@ def _openfoam_submit(p, kind):
                            {"case_dir": os.path.abspath(case_dir), "app": app})
 
     def _work():
-        rc, tail = _run_foam(case_dir, [[solver_bin]], env_bashrc)
+        if is_openfoam:
+            rc, tail = _run_foam(case_dir, [[solver_bin]], env_bashrc)
+        else:
+            # SU2: direct subprocess, no bash. SU2_CFD wants its .cfg as an
+            # argument; an `application` may carry it inline ("SU2_CFD flow.cfg"),
+            # otherwise resolve the case's config file.
+            import shlex
+            if p.get("application"):
+                argv = shlex.split(str(p["application"]), posix=(os.name == "posix"))
+                argv[0] = shutil.which(argv[0]) or argv[0]
+            else:
+                argv = [solver_bin]
+                cfg = solvers.su2_case_config(case_dir)
+                if cfg:
+                    argv.append(cfg)
+            rc, tail = solvers.run_argvs(case_dir, [argv])
         return {
             "ok": rc == 0,
             "returncode": rc,
