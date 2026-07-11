@@ -132,12 +132,33 @@ if ($LASTEXITCODE -ne 0) { throw 'pip install of the base package failed' }
 # `*>$null` discards every stream so nothing reaches the pipeline.
 $prevEAP = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
+# extra -> (probe modules; packages to remove if the probe fails). A wheel can
+# install fine yet be BROKEN in this venv: under a FreeCAD-bundled-python venv,
+# PySide's QtCore resolves FreeCAD's own Qt DLLs from the venv's base `home`
+# dir and dies with "DLL load failed" (exactly how rayoptics failed on the
+# self-hosted lane). solvers.py discovery is find_spec-based (file exists, no
+# import), so a broken wheel is reported as an AVAILABLE family and its test
+# FAILS instead of skipping. Probe the real import and uninstall what doesn't
+# survive, so the family degrades cleanly instead.
+$extraProbes = @{
+    mbd      = @{ modules = @('pybullet');              packages = @('pybullet') }
+    topology = @{ modules = @('solidspy');              packages = @('solidspy') }
+    optics   = @{ modules = @('rayoptics', 'optiland'); packages = @('rayoptics', 'optiland') }
+    fluids   = @{ modules = @('CoolProp');              packages = @('CoolProp') }
+}
 foreach ($extra in 'mbd', 'topology', 'optics', 'fluids') {
     & $venvPy -m pip install --quiet -e ".[$extra]" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "  extra [$extra]: no Windows wheel for this Python - skipped (its tests degrade cleanly)"
+        continue
+    }
+    $probe = ($extraProbes[$extra].modules | ForEach-Object { "import $_" }) -join '; '
+    & $venvPy -c $probe *> $null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  extra [$extra]: installed"
     } else {
-        Write-Warning "  extra [$extra]: no Windows wheel for this Python - skipped (its tests degrade cleanly)"
+        & $venvPy -m pip uninstall --quiet --yes @($extraProbes[$extra].packages) *> $null
+        Write-Warning "  extra [$extra]: installed but does not import in this venv - removed (its tests degrade cleanly)"
     }
 }
 $ErrorActionPreference = $prevEAP
