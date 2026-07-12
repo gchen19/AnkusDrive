@@ -18,7 +18,9 @@ Two solver shapes:
     renderers are: ``DRIFTPIN_<SOLVER>_PATH`` env override -> PATH (``shutil.which``)
     -> common per-OS install dirs. OpenFOAM / Elmer / SU2 ship via apt/conda, are
     documented (not vendored), and only *execute* on the provisioned/self-hosted
-    runner.
+    runner. On Windows the OpenFOAM-backed families additionally resolve *inside*
+    the WSL2 distro (probed glob-only through \\wsl$; launched via ``bash_argv`` —
+    issue #193), reported with ``via: "wsl"``.
 
 The degradation contract (the part that gates every PR, no solver needed):
   ``require_solver(name)`` returns ``{ok: True, ...}`` when the solver resolves, or
@@ -102,7 +104,16 @@ _SOLVERS: dict = {
         "install_hint": "OpenFOAM via apt (openfoam.org / openfoam.com repos), "
                         "conda ('conda install -c conda-forge openfoam'), or the "
                         "FreeCAD CfdOF workbench — then ensure foamRun/simpleFoam is "
-                        "on PATH or set DRIFTPIN_OPENFOAM_PATH",
+                        "on PATH or set DRIFTPIN_OPENFOAM_PATH; on Windows install "
+                        "WSL2 ('wsl --install -d Ubuntu') and provision inside the "
+                        "distro (scripts/install-solvers.ps1 wsl)",
+        # in-distro install layouts probed through \\wsl$ on Windows (issue #193):
+        # POSIX glob dirs, matched against each registry binary. Deliberately NOT
+        # dirs["Linux"] — those are expanduser'd on the Windows side at import.
+        "wsl_bins": ("/usr/lib/openfoam/openfoam*/platforms/*/bin",
+                     "/opt/openfoam*/platforms/*/bin",
+                     "/opt/OpenFOAM*/platforms/*/bin",
+                     "~/OpenFOAM/OpenFOAM-*/platforms/*/bin"),
         # installed-but-unwired probe (issue #177): foamRun/simpleFoam only land on
         # PATH *after* an etc/bashrc is sourced, so a bare shell reports the binary
         # absent even when OpenFOAM is fully installed. A standard-location etc/bashrc
@@ -113,6 +124,9 @@ _SOLVERS: dict = {
                       "/usr/lib/openfoam/openfoam*/etc/bashrc",
                       "/opt/openfoam*/etc/bashrc", "/opt/OpenFOAM*/etc/bashrc"),
             "hint": "set DRIFTPIN_OPENFOAM_BASHRC={found} (or source it)",
+            # a \\wsl$ hit means "wired" once the WSL launcher is used (issue #193)
+            "hint_wsl": "set DRIFTPIN_OPENFOAM_BASHRC={found} "
+                        "(runs via WSL distro '{distro}')",
         },
     },
     "su2": {
@@ -293,6 +307,9 @@ _SOLVERS: dict = {
             "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin"),
             "Windows": (),
         },
+        # in-distro build layouts probed through \\wsl$ on Windows (issue #193)
+        "wsl_bins": ("~/calculix-adapter/bin", "~/opt/calculix-adapter/bin",
+                     "/usr/local/bin"),
         "install_hint": "build the preCICE FSI stack (LGPL core + two source "
                         "adapters; not a pip wheel): scripts/install-solvers.sh fsi "
                         "— installs serial libprecice (MPI off), builds "
@@ -402,6 +419,140 @@ def _freecad_bundled_bin_dirs() -> list:
     return dirs
 
 
+# --- WSL bridge (issue #193) -----------------------------------------------------
+# On Windows the OpenFOAM-backed families (CFD / FSI / injection molding) run their
+# bash scripts inside a WSL2 distro: the launcher swaps ["bash","-c",script] for
+# ["wsl","-d",<distro>,"-e","bash","-c",script] (wsl.exe auto-maps a Windows cwd to
+# /mnt/<drive>/..., so case dirs cross with zero path translation), and discovery
+# probes the distro's filesystem through its \\wsl$\<distro> UNC mirror — glob-only,
+# nothing is ever executed. Resolvers return POSIX paths on Windows (/usr/lib/...):
+# that is the only form ever consumed (embedded into the scripts bash runs
+# in-distro); the UNC form exists purely as the probe vehicle.
+
+def _wsl_registry_distro() -> str | None:
+    """Name of the default WSL distro, read from the registry
+    (HKCU\\...\\Lxss -> DefaultDistribution GUID -> DistributionName). A pure
+    winreg READ: never executes wsl.exe and never starts the distro VM, so
+    discovery stays side-effect-free. None when no distro is registered."""
+    if platform.system() != "Windows":
+        return None
+    try:
+        import winreg
+        base = r"Software\Microsoft\Windows\CurrentVersion\Lxss"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base) as key:
+            guid, _ = winreg.QueryValueEx(key, "DefaultDistribution")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base + "\\" + guid) as sub:
+            return winreg.QueryValueEx(sub, "DistributionName")[0]
+    except OSError:
+        return None
+
+
+def wsl_distro() -> str | None:
+    """The WSL distro DriftPin probes and launches into on Windows:
+    ``DRIFTPIN_WSL_DISTRO`` (env -> config.toml) -> the registry default.
+    None off-Windows or when no distro is registered."""
+    if platform.system() != "Windows":
+        return None
+    return _config.get("DRIFTPIN_WSL_DISTRO") or _wsl_registry_distro()
+
+
+def wsl_available() -> bool:
+    """True when Windows can reach a WSL distro (wsl.exe on PATH and a registered
+    distro). Side-effect-free."""
+    return (platform.system() == "Windows"
+            and shutil.which("wsl") is not None
+            and wsl_distro() is not None)
+
+
+def wsl_unc(posix_path: str, distro: str | None = None) -> str:
+    """Windows-visible UNC mirror of an in-distro POSIX path:
+    ``/usr/lib/...`` -> ``\\\\wsl$\\<distro>\\usr\\lib\\...``.
+
+    CAUTION: merely statting/globbing \\\\wsl$ can auto-start the distro VM — a
+    filesystem-only side effect (nothing is executed) that issue #193 accepts."""
+    d = distro or wsl_distro() or ""
+    return "\\\\wsl$\\" + d + posix_path.replace("/", "\\")
+
+
+def wsl_posix(path: str) -> str:
+    """Normalize a user-supplied path to the POSIX form embedded into in-distro
+    scripts: ``\\\\wsl$\\<d>\\usr\\...`` or ``\\\\wsl.localhost\\<d>\\usr\\...`` ->
+    ``/usr/...`` (either slash direction accepted). Anything else passes through
+    unchanged, so ordinary Windows/POSIX paths are unaffected."""
+    p = path.replace("/", "\\")
+    for prefix in ("\\\\wsl$\\", "\\\\wsl.localhost\\"):
+        if p.lower().startswith(prefix):
+            rest = p[len(prefix):].split("\\", 1)   # ["<distro>", "usr\lib\..."]
+            return "/" + (rest[1].replace("\\", "/") if len(rest) > 1 else "")
+    return path
+
+
+def _posix_isfile(path: str) -> bool:
+    """``os.path.isfile`` that, on Windows, checks a leading-``/`` POSIX path
+    through the \\\\wsl$ mirror of the resolved distro."""
+    if platform.system() == "Windows" and path.startswith("/"):
+        return wsl_available() and os.path.isfile(wsl_unc(path))
+    return os.path.isfile(path)
+
+
+def _posix_isdir(path: str) -> bool:
+    """``os.path.isdir`` twin of :func:`_posix_isfile`."""
+    if platform.system() == "Windows" and path.startswith("/"):
+        return wsl_available() and os.path.isdir(wsl_unc(path))
+    return os.path.isdir(path)
+
+
+def _expand_linux_home(pattern: str) -> list:
+    """``~/...`` patterns name the LINUX home when probed through \\\\wsl$
+    (``expanduser`` would wrongly substitute ``C:\\Users\\...``): expand to
+    ``/home/*/...`` + ``/root/...``. Non-``~`` patterns pass through."""
+    if pattern == "~" or pattern.startswith("~/"):
+        rest = pattern[2:]
+        return [("/home/*/" + rest).rstrip("/"), ("/root/" + rest).rstrip("/")]
+    return [pattern]
+
+
+def _posix_glob(patterns) -> list:
+    """Sorted existing POSIX paths for POSIX glob patterns. Linux/macOS: a plain
+    ``expanduser`` + ``glob``. Windows: glob the \\\\wsl$ mirror of the resolved
+    distro and map hits BACK to POSIX — the form the wsl-launched bash scripts
+    consume. Glob-only, never executes anything (see :func:`wsl_unc`'s
+    VM-auto-start caveat)."""
+    import glob as _glob
+    out = []
+    if platform.system() == "Windows":
+        if not wsl_available():
+            return []
+        for pat in patterns:
+            for p in _expand_linux_home(pat):
+                out.extend(wsl_posix(h) for h in _glob.glob(wsl_unc(p)))
+    else:
+        for pat in patterns:
+            out.extend(_glob.glob(os.path.expanduser(pat)))
+    return sorted(set(out))
+
+
+def bash_argv(script: str) -> list:
+    """The argv that runs ``script`` under bash, with the caller's ``cwd`` as the
+    case dir. POSIX: ``["bash", "-c", script]``. Windows:
+    ``["wsl", "-d", <distro>, "-e", "bash", "-c", script]`` — wsl.exe auto-maps a
+    Windows ``cwd`` to ``/mnt/<drive>/...``, so callers pass their Windows case_dir
+    unchanged, and ``-d`` pins the SAME distro discovery probed via \\\\wsl$ so
+    probe and launch can never disagree (issue #193). The bash-launch twin of
+    :func:`run_argvs` (the no-shell native path SU2 uses)."""
+    if platform.system() == "Windows":
+        d = wsl_distro()
+        return ["wsl", *(["-d", d] if d else []), "-e", "bash", "-c", script]
+    return ["bash", "-c", script]
+
+
+def clean_wsl_text(s: str) -> str:
+    """Strip the NULs wsl.exe's own UTF-16LE messages leave in text-mode capture
+    (e.g. a missing-distro error) so log tails stay readable. Solver output is
+    plain UTF-8 and passes through untouched; no-op off-Windows."""
+    return s.replace("\x00", "") if s else s
+
+
 def _binary_candidates(name: str, spec: dict) -> list:
     """Ordered candidate paths for a binary solver, most-preferred first:
     DRIFTPIN_<NAME>_PATH env override -> PATH (shutil.which) -> common per-OS
@@ -434,6 +585,14 @@ def _binary_candidates(name: str, spec: dict) -> list:
             for binname in spec["binaries"]:
                 for exe in (binname, binname + ".exe"):
                     candidates.append(os.path.join(d, exe))
+    # 6) inside the WSL distro (issue #193): the OpenFOAM-backed families run via
+    #    `wsl -e bash` on Windows, so an in-distro binary counts as resolvable.
+    #    Probed glob-only through the \\wsl$ mirror; the candidates are the POSIX
+    #    paths the in-distro bash scripts consume.
+    if platform.system() == "Windows" and spec.get("wsl_bins") and wsl_available():
+        for d in spec["wsl_bins"]:
+            for binname in spec["binaries"]:
+                candidates.extend(_posix_glob((d + "/" + binname,)))
     return candidates
 
 
@@ -441,7 +600,7 @@ def _binary_path(name: str, spec: dict):
     """First existing candidate path for a binary solver, or None. Side-effect-free
     (does not mutate any environment) — safe for the capabilities probe."""
     for c in _binary_candidates(name, spec):
-        if c and os.path.isfile(c):
+        if c and _posix_isfile(c):
             return c
     return None
 
@@ -471,13 +630,14 @@ def _standard_bashrc(cfg: dict):
     Returns the bashrc path or None. Side-effect-free."""
     roots = _config.get("DRIFTPIN_OPENFOAM_DIRS")
     if roots:
-        for root in roots.split(os.pathsep):
-            cand = os.path.join(root, "etc", "bashrc")
-            if os.path.isfile(cand):
+        for root in roots.split(os.pathsep):     # POSIX prefixes carry no ';'
+            root = wsl_posix(root)
+            cand = (root.rstrip("/") + "/etc/bashrc" if root.startswith("/")
+                    else os.path.join(root, "etc", "bashrc"))
+            if _posix_isfile(cand):
                 return cand
-    import glob as _glob
     for pat in cfg["globs"]:
-        hits = sorted(_glob.glob(pat))
+        hits = _posix_glob((pat,))
         if hits:
             return hits[-1]
     return None
@@ -503,7 +663,13 @@ def _unwired_found(name: str, spec: dict):
     elif probe == "bashrc":
         found = _standard_bashrc(cfg)
         if found:
-            return found, cfg["hint"].format(found=found)
+            # a POSIX hit on Windows came through the \\wsl$ mirror — the wire-up
+            # hint must say the solver runs in-distro (issue #193). The Linux hint
+            # string stays byte-identical (pinned by test_solve_degradation).
+            wsl_hit = platform.system() == "Windows" and found.startswith("/")
+            tmpl = cfg.get("hint_wsl") if wsl_hit else None
+            return found, (tmpl or cfg["hint"]).format(found=found,
+                                                       distro=wsl_distro())
     elif probe == "fsi_adapter":
         found = openfoam_adapter_lib_dir() or precice_lib_dir()
         if found:
@@ -558,6 +724,10 @@ def find_solver(name: str) -> dict:
         if path is not None:
             info["available"] = True
             info["path"] = path
+            if platform.system() == "Windows" and path.startswith("/"):
+                # resolved inside the WSL distro — the runner must launch it via
+                # `wsl -e bash` (bash_argv), never a native subprocess (issue #193)
+                info["via"] = "wsl"
     if info["available"]:
         info["status"] = "ok"
         return info
@@ -599,6 +769,8 @@ def require_solver(name: str) -> dict:
             out["path"] = info["path"]
         if "module" in info:
             out["module"] = info["module"]
+        if "via" in info:
+            out["via"] = info["via"]
         return out
     if info["status"] == "unwired":
         return {
@@ -629,8 +801,10 @@ def openfoam_bashrc() -> str | None:
     ``<foamdir>/etc/bashrc``) -> common install dirs (incl. the apt
     ``/usr/share/openfoam`` layout). Returns the path, or None when none resolves."""
     env = _config.get("DRIFTPIN_OPENFOAM_BASHRC")
-    if env and os.path.isfile(env):
-        return env
+    if env:
+        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
+        if _posix_isfile(env):
+            return env
     wm = os.environ.get("WM_PROJECT_DIR")
     if wm:
         cand = os.path.join(wm, "etc", "bashrc")
@@ -639,17 +813,23 @@ def openfoam_bashrc() -> str | None:
     binpath = find_solver("openfoam").get("path")
     if binpath:
         # source builds: <foamdir>/platforms/<arch>/bin/<app> -> <foamdir>/etc/bashrc
-        marker = os.sep + "platforms" + os.sep
-        real = os.path.realpath(binpath)
-        if marker in real:
-            cand = os.path.join(real.split(marker)[0], "etc", "bashrc")
-            if os.path.isfile(cand):
-                return cand
-    import glob as _glob
+        if binpath.startswith("/") and platform.system() == "Windows":
+            # in-distro (WSL) resolution — keep it POSIX (realpath would mangle it)
+            if "/platforms/" in binpath:
+                cand = binpath.split("/platforms/")[0] + "/etc/bashrc"
+                if _posix_isfile(cand):
+                    return cand
+        else:
+            marker = os.sep + "platforms" + os.sep
+            real = os.path.realpath(binpath)
+            if marker in real:
+                cand = os.path.join(real.split(marker)[0], "etc", "bashrc")
+                if os.path.isfile(cand):
+                    return cand
     for pat in ("/usr/share/openfoam/etc/bashrc",
                 "/usr/lib/openfoam/openfoam*/etc/bashrc",
                 "/opt/openfoam*/etc/bashrc", "/opt/OpenFOAM*/etc/bashrc"):
-        hits = sorted(_glob.glob(pat))
+        hits = _posix_glob((pat,))
         if hits:
             return hits[-1]
     return None
@@ -666,8 +846,10 @@ def ccx_precice_bin() -> str | None:
     participant. DRIFTPIN_CCX_PRECICE / DRIFTPIN_PRECICE_PATH env -> the registry
     binary resolution (~/calculix-adapter/bin etc.). Returns the path or None."""
     env = _config.get("DRIFTPIN_CCX_PRECICE")
-    if env and os.path.isfile(env):
-        return env
+    if env:
+        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
+        if _posix_isfile(env):
+            return env
     return find_solver("precice").get("path")
 
 
@@ -676,16 +858,17 @@ def precice_lib_dir() -> str | None:
     adapters link). DRIFTPIN_PRECICE_LIB env -> the conda-forge env lib ->
     the documented source-build prefix. Returns the dir or None."""
     env = _config.get("DRIFTPIN_PRECICE_LIB")
-    if env and os.path.isdir(env):
-        return env
-    import glob as _glob
-    for pat in (os.path.expanduser("~/precice-serial/lib"),
-                os.path.expanduser("~/miniforge3/envs/precice/lib"),
-                os.path.expanduser("~/miniconda3/envs/precice/lib"),
-                "/usr/local/lib", "/usr/lib/x86_64-linux-gnu"):
-        if os.path.isfile(os.path.join(pat, "libprecice.so")) or \
-           _glob.glob(os.path.join(pat, "libprecice.so*")):
-            return pat
+    if env:
+        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
+        if _posix_isdir(env):
+            return env
+    for base in ("~/precice-serial/lib",
+                 "~/miniforge3/envs/precice/lib",
+                 "~/miniconda3/envs/precice/lib",
+                 "/usr/local/lib", "/usr/lib/x86_64-linux-gnu"):
+        hits = _posix_glob((base + "/libprecice.so*",))
+        if hits:
+            return os.path.dirname(hits[0])  # ntpath.dirname handles '/' fine
     return None
 
 
@@ -694,16 +877,14 @@ def openfoam_adapter_lib_dir() -> str | None:
     function-object adapter the fluid participant loads). DRIFTPIN_OPENFOAM_ADAPTER_LIB
     env -> the wmake user-lib build prefix. Returns the dir or None."""
     env = _config.get("DRIFTPIN_OPENFOAM_ADAPTER_LIB")
-    if env and os.path.isdir(env):
-        return env
-    import glob as _glob
-    for pat in (os.path.expanduser(
-                    "~/OpenFOAM/*/platforms/*/lib"),
-                os.path.expanduser("~/OpenFOAM/*-v*/platforms/*/lib")):
-        for d in sorted(_glob.glob(pat)):
-            if os.path.isfile(
-                    os.path.join(d, "libpreciceAdapterFunctionObject.so")):
-                return d
+    if env:
+        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
+        if _posix_isdir(env):
+            return env
+    hits = _posix_glob(
+        ("~/OpenFOAM/*/platforms/*/lib/libpreciceAdapterFunctionObject.so",))
+    if hits:
+        return os.path.dirname(hits[0])      # ntpath.dirname handles '/' fine
     return None
 
 
@@ -725,8 +906,10 @@ def fsi_openfoam_bashrc() -> str | None:
     matches the adapter lib path (``~/OpenFOAM/<user>-v2512/...`` -> the
     ``…openfoam2512…`` / ``…-v2512…`` bashrc) -> the general ``openfoam_bashrc()``."""
     env = _config.get("DRIFTPIN_FSI_OPENFOAM_BASHRC")
-    if env and os.path.isfile(env):
-        return env
+    if env:
+        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
+        if _posix_isfile(env):
+            return env
     ofa = openfoam_adapter_lib_dir()
     if ofa:
         import re as _re
@@ -738,12 +921,13 @@ def fsi_openfoam_bashrc() -> str | None:
         if m:
             ver = m.group(1)
             for cand in (f"/usr/lib/openfoam/openfoam{ver}/etc/bashrc",
-                         os.path.expanduser(f"~/OpenFOAM/OpenFOAM-v{ver}/etc/bashrc"),
+                         f"~/OpenFOAM/OpenFOAM-v{ver}/etc/bashrc",
                          f"/opt/openfoam{ver}/etc/bashrc",
                          f"/opt/OpenFOAM-v{ver}/etc/bashrc",
                          f"/usr/share/openfoam{ver}/etc/bashrc"):
-                if os.path.isfile(cand):
-                    return cand
+                hits = _posix_glob((cand,))
+                if hits:
+                    return hits[-1]
     return openfoam_bashrc()
 
 
@@ -796,16 +980,17 @@ def openinjmoldsim_bin() -> str | None:
     resolve (the common case until the OF7-org build lands)."""
     for var in ("DRIFTPIN_OPENINJMOLDSIM", "DRIFTPIN_OPENINJMOLDSIM_PATH"):
         env = _config.get(var)
-        if env and os.path.isfile(env):
-            return env
+        if env:
+            env = wsl_posix(env)            # \\wsl$ overrides normalize to POSIX
+            if _posix_isfile(env):
+                return env
     found = shutil.which("openInjMoldSim")
     if found:
         return found
-    import glob as _glob
-    for pat in (os.path.expanduser("~/opt/openInjMoldSim/*/bin/openInjMoldSim"),
-                os.path.expanduser("~/OpenFOAM/*/platforms/*/bin/openInjMoldSim"),
+    for pat in ("~/opt/openInjMoldSim/*/bin/openInjMoldSim",
+                "~/OpenFOAM/*/platforms/*/bin/openInjMoldSim",
                 "/opt/openInjMoldSim/*/bin/openInjMoldSim"):
-        hits = sorted(_glob.glob(pat))
+        hits = _posix_glob((pat,))
         if hits:
             return hits[-1]
     return None
@@ -817,14 +1002,15 @@ def openinjmoldsim_bashrc() -> str | None:
     ESI v19xx/v25xx build). ``DRIFTPIN_OPENINJMOLDSIM_BASHRC`` env -> the OF7-org
     source-build / apt layouts. Returns the path or None."""
     env = _config.get("DRIFTPIN_OPENINJMOLDSIM_BASHRC")
-    if env and os.path.isfile(env):
-        return env
-    import glob as _glob
-    for pat in (os.path.expanduser("~/OpenFOAM/OpenFOAM-7/etc/bashrc"),
-                os.path.expanduser("~/opt/OpenFOAM-7/etc/bashrc"),
+    if env:
+        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
+        if _posix_isfile(env):
+            return env
+    for pat in ("~/OpenFOAM/OpenFOAM-7/etc/bashrc",
+                "~/opt/OpenFOAM-7/etc/bashrc",
                 "/opt/openfoam7/etc/bashrc",
                 "/usr/lib/openfoam/openfoam7/etc/bashrc"):
-        hits = sorted(_glob.glob(pat))
+        hits = _posix_glob((pat,))
         if hits:
             return hits[-1]
     return None
