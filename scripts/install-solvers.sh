@@ -222,9 +222,12 @@ build_fsi() {
   # Needs CalculiX 2.20 SOURCE (matches the adapter; the resulting solver is its own
   # binary, independent of the system ccx). Build with gcc/gfortran (NOT mpicc) so it
   # carries no MPI.
-  wget http://www.dhondt.de/ccx_2.20.src.tar.bz2 -O /tmp/ccx.tbz2
-  mkdir -p ~/CalculiX && tar xjf /tmp/ccx.tbz2 -C ~/CalculiX --strip-components=1 \\
-       CalculiX/ccx_2.20    # -> ~/CalculiX/ccx_2.20/src
+  # download to ~ (NOT /tmp — tmpfs since Ubuntu 24.10, gone when a WSL VM idles
+  # out); the tarball's members carry a leading ./ so strip 2, not 1 (verified
+  # live on the Windows runner's distro, issue #193)
+  wget http://www.dhondt.de/ccx_2.20.src.tar.bz2 -O ~/ccx.tbz2
+  mkdir -p ~/CalculiX && tar xjf ~/ccx.tbz2 -C ~/CalculiX --strip-components=2 \\
+       ./CalculiX/ccx_2.20    # -> ~/CalculiX/ccx_2.20/src
   git clone --depth 1 https://github.com/precice/calculix-adapter.git $ccxadapter
   ( cd $ccxadapter && \\
     PKG_CONFIG_PATH=$pserial/lib/pkgconfig \\

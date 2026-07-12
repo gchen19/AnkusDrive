@@ -139,14 +139,19 @@ if [[ ! -f "${OF7_DIR}/etc/bashrc" ]]; then
   git clone -b "version-${OF7_VERSION}" \
     "https://github.com/OpenFOAM/ThirdParty-${OF7_VERSION}.git" \
     "$HOME/OpenFOAM/ThirdParty-${OF7_VERSION}"
+  # OF-7's etc/bashrc reads unguarded vars ($ZSH_NAME) — dies under our set -u
+  set +u
   # shellcheck disable=SC1091
   source "${OF7_DIR}/etc/bashrc"
+  set -u
   ( cd "$WM_THIRD_PARTY_DIR" && ./Allwmake -j"${JOBS}" )
   ( cd "${OF7_DIR}" && ./Allwmake -j"${JOBS}" )
 else
   say "OpenFOAM-${OF7_VERSION} already present at ${OF7_DIR} — reusing"
+  set +u
   # shellcheck disable=SC1091
   source "${OF7_DIR}/etc/bashrc"
+  set -u
 fi
 
 if [[ ! -d "${PREFIX}/openInjMoldSim" ]]; then
