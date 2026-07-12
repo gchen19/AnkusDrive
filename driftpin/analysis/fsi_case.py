@@ -124,22 +124,41 @@ def write_fsi_case(
 
 # --- coupled run --------------------------------------------------------------
 
-def _adapter_env() -> dict:
-    """Build the environment that puts libprecice + ccx_preCICE + the OpenFOAM
-    function-object adapter on the runtime paths. Resolved through
-    ``solvers`` (env overrides honoured)."""
-    env = dict(os.environ)
-    lib = solvers.precice_lib_dir()
-    if lib:
-        env["LD_LIBRARY_PATH"] = lib + os.pathsep + env.get("LD_LIBRARY_PATH", "")
-    ofa = solvers.openfoam_adapter_lib_dir()
-    if ofa:
-        env["FOAM_USER_LIBBIN"] = ofa
-    ccxbin = solvers.ccx_precice_bin()
-    if ccxbin:
-        env["PATH"] = os.path.dirname(ccxbin) + os.pathsep + env.get("PATH", "")
-    env.setdefault("OMP_NUM_THREADS", "4")
-    return env
+def _participant_script(setup_lines: list, exec_line: str) -> str:
+    """A participant launch script: record the pid, then ``exec`` the solver so
+    the recorded pid IS the solver's (bash replaces itself). All environment
+    (LD_LIBRARY_PATH, FOAM_USER_LIBBIN, ...) crosses as export lines in the
+    script text — on Windows the script runs inside the WSL distro
+    (``solvers.bash_argv``) where an ``env=`` on the wsl.exe Popen would never
+    arrive (issue #193); on Linux the exports are equivalent to the old ``env=``
+    dict. The pidfile is what ``_stop_participant`` kills on Windows, where
+    terminating the Popen only kills the wsl.exe relay, not the in-distro
+    solver."""
+    lines = ["echo $$ > .driftpin-participant.pid"] + [l for l in setup_lines if l]
+    return "\n".join(lines) + f"\nexec {exec_line}"
+
+
+def _stop_participant(proc, workdir: str) -> None:
+    """Stop a participant: terminate/kill the Popen, then on Windows sweep the
+    in-distro process by the pidfile its own launch script wrote (case-scoped,
+    so concurrent FSI runs never kill each other). Best-effort — a participant
+    that already exited leaves a stale pid that kill quietly misses."""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    if os.name == "nt":
+        try:
+            subprocess.run(solvers.bash_argv(
+                "kill -TERM $(cat .driftpin-participant.pid 2>/dev/null) "
+                "2>/dev/null; sleep 2; "
+                "kill -KILL $(cat .driftpin-participant.pid 2>/dev/null) "
+                "2>/dev/null; true"),
+                cwd=workdir, capture_output=True, timeout=30)
+        except Exception:
+            pass
 
 
 def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
@@ -165,7 +184,6 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
                 "openfoam_bashrc": of_bashrc, "ccx_precice": ccxbin,
                 "precice_lib": lib}
 
-    env = _adapter_env()
     # clean stale preCICE coupling dir
     for stale in ("precice-run", "precice-profiling"):
         p = os.path.join(case_dir, stale)
@@ -174,33 +192,43 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
 
     # 1) blockMesh (fluid mesh) — needs the OpenFOAM env
     bm = subprocess.run(
-        ["bash", "-c", f"source '{of_bashrc}' >/dev/null 2>&1 && blockMesh"],
-        cwd=fluid, env=env, capture_output=True, text=True, timeout=timeout_s)
+        solvers.bash_argv(f"source '{of_bashrc}' >/dev/null 2>&1 && blockMesh"),
+        cwd=fluid, capture_output=True, text=True, timeout=timeout_s)
     if bm.returncode != 0:
         return {"ok": False, "reason": "blockMesh failed",
-                "log_tail": (bm.stdout + bm.stderr)[-1500:]}
+                "log_tail": solvers.clean_wsl_text(bm.stdout + bm.stderr)[-1500:]}
 
-    # 2) launch Solid (ccx_preCICE) then Fluid (pimpleFoam), wait on both.
-    # The solid only needs libprecice on the path; the fluid needs OpenFOAM's full
+    # 2) launch Solid (ccx_preCICE) then Fluid (pimpleFoam), wait on both. All
+    # runtime env lives in the script text (see _participant_script). The solid
+    # only needs libprecice on the loader path; the fluid needs OpenFOAM's full
     # env (sourced bashrc) with libprecice PREPENDED — replacing LD_LIBRARY_PATH
     # after the source would drop OF's own libs (libregionFaModels.so etc.) and
-    # pimpleFoam fails to load. So we prepend, never clobber.
+    # pimpleFoam fails to load. So we prepend, never clobber. FOAM_USER_LIBBIN
+    # exports AFTER the source for the same reason (the bashrc recomputes it).
     solid_log = os.path.join(case_dir, "solid.log")
     fluid_log = os.path.join(case_dir, "fluid.log")
-    ld = lib + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+
+    solid_script = _participant_script(
+        [f"export LD_LIBRARY_PATH='{lib}':\"$LD_LIBRARY_PATH\"",
+         'export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"'],
+        f"'{ccxbin}' -i flap -precice-participant Solid")
+    ofa = solvers.openfoam_adapter_lib_dir()
+    fluid_script = _participant_script(
+        [f"source '{of_bashrc}' >/dev/null 2>&1",
+         f"export LD_LIBRARY_PATH='{lib}':\"$LD_LIBRARY_PATH\"",
+         (f"export FOAM_USER_LIBBIN='{ofa}'" if ofa else ""),
+         'export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"'],
+        "pimpleFoam")
 
     with open(solid_log, "w") as sl:
         solid_proc = subprocess.Popen(
-            [ccxbin, "-i", "flap", "-precice-participant", "Solid"],
-            cwd=solid, env={**env, "LD_LIBRARY_PATH": ld}, stdout=sl,
-            stderr=subprocess.STDOUT)
+            solvers.bash_argv(solid_script),
+            cwd=solid, stdout=sl, stderr=subprocess.STDOUT)
     time.sleep(2.0)  # let the solid participant bind the preCICE socket first
     with open(fluid_log, "w") as fl:
         fluid_proc = subprocess.Popen(
-            ["bash", "-c",
-             f"source '{of_bashrc}' >/dev/null 2>&1; "
-             f"export LD_LIBRARY_PATH='{lib}':\"$LD_LIBRARY_PATH\"; pimpleFoam"],
-            cwd=fluid, env=env, stdout=fl, stderr=subprocess.STDOUT)
+            solvers.bash_argv(fluid_script),
+            cwd=fluid, stdout=fl, stderr=subprocess.STDOUT)
 
     deadline = time.time() + timeout_s
     rc_fluid = rc_solid = None
@@ -212,13 +240,8 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
         rc_fluid = fluid_proc.poll()
         rc_solid = solid_proc.poll()
     finally:
-        for proc in (fluid_proc, solid_proc):
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+        _stop_participant(fluid_proc, fluid)
+        _stop_participant(solid_proc, solid)
 
     tip = parse_tip_watchpoint(solid)
     windows = _count_time_windows(solid_log)

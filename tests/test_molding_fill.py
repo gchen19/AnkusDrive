@@ -126,8 +126,9 @@ def _skip_unless_molding_solve():
 def _run_fill(case_dir):
     bashrc = solvers.openfoam_bashrc()
     src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
+    # bash_argv routes through the WSL distro on Windows (issue #193)
     return subprocess.run(
-        ["bash", "-c", src + "blockMesh > log.bm 2>&1 && interFoam > log.if 2>&1"],
+        solvers.bash_argv(src + "blockMesh > log.bm 2>&1 && interFoam > log.if 2>&1"),
         cwd=case_dir, capture_output=True, text=True)
 
 
@@ -426,7 +427,7 @@ def test_openinjmoldsim_generated_case_fills():
     script = (f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n"
               "blockMesh > log.bm 2>&1 && setFields > log.sf 2>&1 && "
               f"'{binp}' -fillEnd 0.98 > log.oims 2>&1")
-    proc = subprocess.run(["bash", "-c", script], cwd=d, capture_output=True,
+    proc = subprocess.run(solvers.bash_argv(script), cwd=d, capture_output=True,
                           text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
     parsed = mf.parse_fill(d, nx=60, ny=8, length_m=0.02)
@@ -458,7 +459,7 @@ def test_openinjmoldsim_fill_pack_cools_and_densifies():
         chain = " && ".join(" ".join(a) for a in cmds)
         script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
         with open(os.path.join(d, log), "w") as f:
-            return subprocess.run(["bash", "-c", script], cwd=d, stdout=f,
+            return subprocess.run(solvers.bash_argv(script), cwd=d, stdout=f,
                                   stderr=subprocess.STDOUT).returncode
 
     assert run([["blockMesh"], ["setFields"], [binp, "-fillEnd", "0.98"]],
@@ -577,7 +578,7 @@ def test_openinjmoldsim_asymmetric_cooling_warps():
         chain = " && ".join(" ".join(a) for a in cmds)
         script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
         with open(os.path.join(d, log), "w") as f:
-            return subprocess.run(["bash", "-c", script], cwd=d, stdout=f,
+            return subprocess.run(solvers.bash_argv(script), cwd=d, stdout=f,
                                   stderr=subprocess.STDOUT).returncode
 
     assert run([["blockMesh"], ["setFields"], [binp, "-fillEnd", "0.98"]],
