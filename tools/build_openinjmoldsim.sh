@@ -100,7 +100,7 @@ PLANEOF
 plan "git clone ${OIMS_REPO} ${PREFIX}/openInjMoldSim && cd ${PREFIX}/openInjMoldSim && git checkout ${OIMS_TAG}"
 plan "source ${OF7_DIR}/etc/bashrc"
 plan "export WM_NCOMPPROCS=${JOBS}"
-plan "( cd ${PREFIX}/openInjMoldSim && ./Allwmake -j${JOBS} > log.oims 2>&1 )"
+plan "( cd ${PREFIX}/openInjMoldSim/applications/solvers/multiphase/openInjMoldSim && ./Allwmake > log.oims 2>&1 )"
 echo
 cat <<PLANEOF
    3. Expose to driftpin (see solvers.openinjmoldsim_bin / _bashrc):
@@ -139,10 +139,11 @@ if [[ ! -f "${OF7_DIR}/etc/bashrc" ]]; then
   git clone -b "version-${OF7_VERSION}" \
     "https://github.com/OpenFOAM/ThirdParty-${OF7_VERSION}.git" \
     "$HOME/OpenFOAM/ThirdParty-${OF7_VERSION}"
-  # OF-7's etc/bashrc reads unguarded vars ($ZSH_NAME) — dies under our set -u
+  # OF-7's etc/bashrc reads unguarded vars ($ZSH_NAME) — dies under our set -u —
+  # and exits non-zero, which set -e would turn fatal (verified live, #193)
   set +u
   # shellcheck disable=SC1091
-  source "${OF7_DIR}/etc/bashrc"
+  source "${OF7_DIR}/etc/bashrc" || true
   set -u
   ( cd "$WM_THIRD_PARTY_DIR" && ./Allwmake -j"${JOBS}" )
   ( cd "${OF7_DIR}" && ./Allwmake -j"${JOBS}" )
@@ -150,14 +151,18 @@ else
   say "OpenFOAM-${OF7_VERSION} already present at ${OF7_DIR} — reusing"
   set +u
   # shellcheck disable=SC1091
-  source "${OF7_DIR}/etc/bashrc"
+  source "${OF7_DIR}/etc/bashrc" || true
   set -u
 fi
 
 if [[ ! -d "${PREFIX}/openInjMoldSim" ]]; then
   git clone "${OIMS_REPO}" "${PREFIX}/openInjMoldSim"
 fi
-( cd "${PREFIX}/openInjMoldSim" && git checkout "${OIMS_TAG}" && ./Allwmake -j"${JOBS}" )
+# the Allwmake lives in the solver subdir, not the repo root (v7.2 layout,
+# verified live #193); it takes no -j — WM_NCOMPPROCS caps the parallelism
+( cd "${PREFIX}/openInjMoldSim" && git checkout "${OIMS_TAG}" )
+( cd "${PREFIX}/openInjMoldSim/applications/solvers/multiphase/openInjMoldSim" \
+  && ./Allwmake )
 
 say "build done. Export the env vars (see step 3) and verify with:"
 plan "python3 -c 'from driftpin import solvers; print(solvers.openinjmoldsim_bin())'"
