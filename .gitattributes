@@ -1,0 +1,4 @@
+# Shell scripts must stay LF: they are executed inside the WSL distro on Windows
+# hosts (issue #193 — `wsl -e bash scripts/install-solvers.sh ...`), and bash
+# dies on \r. core.autocrlf=true would otherwise check them out CRLF.
+*.sh text eol=lf
