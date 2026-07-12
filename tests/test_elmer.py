@@ -78,7 +78,7 @@ def test_write_case_lays_down_files_and_splits_time():
 
 def test_parse_scalars_reads_last_row():
     with tempfile.TemporaryDirectory() as d:
-        with open(os.path.join(d, "scalars.dat"), "w") as f:
+        with open(os.path.join(d, "scalars.dat"), "w", encoding="utf-8") as f:
             f.write("  99.0  80.0\n  90.0  77.0\n  89.81  76.52\n")
         got = elmer.parse_slab_scalars(d)
         assert abs(got["t_center_c"] - 89.81) < 1e-9    # col 1 = max = centre
@@ -141,7 +141,7 @@ def test_radiation_write_case_and_parse_flux():
         assert os.path.isfile(os.path.join(d, "rad", "mesh.header"))
         assert abs(meta["area_1_m2"] - 2.0) < 1e-12       # width 2 x depth 1
         # parse: col 1 of the last row is the net flux (W); /area -> W/m^2
-        with open(os.path.join(d, meta["scalars"]), "w") as f:
+        with open(os.path.join(d, meta["scalars"]), "w", encoding="utf-8") as f:
             f.write("  100.0 1 1\n  25510.0 1 1\n")        # net 25510 W over 2 m^2
         got = elmer.parse_radiation_flux(d, meta["scalars"], meta["area_1_m2"])
         assert abs(got["q_net_w"] - 25510.0) < 1e-9

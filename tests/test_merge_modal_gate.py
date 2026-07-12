@@ -89,7 +89,7 @@ def _fork_manifest(tmp, prong_len, requirements=None):
     }
     if requirements is not None:
         man["requirements"] = requirements
-    (tmp / "m.json").write_text(json.dumps(man))
+    (tmp / "m.json").write_text(json.dumps(man), encoding="utf-8")
     return tmp / "m.json"
 
 

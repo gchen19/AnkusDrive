@@ -60,11 +60,11 @@ def write_fsi_case(
     solid = os.path.join(case_dir, "solid-calculix")
 
     def _sub(path, pairs):
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             txt = fh.read()
         for pat, repl in pairs:
             txt = re.sub(pat, repl, txt)
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write(txt)
 
     # fluid: inlet velocity (0/U internalField), nu (transportProperties),
@@ -220,12 +220,12 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
          'export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"'],
         "pimpleFoam")
 
-    with open(solid_log, "w") as sl:
+    with open(solid_log, "w", encoding="utf-8") as sl:
         solid_proc = subprocess.Popen(
             solvers.bash_argv(solid_script),
             cwd=solid, stdout=sl, stderr=subprocess.STDOUT)
     time.sleep(2.0)  # let the solid participant bind the preCICE socket first
-    with open(fluid_log, "w") as fl:
+    with open(fluid_log, "w", encoding="utf-8") as fl:
         fluid_proc = subprocess.Popen(
             solvers.bash_argv(fluid_script),
             cwd=fluid, stdout=fl, stderr=subprocess.STDOUT)
@@ -248,7 +248,7 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     converged = _reached_end(solid_log)
     tail = ""
     if os.path.exists(solid_log):
-        with open(solid_log) as fh:
+        with open(solid_log, encoding="utf-8") as fh:
             tail = fh.read()[-1500:]
 
     ok = (rc_fluid == 0 and rc_solid == 0 and converged)
@@ -275,7 +275,7 @@ def parse_tip_watchpoint(solid_dir: str) -> dict | None:
     if not cand or not os.path.exists(cand):
         return None
     rows = []
-    with open(cand) as fh:
+    with open(cand, encoding="utf-8") as fh:
         lines = fh.readlines()
     if not lines:
         return None
@@ -307,7 +307,7 @@ def _count_time_windows(log_path: str) -> int:
     if not os.path.exists(log_path):
         return 0
     seen = set()
-    with open(log_path) as fh:
+    with open(log_path, encoding="utf-8") as fh:
         for ln in fh:
             m = re.search(r"time-window (\d+),", ln)
             if m:
@@ -318,6 +318,6 @@ def _count_time_windows(log_path: str) -> int:
 def _reached_end(log_path: str) -> bool:
     if not os.path.exists(log_path):
         return False
-    with open(log_path) as fh:
+    with open(log_path, encoding="utf-8") as fh:
         txt = fh.read()
     return "Reached end at" in txt or "final time-window" in txt

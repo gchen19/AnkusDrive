@@ -198,7 +198,7 @@ def write_pipe_case(case_dir: str, *, diameter_m: float, length_m: float,
     for rel, text in files.items():
         path = os.path.join(case_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(text)
     return {
         "case_dir": case_dir,
@@ -233,7 +233,7 @@ def _read_internal_scalar_field(path: str):
     """Parse the internalField of an OpenFOAM scalar field file into a list of floats
     (handles both ``nonuniform List<scalar>`` and a single ``uniform`` value). Returns
     None on a shape it can't read."""
-    txt = open(path).read()
+    txt = open(path, encoding="utf-8").read()
     m = re.search(r"internalField\s+nonuniform\s+List<scalar>\s*\n\s*(\d+)\s*\n\(\s*(.*?)\)\s*;",
                   txt, re.S)
     if m:
@@ -465,7 +465,7 @@ def write_flat_plate_case(
     for rel, text in files.items():
         path = os.path.join(case_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(text)
     return {
         "case_dir": case_dir,
@@ -486,7 +486,7 @@ def write_flat_plate_case(
 def _read_internal_vector_field(path: str):
     """Parse the internalField of an OpenFOAM vector field into a list of (x,y,z)
     tuples (nonuniform List<vector>), or None on a shape it can't read."""
-    txt = open(path).read()
+    txt = open(path, encoding="utf-8").read()
     m = re.search(
         r"internalField\s+nonuniform\s+List<vector>\s*\n?\s*(\d+)\s*\n\(\s*(.*?)\)\s*;",
         txt, re.S)
@@ -694,7 +694,7 @@ def write_pipe_rans_case(
     for rel, content in files.items():
         path = os.path.join(case_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(content)
     # first-cell y+ from the Blasius shear estimate: tau = f/8 * rho U^2
     from . import cfd as _cfd
@@ -813,7 +813,7 @@ def write_flat_plate_rans_case(case_dir: str, **kwargs) -> dict:
     for rel, content in files.items():
         path = os.path.join(case_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(content)
     # first cell height from the geometric grading; y+ from mid-plate local Cf
     k = grading_y ** (1.0 / (n_y - 1))
@@ -881,7 +881,7 @@ def parse_flat_plate_rans_drag(
     # wall-function correction: nut on the plate patch scales each station's
     # mu*u1/y1 contribution by (nu + nut_i)/nu
     try:
-        txt = open(os.path.join(case_dir, td, "nut")).read()
+        txt = open(os.path.join(case_dir, td, "nut"), encoding="utf-8").read()
         m = re.search(r"plate\s*\{(.*?)\n\s*\}", txt, re.S)
         lst = re.search(r"List<scalar>\s*\n?\s*\d+\s*\(([^)]*)\)", m.group(1), re.S)
         nut_wall = [float(v) for v in lst.group(1).split()]

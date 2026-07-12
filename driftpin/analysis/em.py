@@ -293,12 +293,12 @@ def write_dc_strip_case(
     mesh_dir = os.path.join(case_dir, mesh_name)
     os.makedirs(mesh_dir, exist_ok=True)
     for fname, text in rect_mesh_files(nx, ny, length_m, width_m).items():
-        with open(os.path.join(mesh_dir, fname), "w") as f:
+        with open(os.path.join(mesh_dir, fname), "w", encoding="utf-8") as f:
             f.write(text)
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(dc_strip_sif(conductivity_s_m=sigma, voltage_v=voltage_v,
                              mesh_name=mesh_name, scalars=scalars))
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     return {
         "case_dir": case_dir,
@@ -321,12 +321,12 @@ def parse_dc_scalars(case_dir: str, scalars: str = "dc.dat") -> dict | None:
     if not (os.path.isfile(data_path) and os.path.isfile(names_path)):
         return None
     cols = {}
-    for line in open(names_path):
+    for line in open(names_path, encoding="utf-8"):
         line = line.strip()
         if ":" in line and line.split(":")[0].strip().isdigit():
             idx, name = line.split(":", 1)
             cols[name.strip().lower()] = int(idx) - 1
-    rows = [r for r in open(data_path).read().splitlines() if r.strip()]
+    rows = [r for r in open(data_path, encoding="utf-8").read().splitlines() if r.strip()]
     if not rows:
         return None
     vals = [float(v) for v in rows[-1].split()]
@@ -433,13 +433,13 @@ def write_skin_effect_case(
     mesh_dir = os.path.join(case_dir, mesh_name)
     os.makedirs(mesh_dir, exist_ok=True)
     for fname, text in rect_mesh_files(nx, ny, length_m, width_m).items():
-        with open(os.path.join(mesh_dir, fname), "w") as f:
+        with open(os.path.join(mesh_dir, fname), "w", encoding="utf-8") as f:
             f.write(text)
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(skin_slab_sif(frequency_hz=frequency_hz, conductivity_s_m=sigma,
                               mu_r=mu_r, mesh_name=mesh_name, line_file=line_file,
                               length_m=length_m, width_m=width_m))
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     return {
         "case_dir": case_dir,
@@ -460,7 +460,7 @@ def parse_line_profile(case_dir: str, line_file: str = "line.dat"):
         return None
     pts = []
     try:
-        for ln in open(path):
+        for ln in open(path, encoding="utf-8"):
             f = ln.split()
             if len(f) >= 8:
                 pts.append((float(f[3]), complex(float(f[6]), float(f[7]))))
@@ -570,7 +570,7 @@ def write_induction_heating_case(
     mesh_dir = os.path.join(case_dir, mesh_name)
     os.makedirs(mesh_dir, exist_ok=True)
     for fname, text in rect_mesh_files(nx, ny, length_m, width_m).items():
-        with open(os.path.join(mesh_dir, fname), "w") as f:
+        with open(os.path.join(mesh_dir, fname), "w", encoding="utf-8") as f:
             f.write(text)
     sif = f"""Header
   Mesh DB "." "{mesh_name}"
@@ -651,9 +651,9 @@ Boundary Condition 2
   Potential Im = 0.0
 End
 """
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     return {
         "case_dir": case_dir,
@@ -681,12 +681,12 @@ def parse_induction_scalars(case_dir: str, scalars: str = "induct.dat") -> dict 
     names_path = path + ".names"
     cols = {}
     if os.path.exists(names_path):
-        for ln in open(names_path):
+        for ln in open(names_path, encoding="utf-8"):
             m = ln.strip()
             if ":" in m and m[0].isdigit():
                 idx, label = m.split(":", 1)
                 cols[label.strip().lower()] = int(idx) - 1
-    rows = [ln.split() for ln in open(path) if ln.strip()]
+    rows = [ln.split() for ln in open(path, encoding="utf-8") if ln.strip()]
     if not rows:
         return None
     last = [float(v) for v in rows[-1]]

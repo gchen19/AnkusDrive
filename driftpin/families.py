@@ -122,7 +122,7 @@ def load_table(path: str) -> dict:
     """Read a family table from disk into the canonical normalized dict. Dispatches
     on extension: ``.csv`` -> :func:`parse_csv`, otherwise JSON. Raises loudly on an
     unreadable / malformed file (a bad table must never resolve to silence)."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
     if path.lower().endswith(".csv"):
         return parse_csv(text)

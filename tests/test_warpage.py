@@ -147,7 +147,7 @@ def test_parse_frd_picks_out_of_plane_peak():
     try:
         frd = os.path.join(cd, "case.frd")
         # node 2 has the biggest |Uz|; node 3 the biggest total magnitude
-        open(frd, "w").write(_synthetic_disp_frd([
+        open(frd, "w", encoding="utf-8").write(_synthetic_disp_frd([
             (1, 0.0, 0.0, 0.0),
             (2, 0.01, 0.02, 1.50),
             (3, 5.0, 0.0, 0.10),
@@ -211,7 +211,7 @@ def _write_hex_plate_mesh(path, *, L=40.0, Wd=10.0, t=1.0, nx=20, ny=5, nz=2):
                 conn = [nid(i + dx, j + dy, k + dz) for dx, dy, dz in _HEX]
                 lines.append(f"{eid}, " + ", ".join(str(c) for c in conn))
                 eid += 1
-    open(path, "w").write("\n".join(lines) + "\n")
+    open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
     return nodes
 
 

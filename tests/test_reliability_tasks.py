@@ -271,7 +271,7 @@ def run_suite(client, models, trials):
                     "avg_cost": sum(r["cost_usd"] for r in results) / trials,
                     "tier": task.tier,
                 }
-    (CACHE_DIR / "report_tasks.json").write_text(json.dumps(report, indent=2))
+    (CACHE_DIR / "report_tasks.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
 

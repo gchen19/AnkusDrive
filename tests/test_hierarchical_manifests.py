@@ -62,7 +62,7 @@ def _box(path, w_, d_, h_, name="part"):
 
 
 def _write(path, obj):
-    path.write_text(json.dumps(obj))
+    path.write_text(json.dumps(obj), encoding="utf-8")
     return path
 
 

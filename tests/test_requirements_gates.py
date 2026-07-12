@@ -51,7 +51,7 @@ def _merge(tmp, requirements):
            "instances": [{"component": "a", "name": "a", "placement": [0, 0, 0]},
                          {"component": "b", "name": "b", "placement": [40, 0, 0]}],
            "requirements": requirements}
-    (tmp / "m.json").write_text(json.dumps(man))
+    (tmp / "m.json").write_text(json.dumps(man), encoding="utf-8")
     with Worker() as w:
         return w.call("merge_assembly", manifest=str(tmp / "m.json"))
 
@@ -115,7 +115,7 @@ def test_no_requirements_block_is_backcompat():
         man = {"name": "x", "root": "x.FCStd",
                "components": {"a": {"file": "a.FCStd"}},
                "instances": [{"component": "a", "name": "a", "placement": [0, 0, 0]}]}
-        (tmp / "m.json").write_text(json.dumps(man))
+        (tmp / "m.json").write_text(json.dumps(man), encoding="utf-8")
         with Worker() as w:
             rep = w.call("merge_assembly", manifest=str(tmp / "m.json"))
         _check("no requirements -> no requirements gate",

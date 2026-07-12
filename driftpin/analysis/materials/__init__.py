@@ -162,10 +162,10 @@ def _load_corpus() -> dict:
         # subsumes optical 'Polycarbonate' — never two cards for one material.
         layers: list[tuple[int, dict]] = []
         if _FCMAT_PATH.is_file():
-            layers += [(0, m) for m in json.loads(_FCMAT_PATH.read_text())["materials"]]
+            layers += [(0, m) for m in json.loads(_FCMAT_PATH.read_text(encoding="utf-8"))["materials"]]
         if _OPTICAL_PATH.is_file():
-            layers += [(1, m) for m in json.loads(_OPTICAL_PATH.read_text())["materials"]]
-        layers += [(2, m) for m in json.loads(_SEED_PATH.read_text())["materials"]]
+            layers += [(1, m) for m in json.loads(_OPTICAL_PATH.read_text(encoding="utf-8"))["materials"]]
+        layers += [(2, m) for m in json.loads(_SEED_PATH.read_text(encoding="utf-8"))["materials"]]
         _CACHE = _build_corpus(layers)
     return _CACHE
 

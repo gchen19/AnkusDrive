@@ -371,7 +371,7 @@ def write_cavity_case(case_dir: str, **kwargs) -> dict:
     for rel, text in files.items():
         path = os.path.join(case_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(text)
     L = kwargs.get("length_m", 0.10)
     H = kwargs.get("height_m", 0.002)
@@ -967,7 +967,7 @@ def write_openinjmoldsim_case(case_dir: str, **kwargs) -> dict:
     for rel, text in files.items():
         path = os.path.join(case_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(text)
     L = kwargs.get("length_m", 0.02)
     H = kwargs.get("height_m", 1.0e-3)
@@ -1013,7 +1013,7 @@ def _latest_time_dir(case_dir: str) -> str | None:
 def _read_internal_scalar_field(path: str):
     """Parse an OpenFOAM scalar field internalField into a list of floats (handles
     nonuniform List<scalar> and a single uniform value), or None."""
-    txt = open(path).read()
+    txt = open(path, encoding="utf-8").read()
     m = re.search(
         r"internalField\s+nonuniform\s+List<scalar>\s*\n\s*(\d+)\s*\n\(\s*(.*?)\)\s*;",
         txt, re.S)

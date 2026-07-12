@@ -34,9 +34,9 @@ def test_duct_case_structure():
     d = tempfile.mkdtemp(prefix="acfem_gen_")
     built = ac.write_helmholtz_duct_case(d, n_elements=50)
     mesh = Path(d) / built["mesh_db"]
-    header = (mesh / "mesh.header").read_text().split()
+    header = (mesh / "mesh.header").read_text(encoding="utf-8").split()
     assert header[0] == "51" and header[1] == "50", header   # nodes, elements
-    sif = (Path(d) / built["sif"]).read_text()
+    sif = (Path(d) / built["sif"]).read_text(encoding="utf-8")
     assert "HelmholtzSolve" in sif and "Sound Speed" in sif
     assert f"Frequency = {built['frequency_hz']:.10g}" in sif
     # exact oracle values ride along with the case
@@ -53,7 +53,7 @@ def test_duct_case_structure():
 def test_cavity_case_structure_and_sweep():
     d = tempfile.mkdtemp(prefix="acfem_gen_")
     built = ac.write_helmholtz_cavity_case(d, nx=10, ny=8, mode_nx=1, mode_ny=1)
-    bnd = (Path(d) / built["mesh_db"] / "mesh.boundary").read_text()
+    bnd = (Path(d) / built["mesh_db"] / "mesh.boundary").read_text(encoding="utf-8")
     tags = {ln.split()[1] for ln in bnd.strip().splitlines()}
     assert tags == {"1", "2", "3"}, tags          # drive, rigid, corner probe
     # the sweep straddles the exact eigenfrequency without landing on it
@@ -61,7 +61,7 @@ def test_cavity_case_structure_and_sweep():
     f_ex = built["f_exact_hz"]
     assert freqs[0] < f_ex < freqs[-1]
     assert all(abs(f - f_ex) > 1e-9 for f in freqs)
-    sif = (Path(d) / built["sif"]).read_text()
+    sif = (Path(d) / built["sif"]).read_text(encoding="utf-8")
     assert "Wave Flux 1" in sif and "Scanning" in sif
     for bad in (
         lambda: ac.write_helmholtz_cavity_case(tempfile.mkdtemp(), mode_nx=0,

@@ -149,7 +149,7 @@ def substitutability_report(base_manifest_path, slot, variant, call,
        baseline_failing: {...},   # only when the premise is violated
        reports: {baseline_ok, swap_ok}}
     """
-    with open(base_manifest_path) as f:
+    with open(base_manifest_path, encoding="utf-8") as f:
         base_man = json.load(f)
 
     base_failing = {}

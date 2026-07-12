@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO))
 from driftpin import feature_templates as ft  # noqa: E402
 
 FIXTURE = json.loads((Path(__file__).resolve().parent / "fixtures"
-                      / "feature_mounting_boss.json").read_text())
+                      / "feature_mounting_boss.json").read_text(encoding="utf-8"))
 
 _PASS = _FAIL = 0
 

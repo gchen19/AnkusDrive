@@ -4822,7 +4822,7 @@ def _lock_state(manifest, base_dir):
             cm = spec["manifest"]
             cm = cm if _os.path.isabs(cm) else _os.path.join(base_dir, cm)
             try:
-                with open(cm) as cf:
+                with open(cm, encoding="utf-8") as cf:
                     child_man = _json.load(cf)
             except Exception:
                 child_man = {}
@@ -4958,7 +4958,7 @@ def _h_validate_manifest(p):
     before merge_assembly to reject a malformed contract before any geometry (or
     token) is spent on it."""
     import json as _json
-    with open(p["manifest"]) as f:
+    with open(p["manifest"], encoding="utf-8") as f:
         man = _json.load(f)
     problems = _validate_manifest(man)
     return {"ok": not problems, "problems": problems,
@@ -4975,7 +4975,7 @@ def _h_assembly_lock(p):
     import os as _os
     import json as _json
     manifest_path = p["manifest"]
-    with open(manifest_path) as f:
+    with open(manifest_path, encoding="utf-8") as f:
         man = _json.load(f)
     problems = _validate_manifest(man)
     if problems:
@@ -4987,7 +4987,7 @@ def _h_assembly_lock(p):
     lock = {"manifest": _os.path.basename(manifest_path),
             "schema": man.get("schema", _MANIFEST_SCHEMA),
             "manifest_hash": _manifest_content_hash(man), "components": state}
-    with open(lockfile, "w") as f:
+    with open(lockfile, "w", encoding="utf-8") as f:
         _json.dump(lock, f, indent=2, sort_keys=True)
     return {"lockfile": lockfile, "components": state,
             "schema": lock["schema"], "manifest_hash": lock["manifest_hash"]}
@@ -5008,12 +5008,12 @@ def _h_assembly_lock_check(p):
     import os as _os
     import json as _json
     manifest_path = p["manifest"]
-    with open(manifest_path) as f:
+    with open(manifest_path, encoding="utf-8") as f:
         man = _json.load(f)
     base_dir = _os.path.dirname(_os.path.abspath(manifest_path))
     lockfile = p.get("lockfile") or (
         _os.path.splitext(manifest_path)[0] + ".lock.json")
-    with open(lockfile) as f:
+    with open(lockfile, encoding="utf-8") as f:
         lock_full = _json.load(f)
     locked = lock_full.get("components", {})
     locked_hash = lock_full.get("manifest_hash")
@@ -6381,7 +6381,7 @@ def _h_merge_assembly(p):
     import json as _json
     import os as _os
     manifest_path = p["manifest"]
-    with open(manifest_path) as f:
+    with open(manifest_path, encoding="utf-8") as f:
         man = _json.load(f)
     problems = _validate_manifest(man)  # §11.7: fail a malformed contract at the door
     if problems:
@@ -11197,7 +11197,7 @@ def _h_slice_gcode_submit(p):
         if proc.returncode == 0 and os.path.isfile(gcode_path):
             try:
                 stats = _slicing.parse_gcode_stats(
-                    open(gcode_path, errors="replace").read(), density_g_cc=rho)
+                    open(gcode_path, encoding="utf-8", errors="replace").read(), density_g_cc=rho)
             except ValueError as exc:
                 out["ok"] = False
                 out["reason"] = f"unparseable G-code: {exc}"
@@ -12753,7 +12753,7 @@ def _parse_elmer_scalars(case_dir):
     dats = sorted(glob.glob(os.path.join(case_dir, "*.dat")))
     if not dats:
         return None
-    with open(dats[-1]) as f:
+    with open(dats[-1], encoding="utf-8") as f:
         rows = [r for r in f.read().splitlines() if r.strip()]
     if not rows:
         return None
@@ -15207,7 +15207,7 @@ def _h_items_new(p):
         reg = _items.empty_registry()
     _items.new_item(reg, p["item"], files=p.get("files"),
                     metadata=p.get("metadata"))
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         _json.dump(reg, f, indent=2, sort_keys=True)
     return {"part_number": reg["items"][p["item"]]["part_number"],
             "item": p["item"], "registry": path}
@@ -15220,7 +15220,7 @@ def _h_items_check_manifest(p):
     Returns {ok, problems} — a dangling item-ref is caught before a merge."""
     import json as _json
     from driftpin import items as _items
-    with open(p["manifest"]) as f:
+    with open(p["manifest"], encoding="utf-8") as f:
         man = _json.load(f)
     reg = _items.load_registry(p["registry"])
     problems = _items.validate_manifest_refs(man, reg)
@@ -15300,12 +15300,12 @@ def _h_project_resolve_manifest(p):
     base_dir = _os.path.dirname(_os.path.abspath(p["project"]))
     mani = proj.get("manifest", "manifest.json")
     mpath = _os.path.join(base_dir, mani)
-    with open(mpath) as f:
+    with open(mpath, encoding="utf-8") as f:
         manifest = _json.load(f)
     reg = _items.load_registry(_os.path.join(base_dir, proj.get("registry", "items.json")))
     lowered = _proj.lower_item_refs(manifest, reg)
     out = p.get("out") or (_os.path.splitext(mpath)[0] + ".resolved.json")
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         _json.dump(lowered, f, indent=2)
     return {"path": out, "lowered": lowered}
 # --- design tables / variant families (issue #138, B1, append-only) -----------
@@ -15353,7 +15353,7 @@ def _h_family_materialize(p):
 
     result = _fam.materialize(table, _call, registry=registry, mode=p.get("mode"))
     if reg_path:
-        with open(reg_path, "w") as f:
+        with open(reg_path, "w", encoding="utf-8") as f:
             _json.dump(registry, f, indent=2, sort_keys=True)
     return result
 # --- Liskov-substitutability gate (issue #147, T1; DESIGN_HIERARCHY §7.1) -----
@@ -15419,7 +15419,7 @@ def _h_lifecycle_transition(p):
                        note=p.get("note"))
     except (_lc.LifecycleError, KeyError) as e:
         return {"ok": False, "problems": [str(e)]}
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         _json.dump(reg, f, indent=2, sort_keys=True)
     rec = reg["items"][p["item"]]
     return {"ok": True, "state": rec["lifecycle"], "rev": rec.get("rev", "-")}
@@ -15459,7 +15459,7 @@ def _h_lifecycle_apply_change(p):
                                actor=p.get("actor"), note=p.get("note"))
     except (_lc.LifecycleError, KeyError, ValueError) as e:
         return {"ok": False, "problems": [str(e)]}
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         _json.dump(reg, f, indent=2, sort_keys=True)
     res["ok"] = True
     return res
@@ -15621,7 +15621,7 @@ def _h_eco_create(p):
     if p.get("lockfile"):
         eco = _chg.eco_with_impact(eco, _chg.load_lockfile(p["lockfile"]))
     if p.get("out"):
-        with open(p["out"], "w") as f:
+        with open(p["out"], "w", encoding="utf-8") as f:
             f.write(_chg.serialize_eco(eco))
     return eco
 
@@ -15643,7 +15643,7 @@ def _h_baseline_create(p):
     baseline = _chg.create_baseline(p["label"], reg, base_dir=base_dir,
                                     items=p.get("items"), note=p.get("note"))
     if p.get("out"):
-        with open(p["out"], "w") as f:
+        with open(p["out"], "w", encoding="utf-8") as f:
             f.write(_chg.serialize_baseline(baseline))
     return baseline
 
@@ -15659,7 +15659,7 @@ def _h_baseline_verify(p):
     import os as _os
     from driftpin import change as _chg
     from driftpin import items as _items
-    with open(p["baseline"]) as f:
+    with open(p["baseline"], encoding="utf-8") as f:
         baseline = _json.load(f)
     reg_path = p["registry"]
     reg = _items.load_registry(reg_path)

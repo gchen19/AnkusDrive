@@ -142,13 +142,13 @@ def run_suite() -> dict:
 
                 # Model verdict.
                 if txt_path.exists():
-                    response = txt_path.read_text()
+                    response = txt_path.read_text(encoding="utf-8")
                     cached = True
                 else:
                     prompt = PROMPT_TEMPLATE.format(spec=spec.description)
                     t0 = time.time()
                     response = call_claude(png, prompt)
-                    txt_path.write_text(response)
+                    txt_path.write_text(response, encoding="utf-8")
                     cached = False
                     print(f"  [api] {key} ({time.time() - t0:.1f}s)")
 
@@ -192,7 +192,7 @@ def run_suite() -> dict:
         "false_negatives": false_neg,
         "rows": rows,
     }
-    (CACHE_DIR / "report_agent_loop.json").write_text(json.dumps(report, indent=2))
+    (CACHE_DIR / "report_agent_loop.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
 

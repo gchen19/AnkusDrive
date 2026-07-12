@@ -63,7 +63,7 @@ def test_body_case_writes_sif_and_elmergrid_argv():
             d, k=200, rho=2700, cp=900, h_conv=10000, duration_s=0.6,
             convection_tags=[1, 2])
         assert os.path.isfile(os.path.join(d, "case.sif"))
-        assert open(os.path.join(d, "ELMERSOLVER_STARTINFO")).read().strip() == "case.sif"
+        assert open(os.path.join(d, "ELMERSOLVER_STARTINFO"), encoding="utf-8").read().strip() == "case.sif"
         assert built["elmergrid_argv"] == [
             "ElmerGrid", "8", "2", "body.unv", "-out", "bodymesh", "-autoclean"]
         assert abs(built["dt"] - 0.005) < 1e-12 and built["n_steps"] == 120
@@ -71,7 +71,7 @@ def test_body_case_writes_sif_and_elmergrid_argv():
 
 def test_parse_minmax_scalars_reads_last_row():
     with tempfile.TemporaryDirectory() as d:
-        open(os.path.join(d, "scalars.dat"), "w").write(
+        open(os.path.join(d, "scalars.dat"), "w", encoding="utf-8").write(
             "9.9e1 9.0e1\n9.058932393949E+001 7.653637074115E+001\n")
         r = mb.parse_minmax_scalars(d)
         assert abs(r["t_max_c"] - 90.58932393949) < 1e-9
@@ -85,9 +85,9 @@ def test_mesh_boundary_count_guards_zero():
         mdir = os.path.join(d, "case")
         os.makedirs(mdir)
         # mesh.header line 1 = "n_nodes n_bulk n_boundary"
-        open(os.path.join(mdir, "mesh.header"), "w").write("729 384 104\n3\n")
+        open(os.path.join(mdir, "mesh.header"), "w", encoding="utf-8").write("729 384 104\n3\n")
         assert mb.mesh_boundary_count(d, "case") == 104        # healthy mesh
-        open(os.path.join(mdir, "mesh.header"), "w").write("729 384 0\n3\n")
+        open(os.path.join(mdir, "mesh.header"), "w", encoding="utf-8").write("729 384 0\n3\n")
         assert mb.mesh_boundary_count(d, "case") == 0          # the silent-zero failure
         assert mb.mesh_boundary_count(d, "absent") == 0        # missing header -> 0
 

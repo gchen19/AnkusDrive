@@ -113,7 +113,7 @@ async def _test_export_roundtrip(session):
         assert os.path.isfile(fcstd)
         await session.call_tool("export_shape", {"path": step})
         assert os.path.getsize(step) > 0
-        with open(step) as f:
+        with open(step, encoding="utf-8") as f:
             assert "ISO-10303" in f.read(100)
 
 

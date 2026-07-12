@@ -60,7 +60,7 @@ def test_golden_registry_valid_and_resolves():
 def test_manifest_item_refs_resolve():
     import json
     reg = I.load_registry(FIXTURES / "items.json")
-    man = json.loads((FIXTURES / "manifest_with_items.json").read_text())
+    man = json.loads((FIXTURES / "manifest_with_items.json").read_text(encoding="utf-8"))
     _check("manifest item-refs all resolve", I.validate_manifest_refs(man, reg), [])
 
 

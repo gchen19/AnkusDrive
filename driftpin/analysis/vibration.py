@@ -413,7 +413,7 @@ def write_harmonic_beam_case(
     mesh_dir = os.path.join(case_dir, mesh_name)
     os.makedirs(mesh_dir, exist_ok=True)
     for name, content in harmonic_beam_mesh_files(length_m, height_m, nx, ny).items():
-        with open(os.path.join(mesh_dir, name), "w") as f:
+        with open(os.path.join(mesh_dir, name), "w", encoding="utf-8") as f:
             f.write(content)
     freq_rows = "".join(f"      {i + 1}.0 {f:.10g}\n" for i, f in enumerate(freqs))
     sif = f"""Header
@@ -477,9 +477,9 @@ Boundary Condition 2
   Force 2 = {traction_pa:.10g}
 End
 """
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     tip_node = (ny // 2) * (nx + 1) + nx    # 0-based index of the mid-tip node
     return {
@@ -512,7 +512,7 @@ def parse_harmonic_beam(case_dir, *, mesh_name="beam", output="frf",
         path = os.path.join(case_dir, mesh_name, f"{output}_t{i:04d}.vtu")
         if not os.path.exists(path):
             return None
-        m = re.search(_VTU_ARRAY_RE, open(path).read(), re.S)
+        m = re.search(_VTU_ARRAY_RE, open(path, encoding="utf-8").read(), re.S)
         if not m:
             return None
         vals = m.group(1).split()

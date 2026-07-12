@@ -66,7 +66,7 @@ def _write_prism_stl(path, L=20.0, W=20.0):
         n = np.cross(np.array(q) - np.array(p), np.array(r) - np.array(p))
         nn = np.linalg.norm(n)
         return n / nn if nn > 0 else n
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("solid prism\n")
         for i, j, k in tris:
             p, q, r = V[i], V[j], V[k]

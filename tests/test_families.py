@@ -262,7 +262,7 @@ _SMALL_GEARS = {
 
 def _write(tmp, name, table):
     p = Path(tmp) / name
-    p.write_text(json.dumps(table, indent=2))
+    p.write_text(json.dumps(table, indent=2), encoding="utf-8")
     return str(p)
 
 

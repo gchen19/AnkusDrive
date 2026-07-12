@@ -197,7 +197,7 @@ def substitutability_setup(w, tmp):
                     "min_clearance_mm": 0.1, "max_clearance_mm": 0.5}],
     }
     mpath = tmp / "subst_manifest.json"
-    mpath.write_text(json.dumps(man))
+    mpath.write_text(json.dumps(man), encoding="utf-8")
     return str(mpath)
 
 
@@ -241,7 +241,7 @@ def encapsulation_setup(w, tmp):
                 "mate": {"child_iface": "seat", "parent": "housing",
                          "parent_iface": "seat"}}]}
     mpath = tmp / "enc_manifest.json"
-    mpath.write_text(json.dumps(man))
+    mpath.write_text(json.dumps(man), encoding="utf-8")
     lock = w.call("assembly_lock", manifest=str(mpath))
     return {"manifest": str(mpath), "lockfile": lock["lockfile"]}
 

@@ -3670,7 +3670,7 @@ def test_every_add_command_has_a_producer_smoke():
     Non-solid add_* tools are explicitly excluded (and the exclusions are checked
     to be real tools, so the allowlist can't hide a missing producer)."""
     import ast
-    src = (REPO / "driftpin" / "mcp_server.py").read_text()
+    src = (REPO / "driftpin" / "mcp_server.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     add_tools = {
         n.name for n in tree.body

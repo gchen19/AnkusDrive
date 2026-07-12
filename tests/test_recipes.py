@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO))
 from driftpin import recipes  # noqa: E402
 
 FIXTURE = json.loads((Path(__file__).resolve().parent / "fixtures"
-                      / "recipe_spur_gear.json").read_text())
+                      / "recipe_spur_gear.json").read_text(encoding="utf-8"))
 
 _PASS = _FAIL = 0
 
@@ -233,7 +233,7 @@ def test_merge_builds_a_recipe_component():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         mp = tmp / "gearpair.manifest.json"
-        mp.write_text(json.dumps(lowered, indent=2))
+        mp.write_text(json.dumps(lowered, indent=2), encoding="utf-8")
         with Worker() as w:
             rep = w.call("merge_assembly", manifest=str(mp))
     _check("recipe-component merge -> ok", rep["ok"], True)

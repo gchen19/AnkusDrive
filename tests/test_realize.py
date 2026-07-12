@@ -142,7 +142,7 @@ def _manifest(d, collar_file):
 def _merge(w, d, collar_file):
     man = _manifest(d, collar_file)
     mpath = os.path.join(d, f"manifest_{Path(collar_file).stem}.json")
-    with open(mpath, "w") as f:
+    with open(mpath, "w", encoding="utf-8") as f:
         json.dump(man, f)
     return w.call("merge_assembly", manifest=mpath)
 
@@ -216,7 +216,7 @@ def test_freewheel_gear_is_round_bored():
                 if chk.get("kind") == "bore_keying" and chk["part"] == "gear":
                     chk["keyed"] = True
             mpath = os.path.join(d, "manifest_keyed_gear.json")
-            with open(mpath, "w") as f:
+            with open(mpath, "w", encoding="utf-8") as f:
                 json.dump(man, f)
             rep = w.call("merge_assembly", manifest=mpath)
     assert not rep["ok"], "round-bored gear declared keyed must FAIL"

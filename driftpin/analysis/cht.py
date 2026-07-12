@@ -375,15 +375,15 @@ def write_cht_channel_case(
     files = cht_channel_mesh_files(nx, ny_fluid, ny_solid,
                                    length_m, fluid_height_m, solid_thickness_m)
     for fname, text in files.items():
-        with open(os.path.join(mesh_dir, fname), "w") as f:
+        with open(os.path.join(mesh_dir, fname), "w", encoding="utf-8") as f:
             f.write(text)
     sif_text = cht_channel_sif(
         velocity_m_s=velocity_m_s, flux_w_m2=flux_w_m2, t_in_c=t_in_c,
         k_fluid=k_fluid, rho_fluid=rho_fluid, cp_fluid=cp_fluid, k_solid=k_solid,
         mesh_name=mesh_name, scalars=scalars)
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif_text)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     return {
         "case_dir": case_dir,
@@ -411,7 +411,7 @@ def parse_cht_scalars(case_dir: str, scalars: str = "cht.dat") -> dict | None:
                  if os.path.isfile(m) and not m.endswith(".names")), None)
     if data is None:
         return None
-    rows = [r for r in open(data).read().splitlines() if r.strip()]
+    rows = [r for r in open(data, encoding="utf-8").read().splitlines() if r.strip()]
     if not rows:
         return None
     try:
@@ -542,7 +542,7 @@ def write_graetz_channel_case(
     mesh_dir = os.path.join(case_dir, mesh_name)
     os.makedirs(mesh_dir, exist_ok=True)
     for name, content in graetz_channel_mesh_files(length_m, gap_m, nx, ny).items():
-        with open(os.path.join(mesh_dir, name), "w") as f:
+        with open(os.path.join(mesh_dir, name), "w", encoding="utf-8") as f:
             f.write(content)
     sif = f"""Header
   Mesh DB "." "{mesh_name}"
@@ -614,9 +614,9 @@ Boundary Condition 3
   Temperature = {t_wall_c:.10g}
 End
 """
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     return {
         "case_dir": case_dir,
@@ -683,7 +683,7 @@ def parse_graetz_channel(
     path = os.path.join(case_dir, mesh_name, f"{output}_t0001.vtu")
     if not os.path.exists(path):
         return None
-    txt = open(path).read()
+    txt = open(path, encoding="utf-8").read()
 
     def field(name, ncomp):
         m = _re.search(rf'Name="{name}"[^>]*format="ascii"[^>]*>(.*?)</DataArray>',

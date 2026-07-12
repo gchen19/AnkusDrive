@@ -44,7 +44,7 @@ def _plate(path, hole_r=3.3):
 
 
 def _write(path, obj):
-    path.write_text(json.dumps(obj))
+    path.write_text(json.dumps(obj), encoding="utf-8")
     return path
 
 

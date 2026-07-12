@@ -86,7 +86,7 @@ _DEFAULT_FORMAT = {"prefix": "DP-", "digits": 6, "next": 1001}
 def load_registry(path):
     """Read an items.json sidecar into a dict. Raises on unreadable/!JSON — a bad
     registry must fail loudly, never resolve to silence (the house rule)."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

@@ -49,7 +49,7 @@ def test_family_regen_matches_baseline_geometry():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         tbl = tmp / "spur_family.json"
-        tbl.write_text(json.dumps(toys.GEAR_FAMILY))
+        tbl.write_text(json.dumps(toys.GEAR_FAMILY), encoding="utf-8")
         with Worker() as w:
             mod = toys.family_regen_modular(w, str(tbl))
             base = toys.family_regen_baseline(w, rows)
