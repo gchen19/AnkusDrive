@@ -175,10 +175,12 @@ environment. `driftpin doctor` reports the file and which layer resolved each va
 dirs, Windows `PATHEXT`/`.exe`, env overrides), so `driftpin doctor` gives an honest report
 on macOS/Linux/Windows. The **pip-wheel** families (MBD, topology, optics, fluids) install
 identically everywhere. The **native-binary** families differ by OS — CalculiX ships inside
-every FreeCAD install; SU2/Elmer/PrusaSlicer have good Windows/macOS binaries; the
+every FreeCAD install; SU2 and PrusaSlicer have good Windows/macOS binaries; Elmer has a
+portable Windows zip but no macOS binaries; the
 **OpenFOAM-backed** families (CFD, FSI, injection molding) still rely on a Linux shell +
 linker glue and are Linux/WSL/Docker for now. See
-[`docs/WINDOWS.md`](docs/WINDOWS.md) for the full per-solver Windows reality and setup.
+[`docs/WINDOWS.md`](docs/WINDOWS.md) and [`docs/MACOS.md`](docs/MACOS.md) for the full
+per-solver reality and setup on each OS.
 
 The review-video demos under [`scratch/`](scratch/) turn a solver result into a GIF a human
 can watch — the **real exported geometry** in motion with the matching oracle overlaid on
