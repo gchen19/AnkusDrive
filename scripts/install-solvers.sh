@@ -57,12 +57,24 @@
 #   scripts/install-solvers.sh em_gpl           # opt-in GPL-3.0 full-wave FDTD (openEMS, source-built)
 #   scripts/install-solvers.sh --optics-gallery # bootstrap: install BOTH optics lanes + render every gallery figure
 #   scripts/install-solvers.sh cfd              # print OpenFOAM/SU2 install guidance (no auto-install)
+#   scripts/install-solvers.sh su2              # macOS: download the official SU2 binary into the
+#                                               #   provisioner dir (auto-discovered); Linux: guidance
+#   scripts/install-solvers.sh prusaslicer      # macOS: brew cask (auto-discovered); Linux: guidance
 #   scripts/install-solvers.sh --list           # show what resolves right now (per solve_capabilities)
+#
+# macOS (issue #194): the pip-wheel extras install the same way (mbd resolves to
+# mujoco there — PyBullet has no macOS wheels). `su2` and `prusaslicer` are the two
+# native binaries with a turnkey path; both land where driftpin/solvers.py discovers
+# them with NO env vars (~/Library/Application Support/DriftPin/solvers and
+# /Applications). The apt/source-build recipes (dem_gpl, em_gpl, fsi) and the
+# OpenFOAM families are Linux-only — see docs/MACOS.md.
 #
 # ENV OVERRIDES
 #   PY       interpreter whose env gets the wheels (default: ./.venv/bin/python3 if
 #            present, else python3 — MUST match the MCP server's interpreter)
 #   FORCE=1  pass --force-reinstall to pip
+#   SOLVERS_DIR  where macOS portable binaries are extracted
+#            (default: ~/Library/Application Support/DriftPin/solvers)
 #
 # Idempotent: pip skips an already-satisfied wheel; re-running is safe. Heavy
 # *solves* belong on the provisioned/self-hosted FreeCAD runner — this script only
@@ -78,6 +90,11 @@ if [ -z "${PY:-}" ]; then
   if [ -x "$REPO_ROOT/.venv/bin/python3" ]; then PY="$REPO_ROOT/.venv/bin/python3"; else PY="python3"; fi
 fi
 FORCE="${FORCE:-0}"
+OS="$(uname -s)"
+# macOS provisioner dir — the Darwin analog of the Windows %LOCALAPPDATA%\DriftPin\
+# solvers layout; driftpin/solvers.py globs it, so binaries extracted here resolve
+# with NO env vars (the way a minimal-env MCP host launches `driftpin mcp`).
+SOLVERS_DIR="${SOLVERS_DIR:-$HOME/Library/Application Support/DriftPin/solvers}"
 
 # Wheel-installable extras (pyproject [project.optional-dependencies]) -> the pip
 # install this script automates. Keep in lockstep with pyproject.toml. WHEEL_EXTRAS
@@ -120,7 +137,9 @@ CFD (OpenFOAM / SU2) — system package, install manually then put on PATH:
       sudo add-apt-repository http://dl.openfoam.org/ubuntu
       sudo apt-get update && sudo apt-get install -y openfoam11
       # then: source /opt/openfoam11/etc/bashrc   (puts foamRun/simpleFoam on PATH)
-  conda (any OS):  conda install -c conda-forge openfoam
+  conda (Linux):  conda install -c conda-forge openfoam
+  macOS:   SU2:      scripts/install-solvers.sh su2   (official binary, auto-discovered)
+           OpenFOAM: Docker only — the runner glue is Linux-only (issue #193)
   FreeCAD CfdOF workbench bundles a usable OpenFOAM on some platforms.
   SU2 alternative:  download from https://su2code.github.io/download.html
   Verify:  foamRun -help  (or set DRIFTPIN_OPENFOAM_PATH / DRIFTPIN_SU2_PATH)
@@ -131,11 +150,68 @@ EOF
 
 Transient/radiation thermal (Elmer) — system package:
   Linux:   sudo apt-get install -y elmerfem-csc
-  conda:   conda install -c conda-forge elmer
-  source:  https://www.elmerfem.org/
+  Windows: pwsh scripts/install-solvers.ps1 elmer   (portable no-GUI zip)
+  macOS:   no prebuilt binaries exist (no Homebrew formula or conda-forge
+           package) — source build from https://www.elmerfem.org/
   Verify:  ElmerSolver -v  (or set DRIFTPIN_ELMER_PATH)
 EOF
   fi
+}
+
+# --- macOS native binaries (issue #194 — the Darwin analog of install-solvers.ps1)
+# SU2's official macOS release is x86_64-only; on Apple Silicon it runs under
+# Rosetta 2 (which translates x86_64 *macOS* binaries — unlike the linux64 renderer
+# tarballs, which can never run here). Refuse to install without Rosetta rather
+# than leave a discovered-but-unrunnable binary behind.
+require_rosetta() {
+  [ "$(uname -m)" = "arm64" ] || return 0
+  /usr/bin/pgrep -q oahd 2>/dev/null && return 0
+  warn "SU2's official macOS binary is x86_64 and needs Rosetta 2 on Apple Silicon."
+  die  "install it first:  softwareupdate --install-rosetta --agree-to-license"
+}
+
+SU2_VER="8.5.0"
+SU2_URL="https://github.com/su2code/SU2/releases/download/v${SU2_VER}/SU2-v${SU2_VER}-macos64.zip"
+
+install_su2_darwin() {
+  [ "$OS" = "Darwin" ] || die "the 'su2' download target is macOS-only (Linux: see 'cfd' guidance; Windows: install-solvers.ps1 su2)"
+  require_rosetta
+  local dest="$SOLVERS_DIR/SU2-$SU2_VER"
+  local zip="$SOLVERS_DIR/su2-$SU2_VER.zip"
+  mkdir -p "$SOLVERS_DIR"
+  log "download SU2 $SU2_VER (official macos64 build, x86_64) -> $zip"
+  curl -fL --retry 3 --connect-timeout 30 -o "$zip" "$SU2_URL" || die "download failed: $SU2_URL"
+  rm -rf "$dest" && mkdir -p "$dest"
+  unzip -o -q "$zip" -d "$dest" || die "unzip failed: $zip"
+  # the release zip nests a second zip (same quirk install-solvers.ps1 handles)
+  local inner; inner="$(find "$dest" -maxdepth 2 -name '*.zip' | head -1)"
+  if [ -n "$inner" ]; then
+    unzip -o -q "$inner" -d "$dest" || die "inner unzip failed: $inner"
+    rm -f "$inner"
+  fi
+  rm -f "$zip"
+  local exe; exe="$(find "$dest" -type f -name SU2_CFD | head -1)"
+  [ -n "$exe" ] || die "SU2_CFD not found under $dest"
+  chmod +x "$(dirname "$exe")"/* 2>/dev/null || true
+  ok "SU2_CFD -> $exe"
+  ok "auto-discovered from $SOLVERS_DIR (no env var needed);"
+  ok "for a non-default SOLVERS_DIR set DRIFTPIN_SU2_PATH=$exe"
+  [ "$(uname -m)" = "arm64" ] && ok "(x86_64 binary — runs under Rosetta 2 on this arm64 Mac)"
+  ok "verify with a live solve:  python3 tests/test_su2_native.py"
+}
+
+install_prusa_darwin() {
+  [ "$OS" = "Darwin" ] || die "the 'prusaslicer' target is macOS-only (Linux: apt install prusa-slicer; Windows: install-solvers.ps1 prusaslicer)"
+  command -v brew >/dev/null 2>&1 \
+    || die "Homebrew not found — install PrusaSlicer manually from https://www.prusa3d.com/prusaslicer/ (the /Applications bundle is auto-discovered)"
+  if [ -d "/Applications/PrusaSlicer.app" ]; then
+    ok "PrusaSlicer.app already present in /Applications"
+  else
+    log "brew install --cask prusaslicer"
+    brew install --cask prusaslicer || die "brew install failed"
+  fi
+  ok "auto-discovered at /Applications/PrusaSlicer.app/Contents/MacOS (no env var needed)"
+  ok "verify with a live slice:  python3 tests/test_slicing.py"
 }
 
 # --- em_gpl: openEMS FDTD full-wave EM (GPL-3.0, source build) ------------------
@@ -146,6 +222,7 @@ EOF
 # python so the worker resolves it. Override the prefix/clone/venv with EM_PREFIX /
 # EM_SRC / EM_VENV.
 build_openems() {
+  [ "$OS" = "Linux" ] || die "the em_gpl build recipe is Linux-only (apt toolchain) — see docs/MACOS.md / docs/WINDOWS.md"
   warn "openEMS is GPL-3.0. DriftPin runs it ONLY out-of-process"
   warn "(driftpin/em_fullwave_gpl_runner.py), keeping its own license clean."
   local prefix="${EM_PREFIX:-$HOME/opt/openEMS}"
@@ -188,6 +265,7 @@ EOF
 # GUARDRAIL: every compile is capped at -j8 (never -j$(nproc)) + ccache — this host
 # also runs the CI runner and parallel full-core builds crash it.
 build_fsi() {
+  [ "$OS" = "Linux" ] || die "the fsi build recipe is Linux-only (apt + OpenFOAM wmake) — see docs/MACOS.md / docs/WINDOWS.md"
   warn "preCICE FSI stack (LGPL core + precice/calculix-adapter + precice/openfoam-adapter)."
   warn "Both heavy solvers run out-of-process (fsi_case.py) — DriftPin never imports preCICE."
   local jobs="${FSI_JOBS:-8}"        # -j cap: NEVER $(nproc) on the CI host
@@ -304,6 +382,7 @@ PYEOF
 # reach into DriftPin's own (permissive) code. Installs into ~/opt/yade by default.
 # RESOURCE NOTE: caps the build at -j8 so it never starves a co-resident CI runner.
 build_dem_gpl() {
+  [ "$OS" = "Linux" ] || die "the dem_gpl build recipe is Linux-only (apt toolchain) — see docs/MACOS.md / docs/WINDOWS.md"
   warn "'dem_gpl' source-builds YADE (GPL-3.0). DriftPin runs it only out-of-process"
   warn "(driftpin/dem_gpl_runner.py via the \`yade\` executable), keeping its own license clean."
   local prefix="${YADE_PREFIX:-$HOME/opt/yade}"
@@ -377,15 +456,30 @@ main() {
       fsi|precice)       build_fsi; exit 0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
       thermal|elmer)     systems+=("thermal"); do_all=0 ;;
-      openfoam|su2)      systems+=("cfd"); do_all=0 ;;
+      openfoam)          systems+=("cfd"); do_all=0 ;;
+      su2)               if [ "$OS" = "Darwin" ]; then install_su2_darwin; exit 0
+                         else systems+=("cfd"); do_all=0; fi ;;
+      prusaslicer|prusa) install_prusa_darwin; exit 0 ;;
       *) die "unknown argument: $1 (try --list or --help)" ;;
     esac
     shift
   done
 
   if [ "$do_all" = "1" ]; then
-    for e in $WHEEL_EXTRAS; do pip_install_extra "$e"; done
+    # Best-effort, independently (subshell so a die inside doesn't abort the run):
+    # one missing wheel (e.g. PyBullet on a Python without wheels) must not stop
+    # the other extras — the corresponding family just degrades cleanly. Mirrors
+    # install-solvers.ps1's per-extra loop (issue #194).
+    for e in $WHEEL_EXTRAS; do
+      ( pip_install_extra "$e" ) || warn "[$e] install failed — skipped (family degrades cleanly)"
+    done
     system_guidance all
+    if [ "$OS" = "Darwin" ]; then
+      echo
+      warn "macOS native binaries: 'scripts/install-solvers.sh su2 prusaslicer' provisions"
+      warn "SU2 (official binary, Rosetta 2 on Apple Silicon) and PrusaSlicer (brew cask);"
+      warn "both are auto-discovered with no env vars. See docs/MACOS.md."
+    fi
     echo
     warn "GPL opt-in NOT installed by default: the non-sequential optics engine (KrakenOS)"
     warn "is GPL-3.0 — install it explicitly with: scripts/install-solvers.sh optics_gpl"

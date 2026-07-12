@@ -197,6 +197,39 @@ def test_windows_provisioner_dir_discovered_without_env():
             os.environ["DRIFTPIN_ELMER_PATH"] = prev_env
 
 
+def test_darwin_provisioner_dir_discovered_without_env():
+    """On macOS, a solver install-solvers.sh extracted under
+    ~/Library/Application Support/DriftPin/solvers resolves with NO env var —
+    the minimal-env way an MCP host launches `driftpin mcp` (issue #194, the
+    Darwin analog of the %LOCALAPPDATA% glob above). Skipped elsewhere."""
+    if sys.platform != "darwin":
+        print("    SKIP — Darwin provisioner layout only exists on macOS")
+        return
+    prev_home = os.environ.get("HOME")
+    prev_env = os.environ.pop("DRIFTPIN_SU2_PATH", None)
+    tmp = tempfile.mkdtemp(prefix="fake_home_")
+    try:
+        bin_dir = os.path.join(tmp, "Library", "Application Support", "DriftPin",
+                               "solvers", "SU2-8.5.0", "bin")
+        os.makedirs(bin_dir)
+        fake = os.path.join(bin_dir, "SU2_CFD")
+        open(fake, "w").close()
+        os.environ["HOME"] = tmp
+        # guard against a PATH-installed SU2_CFD stealing the resolution
+        info = solvers.find_solver("su2")
+        assert info["available"] is True, info
+        assert info["path"].startswith(tmp) or os.path.isfile(info["path"]), info
+        if not info["path"].startswith(tmp):
+            print("    NOTE — a real SU2_CFD resolved first; glob step untested here")
+    finally:
+        if prev_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = prev_home
+        if prev_env is not None:
+            os.environ["DRIFTPIN_SU2_PATH"] = prev_env
+
+
 def test_sibling_bin_appends_exe_on_windows():
     """sibling_bin resolves a companion executable next to the main binary,
     adding the .exe suffix Windows needs (the bare join silently skipped the

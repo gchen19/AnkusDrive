@@ -73,7 +73,11 @@ dev = [
 # apt/conda solvers (OpenFOAM, Elmer) are documented in scripts/install-solvers.sh,
 # not vendored — so `cfd` is intentionally empty (the solver is a system package).
 mbd = [
-    "pybullet>=3.2",        # MuJoCo ('mujoco') is the alternative the registry also accepts
+    # The registry accepts PyBullet OR MuJoCo for the mbd family. PyBullet ships no
+    # macOS wheels and its sdist fails to compile under clang (verified on arm64 /
+    # Python 3.14, issue #194), so Darwin gets mujoco instead.
+    'pybullet>=3.2; platform_system != "Darwin"',
+    'mujoco; platform_system == "Darwin"',
 ]
 topology = [
     "solidspy",             # 'topopt' is the registry's alternative

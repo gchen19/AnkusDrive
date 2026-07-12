@@ -48,7 +48,9 @@ _SOLVERS: dict = {
         "family": "mbd",
         "extra": "mbd",
         "modules": ("pybullet",),
-        "install_hint": "pip install 'driftpin[mbd]'  (pulls pybullet), "
+        "install_hint": "pip install 'driftpin[mbd]'  (pulls pybullet on "
+                        "Linux/Windows; PyBullet ships no macOS wheels and its sdist "
+                        "fails to compile there — the extra pulls mujoco instead), "
                         "or: pip install pybullet",
     },
     "mujoco": {
@@ -80,10 +82,13 @@ _SOLVERS: dict = {
                         "/Applications/Elmer.app/Contents/MacOS"),
             "Windows": (r"C:\Program Files\Elmer\bin",),
         },
-        "install_hint": "'apt install elmerfem-csc' (Linux), "
-                        "'conda install -c conda-forge elmer', or a build from "
-                        "https://www.elmerfem.org/ — then ensure ElmerSolver is on "
-                        "PATH or set DRIFTPIN_ELMER_PATH",
+        # NB: there is NO conda-forge/Homebrew Elmer package (issue #194, same class
+        # of stale hint as the brew calculix one in #192) — don't suggest conda.
+        "install_hint": "'apt install elmerfem-csc' (Linux), the portable no-GUI zip "
+                        "via scripts/install-solvers.ps1 elmer (Windows), or a source "
+                        "build from https://www.elmerfem.org/ (macOS ships no prebuilt "
+                        "binaries) — then ensure ElmerSolver is on PATH or set "
+                        "DRIFTPIN_ELMER_PATH",
     },
     # --- M5 CFD: OpenFOAM / SU2 (apt/conda, not vendored), heaviest, last ----
     "openfoam": {
@@ -418,16 +423,23 @@ def _binary_candidates(name: str, spec: dict) -> list:
         for binname in spec["binaries"]:
             for exe in (binname, binname + ".exe"):
                 candidates.append(os.path.join(d, exe))
-    # 4) the Windows provisioner's portable extracts: scripts/install-solvers.ps1
-    #    unzips SU2/PrusaSlicer/Elmer under %LOCALAPPDATA%\DriftPin\solvers, so a
-    #    provisioned box resolves them with NO env var — the way an MCP host with
-    #    a minimal environment launches `driftpin mcp` (issue #205 / #199).
+    # 4) the provisioners' portable extracts: scripts/install-solvers.ps1 unzips
+    #    SU2/PrusaSlicer/Elmer under %LOCALAPPDATA%\DriftPin\solvers, and
+    #    scripts/install-solvers.sh (Darwin) unzips SU2 under
+    #    ~/Library/Application Support/DriftPin/solvers — so a provisioned box
+    #    resolves them with NO env var, the way an MCP host with a minimal
+    #    environment launches `driftpin mcp` (issue #205 / #199 / #194).
+    prov_base = None
     if platform.system() == "Windows" and (lad := os.environ.get("LOCALAPPDATA")):
+        prov_base = os.path.join(lad, "DriftPin", "solvers")
+    elif platform.system() == "Darwin":
+        prov_base = os.path.expanduser("~/Library/Application Support/DriftPin/solvers")
+    if prov_base:
         import glob as _glob
-        base = os.path.join(lad, "DriftPin", "solvers")
+        suffix = ".exe" if platform.system() == "Windows" else ""
         for binname in spec["binaries"]:
             candidates.extend(sorted(_glob.glob(
-                os.path.join(base, "*", "**", binname + ".exe"),
+                os.path.join(prov_base, "*", "**", binname + suffix),
                 recursive=True), reverse=True))       # newest versioned dir first
     if spec.get("freecad_bundled"):                  # 5) FreeCAD's bundled bin/ (ccx, gmsh)
         for d in _freecad_bundled_bin_dirs():
