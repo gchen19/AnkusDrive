@@ -154,7 +154,8 @@ def _solve_pipe(D_mm, L_mm, U, nu, rho, na=120, nr=15, et=4000):
         nu_m2_s=nu, n_axial=na, n_radial=nr, end_time=et)
     bashrc = solvers.openfoam_bashrc()
     src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
-    subprocess.run(["bash", "-c", src + "blockMesh > log.bm 2>&1 && simpleFoam > log.sf 2>&1"],
+    # bash_argv routes through the WSL distro on Windows (issue #193)
+    subprocess.run(solvers.bash_argv(src + "blockMesh > log.bm 2>&1 && simpleFoam > log.sf 2>&1"),
                    cwd=d, capture_output=True, text=True)
     return openfoam.parse_pressure_drop(d, rho_kg_m3=rho)
 
@@ -204,7 +205,8 @@ def _solve_flat_plate(U, nu, rho, L=0.1):
     built = openfoam.write_flat_plate_case(d, velocity_m_s=U, nu_m2_s=nu, plate_length_m=L)
     bashrc = solvers.openfoam_bashrc()
     src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
-    subprocess.run(["bash", "-c", src + "blockMesh > log.bm 2>&1 && simpleFoam > log.sf 2>&1"],
+    # bash_argv routes through the WSL distro on Windows (issue #193)
+    subprocess.run(solvers.bash_argv(src + "blockMesh > log.bm 2>&1 && simpleFoam > log.sf 2>&1"),
                    cwd=d, capture_output=True, text=True)
     got = openfoam.parse_flat_plate_drag(
         d, rho_kg_m3=rho, nu_m2_s=nu, velocity_m_s=U, plate_length_m=L,
@@ -363,10 +365,11 @@ def test_rans_plate_matches_mixed_cf_banded():
 
 def _run_case(case_dir):
     bashrc = solvers.openfoam_bashrc()
+    # cwd= (not an in-script `cd`) so a Windows case_dir auto-maps to /mnt/<drive>
+    # when bash_argv routes through the WSL distro (issue #193)
     return subprocess.run(
-        ["bash", "-c",
-         f"source '{bashrc}' >/dev/null 2>&1; cd '{case_dir}' && blockMesh && simpleFoam"],
-        capture_output=True, text=True).returncode
+        solvers.bash_argv(f"source '{bashrc}' >/dev/null 2>&1; blockMesh && simpleFoam"),
+        cwd=case_dir, capture_output=True, text=True).returncode
 
 
 # --- runner -------------------------------------------------------------------

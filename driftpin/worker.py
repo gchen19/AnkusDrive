@@ -14118,23 +14118,32 @@ def _run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False):
     ``unset_sigfpe`` unsets ``FOAM_SIGFPE`` after sourcing — the OF7-org bashrc
     *exports* it (even empty counts as "set"), turning on the FPE trap that aborts
     openInjMoldSim on the transient ``exp`` infinities thrown during the violent
-    fill startup; clamps (etaMax/pMin) recover the step once the trap is off."""
+    fill startup; clamps (etaMax/pMin) recover the step once the trap is off.
+
+    On Windows the script runs inside the WSL distro (``solvers.bash_argv`` —
+    issue #193): ``case_dir`` stays a Windows path, auto-mapped to /mnt/<drive>
+    as the in-distro cwd, while ``env_bashrc`` arrives as a POSIX path from the
+    \\\\wsl$-probing resolvers."""
     import subprocess
+
+    from driftpin import solvers
     chain = " && ".join(" ".join(a) for a in argv_list)
     script = (f"source '{env_bashrc}' >/dev/null 2>&1\n" if env_bashrc else "")
     if unset_sigfpe:
         script += "unset FOAM_SIGFPE\n"
     script += chain
-    proc = subprocess.run(["bash", "-c", script], cwd=case_dir,
+    proc = subprocess.run(solvers.bash_argv(script), cwd=case_dir,
                           capture_output=True, text=True)
-    return proc.returncode, ((proc.stdout or "") + (proc.stderr or ""))[-2000:]
+    tail = solvers.clean_wsl_text((proc.stdout or "") + (proc.stderr or ""))
+    return proc.returncode, tail[-2000:]
 
 
 def _openfoam_submit(p, kind):
     """Shared OpenFOAM/SU2 runner for the prepared-`case_dir` path of the
     cfd_*_flow_submit handlers. Degrades to the structured dict when no CFD solver
     resolves; otherwise runs the solver app in the prepared case as a background
-    subprocess. OpenFOAM runs through bash with its environment sourced; SU2 is a
+    subprocess. OpenFOAM runs through bash with its environment sourced (on
+    Windows that bash lives in the WSL distro — issue #193); SU2 is a
     self-contained binary and runs as a direct native subprocess — no bash/WSL, so
     it works on native Windows (issue #203). ``kind`` ('internal' | 'external')
     labels the job/meta; force/pressure extraction lives in the case's setup."""

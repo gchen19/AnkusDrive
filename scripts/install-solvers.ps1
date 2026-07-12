@@ -23,8 +23,13 @@
     * Elmer (thermal/CHT/EM/acoustic FEM: CFD-adjacent families) is ALSO a portable
       zip now - the 'elmer' target downloads the no-GUI build and wires
       DRIFTPIN_ELMER_PATH (there is no Elmer winget package).
-    * OpenFOAM families (CFD solve / FSI / injection molding), YADE, openEMS, bempp - need
-      Linux mechanisms (bash, .so, LD_LIBRARY_PATH); use WSL/Docker (see docs/WINDOWS.md).
+    * OpenFOAM families (CFD solve / FSI / injection molding) - WSL2-backed since
+      issue #193: the 'wsl' target provisions them INSIDE the default distro (the
+      Linux install-solvers.sh runs verbatim there) and driftpin discovers/launches
+      them through \wsl$ + `wsl -e bash` automatically. One-time prerequisite:
+      `wsl --install -d Ubuntu` + reboot.
+    * YADE, openEMS, bempp - still need Linux mechanisms; same WSL route works
+      manually (see docs/WINDOWS.md).
 
   DISCOVERY: a family resolves its solver via driftpin/solvers.py - a wheel must import in
   the venv; a binary is found via DRIFTPIN_<SOLVER>_PATH -> PATH -> per-OS dirs -> (for
@@ -33,7 +38,7 @@
   with `driftpin doctor` (or this script's `list`).
 
 .PARAMETER Targets
-  Any of: pip su2 prusaslicer elmer all list. Default (no args) = pip + guidance.
+  Any of: pip su2 prusaslicer elmer wsl all list. Default (no args) = pip + guidance.
 
 .PARAMETER Dir
   Where portable binaries are extracted. Default: %LOCALAPPDATA%\DriftPin\solvers.
@@ -146,6 +151,26 @@ function Install-Elmer {
     Set-SolverEnv 'DRIFTPIN_ELMER_PATH' $exe.FullName
 }
 
+function Install-WslSolvers {
+    Write-Host '== OpenFOAM families (CFD / FSI / injection molding) via WSL2 (issue #193) =='
+    if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
+        throw 'WSL not installed: run "wsl --install -d Ubuntu", reboot, then re-run this target'
+    }
+    # The repo is visible in-distro at /mnt/<drive>/... and *.sh are LF-normalized
+    # (.gitattributes), so the Linux provisioning scripts run verbatim inside the
+    # distro. The cfd/fsi targets PRINT the validated apt + source-build recipes
+    # (they need sudo + network); run those inside the distro, then re-run
+    # `driftpin doctor` here - discovery probes \wsl$ automatically.
+    wsl -e bash -lc 'bash scripts/install-solvers.sh cfd fsi'
+    Write-Host ''
+    Write-Host 'Injection molding (openInjMoldSim, needs a parallel OpenFOAM-7 .org source'
+    Write-Host 'build - multi-hour): inside the distro run:'
+    Write-Host '  bash tools/build_openinjmoldsim.sh --build'
+    Write-Host 'IMPORTANT: clone/build INSIDE the distro filesystem (~), not /mnt/c - the'
+    Write-Host '9P mount is slow for compiles. Case dirs staying on /mnt/c is fine.'
+    Write-Host 'Override the probed distro with DRIFTPIN_WSL_DISTRO (env or config.toml).'
+}
+
 function Show-List {
     if (Test-Path $venvPy) { & $venvPy -m driftpin doctor }
     else { Write-Warning 'no .venv - cannot run driftpin doctor' }
@@ -159,9 +184,10 @@ foreach ($t in $Targets) {
         'prusaslicer' { Install-Prusa; $did = $true }
         'prusa'       { Install-Prusa; $did = $true }
         'elmer'       { Install-Elmer; $did = $true }
+        'wsl'         { Install-WslSolvers; $did = $true }
         'all'         { Install-Pip; Install-SU2; Install-Prusa; Install-Elmer; $did = $true }
         'list'        { Show-List; $did = $true }
-        default       { Write-Warning "unknown target '$t' (use: pip su2 prusaslicer elmer all list)" }
+        default       { Write-Warning "unknown target '$t' (use: pip su2 prusaslicer elmer wsl all list)" }
     }
 }
 if (-not $did) { Install-Pip }

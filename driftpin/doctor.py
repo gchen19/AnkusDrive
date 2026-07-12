@@ -153,7 +153,11 @@ def _fmt_solvers(caps: dict) -> list[str]:
         solver_states = {s: caps["solvers"][s] for s in info["solvers"]}
         if info["any_available"]:
             ready = ", ".join(sorted(info["available"]))
-            lines.append(f"{_MARK['ok']} {fam:<16} ready via {ready}")
+            # in-distro resolutions (issue #193) launch through `wsl -e bash`
+            wsl = any(solver_states[s].get("via") == "wsl"
+                      for s in info["available"])
+            lines.append(f"{_MARK['ok']} {fam:<16} ready via {ready}"
+                         + (" (in WSL)" if wsl else ""))
             continue
         # nothing ready: prefer the unwired (installed-but-not-wired) hint if present,
         # else the install hint of the first solver in the family.

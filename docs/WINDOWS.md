@@ -177,31 +177,48 @@ FreeCAD's bundled `ccx.exe` even though it isn't on PATH.
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD; dedicated venv (`DRIFTPIN_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ prebuilt Windows binaries exist upstream, but not yet wired into the installer scripts |
 | DEM (granular) | YADE (GPL) | ⚠️ no native Windows build — **WSL** |
-| CFD/FSI/molding | OpenFOAM + preCICE | ⚠️ Linux shell + linker glue (`bash`, `LD_LIBRARY_PATH`, `.so`) — **WSL / Docker / blueCFD** ([#193](https://github.com/gchen19/DriftPin/issues/193)) |
+| CFD/FSI/molding | OpenFOAM + preCICE + openInjMoldSim | ✅ **WSL2-backed, verified** ([#193](https://github.com/gchen19/DriftPin/issues/193)): discovery probes `\\wsl$\<distro>` (glob-only, side-effect-free) and launches route through `wsl -e bash`, so the server itself stays native Windows. Provision with `scripts/install-solvers.ps1 wsl` (one-time prerequisite: `wsl --install -d Ubuntu`) |
 
 Every absent solver **degrades cleanly** — the family returns `{ok: false, reason, install}`
 rather than crashing — so an incomplete solver set never breaks the server; those tools just
 report "not available" with the fix. `driftpin doctor` shows the current state.
 
-### The OpenFOAM families on Windows
+### The OpenFOAM families on Windows (WSL2-backed, #193)
 
 CFD, FSI, and injection molding shell out to OpenFOAM through Linux-only mechanisms
-(`bash -c 'source etc/bashrc && ...'`, `LD_LIBRARY_PATH`, `.so` adapter libs). None run
-under native Windows today. Two supported paths:
+(`bash -c 'source etc/bashrc && ...'`, `LD_LIBRARY_PATH`, `.so` adapter libs). Since
+[#193](https://github.com/gchen19/DriftPin/issues/193) those launches route through the
+WSL2 distro **automatically** — DriftPin itself (server, FreeCAD, case generation) runs
+native Windows, and only the OpenFOAM subprocesses cross into the distro:
 
-- **WSL2** — install DriftPin + OpenFOAM inside a WSL Ubuntu, run the server there; the
-  Windows FreeCAD isn't reachable from WSL, so install FreeCAD in the WSL environment too.
-- **Docker** — run the OpenFOAM steps in a Linux OpenFOAM container (a container backend is
-  proposed in [#193](https://github.com/gchen19/DriftPin/issues/193), option **b**).
+- **Launch**: `solvers.bash_argv(script)` swaps `["bash","-c",…]` for
+  `["wsl","-d",<distro>,"-e","bash","-c",…]`. The Windows case dir passes as `cwd`
+  unchanged — wsl.exe auto-maps it to `/mnt/<drive>/...`, so case files live on the
+  Windows side and results parse natively.
+- **Discovery**: side-effect-free globs over the `\\wsl$\<distro>` mirror find the
+  in-distro bashrc/binaries/adapter libs and report them as POSIX paths with
+  `via: "wsl"` (`driftpin doctor` shows `(in WSL)`). Nothing is executed to probe;
+  note that merely statting `\\wsl$` can auto-start the distro VM.
+- **Distro selection**: the registry default; override with `DRIFTPIN_WSL_DISTRO`
+  (env var or `config.toml`).
+- **Provisioning**: `scripts/install-solvers.ps1 wsl` — the Linux
+  `scripts/install-solvers.sh` runs verbatim inside the distro (the repo is visible at
+  `/mnt/...`). Source builds (FSI stack, OF7-org + openInjMoldSim) belong in the distro
+  home (`~`), not `/mnt/c` — the 9P mount is slow for compiles. Case I/O on `/mnt/c` is
+  fine at DriftPin's validation-case scale.
+- **Docker** was evaluated and rejected for Windows (it runs on WSL2 anyway — strictly
+  more machinery; see the decision record in #193). macOS remains documented-unsupported
+  with clean degradation.
 
-Until then, on native Windows these families report "not available" via clean degradation.
+Without WSL (or with an unprovisioned distro), these families still degrade cleanly to
+`{ok: false, reason, install}` with the WSL setup hint.
 
 ## Known Windows gaps (tracked)
 
 - **Provisioning/build scripts** ([#194](https://github.com/gchen19/DriftPin/issues/194)) —
   the Windows-viable path is now covered by [`scripts/install-solvers.ps1`](../scripts/install-solvers.ps1)
-  (pip-wheel extras + portable SU2/PrusaSlicer). The `scripts/*.sh` builders remain
-  bash + Linux-x86_64 and are only needed for the source-built GPL families (WSL).
+  (pip-wheel extras + portable SU2/PrusaSlicer/Elmer, and the `wsl` target that reaches
+  the `scripts/*.sh` builders inside the distro for the OpenFOAM families — #193).
 - **Persistent config file** ([#199](https://github.com/gchen19/DriftPin/issues/199)) — env
   vars don't survive MCP-host launches; a `%APPDATA%\driftpin\config.toml` resolution layer
   is planned so paths persist without `setx`.

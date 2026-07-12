@@ -104,6 +104,10 @@ echo "== P2 solver degradation contract (pure-Python; no FreeCAD) =="
 python3 tests/test_solve_degradation.py
 
 echo
+echo "== WSL routing for the OpenFOAM families (#193; monkeypatched, runs anywhere) =="
+python3 tests/test_wsl_routing.py
+
+echo
 echo "== Persistent config layer (env -> config.toml -> auto; pure-Python; no FreeCAD) =="
 python3 tests/test_config.py
 

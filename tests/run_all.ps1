@@ -95,6 +95,7 @@ if (Test-Path $ruff) {
 
 # --- Windows-native contract (the piece unique to this lane) --------------------
 Test-Module 'Windows FreeCAD resolution + doctor (cross-platform discovery, #191/#198)' 'test_windows_support.py'
+Test-Module 'WSL routing for OpenFOAM families (#193)' 'test_wsl_routing.py'
 
 # --- static contracts + pure-Python toys (all cross-platform, no FreeCAD) -------
 Test-Module 'Static contracts (registry parity + docstrings + determinism coverage)' 'test_contracts.py'
@@ -193,14 +194,19 @@ $env:RUN_RELIABILITY = ''
 Test-Module 'Reliability Layer D - harness validator (free stub)' 'test_reliability_tasks.py'
 $env:RUN_RELIABILITY = $savedRel
 
+# The OpenFOAM-backed suites run on Windows since #193 (launches route through the
+# WSL distro; solves self-gate on RUN_HEAVY_SOLVES + in-distro availability, so the
+# default lane stays fast). test_meshbridge's Elmer leg is native (#205); its snappy
+# leg rides the same WSL route.
+Test-Module 'OpenFOAM CFD (structure + WSL-gated solves)'  'test_openfoam.py'
+Test-Module 'Mesh bridge (ElmerGrid native / snappy via WSL)' 'test_meshbridge.py'
+Test-Module 'FSI preCICE (degradation + WSL-gated solve)'  'test_fsi.py'
+
 # --- Linux-only families: skipped on Windows (documented, not silent) -----------
 $linuxOnly = @(
-    @{ f = 'test_openfoam.py';      why = 'OpenFOAM (bash/LD_LIBRARY_PATH); WSL/Docker only' },
-    @{ f = 'test_meshbridge.py';    why = 'ElmerGrid/snappyHexMesh geometry bridge; Linux toolchain' },
     @{ f = 'test_acoustics_bem.py'; why = 'bempp-cl (OpenCL ICD + meshio>=5 dedicated venv)' },
     @{ f = 'test_granular.py';      why = 'YADE (GPL, no native Windows build); WSL only' },
-    @{ f = 'test_em_fullwave.py';   why = 'openEMS FDTD (source-built, not wired on Windows)' },
-    @{ f = 'test_fsi.py';           why = 'preCICE + OpenFOAM<->CalculiX (.so adapters); Linux only' }
+    @{ f = 'test_em_fullwave.py';   why = 'openEMS FDTD (source-built, not wired on Windows)' }
 )
 Write-Host ''
 Write-Host '== Skipped on Windows (Linux-only solver toolchains; see docs/WINDOWS.md) ==' -ForegroundColor Yellow

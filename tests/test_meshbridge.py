@@ -245,7 +245,7 @@ def test_bridged_cylinder_matches_hagen_poiseuille():
             inlet_velocity_m_s=(0.0, 0.0, U), nu_m2_s=nu)
         chain = " && ".join(" ".join(a) for a in mb.snappy_mesh_cmds())
         script = (f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else "") + chain
-        proc = subprocess.run(["bash", "-c", script], cwd=d,
+        proc = subprocess.run(solvers.bash_argv(script), cwd=d,
                               capture_output=True, text=True)
         assert proc.returncode == 0, (proc.stdout + proc.stderr)[-1200:]
 
