@@ -316,7 +316,7 @@ def toy4_build(w, tmp, variant):
         ],
     }
     mpath = tmp / f"{p}_manifest.json"
-    mpath.write_text(json.dumps(manifest))
+    mpath.write_text(json.dumps(manifest), encoding="utf-8")
     res = w.call("merge_assembly", manifest=str(mpath))
     return res["assembly"]
 
@@ -393,7 +393,7 @@ def toy5_build(w, tmp, variant):
                       "parent_iface": "seat"}}],
     }
     mpath = tmp / f"{p}_manifest.json"
-    mpath.write_text(json.dumps(manifest))
+    mpath.write_text(json.dumps(manifest), encoding="utf-8")
     res = w.call("merge_assembly", manifest=str(mpath))
     return res["assembly"]
 
@@ -439,7 +439,7 @@ def toy6_setup(w, tmp):
                 "mate": {"child_iface": "seat", "parent": "housing",
                          "parent_iface": "seat"}}]}
     mpath = tmp / "t6_manifest.json"
-    mpath.write_text(json.dumps(man))
+    mpath.write_text(json.dumps(man), encoding="utf-8")
     lock = w.call("assembly_lock", manifest=str(mpath))
     return {"manifest": str(mpath), "lockfile": lock["lockfile"], "tmp": tmp}
 

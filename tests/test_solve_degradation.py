@@ -180,7 +180,7 @@ def test_windows_provisioner_dir_discovered_without_env():
         bin_dir = os.path.join(tmp, "DriftPin", "solvers", "ElmerFake", "bin")
         os.makedirs(bin_dir)
         fake = os.path.join(bin_dir, "ElmerSolver.exe")
-        open(fake, "w").close()
+        open(fake, "w", encoding="utf-8").close()
         os.environ["LOCALAPPDATA"] = tmp
         # guard against a PATH-installed ElmerSolver stealing the resolution
         info = solvers.find_solver("elmer")
@@ -213,7 +213,7 @@ def test_darwin_provisioner_dir_discovered_without_env():
                                "solvers", "SU2-8.5.0", "bin")
         os.makedirs(bin_dir)
         fake = os.path.join(bin_dir, "SU2_CFD")
-        open(fake, "w").close()
+        open(fake, "w", encoding="utf-8").close()
         os.environ["HOME"] = tmp
         # guard against a PATH-installed SU2_CFD stealing the resolution
         info = solvers.find_solver("su2")
@@ -236,9 +236,9 @@ def test_sibling_bin_appends_exe_on_windows():
     ViewFactors/ElmerGrid legs of a complete native Elmer install, issue #205)."""
     d = tempfile.mkdtemp(prefix="sibling_")
     main = os.path.join(d, "ElmerSolver.exe" if os.name == "nt" else "ElmerSolver")
-    open(main, "w").close()
+    open(main, "w", encoding="utf-8").close()
     grid = os.path.join(d, "ElmerGrid.exe" if os.name == "nt" else "ElmerGrid")
-    open(grid, "w").close()
+    open(grid, "w", encoding="utf-8").close()
     got = solvers.sibling_bin(main, "ElmerGrid")
     # PATH may shadow with a real install; both outcomes must be a real file
     assert os.path.isfile(got), got
@@ -284,7 +284,7 @@ def test_openfoam_unwired_from_standard_bashrc():
     tmp = tempfile.mkdtemp(prefix="fake-openfoam-")
     os.makedirs(os.path.join(tmp, "etc"))
     bashrc = os.path.join(tmp, "etc", "bashrc")
-    with open(bashrc, "w") as fh:
+    with open(bashrc, "w", encoding="utf-8") as fh:
         fh.write("# fake OpenFOAM bashrc\n")
     restore = _clear_env("DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_BASHRC")
     os.environ["DRIFTPIN_OPENFOAM_DIRS"] = tmp
@@ -321,7 +321,7 @@ def test_openems_unwired_from_dedicated_venv():
     tmp = tempfile.mkdtemp(prefix="fake-repo-")
     venv = os.path.join(tmp, ".venv-openems")
     os.makedirs(os.path.join(venv, "bin"))
-    with open(os.path.join(venv, "bin", "python3"), "w") as fh:
+    with open(os.path.join(venv, "bin", "python3"), "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\n")
     restore = _clear_env("DRIFTPIN_OPENEMS_PYTHON")
     os.environ["DRIFTPIN_REPO_ROOT"] = tmp

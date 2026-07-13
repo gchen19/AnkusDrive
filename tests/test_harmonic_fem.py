@@ -28,7 +28,7 @@ from tests.heavy_solve import skip_heavy  # noqa: E402
 def test_beam_case_structure():
     d = tempfile.mkdtemp(prefix="frf_gen_")
     built = vib.write_harmonic_beam_case(d, nx=20, ny=2)
-    sif = (Path(d) / built["sif"]).read_text()
+    sif = (Path(d) / built["sif"]).read_text(encoding="utf-8")
     assert "StressSolve" in sif and "Harmonic Analysis = True" in sif
     assert "Plane Stress = True" in sif and "Rayleigh Damping Beta" in sif
     # Rayleigh beta tuned to give zeta at f1: beta = 2*zeta/omega_1

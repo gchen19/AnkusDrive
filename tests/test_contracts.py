@@ -75,7 +75,7 @@ _MIN_DOCSTRING_LEN = 40  # floor; the current shortest real docstring is 51 char
 def _handler_names():
     """All names registered via @handler("name") in worker.py, in file order
     (a list, so duplicates are detectable)."""
-    return re.findall(r'@handler\(\s*["\']([^"\']+)["\']\s*\)', WORKER.read_text())
+    return re.findall(r'@handler\(\s*["\']([^"\']+)["\']\s*\)', WORKER.read_text(encoding="utf-8"))
 
 
 def _is_tool_decorator(d):
@@ -96,7 +96,7 @@ def _call_target(func):
 
 def _tool_defs():
     """One dict per @mcp.tool function: {name, target, doc, params, lineno}."""
-    tree = ast.parse(MCP.read_text())
+    tree = ast.parse(MCP.read_text(encoding="utf-8"))
     out = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and any(
@@ -145,7 +145,7 @@ def _escalate_targets():
     out = {}
     files = sorted(ANALYSIS_DIR.glob("*.py")) + [WORKER]
     for f in files:
-        tree = ast.parse(f.read_text())
+        tree = ast.parse(f.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Dict):
                 continue
@@ -416,6 +416,87 @@ def test_bounded_submits_are_classified_bounded():
         elif t not in detreg.BOUNDED_TOOLS:
             offenders.append(f"{t}: not classified bounded")
     assert not offenders, "BOUNDED_SUBMITS problems:\n  " + "\n  ".join(offenders)
+
+
+# --- encoding hygiene (issue #204) --------------------------------------------
+#
+# On Windows a text-mode open()/read_text()/write_text() with no explicit
+# encoding= uses the locale codec (cp1252), not UTF-8. DriftPin's sources,
+# generated solver decks and result files carry non-ASCII (em-dashes, µ, °, ×),
+# so an encoding-less text open corrupts data or raises UnicodeDecodeError on a
+# Windows MCP host — which is spawned with a minimal env (no PYTHONUTF8). This
+# guard fails if any text-mode open in driftpin/ or tests/ omits encoding, so a
+# future regression is caught here instead of on a user's machine.
+
+_ENC_ROOTS = [REPO / "driftpin", REPO / "tests"]
+
+
+def _binary_mode(call):
+    """True if this open()/Path.open() call is binary mode ('b' in the mode)."""
+    mode = None
+    if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
+        mode = call.args[1].value
+    for kw in call.keywords:
+        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+            mode = kw.value.value
+    return isinstance(mode, str) and "b" in mode
+
+
+def _is_pil_open(call):
+    """True for PIL Image.open(...) — an image decoder that takes no encoding=.
+    Recognised by an `Image.open(` receiver or a BytesIO(...) first argument."""
+    recv = call.func.value
+    if isinstance(recv, ast.Name) and recv.id == "Image":
+        return True
+    if call.args and isinstance(call.args[0], ast.Call):
+        inner = call.args[0].func
+        name = getattr(inner, "id", None) or getattr(inner, "attr", None)
+        if name == "BytesIO":
+            return True
+    return False
+
+
+def _encodingless_text_opens():
+    """(file:line, snippet) for every text-mode open/read_text/write_text in
+    driftpin/ and tests/ that omits encoding=. PIL Image.open and binary-mode
+    opens are exempt."""
+    offenders = []
+    for root in _ENC_ROOTS:
+        for f in sorted(root.rglob("*.py")):
+            if "__pycache__" in f.parts:
+                continue
+            src = f.read_text(encoding="utf-8")
+            lines = src.splitlines()
+            tree = ast.parse(src, filename=str(f))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                has_enc = any(kw.arg == "encoding" for kw in node.keywords)
+                hit = False
+                if isinstance(fn, ast.Name) and fn.id == "open":
+                    hit = not has_enc and not _binary_mode(node)
+                elif isinstance(fn, ast.Attribute):
+                    if fn.attr in ("read_text", "write_text"):
+                        hit = not has_enc
+                    elif fn.attr == "open":
+                        hit = (not has_enc and not _binary_mode(node)
+                               and not _is_pil_open(node))
+                if hit:
+                    rel = f.relative_to(REPO).as_posix()
+                    snippet = lines[node.lineno - 1].strip()
+                    offenders.append(f"{rel}:{node.lineno}  {snippet}")
+    return offenders
+
+
+def test_no_encodingless_text_opens():
+    """Every text-mode file open specifies encoding= (issue #204)."""
+    offenders = _encodingless_text_opens()
+    assert not offenders, (
+        "text-mode open/read_text/write_text without encoding=\"utf-8\" "
+        "(cp1252 on Windows → UnicodeDecodeError / deck corruption):\n  "
+        + "\n  ".join(offenders)
+    )
 
 
 # --- runner (mirrors tests/test_worker.py) ------------------------------------

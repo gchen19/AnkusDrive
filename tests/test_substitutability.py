@@ -55,7 +55,7 @@ def _write_manifest(tmp, components, instances, checks, name="base"):
     man = {"name": name, "root": str(tmp / f"{name}.FCStd"),
            "components": components, "instances": instances, "checks": checks}
     mpath = tmp / "manifest.json"
-    mpath.write_text(json.dumps(man))
+    mpath.write_text(json.dumps(man), encoding="utf-8")
     return mpath
 
 

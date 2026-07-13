@@ -3303,7 +3303,7 @@ def _ckpt_key(model, toy, condition, trial):
 def _ckpt_load():
     done = {}
     if CKPT_PATH.exists():
-        for line in CKPT_PATH.read_text().splitlines():
+        for line in CKPT_PATH.read_text(encoding="utf-8").splitlines():
             try:
                 row = json.loads(line)
                 done[row["key"]] = row["result"]
@@ -3313,7 +3313,7 @@ def _ckpt_load():
 
 
 def _ckpt_append(key, result):
-    with CKPT_PATH.open("a") as f:
+    with CKPT_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps({"key": key, "result": result}) + "\n")
         f.flush()
         os.fsync(f.fileno())
@@ -3459,7 +3459,7 @@ def main():
     report = {"model": model, "trials": trials, "rows": rows,
               "total_cost_usd": round(total_cost, 4),
               "total_seconds": round(time.time() - t0, 1)}
-    (CACHE_DIR / "report_m2.json").write_text(json.dumps(report, indent=2))
+    (CACHE_DIR / "report_m2.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     CKPT_PATH.unlink(missing_ok=True)  # run completed; only crashes leave a checkpoint
     if resumed:
         print(f"  ({resumed} trial(s) resumed from checkpoint, not re-billed)")

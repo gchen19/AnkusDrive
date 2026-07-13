@@ -216,7 +216,7 @@ def test_real_slicer_brackets_the_analytic_estimate():
     side = 20.0
     with tempfile.TemporaryDirectory() as d:
         stl = f"{d}/cube.stl"
-        open(stl, "w").write(_cube_stl_text(side))
+        open(stl, "w", encoding="utf-8").write(_cube_stl_text(side))
         results = {}
         for frac in (1.0, 0.2):
             gcode = f"{d}/cube_{int(frac * 100)}.gcode"
@@ -225,7 +225,7 @@ def test_real_slicer_brackets_the_analytic_estimate():
             proc = subprocess.run(argv, capture_output=True, text=True)
             assert proc.returncode == 0, (proc.stdout + proc.stderr)[-600:]
             results[frac] = sl.parse_gcode_stats(
-                open(gcode, errors="replace").read(), density_g_cc=1.24)
+                open(gcode, encoding="utf-8", errors="replace").read(), density_g_cc=1.24)
     full, sparse = results[1.0], results[0.2]
     exact_cm3 = side ** 3 / 1000.0
     ratio = full["filament_cm3"] / exact_cm3

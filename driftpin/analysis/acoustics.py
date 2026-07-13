@@ -251,7 +251,7 @@ def write_helmholtz_duct_case(
     mesh_dir = os.path.join(case_dir, mesh_name)
     os.makedirs(mesh_dir, exist_ok=True)
     for name, content in helmholtz_duct_mesh_files(n_elements, length_m).items():
-        with open(os.path.join(mesh_dir, name), "w") as f:
+        with open(os.path.join(mesh_dir, name), "w", encoding="utf-8") as f:
             f.write(content)
     sif = f"""Header
   Mesh DB "." "{mesh_name}"
@@ -311,9 +311,9 @@ Boundary Condition 2
   Save Scalars = True
 End
 """
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     return {
         "case_dir": case_dir,
@@ -336,7 +336,7 @@ def parse_helmholtz_duct(case_dir: str, scalars: str = "duct.dat") -> dict | Non
         if not hits:
             return None
         path = hits[0]
-    rows = [ln.split() for ln in open(path) if ln.strip()]
+    rows = [ln.split() for ln in open(path, encoding="utf-8") if ln.strip()]
     if not rows:
         return None
     last = [float(v) for v in rows[-1]]
@@ -435,7 +435,7 @@ def write_helmholtz_cavity_case(
     mesh_dir = os.path.join(case_dir, mesh_name)
     os.makedirs(mesh_dir, exist_ok=True)
     for name, content in helmholtz_cavity_mesh_files(lx_m, ly_m, nx, ny).items():
-        with open(os.path.join(mesh_dir, name), "w") as f:
+        with open(os.path.join(mesh_dir, name), "w", encoding="utf-8") as f:
             f.write(content)
     sif = f"""Header
   Mesh DB "." "{mesh_name}"
@@ -491,9 +491,9 @@ Boundary Condition 2
   Save Scalars = True
 End
 """
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     return {
         "case_dir": case_dir,
@@ -518,7 +518,7 @@ def parse_helmholtz_cavity(case_dir: str, scalars: str = "cav.dat") -> list | No
             return None
         path = hits[0]
     rows = []
-    for ln in open(path):
+    for ln in open(path, encoding="utf-8"):
         parts = ln.split()
         if len(parts) >= 2:
             rows.append((float(parts[0]), float(parts[1])))

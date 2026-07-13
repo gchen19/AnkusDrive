@@ -46,7 +46,9 @@ if (-not (Test-Path $Py)) {
 }
 
 # Force UTF-8 so the tests' non-ASCII output (arrows, em-dashes) doesn't trip the
-# console's cp1252 default and abort a step with a UnicodeEncodeError.
+# console's cp1252 default and abort a step with a UnicodeEncodeError. This is now
+# purely for console OUTPUT: file reads/writes carry explicit encoding="utf-8" at
+# the call sites (issue #204), so a decode crash no longer depends on this being set.
 $env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONUTF8 = '1'
 

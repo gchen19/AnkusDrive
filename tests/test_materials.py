@@ -332,7 +332,7 @@ def _all_cards():
 
 
 def _seed_names():
-    seed = _json.loads(materials._SEED_PATH.read_text())["materials"]
+    seed = _json.loads(materials._SEED_PATH.read_text(encoding="utf-8"))["materials"]
     return [m["name"] for m in seed]
 
 
@@ -413,7 +413,7 @@ def test_fcmat_vendored_first_class():
     """FreeCAD's FCMat library is vendored into a shipped JSON, so the ~100+
     cards are present WITHOUT a runtime FreeCAD path."""
     assert materials._FCMAT_PATH.is_file(), "fcmat.json not shipped"
-    payload = _json.loads(materials._FCMAT_PATH.read_text())
+    payload = _json.loads(materials._FCMAT_PATH.read_text(encoding="utf-8"))
     assert payload["materials"], "fcmat.json has no cards"
     assert len(payload["materials"]) >= 100, len(payload["materials"])
     corpus = _all_cards()

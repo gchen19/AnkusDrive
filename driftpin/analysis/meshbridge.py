@@ -177,9 +177,9 @@ def write_body_transient_case(
         convection_tags=convection_tags, mesh_name=mesh_name, scalars=scalars,
         coordinate_scaling=coordinate_scaling)
     os.makedirs(case_dir, exist_ok=True)
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif_text)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
     return {
         "case_dir": case_dir,
@@ -203,7 +203,7 @@ def mesh_boundary_count(case_dir: str, mesh_name: str) -> int:
     rc=0. Returns 0 when the header is absent or unparseable (treated as a failure)."""
     path = os.path.join(case_dir, mesh_name, "mesh.header")
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             fields = f.readline().split()
         return int(fields[2]) if len(fields) >= 3 else 0
     except (OSError, ValueError, IndexError):
@@ -270,7 +270,7 @@ def parse_minmax_scalars(case_dir: str, scalars: str = "scalars.dat") -> dict | 
                  if os.path.isfile(m) and not m.endswith(".names")), None)
     if data is None:
         return None
-    rows = [r for r in open(data).read().splitlines() if r.strip()]
+    rows = [r for r in open(data, encoding="utf-8").read().splitlines() if r.strip()]
     if not rows:
         return None
     try:
@@ -552,7 +552,7 @@ def write_snappy_internal_case(case_dir: str, *, stl_text: str,
     for rel, text in files.items():
         path = os.path.join(case_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(text)
     return {"case_dir": case_dir, "stl": stl_filename, "cmds": snappy_mesh_cmds()}
 

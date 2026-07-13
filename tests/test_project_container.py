@@ -114,7 +114,7 @@ def test_reference_guard_clean_passes():
     reference-integrity guard."""
     with tempfile.TemporaryDirectory() as td:
         (Path(td) / "components").mkdir()
-        (Path(td) / "components" / "housing.FCStd").write_text("x")
+        (Path(td) / "components" / "housing.FCStd").write_text("x", encoding="utf-8")
         man = {"components": {"housing": {"file": "components/housing.FCStd"}},
                "instances": [{"component": "housing", "placement": [0, 0, 0]}]}
         _check("clean manifest -> no problems",

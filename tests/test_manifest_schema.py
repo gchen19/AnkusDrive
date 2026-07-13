@@ -54,7 +54,7 @@ def _valid_manifest(tmp):
 
 
 def _validate(tmp, man):
-    (tmp / "m.json").write_text(json.dumps(man))
+    (tmp / "m.json").write_text(json.dumps(man), encoding="utf-8")
     with Worker() as w:
         return w.call("validate_manifest", manifest=str(tmp / "m.json"))
 
@@ -121,7 +121,7 @@ def test_merge_rejects_invalid_manifest():
         tmp = Path(td)
         m = _valid_manifest(tmp)
         m["instances"].append({"component": "ghost", "placement": [0, 0, 0]})
-        (tmp / "m.json").write_text(json.dumps(m))
+        (tmp / "m.json").write_text(json.dumps(m), encoding="utf-8")
         raised = False
         try:
             with Worker() as w:
@@ -138,7 +138,7 @@ def test_lockfile_records_and_detects_contract_drift():
         tmp = Path(td)
         man = _valid_manifest(tmp)
         mp = tmp / "m.json"
-        mp.write_text(json.dumps(man))
+        mp.write_text(json.dumps(man), encoding="utf-8")
         with Worker() as w:
             w.call("merge_assembly", manifest=str(mp))
             lock = w.call("assembly_lock", manifest=str(mp))
@@ -149,7 +149,7 @@ def test_lockfile_records_and_detects_contract_drift():
         _check("unchanged -> ok", clean["ok"], True)
         # edit the CONTRACT only (move an instance) — component files untouched
         man["instances"][1]["placement"] = [50, 0, 0]
-        mp.write_text(json.dumps(man))
+        mp.write_text(json.dumps(man), encoding="utf-8")
         with Worker() as w:
             chk = w.call("assembly_lock_check", manifest=str(mp))
         _check("contract edit -> manifest_changed True", chk["manifest_changed"], True)
@@ -165,12 +165,12 @@ def test_stamping_schema_is_not_a_contract_change():
         man = _valid_manifest(tmp)
         del man["schema"]
         mp = tmp / "m.json"
-        mp.write_text(json.dumps(man))
+        mp.write_text(json.dumps(man), encoding="utf-8")
         with Worker() as w:
             w.call("merge_assembly", manifest=str(mp))
             w.call("assembly_lock", manifest=str(mp))
         man["schema"] = "driftpin.manifest/1"   # stamp it
-        mp.write_text(json.dumps(man))
+        mp.write_text(json.dumps(man), encoding="utf-8")
         with Worker() as w:
             chk = w.call("assembly_lock_check", manifest=str(mp))
         _check("stamping schema is not a contract change",

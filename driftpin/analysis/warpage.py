@@ -266,7 +266,7 @@ def write_warpage_case(
         ref_temp_c=ref_temp_c)
     os.makedirs(case_dir, exist_ok=True)
     inp = f"{job_name}.inp"
-    with open(os.path.join(case_dir, inp), "w") as f:
+    with open(os.path.join(case_dir, inp), "w", encoding="utf-8") as f:
         f.write(text)
     return {
         "case_dir": case_dir, "inp": inp, "job_name": job_name,
@@ -303,7 +303,7 @@ def parse_warp_frd(frd_path: str, *, axis_index: int = 2) -> dict | None:
     max_mag = 0.0
     warp_vec = None
     n = 0
-    with open(frd_path) as f:
+    with open(frd_path, encoding="utf-8") as f:
         for ln in f:
             if not in_disp:
                 # a -4 header naming the DISP block opens it

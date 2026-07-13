@@ -65,7 +65,7 @@ def test_export_step():
         r = dp("export", fcstd, "-o", step)
         assert r.returncode == 0, r.stderr
         assert os.path.isfile(step)
-        with open(step) as f:
+        with open(step, encoding="utf-8") as f:
             head = f.read(100)
         assert "ISO-10303" in head, f"not a STEP file: {head!r}"
 
@@ -88,7 +88,7 @@ def test_run_script():
             "b = doc.addObject('Part::Box', 'B')\n"
             "b.Length = 7; b.Width = 8; b.Height = 9\n"
             "doc.recompute()\n"
-            "__result__ = {'volume': b.Shape.Volume, 'types': [o.TypeId for o in doc.Objects]}\n"
+            "__result__ = {'volume': b.Shape.Volume, 'types': [o.TypeId for o in doc.Objects]}\n", encoding="utf-8"
         )
         r = dp("run", script)
         assert r.returncode == 0, r.stderr
@@ -101,7 +101,7 @@ def test_run_script_error_surfaces():
     """Broken script → nonzero exit, error on stderr with traceback."""
     with tempfile.TemporaryDirectory() as tmp:
         script = os.path.join(tmp, "bad.py")
-        Path(script).write_text("raise ValueError('toy problem')\n")
+        Path(script).write_text("raise ValueError('toy problem')\n", encoding="utf-8")
         r = dp("run", script)
         assert r.returncode == 2
         assert "ValueError" in r.stderr

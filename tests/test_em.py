@@ -247,7 +247,7 @@ def test_induction_heating_power_identity():
 def test_induction_heating_case_structure():
     d = tempfile.mkdtemp(prefix="indheat_gen_")
     built = em.write_induction_heating_case(d)
-    sif = open(os.path.join(d, built["sif"])).read()
+    sif = open(os.path.join(d, built["sif"]), encoding="utf-8").read()
     assert "MagnetoDynamicsCalcFields" in sif and "Joule Heat = Logical True" in sif
     assert "Transient" in sif and "Before Simulation" in sif
     assert built["dt_mean_exact_k"] > 0 and built["p_total_w_m"] > 0

@@ -58,7 +58,7 @@ def cmd_export(args):
 
 
 def cmd_run(args):
-    code = Path(args.script).read_text()
+    code = Path(args.script).read_text(encoding="utf-8")
     with Worker() as w:
         r = w.call("run_script", _timeout=args.timeout, code=code, path=args.script)
     if r.get("result") is not None:

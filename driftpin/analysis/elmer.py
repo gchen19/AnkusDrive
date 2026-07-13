@@ -180,16 +180,16 @@ def write_slab_transient_case(
     mesh_dir = os.path.join(case_dir, mesh_name)
     os.makedirs(mesh_dir, exist_ok=True)
     for fname, text in slab_mesh_files(n_elements, half_thickness_m).items():
-        with open(os.path.join(mesh_dir, fname), "w") as f:
+        with open(os.path.join(mesh_dir, fname), "w", encoding="utf-8") as f:
             f.write(text)
 
     sif_text = slab_transient_sif(
         k=k, rho=rho, cp=cp, h_conv=h_conv, t_initial_c=t_initial_c,
         t_ambient_c=t_ambient_c, dt=dt, n_steps=n_steps, mesh_name=mesh_name,
         scalars=scalars)
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif_text)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
 
     return {
@@ -219,7 +219,7 @@ def parse_slab_scalars(case_dir: str, scalars: str = "scalars.dat") -> dict | No
                  and not m.endswith(".names")), None)
     if data is None:
         return None
-    rows = [r for r in open(data).read().splitlines() if r.strip()]
+    rows = [r for r in open(data, encoding="utf-8").read().splitlines() if r.strip()]
     if not rows:
         return None
     cols = rows[-1].split()
@@ -437,15 +437,15 @@ def write_radiation_plates_case(
     os.makedirs(mesh_dir, exist_ok=True)
     files = radiation_plates_mesh_files(n_x, width_m, plate_thickness_m, gap_m, n_y)
     for fname, text in files.items():
-        with open(os.path.join(mesh_dir, fname), "w") as f:
+        with open(os.path.join(mesh_dir, fname), "w", encoding="utf-8") as f:
             f.write(text)
 
     sif_text = radiation_plates_sif(
         t1_c=t1_c, t2_c=t2_c, emissivity_1=emissivity_1, emissivity_2=emissivity_2,
         k_plate=k_plate, scalars=scalars).replace("{mesh_db}", mesh_name)
-    with open(os.path.join(case_dir, "case.sif"), "w") as f:
+    with open(os.path.join(case_dir, "case.sif"), "w", encoding="utf-8") as f:
         f.write(sif_text)
-    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w") as f:
+    with open(os.path.join(case_dir, "ELMERSOLVER_STARTINFO"), "w", encoding="utf-8") as f:
         f.write("case.sif\n")
 
     return {
@@ -475,7 +475,7 @@ def parse_radiation_flux(
                  and not m.endswith(".names")), None)
     if data is None:
         return None
-    rows = [r for r in open(data).read().splitlines() if r.strip()]
+    rows = [r for r in open(data, encoding="utf-8").read().splitlines() if r.strip()]
     if not rows:
         return None
     try:

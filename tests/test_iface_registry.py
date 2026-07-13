@@ -156,7 +156,7 @@ def _merge(tmp, components, instances, checks):
     man = {"name": "iface", "root": "iface.FCStd",
            "components": components, "instances": instances, "checks": checks}
     mpath = tmp / "manifest.json"
-    mpath.write_text(json.dumps(man))
+    mpath.write_text(json.dumps(man), encoding="utf-8")
     with Worker() as w:
         return w.call("merge_assembly", manifest=str(mpath))
 
@@ -256,7 +256,7 @@ def test_bus_two_parts_conform_to_one_entry():
         }
         low = ir.lower_manifest(man)              # implements -> conformance checks
         mp = tmp / "bus.manifest.json"
-        mp.write_text(json.dumps(low))
+        mp.write_text(json.dumps(low), encoding="utf-8")
         with Worker() as w:
             rep = w.call("merge_assembly", manifest=str(mp))
     confs = _conf_violations(rep)

@@ -114,7 +114,7 @@ def default_project(name, master=None, **overrides):
 def load_project(path):
     """Read a project.json into a dict. Raises on unreadable / non-JSON — a bad
     container must fail loudly, never resolve to silence (the house rule)."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -166,7 +166,7 @@ def validate_project(project, base_dir=None):
         if master and isinstance(mani, str):
             mpath = os.path.join(base_dir, mani)
             if os.path.exists(mpath):
-                with open(mpath) as f:
+                with open(mpath, encoding="utf-8") as f:
                     man = json.load(f)
                 if master not in (man.get("components") or {}):
                     problems.append(
@@ -308,7 +308,7 @@ def check_project_references(project, base_dir):
     mpath = os.path.join(base_dir, mani)
     if not os.path.exists(mpath):
         return problems + [f"manifest {mani!r} does not exist in the project"]
-    with open(mpath) as f:
+    with open(mpath, encoding="utf-8") as f:
         manifest = json.load(f)
     reg = None
     reg_rel = project.get("registry", _DEFAULTS["registry"])
@@ -354,7 +354,7 @@ def scaffold(base_dir, name, components=None, instances=None,
         _items.new_item(reg, item_id, files=(rec or {}).get("files"),
                         metadata=(rec or {}).get("metadata"))
     reg_path = os.path.join(base_dir, proj["registry"])
-    with open(reg_path, "w") as f:
+    with open(reg_path, "w", encoding="utf-8") as f:
         json.dump(reg, f, indent=2, sort_keys=True)
 
     # seed assembly manifest (the ICD merge_assembly consumes)
@@ -368,11 +368,11 @@ def scaffold(base_dir, name, components=None, instances=None,
     if shared_parameters:
         manifest["shared_parameters"] = shared_parameters
     mani_path = os.path.join(base_dir, proj["manifest"])
-    with open(mani_path, "w") as f:
+    with open(mani_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
 
     proj_path = os.path.join(base_dir, "project.json")
-    with open(proj_path, "w") as f:
+    with open(proj_path, "w", encoding="utf-8") as f:
         json.dump(proj, f, indent=2, sort_keys=True)
 
     return {

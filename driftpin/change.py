@@ -99,7 +99,7 @@ def load_lockfile(path):
     """Read a lockfile sidecar (the JSON `assembly_lock` wrote) into a dict.
     Raises on unreadable/!JSON — a missing graph must fail loudly, never resolve to
     an empty (and therefore silently impact-free) graph (the house rule)."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

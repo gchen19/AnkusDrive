@@ -129,12 +129,12 @@ def run_reliability_suite() -> dict:
                 img_path.write_bytes(png)
 
             if txt_path.exists():
-                response = txt_path.read_text()
+                response = txt_path.read_text(encoding="utf-8")
                 cached = True
             else:
                 t0 = time.time()
                 response = call_claude(png)
-                txt_path.write_text(response)
+                txt_path.write_text(response, encoding="utf-8")
                 cached = False
                 print(f"  [api] {spec.name} ({time.time() - t0:.1f}s)")
 
@@ -157,7 +157,7 @@ def run_reliability_suite() -> dict:
         "accuracy": accuracy,
         "results": results,
     }
-    (CACHE_DIR / "report.json").write_text(json.dumps(report, indent=2))
+    (CACHE_DIR / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
 

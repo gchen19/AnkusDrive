@@ -383,7 +383,7 @@ def _write_scalar_field(path, name, values):
     """Emit a minimal OpenFOAM nonuniform scalar field the parser reads."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     body = "\n".join(f"{v:.8g}" for v in values)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(f"FoamFile {{ version 2.0; format ascii; class volScalarField; "
                 f"object {name}; }}\n"
                 f"internalField   nonuniform List<scalar>\n{len(values)}\n(\n{body}\n);\n")
@@ -458,7 +458,7 @@ def test_openinjmoldsim_fill_pack_cools_and_densifies():
     def run(cmds, log):
         chain = " && ".join(" ".join(a) for a in cmds)
         script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
-        with open(os.path.join(d, log), "w") as f:
+        with open(os.path.join(d, log), "w", encoding="utf-8") as f:
             return subprocess.run(solvers.bash_argv(script), cwd=d, stdout=f,
                                   stderr=subprocess.STDOUT).returncode
 
@@ -473,7 +473,7 @@ def test_openinjmoldsim_fill_pack_cools_and_densifies():
         cmds += mf.time_extend_cmds(end_time_s=e, write_interval_s=w, max_deltaT_s=m)
         cmds += [[binp]]
     assert run(cmds, "log.pack") == 0
-    with open(os.path.join(d, "log.pack")) as f:
+    with open(os.path.join(d, "log.pack"), encoding="utf-8") as f:
         assert "nan" not in f.read().lower(), "pack diverged (nan in log)"
 
     ppar = mf.parse_pack(d, fill_rho_mean=fstats["rho_mean"],
@@ -577,7 +577,7 @@ def test_openinjmoldsim_asymmetric_cooling_warps():
     def run(cmds, log):
         chain = " && ".join(" ".join(a) for a in cmds)
         script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
-        with open(os.path.join(d, log), "w") as f:
+        with open(os.path.join(d, log), "w", encoding="utf-8") as f:
             return subprocess.run(solvers.bash_argv(script), cwd=d, stdout=f,
                                   stderr=subprocess.STDOUT).returncode
 
@@ -594,7 +594,7 @@ def test_openinjmoldsim_asymmetric_cooling_warps():
         cmds += mf.time_extend_cmds(end_time_s=e, write_interval_s=w, max_deltaT_s=m)
         cmds += [[binp]]
     assert run(cmds, "log.pack") == 0
-    with open(os.path.join(d, "log.pack")) as f:
+    with open(os.path.join(d, "log.pack"), encoding="utf-8") as f:
         assert "nan" not in f.read().lower(), "asymmetric pack diverged (nan)"
 
     cdt = mf.cooling_field_dT_through_k(d, nx=60, ny=8)

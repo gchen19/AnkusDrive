@@ -58,9 +58,9 @@ def _load() -> dict:
     global _CACHE
     if _CACHE is None:
         _CACHE = {
-            "threads": json.loads(_THREADS_PATH.read_text()),
-            "bearings": json.loads(_BEARINGS_PATH.read_text()),
-            "stock": json.loads(_STOCK_PATH.read_text()),
+            "threads": json.loads(_THREADS_PATH.read_text(encoding="utf-8")),
+            "bearings": json.loads(_BEARINGS_PATH.read_text(encoding="utf-8")),
+            "stock": json.loads(_STOCK_PATH.read_text(encoding="utf-8")),
         }
     return _CACHE
 

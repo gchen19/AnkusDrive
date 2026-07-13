@@ -144,7 +144,7 @@ def test_channel_writer_guards_cell_peclet():
 
 def test_parse_cht_scalars_reads_columns():
     with tempfile.TemporaryDirectory() as d:
-        open(os.path.join(d, "cht.dat"), "w").write(
+        open(os.path.join(d, "cht.dat"), "w", encoding="utf-8").write(
             "6.8e1 8.8e1 6.8e1\n6.806768766018E+001 8.798331272069E+001 6.794480627737E+001\n")
         r = cht.parse_cht_scalars(d)
         assert abs(r["t_outlet_mean_c"] - 68.06768766018) < 1e-9
@@ -203,7 +203,7 @@ def test_conjugate_channel_zero_flux_negative():
 def test_graetz_case_structure_and_policing():
     d = tempfile.mkdtemp(prefix="graetz_gen_")
     built = cht.write_graetz_channel_case(d)
-    sif = open(os.path.join(d, built["sif"])).read()
+    sif = open(os.path.join(d, built["sif"]), encoding="utf-8").read()
     assert "FlowSolve" in sif and "Convection = Computed" in sif, sif[:200]
     assert "Viscosity" in sif and "ResultOutputSolve" in sif
     assert 4 <= built["reynolds"] <= 400 and built["pe_cell"] <= 25, built

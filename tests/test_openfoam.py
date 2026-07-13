@@ -74,7 +74,7 @@ def test_parse_pressure_drop_reads_field():
     with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, "1000"))
         # a linear pressure profile: mean = max/2, so 2*mean == max == inlet drop
-        with open(os.path.join(d, "1000", "p"), "w") as f:
+        with open(os.path.join(d, "1000", "p"), "w", encoding="utf-8") as f:
             f.write("internalField   nonuniform List<scalar>\n4\n(\n0.8\n0.6\n0.4\n0.2\n)\n;\n")
         got = openfoam.parse_pressure_drop(d, rho_kg_m3=1000.0)
         assert abs(got["dp_inlet_pa"] - 800.0) < 1e-6        # 1000 * max(0.8)
