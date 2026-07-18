@@ -142,6 +142,36 @@ def test_module_probe_uses_find_spec():
     # not guaranteed to carry driftpin's wheel deps (numpy etc.)
     assert solvers._module_available("json") is True
     assert solvers._module_available("nope_not_a_real_module_xyz") is False
+
+
+def test_doctor_ready_via_names_the_resolved_package():
+    """doctor's "ready via …" line must name the package that actually resolved, not
+    the registry key. A wheel family can be satisfied by an alternative module (the
+    "topopt" entry lists ("topopt", "solidspy")); if only solidspy is installed,
+    reporting "ready via topopt" while topopt is absent is exactly the stale hint the
+    doctor exists to avoid. Regression guard for the honest-label fix (issue #189)."""
+    from driftpin import doctor
+
+    _mod, _bin, _unwired = (
+        solvers._module_available, solvers._binary_path, solvers._unwired_found)
+    solvers._unwired_found = lambda name, spec: None
+    solvers._binary_path = lambda name, spec: None          # no binaries resolve
+    # only solidspy present; topopt (the entry's own name) is absent
+    solvers._module_available = lambda m: m == "solidspy"
+    try:
+        caps = solvers.capabilities()
+        topo = caps["families"]["topology"]
+        assert topo["any_available"] is True, topo
+        # find_solver carried the resolved module through, and it is NOT the key name
+        assert caps["solvers"]["topopt"]["module"] == "solidspy", caps["solvers"]["topopt"]
+        line = next(l for l in doctor._fmt_solvers(caps) if l.strip().startswith(
+            f"{doctor._MARK['ok']}") and "topology" in l)
+        assert "solidspy" in line, line
+        assert "topopt" not in line, line
+    finally:
+        solvers._module_available = _mod
+        solvers._binary_path = _bin
+        solvers._unwired_found = _unwired
     # a dotted name whose parent is missing must be absent, not an exception
     assert solvers._module_available("nope_xyz.sub") is False
 
