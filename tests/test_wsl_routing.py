@@ -239,6 +239,54 @@ def test_clean_wsl_text_strips_nuls():
     assert solvers.clean_wsl_text("") == ""
 
 
+# --- macOS: Multipass is the OpenFOAM substrate (issue #193) -------------------
+
+def test_bash_argv_macos_multipass():
+    """macOS launches into the Multipass VM; `multipass exec` starts in the VM home,
+    so the case dir is cd'd into inside the script (host scratch mounted at the same
+    path). Instance name defaults to "openfoam" and honors the env override; a case
+    dir with a space is shell-quoted."""
+    with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Darwin"))
+        assert solvers.bash_argv("blockMesh", "/private/tmp/case") == [
+            "multipass", "exec", "openfoam", "--",
+            "bash", "-c", "cd /private/tmp/case && blockMesh"]
+        # no case dir -> no cd wrapper (the script runs in the VM home)
+        assert solvers.bash_argv("echo hi") == [
+            "multipass", "exec", "openfoam", "--", "bash", "-c", "echo hi"]
+        # spaced case dir is quoted
+        argv = solvers.bash_argv("blockMesh", "/tmp/my case")
+        assert argv[-1] == "cd '/tmp/my case' && blockMesh", argv
+        # instance name is overridable (openfoam.org's `multipass launch -n <name>`)
+        os.environ["DRIFTPIN_OPENFOAM_INSTANCE"] = "foam-dev"
+        try:
+            assert solvers.foam_instance() == "foam-dev"
+            assert solvers.bash_argv("x", "/c")[2] == "foam-dev"
+        finally:
+            os.environ.pop("DRIFTPIN_OPENFOAM_INSTANCE", None)
+
+
+def test_macos_openfoam_unwired_when_multipass_present():
+    """macOS has no host-visible OpenFOAM bashrc (it's inside the VM), so the honest
+    signal is the `multipass` CLI on PATH: openfoam reports `unwired` with the
+    provisioning hint — never ready (the VM's contents can't be probed without
+    executing it). With multipass absent it stays plain absent."""
+    with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Darwin"))
+        p.set(solvers, "_binary_path", lambda name, spec: None)   # no host binary
+        p.set(solvers, "_standard_bashrc", lambda cfg: None)      # no host bashrc
+        p.set(solvers.shutil, "which",
+              lambda n: "/opt/homebrew/bin/multipass" if n == "multipass" else None)
+        info = solvers.find_solver("openfoam")
+        assert info["available"] is False and info["status"] == "unwired", info
+        assert info["found_at"] == "multipass", info
+        assert "multipass shell" in info["wire_hint"], info
+
+        p.set(solvers.shutil, "which", lambda n: None)            # multipass absent
+        info = solvers.find_solver("openfoam")
+        assert info["status"] == "absent", info
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

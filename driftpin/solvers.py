@@ -132,6 +132,15 @@ _SOLVERS: dict = {
             # a \\wsl$ hit means "wired" once the WSL launcher is used (issue #193)
             "hint_wsl": "set DRIFTPIN_OPENFOAM_BASHRC={found} "
                         "(runs via WSL distro '{distro}')",
+            # macOS: OpenFOAM lives inside the Multipass VM (issue #193), so there is
+            # no host-visible bashrc to glob. The `multipass` CLI on PATH is the honest
+            # side-effect-free signal that the substrate exists; the solver inside the
+            # VM can't be confirmed without executing it, so this is reported as
+            # unwired (substrate present, provisioning unverified), never as ready.
+            "darwin_multipass": (
+                "provision OpenFOAM in the Multipass VM — "
+                "`multipass shell {inst}` then `bash scripts/install-solvers.sh cfd`; "
+                "set DRIFTPIN_OPENFOAM_INSTANCE={inst} if the instance is named otherwise"),
         },
     },
     "su2": {
@@ -537,17 +546,38 @@ def _posix_glob(patterns) -> list:
     return sorted(set(out))
 
 
-def bash_argv(script: str) -> list:
-    """The argv that runs ``script`` under bash, with the caller's ``cwd`` as the
-    case dir. POSIX: ``["bash", "-c", script]``. Windows:
-    ``["wsl", "-d", <distro>, "-e", "bash", "-c", script]`` — wsl.exe auto-maps a
-    Windows ``cwd`` to ``/mnt/<drive>/...``, so callers pass their Windows case_dir
-    unchanged, and ``-d`` pins the SAME distro discovery probed via \\\\wsl$ so
-    probe and launch can never disagree (issue #193). The bash-launch twin of
-    :func:`run_argvs` (the no-shell native path SU2 uses)."""
-    if platform.system() == "Windows":
+def foam_instance() -> str:
+    """The Multipass instance name that hosts OpenFOAM on macOS (issue #193).
+    ``DRIFTPIN_OPENFOAM_INSTANCE`` (env -> config.toml) overrides; the default
+    ``openfoam`` matches openfoam.org's documented ``multipass launch -n openfoam``."""
+    return _config.get("DRIFTPIN_OPENFOAM_INSTANCE") or "openfoam"
+
+
+def bash_argv(script: str, case_dir: str | None = None) -> list:
+    """The argv that runs ``script`` under bash in the caller's ``cwd`` (the case
+    dir). One per-OS substrate, the same bash script inside (issue #193):
+
+      * **POSIX/Linux** — ``["bash", "-c", script]``; the caller's ``cwd`` is used.
+      * **Windows** — ``["wsl", "-d", <distro>, "-e", "bash", "-c", script]``.
+        wsl.exe auto-maps a Windows ``cwd`` to ``/mnt/<drive>/...`` so callers pass
+        their Windows case_dir unchanged, and ``-d`` pins the SAME distro discovery
+        probed via \\\\wsl$ so probe and launch can never disagree.
+      * **macOS** — ``["multipass", "exec", <inst>, "--", "bash", "-c", "cd <case>
+        && " + script]``. OpenFOAM on macOS runs in a Multipass VM (openfoam.org's
+        official, arm64-native substrate); ``multipass exec`` starts in the VM home,
+        so the case dir is ``cd``'d into *inside* the script — the host scratch is
+        expected mounted at the same absolute path in the VM (``multipass mount``),
+        so the path lines up. The host ``cwd`` is then irrelevant.
+
+    The bash-launch twin of :func:`run_argvs` (the no-shell native path SU2 uses)."""
+    system = platform.system()
+    if system == "Windows":
         d = wsl_distro()
         return ["wsl", *(["-d", d] if d else []), "-e", "bash", "-c", script]
+    if system == "Darwin":
+        import shlex
+        body = f"cd {shlex.quote(case_dir)} && {script}" if case_dir else script
+        return ["multipass", "exec", foam_instance(), "--", "bash", "-c", body]
     return ["bash", "-c", script]
 
 
@@ -682,6 +712,12 @@ def _unwired_found(name: str, spec: dict):
             tmpl = cfg.get("hint_wsl") if wsl_hit else None
             return found, (tmpl or cfg["hint"]).format(found=found,
                                                        distro=wsl_distro())
+        # macOS: no host-visible bashrc — OpenFOAM lives in the Multipass VM (#193).
+        # `multipass` on PATH is the read-only signal the substrate is present (the
+        # solver inside the VM can't be confirmed without executing it).
+        if platform.system() == "Darwin" and cfg.get("darwin_multipass"):
+            if shutil.which("multipass"):
+                return "multipass", cfg["darwin_multipass"].format(inst=foam_instance())
     elif probe == "fsi_adapter":
         found = openfoam_adapter_lib_dir() or precice_lib_dir()
         if found:
