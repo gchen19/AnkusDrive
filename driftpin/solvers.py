@@ -581,6 +581,16 @@ def bash_argv(script: str, case_dir: str | None = None) -> list:
     return ["bash", "-c", script]
 
 
+def runs_in_substrate() -> bool:
+    """True when :func:`bash_argv` wraps the script in a separate *relay* process —
+    ``wsl.exe`` on Windows, ``multipass`` on macOS (issue #193) — rather than
+    launching bash directly. Behind a relay, terminating the launched Popen only
+    reaches the relay, not the solver inside the distro/VM, so callers that must
+    actually stop the solver (FSI's ``_stop_participant``) sweep it by pidfile
+    instead. False on Linux, where the Popen IS the solver's process tree."""
+    return platform.system() in ("Windows", "Darwin")
+
+
 def clean_wsl_text(s: str) -> str:
     """Strip the NULs wsl.exe's own UTF-16LE messages leave in text-mode capture
     (e.g. a missing-distro error) so log tails stay readable. Solver output is
@@ -889,15 +899,30 @@ def openfoam_bashrc() -> str | None:
 # install path), then a small set of build-default locations, mirroring the
 # openfoam_bashrc() resolution style. The FSI handler/runner consumes these.
 
+def _fsi_override(value: str, *, is_dir: bool) -> str | None:
+    """Validate a DRIFTPIN_* FSI-stack path override across substrates (issue #193).
+    Windows normalizes a \\wsl$ override and checks it through the mirror; Linux
+    checks the host directly. macOS trusts an absolute POSIX override as an in-VM
+    path when ``multipass`` is present — the Multipass VM filesystem is opaque from
+    the host, so the override (which the provisioning step sets to a VM path) can't
+    be stat'd from macOS. Returns the normalized path, or None if it doesn't check
+    out."""
+    p = wsl_posix(value)                     # \\wsl$ overrides normalize to POSIX
+    if _posix_isdir(p) if is_dir else _posix_isfile(p):
+        return p
+    if (platform.system() == "Darwin" and p.startswith("/")
+            and shutil.which("multipass")):
+        return p                             # in-VM path; host can't confirm it
+    return None
+
+
 def ccx_precice_bin() -> str | None:
     """The preCICE-enabled CalculiX solver (``ccx_preCICE``) — the solid
     participant. DRIFTPIN_CCX_PRECICE / DRIFTPIN_PRECICE_PATH env -> the registry
     binary resolution (~/calculix-adapter/bin etc.). Returns the path or None."""
-    env = _config.get("DRIFTPIN_CCX_PRECICE")
-    if env:
-        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
-        if _posix_isfile(env):
-            return env
+    if env := _config.get("DRIFTPIN_CCX_PRECICE"):
+        if r := _fsi_override(env, is_dir=False):
+            return r
     return find_solver("precice").get("path")
 
 
@@ -905,11 +930,9 @@ def precice_lib_dir() -> str | None:
     """Directory holding ``libprecice.so`` (the serial, MPI-off build that the
     adapters link). DRIFTPIN_PRECICE_LIB env -> the conda-forge env lib ->
     the documented source-build prefix. Returns the dir or None."""
-    env = _config.get("DRIFTPIN_PRECICE_LIB")
-    if env:
-        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
-        if _posix_isdir(env):
-            return env
+    if env := _config.get("DRIFTPIN_PRECICE_LIB"):
+        if r := _fsi_override(env, is_dir=True):
+            return r
     for base in ("~/precice-serial/lib",
                  "~/miniforge3/envs/precice/lib",
                  "~/miniconda3/envs/precice/lib",
@@ -924,11 +947,9 @@ def openfoam_adapter_lib_dir() -> str | None:
     """Directory holding ``libpreciceAdapterFunctionObject.so`` (the OpenFOAM
     function-object adapter the fluid participant loads). DRIFTPIN_OPENFOAM_ADAPTER_LIB
     env -> the wmake user-lib build prefix. Returns the dir or None."""
-    env = _config.get("DRIFTPIN_OPENFOAM_ADAPTER_LIB")
-    if env:
-        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
-        if _posix_isdir(env):
-            return env
+    if env := _config.get("DRIFTPIN_OPENFOAM_ADAPTER_LIB"):
+        if r := _fsi_override(env, is_dir=True):
+            return r
     hits = _posix_glob(
         ("~/OpenFOAM/*/platforms/*/lib/libpreciceAdapterFunctionObject.so",))
     if hits:
@@ -953,11 +974,9 @@ def fsi_openfoam_bashrc() -> str | None:
     Resolution: ``DRIFTPIN_FSI_OPENFOAM_BASHRC`` env -> the install whose version
     matches the adapter lib path (``~/OpenFOAM/<user>-v2512/...`` -> the
     ``…openfoam2512…`` / ``…-v2512…`` bashrc) -> the general ``openfoam_bashrc()``."""
-    env = _config.get("DRIFTPIN_FSI_OPENFOAM_BASHRC")
-    if env:
-        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
-        if _posix_isfile(env):
-            return env
+    if env := _config.get("DRIFTPIN_FSI_OPENFOAM_BASHRC"):
+        if r := _fsi_override(env, is_dir=False):
+            return r
     ofa = openfoam_adapter_lib_dir()
     if ofa:
         import re as _re
