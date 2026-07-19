@@ -14132,7 +14132,9 @@ def _run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False):
     if unset_sigfpe:
         script += "unset FOAM_SIGFPE\n"
     script += chain
-    proc = subprocess.run(solvers.bash_argv(script), cwd=case_dir,
+    # case_dir lets the macOS branch cd into the VM-mounted case (issue #193); Linux/
+    # Windows ignore it and use the subprocess cwd (WSL auto-maps it to /mnt/<drive>).
+    proc = subprocess.run(solvers.bash_argv(script, case_dir), cwd=case_dir,
                           capture_output=True, text=True)
     tail = solvers.clean_wsl_text((proc.stdout or "") + (proc.stderr or ""))
     return proc.returncode, tail[-2000:]
