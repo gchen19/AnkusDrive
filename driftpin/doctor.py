@@ -145,6 +145,18 @@ def _fmt_freecad(fc: dict) -> list[str]:
     return lines
 
 
+def _resolved_label(state: dict) -> str:
+    """How a ready solver should be named in the ``ready via …`` line. For a wheel
+    whose resolved module differs from the registry key (topology's "topopt" entry
+    satisfied by solidspy), name the package that actually resolved; otherwise the
+    entry name (binaries keep their key, e.g. su2/calculix)."""
+    name = state["name"]
+    module = state.get("module")
+    if module and module != name:
+        return module
+    return name
+
+
 def _fmt_solvers(caps: dict) -> list[str]:
     lines = []
     families = caps["families"]
@@ -152,7 +164,13 @@ def _fmt_solvers(caps: dict) -> list[str]:
         info = families[fam]
         solver_states = {s: caps["solvers"][s] for s in info["solvers"]}
         if info["any_available"]:
-            ready = ", ".join(sorted(info["available"]))
+            # A wheel family can be satisfied by a package whose name differs from
+            # the registry key (e.g. topology's "topopt" entry resolves via solidspy
+            # when topopt itself is absent). Report the package that actually
+            # resolved, not the entry name — "ready via topopt" while topopt is not
+            # installed is exactly the stale hint this doctor exists to avoid.
+            ready = ", ".join(
+                _resolved_label(solver_states[s]) for s in sorted(info["available"]))
             # in-distro resolutions (issue #193) launch through `wsl -e bash`
             wsl = any(solver_states[s].get("via") == "wsl"
                       for s in info["available"])
