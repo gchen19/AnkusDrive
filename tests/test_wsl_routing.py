@@ -287,6 +287,96 @@ def test_macos_openfoam_unwired_when_multipass_present():
         assert info["status"] == "absent", info
 
 
+def test_runs_in_substrate_by_platform():
+    """A relay wraps the launched process on Windows (wsl.exe) and macOS (multipass)
+    but not Linux — the signal FSI's cleanup uses to decide whether to sweep the
+    in-substrate solver by pidfile (issue #193 slice 2)."""
+    for sysname, expect in (("Linux", False), ("Windows", True), ("Darwin", True)):
+        with _patch() as p:
+            p.set(solvers, "platform", _fake_platform(sysname))
+            assert solvers.runs_in_substrate() is expect, sysname
+
+
+def test_fsi_override_trusts_in_vm_path_on_macos():
+    """The FSI stack lives inside the Multipass VM on macOS; its DRIFTPIN_* overrides
+    name in-VM POSIX paths the host can't stat. `_fsi_override` trusts an absolute
+    override when multipass is present, rejects it otherwise, and on Linux the host
+    check governs (issue #193 slice 2)."""
+    with _patch() as p:
+        p.set(solvers.os.path, "isfile", lambda x: False)         # nothing on the host
+        p.set(solvers.os.path, "isdir", lambda x: False)
+        p.set(solvers, "platform", _fake_platform("Darwin"))
+        p.set(solvers.shutil, "which", lambda n: "/x/mp" if n == "multipass" else None)
+        assert solvers._fsi_override("/home/ubuntu/x/ccx_preCICE", is_dir=False) \
+            == "/home/ubuntu/x/ccx_preCICE"
+        assert solvers._fsi_override("/home/ubuntu/lib", is_dir=True) == "/home/ubuntu/lib"
+        p.set(solvers.shutil, "which", lambda n: None)            # multipass absent
+        assert solvers._fsi_override("/home/ubuntu/x/ccx_preCICE", is_dir=False) is None
+        p.set(solvers, "platform", _fake_platform("Linux"))       # host check governs
+        assert solvers._fsi_override("/nope", is_dir=False) is None
+
+
+def test_fsi_routes_participants_through_multipass_on_macos():
+    """The FSI runner threads each participant's workdir into bash_argv so the macOS
+    branch cd's into the (VM-mounted) case subdir, and _stop_participant's pidfile
+    sweep fires on macOS too (multipass is a relay, like WSL). Issue #193 slice 2."""
+    from driftpin.analysis import fsi_case
+
+    calls = []                       # (script, case_dir) for every bash_argv call
+
+    class _FakePopen:
+        def __init__(self, *a, **k):
+            pass
+
+        def poll(self):
+            return 0                 # already exited -> the wait loop breaks at once
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    class _FakeRun:
+        returncode, stdout, stderr = 0, "", ""
+
+    with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Darwin"))
+        p.set(solvers.shutil, "which", lambda n: "/x/mp" if n == "multipass" else None)
+        p.set(solvers, "fsi_openfoam_bashrc", lambda: "/home/ubuntu/OF/etc/bashrc")
+        p.set(solvers, "ccx_precice_bin", lambda: "/home/ubuntu/adapter/bin/ccx_preCICE")
+        p.set(solvers, "precice_lib_dir", lambda: "/home/ubuntu/precice/lib")
+        p.set(solvers, "openfoam_adapter_lib_dir", lambda: "/home/ubuntu/OF/lib")
+
+        def rec_bash_argv(script, case_dir=None):
+            calls.append((script, case_dir))
+            return ["multipass", "exec", "openfoam", "--", "bash", "-c", script]
+        p.set(solvers, "bash_argv", rec_bash_argv)
+        p.set(fsi_case.subprocess, "run", lambda *a, **k: _FakeRun())
+        p.set(fsi_case.subprocess, "Popen", _FakePopen)
+        p.set(fsi_case.time, "sleep", lambda *_: None)
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as case:
+            fluid = os.path.join(case, "fluid-openfoam")
+            solid = os.path.join(case, "solid-calculix")
+            os.makedirs(fluid)
+            os.makedirs(solid)
+            fsi_case.run_coupled_fsi(case, timeout_s=5)
+
+        launch = [(s, d) for s, d in calls if "kill -TERM" not in s]
+        assert any("blockMesh" in s and d == fluid for s, d in launch), launch
+        assert any("ccx_preCICE" in s and d == solid for s, d in launch), launch
+        assert any("pimpleFoam" in s and d == fluid for s, d in launch), launch
+        # the pidfile sweep fires on macOS (skipped pre-slice-2) with the workdir
+        sweeps = [(s, d) for s, d in calls if "kill -TERM" in s]
+        assert len(sweeps) == 2, sweeps
+        assert {d for _, d in sweeps} == {fluid, solid}, sweeps
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

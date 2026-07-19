@@ -128,34 +128,38 @@ def _participant_script(setup_lines: list, exec_line: str) -> str:
     """A participant launch script: record the pid, then ``exec`` the solver so
     the recorded pid IS the solver's (bash replaces itself). All environment
     (LD_LIBRARY_PATH, FOAM_USER_LIBBIN, ...) crosses as export lines in the
-    script text — on Windows the script runs inside the WSL distro
-    (``solvers.bash_argv``) where an ``env=`` on the wsl.exe Popen would never
-    arrive (issue #193); on Linux the exports are equivalent to the old ``env=``
-    dict. The pidfile is what ``_stop_participant`` kills on Windows, where
-    terminating the Popen only kills the wsl.exe relay, not the in-distro
-    solver."""
+    script text — under a substrate relay (WSL on Windows, Multipass on macOS,
+    ``solvers.bash_argv``, issue #193) an ``env=`` on the relay Popen would never
+    reach the in-substrate solver; on Linux the exports are equivalent to the old
+    ``env=`` dict. The pidfile is what ``_stop_participant`` kills behind a relay,
+    where terminating the Popen only reaches the relay, not the solver inside it."""
     lines = ["echo $$ > .driftpin-participant.pid"] + [l for l in setup_lines if l]
     return "\n".join(lines) + f"\nexec {exec_line}"
 
 
 def _stop_participant(proc, workdir: str) -> None:
-    """Stop a participant: terminate/kill the Popen, then on Windows sweep the
-    in-distro process by the pidfile its own launch script wrote (case-scoped,
-    so concurrent FSI runs never kill each other). Best-effort — a participant
-    that already exited leaves a stale pid that kill quietly misses."""
+    """Stop a participant: terminate/kill the Popen, then — when the solver ran
+    behind a substrate relay (WSL on Windows, Multipass on macOS, issue #193) —
+    sweep the in-substrate process by the pidfile its own launch script wrote
+    (case-scoped, so concurrent FSI runs never kill each other). Killing the Popen
+    only reaches the relay (wsl.exe / multipass), not the solver inside it, so the
+    pidfile kill is what actually stops it. Best-effort — a participant that already
+    exited leaves a stale pid that kill quietly misses."""
     if proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
-    if os.name == "nt":
+    if solvers.runs_in_substrate():
         try:
+            # the kill runs in the SAME substrate (workdir → the VM-mounted case dir
+            # on macOS) so it reads the pidfile and kills the solver by its in-VM pid.
             subprocess.run(solvers.bash_argv(
                 "kill -TERM $(cat .driftpin-participant.pid 2>/dev/null) "
                 "2>/dev/null; sleep 2; "
                 "kill -KILL $(cat .driftpin-participant.pid 2>/dev/null) "
-                "2>/dev/null; true"),
+                "2>/dev/null; true", workdir),
                 cwd=workdir, capture_output=True, timeout=30)
         except Exception:
             pass
@@ -190,9 +194,11 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
         if os.path.isdir(p):
             shutil.rmtree(p, ignore_errors=True)
 
-    # 1) blockMesh (fluid mesh) — needs the OpenFOAM env
+    # 1) blockMesh (fluid mesh) — needs the OpenFOAM env. The workdir is passed to
+    # bash_argv so the macOS Multipass branch cd's into the (VM-mounted) case dir
+    # (issue #193); Linux/Windows ignore it and use the subprocess cwd.
     bm = subprocess.run(
-        solvers.bash_argv(f"source '{of_bashrc}' >/dev/null 2>&1 && blockMesh"),
+        solvers.bash_argv(f"source '{of_bashrc}' >/dev/null 2>&1 && blockMesh", fluid),
         cwd=fluid, capture_output=True, text=True, timeout=timeout_s)
     if bm.returncode != 0:
         return {"ok": False, "reason": "blockMesh failed",
@@ -222,12 +228,12 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
 
     with open(solid_log, "w", encoding="utf-8") as sl:
         solid_proc = subprocess.Popen(
-            solvers.bash_argv(solid_script),
+            solvers.bash_argv(solid_script, solid),
             cwd=solid, stdout=sl, stderr=subprocess.STDOUT)
     time.sleep(2.0)  # let the solid participant bind the preCICE socket first
     with open(fluid_log, "w", encoding="utf-8") as fl:
         fluid_proc = subprocess.Popen(
-            solvers.bash_argv(fluid_script),
+            solvers.bash_argv(fluid_script, fluid),
             cwd=fluid, stdout=fl, stderr=subprocess.STDOUT)
 
     deadline = time.time() + timeout_s
