@@ -115,11 +115,64 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ dri
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD (`pocl` on Apple Silicon); dedicated venv (`DRIFTPIN_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ source build with brew deps; the `em_gpl` recipe is Linux-only today |
 | DEM (granular) | YADE (GPL) | ⚠️ no macOS build path in this repo — Linux box or container |
-| CFD/FSI/molding | OpenFOAM + preCICE | ⚠️ Linux shell + linker glue (`bash`, `LD_LIBRARY_PATH`, `.so`) — **Docker** ([#193](https://github.com/gchen19/DriftPin/issues/193)) |
+| CFD/FSI/molding | OpenFOAM + preCICE | ✅ **Multipass** (arm64-native Ubuntu VM) — DriftPin runs the apps via `multipass exec`; live FSI coupled solve verified ([#193](https://github.com/gchen19/DriftPin/issues/193), see below) |
 
 Every absent solver **degrades cleanly** — the family returns `{ok: false, reason, install}`
 rather than crashing — so an incomplete solver set never breaks the server; those tools
 just report "not available" with the fix. `driftpin doctor` shows the current state.
+
+## OpenFOAM-backed families via Multipass (CFD / FSI / molding)
+
+OpenFOAM has no native macOS build; [openfoam.org](https://openfoam.org/version/macos/)
+ships it inside a **Canonical Multipass** VM (arm64-native on Apple Silicon — no
+emulation). DriftPin routes the OpenFOAM apps through that VM: on macOS
+`solvers.bash_argv` launches `multipass exec <instance> -- bash -c "cd <case> && …"`
+(issue [#193](https://github.com/gchen19/DriftPin/issues/193)), so the same case the
+host builds is meshed/solved inside the VM. **CFD alone needs none of this** — it
+degrades to SU2 (native, under Rosetta). Multipass is only for the OpenFOAM-*exclusive*
+families: injection-molding fill and the preCICE **FSI** coupling.
+
+**1. Install Multipass and launch the VM** (the instance name must be `openfoam`, or set
+`DRIFTPIN_OPENFOAM_INSTANCE`):
+
+```bash
+brew install --cask multipass
+multipass launch -c 8 -m 8G -d 80G -n openfoam 24.04
+```
+
+**2. Provision the FSI stack inside the VM.** `scripts/install-solvers.sh fsi` *prints*
+the exact validated recipe; run those steps inside `multipass shell openfoam`. It adds the
+ESI OpenFOAM apt repo (`dl.openfoam.com` — publishes **arm64** debs), installs
+`openfoam2512-dev`, then source-builds serial libprecice, the CalculiX-preCICE adapter
+(`ccx_preCICE`), and the OpenFOAM-preCICE adapter. Two gotchas on a minimal cloud image:
+the recipe's apt list includes **`bzip2`** (absent by default; `tar xjf` needs it), and do
+**not** run the build under `set -u` — OpenFOAM's `etc/bashrc` references unbound vars.
+
+**3. Share the case dir at a matching host↔VM path**, so `cd <case>` inside the VM resolves
+(the host scratch must be mounted at the *same* absolute path):
+
+```bash
+mkdir -p ~/fsi-run
+multipass mount ~/fsi-run openfoam:$HOME/fsi-run      # same path both sides
+```
+
+**4. Point DriftPin at the in-VM stack** (absolute in-VM paths; on macOS these are trusted
+as VM paths when `multipass` is present — the VM filesystem is opaque from the host):
+
+```bash
+export TMPDIR=$HOME/fsi-run                            # so test case dirs land in the mount
+export DRIFTPIN_CCX_PRECICE=/home/ubuntu/calculix-adapter/bin/ccx_preCICE
+export DRIFTPIN_PRECICE_LIB=/home/ubuntu/precice-serial/lib
+export DRIFTPIN_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
+export DRIFTPIN_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+```
+
+**Verify** — the coupled preCICE OpenFOAM↔CalculiX solve, live on Apple Silicon:
+
+```bash
+RUN_HEAVY_SOLVES=1 python3 tests/test_fsi.py
+# PASS test_fsi_coupled_plate_deflects — 4 windows converged, tip 0 → 3.47 mm (monotone into the flow)
+```
 
 ### The renderer scripts
 

@@ -278,7 +278,8 @@ build_fsi() {
   cat <<EOF
   # ---- 0) apt deps (sudo) ----------------------------------------------------
   sudo apt-get install -y cmake g++ gfortran pkg-config ccache libboost-all-dev \\
-       libeigen3-dev libxml2-dev libspooles-dev libarpack2-dev liblapack-dev libblas-dev
+       libeigen3-dev libxml2-dev libspooles-dev libarpack2-dev liblapack-dev libblas-dev \\
+       bzip2   # bzip2 is NOT in the minimal Ubuntu cloud image (macOS Multipass); tar xjf the ccx src needs it
   # ESI OpenFOAM WITH dev headers + wmake (the apt 'openfoam' 1912 ships runtime
   # libs only — no headers/wmake, so the OF adapter cannot compile against it):
   curl -s https://dl.openfoam.com/add-debian-repo.sh | sudo bash
