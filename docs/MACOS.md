@@ -115,7 +115,8 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ dri
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD (`pocl` on Apple Silicon); dedicated venv (`DRIFTPIN_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ source build with brew deps; the `em_gpl` recipe is Linux-only today |
 | DEM (granular) | YADE (GPL) | ⚠️ no macOS build path in this repo — Linux box or container |
-| CFD/FSI/molding | OpenFOAM + preCICE | ✅ **Multipass** (arm64-native Ubuntu VM) — DriftPin runs the apps via `multipass exec`; live FSI coupled solve verified ([#193](https://github.com/gchen19/DriftPin/issues/193), see below) |
+| FSI (preCICE) | OpenFOAM + CalculiX | ✅ **Multipass** (arm64-native Ubuntu VM) — DriftPin runs the apps via `multipass exec`; live coupled solve verified ([#193](https://github.com/gchen19/DriftPin/issues/193), see below). Needs the in-VM `DRIFTPIN_*` exports |
+| Injection-molding fill | openInjMoldSim / interFoam | ✅ **Multipass**, same routing — needs the in-VM exports below. Code path verified by unit test; **no live macOS solve yet** (Windows/WSL and Linux are live-verified) |
 
 Every absent solver **degrades cleanly** — the family returns `{ok: false, reason, install}`
 rather than crashing — so an incomplete solver set never breaks the server; those tools
@@ -156,8 +157,12 @@ mkdir -p ~/fsi-run
 multipass mount ~/fsi-run openfoam:$HOME/fsi-run      # same path both sides
 ```
 
-**4. Point DriftPin at the in-VM stack** (absolute in-VM paths; on macOS these are trusted
-as VM paths when `multipass` is present — the VM filesystem is opaque from the host):
+**4. Point DriftPin at the in-VM stack.** These are absolute *in-VM* paths. Discovery
+cannot stat or glob them — a Multipass VM's filesystem is opaque from macOS, unlike WSL's
+`\\wsl$` mirror — so on macOS an absolute `DRIFTPIN_*` override is **trusted as a VM path**
+whenever `multipass` is on PATH, and that trust is the only way these families resolve
+here. Get one wrong and the solve fails inside the VM rather than degrading; with none set
+`driftpin doctor` reports OpenFOAM `unwired` and its fix line points back here:
 
 ```bash
 export TMPDIR=$HOME/fsi-run                            # so test case dirs land in the mount
@@ -173,6 +178,36 @@ export DRIFTPIN_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
 RUN_HEAVY_SOLVES=1 python3 tests/test_fsi.py
 # PASS test_fsi_coupled_plate_deflects — 4 windows converged, tip 0 → 3.47 mm (monotone into the flow)
 ```
+
+### Injection-molding fill (and any other OpenFOAM app) in the VM
+
+`molding_fill_submit` runs `interFoam` on the ESI OpenFOAM installed in step 2, and prefers
+**openInjMoldSim** (GPL-3.0, OpenFOAM-7 .org) when that build resolves. Both run inside the
+same VM through the same launcher; they need their own exports because neither the binary
+nor the bashrc is visible from the host:
+
+```bash
+# interFoam path — also what a generic `cfd_*_flow_submit` on OpenFOAM would use
+export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+export DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/interFoam
+
+# openInjMoldSim path — build OpenFOAM-7 (.org) + the solver in the VM first:
+#   multipass shell openfoam   →   bash tools/build_openinjmoldsim.sh --build
+export DRIFTPIN_OPENINJMOLDSIM=/home/ubuntu/OpenFOAM/ubuntu-7/platforms/linuxARM64GccDPInt32Opt/bin/openInjMoldSim
+export DRIFTPIN_OPENINJMOLDSIM_BASHRC=/home/ubuntu/OpenFOAM/OpenFOAM-7/etc/bashrc
+```
+
+The case dir must sit under the shared mount (`TMPDIR` above), same absolute path on both
+sides — `multipass exec` starts in the VM home, so the launcher `cd`s into the case by its
+host path. `driftpin doctor` then reports the family as **ready … (in Multipass VM)**,
+which is how you tell an in-VM resolution from a native one.
+
+Status: this routing is exercised by `tests/test_wsl_routing.py` (macOS branches, no VM
+needed), and the identical path is live-verified on Windows/WSL; the heavy macOS molding
+solve (`RUN_HEAVY_SOLVES=1 python3 tests/test_molding_fill.py`) has not been run on Apple
+Silicon yet. The OF7-org source build in particular is unproven on arm64 (it is a 2019
+tree and needed a gcc-11 pin even on x86_64 — see docs/WINDOWS.md); if it won't build,
+skip the second pair of exports and the family runs the `interFoam` fallback.
 
 ### The renderer scripts
 

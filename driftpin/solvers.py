@@ -20,7 +20,10 @@ Two solver shapes:
     documented (not vendored), and only *execute* on the provisioned/self-hosted
     runner. On Windows the OpenFOAM-backed families additionally resolve *inside*
     the WSL2 distro (probed glob-only through \\wsl$; launched via ``bash_argv`` —
-    issue #193), reported with ``via: "wsl"``.
+    issue #193), reported with ``via: "wsl"``; on macOS they resolve inside the
+    Multipass VM, whose filesystem the host cannot probe, so there they resolve
+    only from explicit in-VM ``DRIFTPIN_*`` overrides, reported with
+    ``via: "multipass"``.
 
 The degradation contract (the part that gates every PR, no solver needed):
   ``require_solver(name)`` returns ``{ok: True, ...}`` when the solver resolves, or
@@ -112,13 +115,15 @@ _SOLVERS: dict = {
                         "on PATH or set DRIFTPIN_OPENFOAM_PATH; on Windows install "
                         "WSL2 ('wsl --install -d Ubuntu') and provision inside the "
                         "distro (scripts/install-solvers.ps1 wsl)",
-        # in-distro install layouts probed through \\wsl$ on Windows (issue #193):
-        # POSIX glob dirs, matched against each registry binary. Deliberately NOT
-        # dirs["Linux"] — those are expanduser'd on the Windows side at import.
-        "wsl_bins": ("/usr/lib/openfoam/openfoam*/platforms/*/bin",
-                     "/opt/openfoam*/platforms/*/bin",
-                     "/opt/OpenFOAM*/platforms/*/bin",
-                     "~/OpenFOAM/OpenFOAM-*/platforms/*/bin"),
+        # in-substrate install layouts (issue #193): POSIX glob dirs matched against
+        # each registry binary, probed through \\wsl$ on Windows. Deliberately NOT
+        # dirs["Linux"] — those are expanduser'd on the Windows side at import. The
+        # key also marks this solver as substrate-routable, which on macOS is what
+        # lets an in-VM (Multipass) override resolve — see _vm_binary_path.
+        "substrate_bins": ("/usr/lib/openfoam/openfoam*/platforms/*/bin",
+                           "/opt/openfoam*/platforms/*/bin",
+                           "/opt/OpenFOAM*/platforms/*/bin",
+                           "~/OpenFOAM/OpenFOAM-*/platforms/*/bin"),
         # installed-but-unwired probe (issue #177): foamRun/simpleFoam only land on
         # PATH *after* an etc/bashrc is sourced, so a bare shell reports the binary
         # absent even when OpenFOAM is fully installed. A standard-location etc/bashrc
@@ -140,7 +145,12 @@ _SOLVERS: dict = {
             "darwin_multipass": (
                 "provision OpenFOAM in the Multipass VM — "
                 "`multipass shell {inst}` then `bash scripts/install-solvers.sh cfd`; "
-                "set DRIFTPIN_OPENFOAM_INSTANCE={inst} if the instance is named otherwise"),
+                "then export the IN-VM paths, which macOS trusts unstat'd (the VM "
+                "filesystem is opaque from the host): DRIFTPIN_OPENFOAM_BASHRC="
+                "/usr/lib/openfoam/openfoam<ver>/etc/bashrc and DRIFTPIN_OPENFOAM_PATH="
+                "<that prefix>/platforms/linuxARM64GccDPInt32Opt/bin/interFoam. "
+                "Set DRIFTPIN_OPENFOAM_INSTANCE={inst} if the instance is named "
+                "otherwise. See docs/MACOS.md"),
         },
     },
     "su2": {
@@ -321,9 +331,14 @@ _SOLVERS: dict = {
             "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin"),
             "Windows": (),
         },
-        # in-distro build layouts probed through \\wsl$ on Windows (issue #193)
-        "wsl_bins": ("~/calculix-adapter/bin", "~/opt/calculix-adapter/bin",
-                     "/usr/local/bin"),
+        # in-substrate build layouts (issue #193): globbed through \\wsl$ on Windows;
+        # on macOS the key marks the solver in-VM-routable (see _vm_binary_path).
+        "substrate_bins": ("~/calculix-adapter/bin", "~/opt/calculix-adapter/bin",
+                           "/usr/local/bin"),
+        # DRIFTPIN_CCX_PRECICE is the variable the FSI docs/provisioning set (and
+        # what ccx_precice_bin() reads); honoring it here too keeps discovery — and
+        # so `driftpin doctor` — in step with what the solve actually runs.
+        "env_aliases": ("DRIFTPIN_CCX_PRECICE",),
         "install_hint": "build the preCICE FSI stack (LGPL core + two source "
                         "adapters; not a pip wheel): scripts/install-solvers.sh fsi "
                         "— installs serial libprecice (MPI off), builds "
@@ -546,6 +561,15 @@ def _posix_glob(patterns) -> list:
     return sorted(set(out))
 
 
+def multipass_available() -> bool:
+    """True when macOS can reach the Multipass substrate (the ``multipass`` CLI on
+    PATH). The Darwin twin of :func:`wsl_available` and, like it, side-effect-free —
+    but a weaker signal: \\\\wsl$ lets Windows *see* into the distro, while a
+    Multipass VM's filesystem is opaque from the host, so this proves only that the
+    substrate exists, never that a solver is provisioned inside it."""
+    return platform.system() == "Darwin" and shutil.which("multipass") is not None
+
+
 def foam_instance() -> str:
     """The Multipass instance name that hosts OpenFOAM on macOS (issue #193).
     ``DRIFTPIN_OPENFOAM_INSTANCE`` (env -> config.toml) overrides; the default
@@ -598,15 +622,45 @@ def clean_wsl_text(s: str) -> str:
     return s.replace("\x00", "") if s else s
 
 
+def _substrate_override(value: str, *, is_dir: bool) -> str | None:
+    """Validate a user-supplied ``DRIFTPIN_*`` path override for a solver that may
+    live inside the platform's Linux substrate (issue #193) — the OpenFOAM-backed
+    families: CFD, the preCICE FSI stack, and injection-molding fill.
+
+    Windows normalizes a \\\\wsl$ override and checks it through the mirror; Linux
+    checks the host directly. macOS trusts an absolute POSIX override as an in-VM
+    path when ``multipass`` is present — the Multipass VM filesystem is opaque from
+    the host, so the override (which the provisioning step sets to a VM path) can't
+    be stat'd from macOS, and rejecting it would leave every OpenFOAM-exclusive
+    family permanently unresolvable there. Returns the normalized path, or None if
+    it doesn't check out."""
+    p = wsl_posix(value)                     # \\wsl$ overrides normalize to POSIX
+    if _posix_isdir(p) if is_dir else _posix_isfile(p):
+        return p
+    if multipass_available() and p.startswith("/"):
+        return p                             # in-VM path; host can't confirm it
+    return None
+
+
+def _override_candidates(name: str, spec: dict) -> list:
+    """The user-supplied path overrides for a binary solver, in precedence order:
+    ``DRIFTPIN_<NAME>_PATH`` then the spec's ``env_aliases`` (the documented
+    per-solver variable names, e.g. the FSI stack's DRIFTPIN_CCX_PRECICE). Each
+    resolves through the config layer (env -> config.toml). No existence check."""
+    out = []
+    for var in (f"DRIFTPIN_{name.upper()}_PATH", *spec.get("env_aliases", ())):
+        if value := _config.get(var):
+            out.append(value)
+    return out
+
+
 def _binary_candidates(name: str, spec: dict) -> list:
     """Ordered candidate paths for a binary solver, most-preferred first:
     DRIFTPIN_<NAME>_PATH env override -> PATH (shutil.which) -> common per-OS
     install dirs -> FreeCAD's bundled bin/ (for ``freecad_bundled`` solvers). Pure
     lookup — no side effects, no existence check (the caller filters). Mirrors
     worker.py's _renderer_exec_candidates, minus the FreeCAD prefs step."""
-    candidates = []
-    if env_path := _config.get(f"DRIFTPIN_{name.upper()}_PATH"):
-        candidates.append(env_path)                  # 1) env override -> config file
+    candidates = list(_override_candidates(name, spec))  # 1) env -> config file
     for binname in spec["binaries"]:                 # 2) PATH (honors Windows PATHEXT)
         if found := shutil.which(binname):
             candidates.append(found)
@@ -640,9 +694,11 @@ def _binary_candidates(name: str, spec: dict) -> list:
     # 6) inside the WSL distro (issue #193): the OpenFOAM-backed families run via
     #    `wsl -e bash` on Windows, so an in-distro binary counts as resolvable.
     #    Probed glob-only through the \\wsl$ mirror; the candidates are the POSIX
-    #    paths the in-distro bash scripts consume.
-    if platform.system() == "Windows" and spec.get("wsl_bins") and wsl_available():
-        for d in spec["wsl_bins"]:
+    #    paths the in-distro bash scripts consume. (No macOS twin: a Multipass VM's
+    #    filesystem is opaque from the host, so there is nothing to glob — the
+    #    in-VM binary resolves only from an explicit override, see _vm_binary_path.)
+    if platform.system() == "Windows" and spec.get("substrate_bins") and wsl_available():
+        for d in spec["substrate_bins"]:
             for binname in spec["binaries"]:
                 candidates.extend(_posix_glob((d + "/" + binname,)))
     return candidates
@@ -654,6 +710,22 @@ def _binary_path(name: str, spec: dict):
     for c in _binary_candidates(name, spec):
         if c and _posix_isfile(c):
             return c
+    return None
+
+
+def _vm_binary_path(name: str, spec: dict):
+    """macOS only: the in-VM path of a substrate solver, taken from an explicit
+    override (issue #193). OpenFOAM and the preCICE stack live inside the Multipass
+    VM, whose filesystem the host cannot stat or glob — so unlike WSL there is no
+    discovery here, only trust: an absolute POSIX override for a substrate solver
+    (``substrate_bins``) is accepted when ``multipass`` is present, because that is
+    exactly the path ``bash_argv`` will hand to ``multipass exec``. Returns the path
+    or None; always None off macOS, where :func:`_binary_path` governs."""
+    if not (spec.get("substrate_bins") and multipass_available()):
+        return None
+    for c in _override_candidates(name, spec):
+        if r := _substrate_override(c, is_dir=False):
+            return r
     return None
 
 
@@ -725,9 +797,8 @@ def _unwired_found(name: str, spec: dict):
         # macOS: no host-visible bashrc — OpenFOAM lives in the Multipass VM (#193).
         # `multipass` on PATH is the read-only signal the substrate is present (the
         # solver inside the VM can't be confirmed without executing it).
-        if platform.system() == "Darwin" and cfg.get("darwin_multipass"):
-            if shutil.which("multipass"):
-                return "multipass", cfg["darwin_multipass"].format(inst=foam_instance())
+        if cfg.get("darwin_multipass") and multipass_available():
+            return "multipass", cfg["darwin_multipass"].format(inst=foam_instance())
     elif probe == "fsi_adapter":
         found = openfoam_adapter_lib_dir() or precice_lib_dir()
         if found:
@@ -786,6 +857,14 @@ def find_solver(name: str) -> dict:
                 # resolved inside the WSL distro — the runner must launch it via
                 # `wsl -e bash` (bash_argv), never a native subprocess (issue #193)
                 info["via"] = "wsl"
+        elif (vm_path := _vm_binary_path(name, spec)) is not None:
+            # macOS: nothing on the host, but an explicit override names the binary
+            # inside the Multipass VM — launched via `multipass exec` (bash_argv).
+            # Tagged from the resolution branch, not the path shape: a plain macOS
+            # host path is absolute POSIX too (issue #193).
+            info["available"] = True
+            info["path"] = vm_path
+            info["via"] = "multipass"
     if info["available"]:
         info["status"] = "ok"
         return info
@@ -860,9 +939,10 @@ def openfoam_bashrc() -> str | None:
     ``/usr/share/openfoam`` layout). Returns the path, or None when none resolves."""
     env = _config.get("DRIFTPIN_OPENFOAM_BASHRC")
     if env:
-        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
-        if _posix_isfile(env):
-            return env
+        # normalized + checked per substrate: \\wsl$ -> POSIX through the mirror on
+        # Windows, host stat on Linux, trusted as an in-VM path on macOS (#193)
+        if r := _substrate_override(env, is_dir=False):
+            return r
     wm = os.environ.get("WM_PROJECT_DIR")
     if wm:
         cand = os.path.join(wm, "etc", "bashrc")
@@ -899,29 +979,12 @@ def openfoam_bashrc() -> str | None:
 # install path), then a small set of build-default locations, mirroring the
 # openfoam_bashrc() resolution style. The FSI handler/runner consumes these.
 
-def _fsi_override(value: str, *, is_dir: bool) -> str | None:
-    """Validate a DRIFTPIN_* FSI-stack path override across substrates (issue #193).
-    Windows normalizes a \\wsl$ override and checks it through the mirror; Linux
-    checks the host directly. macOS trusts an absolute POSIX override as an in-VM
-    path when ``multipass`` is present — the Multipass VM filesystem is opaque from
-    the host, so the override (which the provisioning step sets to a VM path) can't
-    be stat'd from macOS. Returns the normalized path, or None if it doesn't check
-    out."""
-    p = wsl_posix(value)                     # \\wsl$ overrides normalize to POSIX
-    if _posix_isdir(p) if is_dir else _posix_isfile(p):
-        return p
-    if (platform.system() == "Darwin" and p.startswith("/")
-            and shutil.which("multipass")):
-        return p                             # in-VM path; host can't confirm it
-    return None
-
-
 def ccx_precice_bin() -> str | None:
     """The preCICE-enabled CalculiX solver (``ccx_preCICE``) — the solid
     participant. DRIFTPIN_CCX_PRECICE / DRIFTPIN_PRECICE_PATH env -> the registry
     binary resolution (~/calculix-adapter/bin etc.). Returns the path or None."""
     if env := _config.get("DRIFTPIN_CCX_PRECICE"):
-        if r := _fsi_override(env, is_dir=False):
+        if r := _substrate_override(env, is_dir=False):
             return r
     return find_solver("precice").get("path")
 
@@ -931,7 +994,7 @@ def precice_lib_dir() -> str | None:
     adapters link). DRIFTPIN_PRECICE_LIB env -> the conda-forge env lib ->
     the documented source-build prefix. Returns the dir or None."""
     if env := _config.get("DRIFTPIN_PRECICE_LIB"):
-        if r := _fsi_override(env, is_dir=True):
+        if r := _substrate_override(env, is_dir=True):
             return r
     for base in ("~/precice-serial/lib",
                  "~/miniforge3/envs/precice/lib",
@@ -948,7 +1011,7 @@ def openfoam_adapter_lib_dir() -> str | None:
     function-object adapter the fluid participant loads). DRIFTPIN_OPENFOAM_ADAPTER_LIB
     env -> the wmake user-lib build prefix. Returns the dir or None."""
     if env := _config.get("DRIFTPIN_OPENFOAM_ADAPTER_LIB"):
-        if r := _fsi_override(env, is_dir=True):
+        if r := _substrate_override(env, is_dir=True):
             return r
     hits = _posix_glob(
         ("~/OpenFOAM/*/platforms/*/lib/libpreciceAdapterFunctionObject.so",))
@@ -975,7 +1038,7 @@ def fsi_openfoam_bashrc() -> str | None:
     matches the adapter lib path (``~/OpenFOAM/<user>-v2512/...`` -> the
     ``…openfoam2512…`` / ``…-v2512…`` bashrc) -> the general ``openfoam_bashrc()``."""
     if env := _config.get("DRIFTPIN_FSI_OPENFOAM_BASHRC"):
-        if r := _fsi_override(env, is_dir=False):
+        if r := _substrate_override(env, is_dir=False):
             return r
     ofa = openfoam_adapter_lib_dir()
     if ofa:
@@ -1044,13 +1107,19 @@ def openinjmoldsim_bin() -> str | None:
     ``DRIFTPIN_OPENINJMOLDSIM`` / ``DRIFTPIN_OPENINJMOLDSIM_PATH`` env -> PATH
     (``shutil.which``) -> the documented source-build prefix
     (``~/opt/openInjMoldSim/...``). Returns the path, or None when it does not
-    resolve (the common case until the OF7-org build lands)."""
+    resolve (the common case until the OF7-org build lands).
+
+    Substrate-aware (issue #193): the globs probe the WSL distro through \\\\wsl$ on
+    Windows, and on macOS — where OF7-org can only be built inside the Multipass VM,
+    invisible to the host — the env override is trusted as an in-VM path. Either
+    way the returned POSIX path is what ``bash_argv`` runs inside the substrate."""
     for var in ("DRIFTPIN_OPENINJMOLDSIM", "DRIFTPIN_OPENINJMOLDSIM_PATH"):
         env = _config.get(var)
         if env:
-            env = wsl_posix(env)            # \\wsl$ overrides normalize to POSIX
-            if _posix_isfile(env):
-                return env
+            # \\wsl$ -> POSIX on Windows; in-VM (Multipass) path trusted on macOS,
+            # where the OF7-org build is only ever reachable inside the VM (#193)
+            if r := _substrate_override(env, is_dir=False):
+                return r
     found = shutil.which("openInjMoldSim")
     if found:
         return found
@@ -1070,9 +1139,8 @@ def openinjmoldsim_bashrc() -> str | None:
     source-build / apt layouts. Returns the path or None."""
     env = _config.get("DRIFTPIN_OPENINJMOLDSIM_BASHRC")
     if env:
-        env = wsl_posix(env)                # \\wsl$ overrides normalize to POSIX
-        if _posix_isfile(env):
-            return env
+        if r := _substrate_override(env, is_dir=False):   # \\wsl$ / in-VM (#193)
+            return r
     for pat in ("~/OpenFOAM/OpenFOAM-7/etc/bashrc",
                 "~/opt/OpenFOAM-7/etc/bashrc",
                 "/opt/openfoam7/etc/bashrc",
