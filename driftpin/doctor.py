@@ -171,11 +171,13 @@ def _fmt_solvers(caps: dict) -> list[str]:
             # installed is exactly the stale hint this doctor exists to avoid.
             ready = ", ".join(
                 _resolved_label(solver_states[s]) for s in sorted(info["available"]))
-            # in-distro resolutions (issue #193) launch through `wsl -e bash`
-            wsl = any(solver_states[s].get("via") == "wsl"
-                      for s in info["available"])
-            lines.append(f"{_MARK['ok']} {fam:<16} ready via {ready}"
-                         + (" (in WSL)" if wsl else ""))
+            # in-substrate resolutions (issue #193) don't run natively: they launch
+            # through `wsl -e bash` (Windows) or `multipass exec` (macOS), so say so
+            # — "ready" on a box with no local OpenFOAM is otherwise baffling.
+            via = {solver_states[s].get("via") for s in info["available"]}
+            substrate = (" (in WSL)" if "wsl" in via else
+                         " (in Multipass VM)" if "multipass" in via else "")
+            lines.append(f"{_MARK['ok']} {fam:<16} ready via {ready}{substrate}")
             continue
         # nothing ready: prefer the unwired (installed-but-not-wired) hint if present,
         # else the install hint of the first solver in the family.

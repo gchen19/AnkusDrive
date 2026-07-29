@@ -39,10 +39,21 @@ _POSIX_BIN = ("/usr/lib/openfoam/openfoam2512/platforms"
 _UNC_BASHRC = r"\\wsl$\Ubuntu\usr\lib\openfoam\openfoam2512\etc\bashrc"
 _POSIX_BASHRC = "/usr/lib/openfoam/openfoam2512/etc/bashrc"
 
+_VM_BIN = ("/usr/lib/openfoam/openfoam2512/platforms"
+           "/linuxARM64GccDPInt32Opt/bin/interFoam")
+_VM_BASHRC = "/usr/lib/openfoam/openfoam2512/etc/bashrc"
+_VM_OIMS = ("/home/ubuntu/OpenFOAM/ubuntu-7/platforms"
+            "/linuxARM64GccDPInt32Opt/bin/openInjMoldSim")
+_VM_OIMS_BASHRC = "/home/ubuntu/OpenFOAM/OpenFOAM-7/etc/bashrc"
+_VM_CCX = "/home/ubuntu/calculix-adapter/bin/ccx_preCICE"
+
 # env vars that would leak the real box's wiring into these tests
 _ISOLATE = ("DRIFTPIN_WSL_DISTRO", "DRIFTPIN_OPENFOAM_BASHRC",
             "DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_DIRS",
-            "DRIFTPIN_CONFIG")
+            "DRIFTPIN_OPENFOAM_INSTANCE", "DRIFTPIN_OPENINJMOLDSIM",
+            "DRIFTPIN_OPENINJMOLDSIM_PATH", "DRIFTPIN_OPENINJMOLDSIM_BASHRC",
+            "DRIFTPIN_CCX_PRECICE", "DRIFTPIN_PRECICE_PATH",
+            "WM_PROJECT_DIR", "DRIFTPIN_CONFIG")
 
 
 class _patch:
@@ -95,6 +106,20 @@ def _fake_windows(p, distro="Ubuntu", wsl_exe=r"C:\Windows\System32\wsl.exe"):
     p.set(solvers.shutil, "which",
           lambda name: wsl_exe if name == "wsl" and wsl_exe else None)
     p.set(solvers, "_wsl_registry_distro", lambda: distro)
+
+
+def _fake_macos(p, multipass="/opt/homebrew/bin/multipass"):
+    """The standard macOS fake: Darwin host with `multipass` on PATH (pass
+    ``multipass=None`` for a box without it) and an EMPTY host filesystem — which is
+    the real situation there: every OpenFOAM-backed artifact lives inside the VM,
+    where the host can neither stat nor glob it. So anything these tests resolve was
+    resolved by in-VM trust, never by a host hit."""
+    p.set(solvers, "platform", _fake_platform("Darwin"))
+    p.set(solvers.shutil, "which",
+          lambda name: multipass if name == "multipass" and multipass else None)
+    p.set(solvers.os.path, "isfile", lambda x: False)
+    p.set(solvers.os.path, "isdir", lambda x: False)
+    p.set(glob, "glob", lambda pat, recursive=False: [])
 
 
 def test_bash_argv_posix_and_windows():
@@ -297,23 +322,117 @@ def test_runs_in_substrate_by_platform():
             assert solvers.runs_in_substrate() is expect, sysname
 
 
-def test_fsi_override_trusts_in_vm_path_on_macos():
-    """The FSI stack lives inside the Multipass VM on macOS; its DRIFTPIN_* overrides
-    name in-VM POSIX paths the host can't stat. `_fsi_override` trusts an absolute
-    override when multipass is present, rejects it otherwise, and on Linux the host
-    check governs (issue #193 slice 2)."""
+def test_substrate_override_trusts_in_vm_path_on_macos():
+    """The OpenFOAM-backed stacks live inside the Multipass VM on macOS; their
+    DRIFTPIN_* overrides name in-VM POSIX paths the host can't stat.
+    `_substrate_override` trusts an absolute override when multipass is present,
+    rejects it otherwise, and on Linux the host check governs (issue #193)."""
     with _patch() as p:
         p.set(solvers.os.path, "isfile", lambda x: False)         # nothing on the host
         p.set(solvers.os.path, "isdir", lambda x: False)
         p.set(solvers, "platform", _fake_platform("Darwin"))
         p.set(solvers.shutil, "which", lambda n: "/x/mp" if n == "multipass" else None)
-        assert solvers._fsi_override("/home/ubuntu/x/ccx_preCICE", is_dir=False) \
+        assert solvers._substrate_override("/home/ubuntu/x/ccx_preCICE", is_dir=False) \
             == "/home/ubuntu/x/ccx_preCICE"
-        assert solvers._fsi_override("/home/ubuntu/lib", is_dir=True) == "/home/ubuntu/lib"
+        assert solvers._substrate_override("/home/ubuntu/lib", is_dir=True) \
+            == "/home/ubuntu/lib"
+        # a relative override is never trusted — an in-VM path is absolute
+        assert solvers._substrate_override("bin/ccx_preCICE", is_dir=False) is None
         p.set(solvers.shutil, "which", lambda n: None)            # multipass absent
-        assert solvers._fsi_override("/home/ubuntu/x/ccx_preCICE", is_dir=False) is None
+        assert solvers._substrate_override("/home/ubuntu/x/ccx_preCICE",
+                                           is_dir=False) is None
         p.set(solvers, "platform", _fake_platform("Linux"))       # host check governs
-        assert solvers._fsi_override("/nope", is_dir=False) is None
+        assert solvers._substrate_override("/nope", is_dir=False) is None
+
+
+def test_macos_openfoam_ready_via_multipass_override():
+    """With the VM provisioned, DRIFTPIN_OPENFOAM_PATH names the in-VM binary: the
+    solver resolves `available` with via:'multipass' (propagated by require_solver),
+    so the OpenFOAM-exclusive families run instead of degrading. The tag comes from
+    the resolution branch, not the path shape — a native macOS path is absolute
+    POSIX too. Without multipass the same override is NOT trusted."""
+    with _patch() as p:
+        _fake_macos(p)
+        os.environ["DRIFTPIN_OPENFOAM_PATH"] = _VM_BIN
+        info = solvers.find_solver("openfoam")
+        assert info["available"] is True and info["status"] == "ok", info
+        assert info["path"] == _VM_BIN and info["via"] == "multipass", info
+        r = solvers.require_solver("openfoam")
+        assert r["ok"] is True and r["via"] == "multipass" and r["path"] == _VM_BIN, r
+
+        _fake_macos(p, multipass=None)      # no substrate: the override buys nothing
+        info = solvers.find_solver("openfoam")
+        assert info["available"] is False and info["status"] == "absent", info
+
+
+def test_macos_openfoam_bashrc_trusts_in_vm_override():
+    """`openfoam_bashrc()` — what every _run_foam script sources — accepts the in-VM
+    path on macOS (the host cannot stat it), and returns None with multipass absent
+    so the family degrades cleanly rather than sourcing a phantom path."""
+    with _patch() as p:
+        _fake_macos(p)
+        os.environ["DRIFTPIN_OPENFOAM_BASHRC"] = _VM_BASHRC
+        assert solvers.openfoam_bashrc() == _VM_BASHRC
+        _fake_macos(p, multipass=None)
+        assert solvers.openfoam_bashrc() is None
+
+
+def test_macos_openinjmoldsim_trusts_in_vm_overrides():
+    """The molding family's OF7-org solver can only be built inside the VM on macOS,
+    so both its resolvers trust in-VM overrides — otherwise molding_fill_submit
+    could never reach the openInjMoldSim path there (issue #193)."""
+    with _patch() as p:
+        _fake_macos(p)
+        os.environ["DRIFTPIN_OPENINJMOLDSIM"] = _VM_OIMS
+        os.environ["DRIFTPIN_OPENINJMOLDSIM_BASHRC"] = _VM_OIMS_BASHRC
+        assert solvers.openinjmoldsim_bin() == _VM_OIMS
+        assert solvers.openinjmoldsim_bashrc() == _VM_OIMS_BASHRC
+        _fake_macos(p, multipass=None)
+        assert solvers.openinjmoldsim_bin() is None
+        assert solvers.openinjmoldsim_bashrc() is None
+
+
+def test_precice_env_alias_resolves_the_solver():
+    """DRIFTPIN_CCX_PRECICE is the variable the FSI docs/provisioning set, so
+    discovery honors it too (`env_aliases`) — otherwise `driftpin doctor` reports
+    the FSI family unwired on a box where the coupled solve runs. On macOS it
+    resolves in-VM (via:'multipass'); on Linux the host check governs."""
+    with _patch() as p:
+        _fake_macos(p)
+        os.environ["DRIFTPIN_CCX_PRECICE"] = _VM_CCX
+        info = solvers.find_solver("precice")
+        assert info["available"] is True and info["path"] == _VM_CCX, info
+        assert info["via"] == "multipass", info
+
+        p.set(solvers, "platform", _fake_platform("Linux"))
+        p.set(solvers.os.path, "isfile", lambda x: x == _VM_CCX)
+        info = solvers.find_solver("precice")
+        assert info["available"] is True and info["path"] == _VM_CCX, info
+        assert "via" not in info, info          # a native Linux binary, no relay
+
+
+def test_doctor_names_the_substrate_for_ready_families():
+    """`driftpin doctor` says WHERE a ready-but-not-native solver runs: "ready via
+    openfoam (in WSL)" / "(in Multipass VM)". Without the suffix, "cfd ready via
+    openfoam" on a box with no local OpenFOAM is baffling (issue #193)."""
+    from driftpin import doctor
+
+    def _caps(via):
+        state = {"name": "openfoam", "available": True, "status": "ok",
+                 "kind": "binary", "family": "cfd", "path": _VM_BIN}
+        if via:
+            state["via"] = via
+        return {"solvers": {"openfoam": state},
+                "families": {"cfd": {"solvers": ["openfoam"],
+                                     "available": ["openfoam"], "unwired": [],
+                                     "any_available": True}}}
+
+    assert "ready via openfoam (in Multipass VM)" in \
+        "\n".join(doctor._fmt_solvers(_caps("multipass")))
+    assert "ready via openfoam (in WSL)" in \
+        "\n".join(doctor._fmt_solvers(_caps("wsl")))
+    native = "\n".join(doctor._fmt_solvers(_caps(None)))
+    assert "ready via openfoam" in native and "(in " not in native, native
 
 
 def test_fsi_routes_participants_through_multipass_on_macos():
