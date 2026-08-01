@@ -36,6 +36,11 @@ import Part  # noqa: E402
 import ObjectsFem  # noqa: E402
 import Sketcher  # noqa: E402
 
+# Orderable standard parts (issue #234). FreeCAD-free pure core; imported at module
+# scope rather than per-handler because the generator handlers stamp a designation
+# on every part they build, so it is on the hot path, not an occasional escape.
+from driftpin import orderable as _orderable  # noqa: E402
+
 
 def _respond(obj):
     os.write(_RESPONSE_FD, (json.dumps(obj) + "\n").encode())
@@ -759,9 +764,20 @@ def _h_add_fastener(p):
     primitives. kind in {socket_head_cap_screw, hex_bolt, hex_nut, washer};
     size in {M3,M4,M5,M6,M8,M10,M12}; length = shank length (mm, screws/bolts
     only, required for them). All dims in mm. Threads are cosmetic (plain
-    shank). Returns the solid's handle plus the mating numbers a coordinator
-    needs: major_diameter (drill the through-hole this + clearance), pitch,
-    head_diameter / head_height (counterbore size), and length."""
+    shank).
+
+    `grade` (optional) is the material/property class as ordered — ISO 898-1 for
+    steel screws ('8.8'), ISO 898-2 for nuts ('8'), ISO 3506 for stainless ('A2').
+    It changes no geometry; it completes the ORDERABLE designation (issue #234)
+    stamped on the object, and without it the designation says outright that a
+    buyer still has to choose.
+
+    Returns the solid's handle plus the mating numbers a coordinator needs:
+    major_diameter (drill the through-hole this + clearance), pitch, head_diameter /
+    head_height (counterbore size), length, plus the canonical `designation` (e.g.
+    'ISO 4762 M4×12 A2'), its full `orderable` card, and `catalog` — the
+    off-the-shelf verdict at creation time (a length nobody stocks is a finding
+    naming the rungs either side, never a refusal to build)."""
     doc = App.ActiveDocument
     if doc is None:
         raise RuntimeError("no active document; call new_document first")
@@ -784,6 +800,7 @@ def _h_add_fastener(p):
     kind = str(p["kind"])
     if kind not in _KINDS:
         raise ValueError(f"unknown kind {kind!r}; expected one of {list(_KINDS)}")
+    grade = p.get("grade")
     size = str(p["size"]).upper()
     if size not in _FASTENER:
         raise ValueError(f"unknown size {size!r}; expected one of {list(_FASTENER)}")
@@ -796,6 +813,11 @@ def _h_add_fastener(p):
         length = float(p["length"])
         if length <= 0:
             raise ValueError("length must be > 0")
+
+    # Designate BEFORE building geometry: a bad grade is a loud ValueError here
+    # rather than an orphaned solid in the document that the caller then has to
+    # clean up.
+    card = _orderable.designate_fastener(kind, size, length, grade)
 
     def _hex_prism(across_flats, height, z0=0.0):
         # Regular hexagon with the given across-flats dimension (flat-to-flat),
@@ -843,8 +865,15 @@ def _h_add_fastener(p):
     doc.recompute()
 
     h = _register("fastener", obj)
+    # Stamp the orderable identity at creation time (issue #234): everything a
+    # canonical designation needs is known RIGHT HERE, and recovering it later from
+    # a naked solid is guesswork. It lives on the object, so it survives save/reopen
+    # and travels into every BOM the part ever appears on.
+    _stamp_orderable(obj, card)
     out = {"handle": h, "name": obj.Name, "kind": kind, "size": size,
-           "major_diameter": major, "pitch": pitch, "volume": obj.Shape.Volume}
+           "major_diameter": major, "pitch": pitch, "volume": obj.Shape.Volume,
+           "designation": card["designation"], "orderable": card,
+           "catalog": _catalog_note(card)}
     if kind in ("socket_head_cap_screw", "hex_bolt"):
         out["length"] = length
         out["head_diameter"] = head_dia
@@ -869,9 +898,18 @@ def _h_add_bearing(p):
     or explicit `bore`/`outer_diameter`/`width`. Explicit values override a
     designation when both are supplied. All lengths mm.
 
-    Returns {handle, name, designation, bore, outer_diameter, width, volume}.
-    `bore` sizes the shaft, `outer_diameter` sizes the housing, `width` sets the
-    shoulder spacing."""
+    `seals` (open | RS | 2RS | RZ | 2RZ | Z | 2Z, default open) changes no geometry
+    — the envelope is the same — but it IS part of the orderable identity: 608,
+    608-2Z and 608-2RS are three different purchases at three different prices. It
+    is folded into the canonical designation stamped on the object (issue #234).
+
+    A bearing built from raw bore/OD/width with NO catalog designation is a
+    geometric envelope, not a purchasable part, and is deliberately left
+    undesignated rather than given a made-up one.
+
+    Returns {handle, name, designation, bore, outer_diameter, width, volume,
+    orderable} where `orderable` is the designation card (its `designation` carries
+    the seal suffix, e.g. '608-2RS')."""
     doc = App.ActiveDocument
     if doc is None:
         raise RuntimeError("no active document; call new_document first")
@@ -944,12 +982,22 @@ def _h_add_bearing(p):
         obj.Placement.Base = App.Vector(*placement)
     doc.recompute()
     h = _register("bearing", obj)
+    if designation:
+        card = _orderable.designate_bearing(designation, p.get("seals", "open"))
+        _stamp_orderable(obj, card)
+    else:
+        card = {"ok": False, "family": _orderable.BEARING, "purchased": True,
+                "designation": None, "complete": False,
+                "reason": "built from explicit bore/OD/width with no catalog "
+                          "designation — a dimensional envelope is not an orderable "
+                          "part; pass designation= to make it one"}
     return {"handle": h, "name": obj.Name,
             "designation": designation,
             "bore": round(bore, 4),
             "outer_diameter": round(outer_diameter, 4),
             "width": round(width, 4),
-            "volume": obj.Shape.Volume}
+            "volume": obj.Shape.Volume,
+            "orderable": card, "catalog": _catalog_note(card)}
 
 
 @handler("oring_groove")
@@ -973,9 +1021,19 @@ def _h_oring_groove(p):
     into the solid along the inward face normal, axially centred on the face's
     centre of mass. Requires the face to be planar.
 
+    `compound` (optional, e.g. 'NBR70', 'FKM75') names the elastomer and durometer
+    the ring is ordered in. It changes no geometry; it completes the AS568
+    designation of THE RING ITSELF (issue #234) — the purchased part this groove
+    exists to hold, which no BOM would otherwise contain, since the ring is never
+    a modelled object.
+
     Returns {groove_depth, groove_width, groove_inner_diameter,
-    groove_outer_diameter, squeeze_pct, cross_section} plus, when cut=True,
-    {handle, name, volume} for the resulting solid. The host input is hidden."""
+    groove_outer_diameter, squeeze_pct, cross_section, oring} plus, when cut=True,
+    {handle, name, volume} for the resulting solid. The host input is hidden.
+    `oring` is the ring's designation card ('AS568-214 NBR70') or, for a size that
+    is not an AS568 standard, ok=False naming the nearest tabulated sizes — an
+    off-table ring is a custom tooled part, and saying so beats naming a dash number
+    that won't seal."""
     cross_section = float(p["cross_section"])
     if cross_section <= 0:
         raise ValueError("cross_section must be > 0 (O-ring wire diameter in mm)")
@@ -998,6 +1056,17 @@ def _h_oring_groove(p):
         "cross_section": cross_section,
         "gland_type": gland_type,
     }
+    # The ring is the purchased part; the groove is the made one. Designate the ring
+    # from the gland that defines it — for a static gland the free ID is the groove
+    # ID — so it can reach the BOM at all.
+    result["oring"] = (
+        _orderable.designate_oring(inner_diameter, cross_section, p.get("compound"))
+        if inner_diameter > 0 else
+        {"ok": False, "family": _orderable.ORING, "purchased": True,
+         "designation": None, "complete": False,
+         "reason": "no inner_diameter given — the ring's size is undetermined, so "
+                   "no AS568 size can be named"})
+    result["oring_catalog"] = _catalog_note(result["oring"])
 
     if not cut:
         return result
@@ -1047,6 +1116,11 @@ def _h_oring_groove(p):
     doc.recompute()
     _set_visibility(obj, False)  # host solid consumed into the grooved result
     h = _register("oring_groove", out)
+    # Stamped as a CONSUMABLE, not as the part's own identity: the grooved solid is
+    # machined, and marking it purchased would put the wrong line on the BOM. The
+    # ring rides along as a separate purchased line (bom_extract collects these).
+    if result["oring"].get("designation"):
+        _stamp_str_prop(out, "DP_ORing", json.dumps(result["oring"], sort_keys=True))
     result["handle"] = h
     result["name"] = out.Name
     result["volume"] = out.Shape.Volume
@@ -1164,6 +1238,9 @@ def _h_add_thread(p):
       starts:   number of thread starts (>=1); multi-start repeats the helix
                 rotated by 360/starts and uses lead = pitch*starts.
       placement: optional [x,y,z] mm translation of the solid's base.
+      grade:    optional material/property class as ordered ('8.8', 'A2'). Changes
+                no geometry; completes the DIN 976-1 threaded-rod designation
+                stamped on an external single-start thread (issue #234).
 
     Geometry: a 60-deg ISO triangular rib (fundamental height H = pitch*0.866,
     truncated to 5H/8) is swept along a Part.makeHelix at the minor radius via
@@ -1173,10 +1250,12 @@ def _h_add_thread(p):
     splitter-cleaned rib. Returns the solid's handle plus the mating numbers a
     coordinator needs: major_diameter (= diameter), minor_diameter
     (= diameter - 1.0825*pitch, the ISO 60-deg minor), pitch, length, starts,
-    internal, volume (mm^3), and modeled (True when a valid swept solid was
+    internal, volume (mm^3), modeled (True when a valid swept solid was
     produced; the cosmetic-only fallback is never taken here because the sweep
-    validates). Raises ValueError on non-positive dims or a pitch too coarse for
-    the diameter (minor radius <= 0)."""
+    validates), and the orderable `designation` / `orderable` card (a DIN 976-1
+    threaded rod for an external single-start thread; None with a reason for an
+    internal tap or a multi-start). Raises ValueError on non-positive dims or a
+    pitch too coarse for the diameter (minor radius <= 0)."""
     import math
     doc = _active_doc()
     diameter = float(p["diameter"])
@@ -1251,11 +1330,32 @@ def _h_add_thread(p):
     doc.recompute()
     h = _register("thread", obj)
 
+    # Orderable identity (issue #234): an EXTERNAL single-start thread is studding —
+    # a length of threaded rod you buy. The internal form is a tap-shaped cutting
+    # tool and a multi-start thread is not a stock item, so neither gets a
+    # designation; saying so is the honest answer, inventing one is not.
+    if internal:
+        card = {"ok": False, "family": _orderable.THREADED_ROD, "purchased": False,
+                "designation": None, "complete": False,
+                "reason": "an internal thread solid is a tap-shaped cutting tool, "
+                          "not a purchased part"}
+    elif starts > 1:
+        card = {"ok": False, "family": _orderable.THREADED_ROD, "purchased": True,
+                "designation": None, "complete": False,
+                "reason": f"{starts}-start threaded rod is not a stock item; "
+                          "single-start studding is (DIN 976-1)"}
+    else:
+        card = _orderable.designate_threaded_rod(diameter, pitch, length,
+                                                 p.get("grade"))
+        _stamp_orderable(obj, card)
+
     minor_diameter = diameter - 1.0825 * pitch
     return {"handle": h, "name": obj.Name, "volume": round(obj.Shape.Volume, 4),
             "major_diameter": round(diameter, 4), "minor_diameter": round(minor_diameter, 4),
             "pitch": pitch, "length": length, "starts": starts,
-            "internal": internal, "modeled": modeled}
+            "internal": internal, "modeled": modeled,
+            "designation": card["designation"], "orderable": card,
+            "catalog": _catalog_note(card)}
 
 
 @handler("engrave_text")
@@ -5205,6 +5305,73 @@ def _h_interference_check(p):
     return overlaps
 
 
+# --- orderable standard parts (issue #234) ------------------------------------
+# A purchased part's orderable identity is stamped on the FreeCAD object at the
+# moment it is generated — DP_Designation (human-readable, visible in the property
+# editor) plus DP_OrderableSpec (the full card as JSON) plus DP_PartClass. It lives
+# on the document, so it survives save/reopen, travels with a linked component into
+# every assembly it appears in, and cannot drift from the geometry it was derived
+# from. Same idempotent add-then-set shape as DP_Balloon / DP_TitleBlock.
+
+def _stamp_orderable(obj, card):
+    """Stamp a designation card on a generated standard part."""
+    if not card or not card.get("designation"):
+        return
+    _stamp_str_prop(obj, "DP_Designation", card["designation"])
+    _stamp_str_prop(obj, "DP_PartClass", "purchased")
+    _stamp_str_prop(obj, "DP_OrderableSpec", json.dumps(card, sort_keys=True))
+
+
+def _orderable_of(obj):
+    """Read the designation card back off an object, or {} when it carries none.
+
+    Falls back to the bare DP_Designation string when the JSON blob is missing or
+    unreadable: a hand-typed designation on an imported part is still a designation,
+    and losing it because a sidecar didn't parse would be the wrong failure."""
+    raw = str(getattr(obj, "DP_OrderableSpec", "") or "")
+    if raw:
+        try:
+            card = json.loads(raw)
+            if isinstance(card, dict):
+                return card
+        except ValueError:
+            pass
+    text = str(getattr(obj, "DP_Designation", "") or "")
+    if text:
+        return {"designation": text, "complete": True, "purchased": True}
+    return {}
+
+
+def _catalog_note(card):
+    """Compact off-the-shelf verdict to ride along on a generator's return.
+
+    Creation time is the loudest possible place to say "nobody stocks an M4×13" —
+    the agent is choosing the number right then, and a finding that arrives at BOM
+    time has already been designed around. Kept to {code, stocked, reason, nearest}
+    so it informs without burying the geometry the caller asked for."""
+    if not card or not card.get("designation"):
+        return None
+    v = _orderable.catalog_check(card)
+    out = {"code": v["code"], "stocked": v["stocked"], "reason": v["reason"]}
+    if v.get("nearest"):
+        out["nearest"] = v["nearest"]
+    return out
+
+
+def _consumable_of(obj):
+    """The o-ring an oring_groove cut on this object needs, or {}. The ring is a
+    purchased part that is never a modelled object, so without this it reaches no
+    BOM at all."""
+    raw = str(getattr(obj, "DP_ORing", "") or "")
+    if not raw:
+        return {}
+    try:
+        card = json.loads(raw)
+        return card if isinstance(card, dict) else {}
+    except ValueError:
+        return {}
+
+
 @handler("bom_extract")
 def _h_bom_extract(p):
     """Walk an assembly, group its parts, return a BOM:
@@ -5217,12 +5384,26 @@ def _h_bom_extract(p):
     the part is an external link, else the object's Label/Name.
 
     recursive (default True): descend into linked subassemblies (App::Part) so the
-    BOM flattens to leaf parts. False counts a subassembly as a single line."""
+    BOM flattens to leaf parts. False counts a subassembly as a single line.
+
+    orderable (default False, issue #234): opt in to the BUYABILITY view. The
+    default return shape is unchanged — a bare list — because everything downstream
+    consumes it; orderable=True instead returns a dict
+    {rows, consumables, undesignated, not_stocked, designation, stocked_count,
+    fidelity, captured, market, ok}, where each row also carries designation /
+    standard / part_class plus the catalog verdict (stocked, catalog_code, catalog).
+
+    check_stock=False designates without checking availability. ok=False means the
+    BOM is NOT buildable from off-the-shelf parts as it stands — a purchased row with
+    no designation, or one naming a part nobody stocks — and the offending rows stay
+    IN the list rather than being silently dropped."""
     import os as _os
     asm = _resolve(p["assembly"])
     density = float(p["density"]) if "density" in p else None
     recursive = p.get("recursive", True)
+    orderable = bool(p.get("orderable", False))
     counts = {}
+    consumables = {}
 
     def _add(base):
         fname = getattr(getattr(base, "Document", None), "FileName", "") or ""
@@ -5238,9 +5419,34 @@ def _h_bom_extract(p):
         row = counts.get(key)
         if row is None:
             counts[key] = {"part": part, "count": 1, "total_volume_mm3": v}
+            if orderable:
+                card = _orderable_of(base)
+                counts[key].update({
+                    "designation": card.get("designation"),
+                    "standard": card.get("standard"),
+                    "family": card.get("family"),
+                    "complete": card.get("complete"),
+                    "reason": card.get("reason", ""),
+                    "part_class": "purchased" if card.get("designation") else
+                                  str(getattr(base, "DP_PartClass", "") or ""),
+                })
         else:
             row["count"] += 1
             row["total_volume_mm3"] += v
+        if orderable:
+            ring = _consumable_of(base)
+            if ring.get("designation"):
+                # keyed by designation: one o-ring size ordered once, however many
+                # grooved parts call for it
+                c = consumables.setdefault(
+                    ring["designation"],
+                    {"part": ring["designation"], "count": 0, "kind": "oring",
+                     "designation": ring["designation"], "part_class": "purchased",
+                     "complete": ring.get("complete"),
+                     "reason": ring.get("reason", ""),
+                     "used_by": []})
+                c["count"] += 1
+                c["used_by"].append(part)
 
     def _walk(group):
         for o in group:
@@ -5257,7 +5463,178 @@ def _h_bom_extract(p):
         for r in rows:
             r["total_mass_kg"] = r["total_volume_mm3"] * density
     rows.sort(key=lambda r: -r["count"])
-    return rows
+    if not orderable:
+        return rows
+
+    rings = sorted(consumables.values(), key=lambda r: r["designation"])
+    out = _orderable.orderable_bom(rows + rings,
+                                   check_stock=bool(p.get("check_stock", True)))
+    # keep the modelled BOM and the consumables distinguishable: an o-ring is a
+    # purchased line, but it is not a part in the assembly tree
+    n = len(rows)
+    out["rows"], out["consumables"] = out["rows"][:n], out["rows"][n:]
+    return out
+
+
+@handler("standard_part_designate")
+def _h_standard_part_designate(p):
+    """Canonical designation for a purchased standard part (issue #234).
+
+    Three ways in, one card out:
+      handle:      read the designation stamped on a generated part. An object with
+                   no stamp reports designation=None and says whether its NAME reads
+                   like a purchased part — it never infers one from geometry, so a
+                   hand-modelled bracket can't acquire a false designation.
+      designation: normalise/parse a designation string ('iso4762 m4x12 a2' ->
+                   'ISO 4762 M4×12 A2'), so two spellings of one part cannot become
+                   two BOM lines.
+      family+spec: build one from facts. family in {fastener, bearing, oring,
+                   threaded_rod}; spec carries {kind,size,length,grade} /
+                   {designation,seals} / {inner_diameter,cross_section,compound} /
+                   {diameter,pitch,length,grade}.
+
+    Returns the designation card: {ok, family, standard, designation, complete,
+    reason, purchased, ...family fields}. complete=False means the string is not yet
+    enough to order against (typically no material grade) with `reason` naming the
+    gap — an unstated fact is reported, never defaulted to a plausible lie."""
+    if p.get("handle"):
+        obj = _resolve(p["handle"])
+        card = _orderable_of(obj)
+        if card.get("designation"):
+            return {**card, "ok": True, "source": "stamp",
+                    "name": getattr(obj, "Name", None)}
+        name = getattr(obj, "Label", None) or getattr(obj, "Name", "")
+        hint = _orderable.looks_purchased(name)
+        return {"ok": False, "designation": None, "complete": False,
+                "source": "stamp", "name": getattr(obj, "Name", None),
+                "looks_purchased": hint,
+                "reason": (f"{name} carries no designation and its name reads like a "
+                           f"purchased part (matched {hint['matched']}) — designate "
+                           "it explicitly" if hint["purchased"] else
+                           f"{name} carries no designation; nothing about it says it "
+                           "is a purchased standard part")}
+    if p.get("designation"):
+        return _orderable.parse_designation(p["designation"])
+
+    family = str(p.get("family") or "")
+    spec = dict(p.get("spec") or {})
+    if family == _orderable.FASTENER:
+        return _orderable.designate_fastener(
+            spec.get("kind"), spec.get("size"), spec.get("length"),
+            spec.get("grade"))
+    if family == _orderable.BEARING:
+        return _orderable.designate_bearing(spec.get("designation"),
+                                            spec.get("seals", "open"))
+    if family == _orderable.ORING:
+        return _orderable.designate_oring(spec.get("inner_diameter"),
+                                          spec.get("cross_section"),
+                                          spec.get("compound"))
+    if family == _orderable.THREADED_ROD:
+        return _orderable.designate_threaded_rod(
+            spec.get("diameter"), spec.get("pitch"), spec.get("length"),
+            spec.get("grade"))
+    raise ValueError(
+        "pass handle=, designation=, or family= with a spec; family must be one of "
+        f"{[_orderable.FASTENER, _orderable.BEARING, _orderable.ORING, _orderable.THREADED_ROD]}")
+
+
+@handler("designation_check")
+def _h_designation_check(p):
+    """Gate: every purchased part on this assembly must be orderable (issue #234).
+
+    Walks the BOM and flags rows that a buyer cannot act on — a purchased part with
+    no canonical designation, or one whose designation is missing a fact needed to
+    order it (no material grade). Purchased-ness is EXACT for DriftPin-generated
+    parts (the object is stamped) and a documented name heuristic for everything
+    else, so a hand-modelled bracket is never flagged while a hand-modelled part
+    called "M6Screw" is.
+
+    Pass `rows` instead of `assembly` to check BOM rows you already have.
+
+    Returns {ok, findings, purchased, designated, undesignated, incomplete, basis};
+    each finding carries part / count / code (no_designation | incomplete_designation)
+    / certainty (stamped | name_heuristic) / reason. ok=False means the BOM cannot be
+    ordered as it stands."""
+    rows = p.get("rows")
+    if rows is None:
+        bom = _h_bom_extract({"assembly": p["assembly"],
+                              "recursive": p.get("recursive", True),
+                              "orderable": True, "check_stock": False})
+        # consumables (an o-ring called for by a groove) are purchased lines too —
+        # excluding them would let the one purchased part with no modelled body slip
+        # past the gate that exists to catch exactly that
+        rows = bom["rows"] + bom["consumables"]
+    return _orderable.designation_check(rows)
+
+
+@handler("catalog_search")
+def _h_catalog_search(p):
+    """Browse the off-the-shelf catalog: which standard components actually exist,
+    in which sizes, in which stocked lengths (issue #234).
+
+    Every argument is an optional filter — family (screw / set_screw / nut / washer /
+    retaining_ring / pin / bearing / oring / threaded_rod), standard (a product
+    standard or alias, 'ISO 4762' or 'DIN 912'), kind, size, an exact length or a
+    min_length/max_length window, grade, drive, limit. Offline, deterministic, no
+    network.
+
+    Returns {ok, count, truncated, items, standards, fidelity, captured, market,
+    not_covered}. Each item is {standard, name, family, kind, drive, size, size_kind,
+    lengths (the stocked ladder, narrowed to any length filter), length_count,
+    grades, length_measured, designation?}. `not_covered` is the corpus's own
+    declaration of what it omits — read it before concluding a part doesn't exist."""
+    return _orderable.catalog_search(
+        family=p.get("family"), standard=p.get("standard"), kind=p.get("kind"),
+        size=p.get("size"), length=p.get("length"),
+        min_length=p.get("min_length"), max_length=p.get("max_length"),
+        grade=p.get("grade"), drive=p.get("drive"), limit=int(p.get("limit", 50)))
+
+
+@handler("catalog_nearest")
+def _h_catalog_nearest(p):
+    """Snap a desired standard part to the nearest one that actually exists (issue
+    #234) — the call that turns "I need a 13 mm screw" into "12 and 16 exist, adjust
+    the stack-up".
+
+    standard: a product standard or alias. size: thread/nominal/shaft size. length:
+    the wanted length in mm (omit for a product with no length dimension, or to list
+    the whole ladder). grade: optional, used to complete the returned designation.
+
+    Exact arithmetic on a DISCRETE ladder: nothing is interpolated and nothing is
+    silently rounded — a length between two rungs is not a part, and the caller
+    decides which way to move.
+
+    Returns {ok, standard, name, size, requested_length, exact, stocked, below,
+    above, nearest [{length, delta}], lengths, grades, designation, reason, fidelity,
+    captured, market}. `designation` is the canonical designation of the RECOMMENDED
+    part, so the answer is directly usable. ok=True means the request as asked is
+    already stocked."""
+    return _orderable.catalog_nearest(p["standard"], p["size"],
+                                      length=p.get("length"),
+                                      grade=p.get("grade"))
+
+
+@handler("catalog_check")
+def _h_catalog_check(p):
+    """Is this designation a part you can actually buy off the shelf (issue #234)?
+
+    Takes `designation` (a canonical designation string) or `handle` (a part whose
+    designation was stamped at creation) and resolves it against the curated
+    catalog. Offline and deterministic.
+
+    Returns {ok, code, standard, size, length, stocked, grade_ok, reason, nearest,
+    lengths, grades, fidelity, captured, market}. `code` is stocked |
+    not_stocked (the length is not a rung — `nearest` names the ones either side) |
+    size_not_stocked | grade_not_listed | not_catalogued (outside the corpus's
+    coverage, which is an absence of evidence and NOT a claim the part is
+    unavailable) | undesignated. ok is True only for `stocked`."""
+    if p.get("handle"):
+        card = _orderable_of(_resolve(p["handle"]))
+        if not card.get("designation"):
+            card = {"designation": None,
+                    "reason": "this object carries no designation to check"}
+        return _orderable.catalog_check(card)
+    return _orderable.catalog_check(p.get("designation"))
 
 
 @handler("envelope_check")

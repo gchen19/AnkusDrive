@@ -68,6 +68,12 @@ EXACT_TOOLS = {
     "dfm_check", "dfa_check", "pack_check", "cost_estimate", "slice_estimate",
     # durability
     "fatigue_check", "fracture_check", "wear_estimate", "creep_flag",
+    # orderable standard parts (issue #234): the designation layer is pure string
+    # arithmetic and the catalog layer is exact lookup on a discrete ladder in a
+    # checked-in dated corpus, so all four are bit-identical by construction — no
+    # wall clock (the capture date comes from the corpus, never from now()), no
+    # network, no dict-order or set-iteration dependence.
+    "standard_part_designate", "catalog_search", "catalog_nearest", "catalog_check",
 }
 
 # Solver / external-CLI / async-job submits: reproducible within a documented bound.
@@ -142,6 +148,10 @@ NOT_YET_CLASSIFIED = {
     # parks here rather than in EXACT_TOOLS because it reads a live document plus an
     # on-disk registry, so it has no representative-kwargs sweep entry.
     'release_package',
+    # orderable standard parts (issue #234). designation_check walks a live
+    # assembly, so it parks here with the other assembly-reading gates rather than
+    # in EXACT_TOOLS with its kwargs-only siblings.
+    'designation_check',
     'feature_instantiate', 'feature_list', 'feature_schema', 'feature_validate',
     'engrave_text', 'envelope_check', 'export_drawing', 'export_shape', 'fem_add_constraint',
     'engrave_text', 'envelope_check', 'export_drawing', 'export_shape',
@@ -293,6 +303,21 @@ ANALYSIS_SWEEP = [
     ("wear_estimate", dict(load_n=200, sliding_dist_m=5000, wear_coef=1e-4,
                            hardness_mpa=300, apparent_area_mm2=100)),
     ("creep_flag", dict(stress_mpa=50, temp_c=150, material="AL6061-T6")),
+    # --- orderable standard parts (issue #234) ---
+    # The designation entry uses the family+spec form (kwargs only, no handle). The
+    # catalog entries deliberately include a MISS: catalog_nearest on an unstocked
+    # length returns generated prose listing the ladder and the bracketing rungs, and
+    # catalog_search returns a size-keyed sweep — precisely the fields a dict- or
+    # set-iteration order bug would scramble.
+    ("standard_part_designate", dict(
+        family="fastener",
+        spec={"kind": "socket_head_cap_screw", "size": "M4", "length": 12,
+              "grade": "A2"})),
+    ("catalog_search", dict(family="screw", size="M6", min_length=10,
+                            max_length=30)),
+    ("catalog_nearest", dict(standard="ISO 4762", size="M4", length=13,
+                             grade="A2")),
+    ("catalog_check", dict(designation="ISO 4762 M4×13 A2")),
 ]
 
 
