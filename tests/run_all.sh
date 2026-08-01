@@ -182,6 +182,11 @@ python3 tests/test_drawing_thumbnail_section.py
 python3 tests/test_drawing_legibility_regression.py
 
 echo
+echo "== Inspection artifacts (issue #232 — balloons, inspection plan, AS9102-shaped FAI report) =="
+python3 tests/test_inspection.py
+python3 tests/test_inspection_worker.py
+
+echo
 echo "== Nonlinear structural FEM (plastic/elastica/Hertz oracles always; ccx gate when present) =="
 python3 tests/test_fem_nonlinear.py
 

@@ -3477,6 +3477,7 @@ _ADD_NOT_SOLID = {
     "add_thumbnail",         # a TechDraw isometric pictorial view
     "add_section_view",      # a TechDraw cross-section view
     "add_feature_note",      # a TechDraw feature note / leader annotation
+    "add_gdt_callout",       # a TechDraw GD&T feature control frame (issue #232)
 }
 
 

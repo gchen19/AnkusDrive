@@ -2291,7 +2291,8 @@ def set_title_block(
 
 @mcp.tool()
 def drawing_gate(page: str, process: str = "auto",
-                 datums_declared: bool = False) -> dict:
+                 datums_declared: bool = False,
+                 require_ballooned: bool = False) -> dict:
     """Manufacturing-completeness gate for a drawing page: does the placed
     dimension set fully and non-redundantly reconstruct the part? A green render
     is not a manufacturable drawing — this validates the *drawing* itself, the way
@@ -2315,9 +2316,16 @@ def drawing_gate(page: str, process: str = "auto",
     Datum-origin discipline turns on automatically when the part has faces annotated
     role='datum' (annotate_face): a location dimension not measured from a datum face
     is then flagged no_datum. Set datums_declared=True to force the check on even
-    without annotated datums."""
+    without annotated datums.
+
+    require_ballooned=True additionally demands that every characteristic carries an
+    inspection balloon (see balloon_drawing) — the requirement a release flow imposes
+    when the drawing must ship with an inspection plan. Unballooned characteristics
+    become `not_ballooned` violations and fail the gate. The `ballooned`
+    ({ok, total, ballooned, missing}) summary is reported either way."""
     return _call("drawing_gate", page=page, process=process,
-                 datums_declared=datums_declared)
+                 datums_declared=datums_declared,
+                 require_ballooned=require_ballooned)
 
 
 @mcp.tool()
@@ -2341,8 +2349,133 @@ def drawing_legibility(page: str, min_gap: float = 0.5) -> dict:
     min_gap (mm) is the breathing room required between two labels. Returns {ok,
     violations, labels, segments, views}; each violation has a `code`
     (overlap/crosses_view/out_of_border) and a human `reason`. ok=True means the
-    placed dimensions read cleanly on the sheet."""
+    placed dimensions read cleanly on the sheet. Inspection balloons count as placed
+    graphics too — a numbered circle sitting on a neighbour or off the sheet is
+    flagged like any other label."""
     return _call("drawing_legibility", page=page, min_gap=min_gap)
+
+
+# --- inspection: ballooned prints, plans, FAI reports (issue #232) ------------
+
+
+@mcp.tool()
+def add_gdt_callout(page: str, control: str, zone: float,
+                    datums: list | None = None, feature: str | None = None,
+                    mmc_bonus: float = 0.0, modifier: str = "",
+                    view: str = "", x: float = 20.0, y: float = 40.0,
+                    name: str = "Fcf") -> dict:
+    """Place a GD&T feature control frame on a drawing page.
+
+    Declaring geometric tolerance ON THE DRAWING (rather than only checking a
+    measurement with gdt_check) is what makes it inspectable: the frame renders as a
+    real compartmented symbol, and inspection_plan / fai_report read it back as a
+    characteristic with its own balloon and measurement method.
+
+    control: an ASME Y14.5 geometric characteristic — the same vocabulary gdt_check
+        accepts: flatness, straightness, circularity, cylindricity, profile_line,
+        profile_surface, perpendicularity, parallelism, angularity, position,
+        concentricity, runout, total_runout.
+    zone: tolerance zone in mm (rendered with a Ø for the diametral controls —
+        position, concentricity, circularity, cylindricity).
+    datums: the ordered datum reference frame, e.g. ["A", "B", "C"]. A control with
+        datums is CMM work; a datum-free form control is surface-plate work, and the
+        inspection plan picks the instrument accordingly.
+    feature: optionally the enumerated feature id (drawing_gate's
+        `enumerated_features`) the frame controls.
+    mmc_bonus: material-condition bonus tolerance carried into inspection, mm.
+    modifier: free text printed in the tolerance compartment (e.g. "Ⓜ").
+    x / y: page position in mm (origin bottom-left, +Y up, like add_annotation).
+
+    Returns {handle, name, control, zone, datums, text}."""
+    params: dict = {"page": page, "control": control, "zone": zone,
+                    "mmc_bonus": mmc_bonus, "modifier": modifier, "view": view,
+                    "x": x, "y": y, "name": name}
+    if datums is not None:
+        params["datums"] = datums
+    if feature is not None:
+        params["feature"] = feature
+    return _call("add_gdt_callout", **params)
+
+
+@mcp.tool()
+def balloon_drawing(page: str, renumber: bool = False) -> dict:
+    """Number every characteristic on a drawing page with an inspection balloon —
+    each dimension, feature control frame, and feature note gets a numbered circle
+    beside it, rendered on SVG/PDF export. This is the print a quality engineer
+    actually works from, and the key inspection_plan and fai_report row against.
+
+    Balloon numbers are an IDENTITY, not an ordinal. They are persisted on the
+    FreeCAD objects, so: re-running on an unchanged page reassigns nothing; adding a
+    dimension appends the next number rather than renumbering the print; and a
+    deleted dimension RETIRES its number instead of passing it to a different
+    feature — an inspection record written against balloon 7 can never come to mean
+    something else. Pass renumber=True to deliberately discard the numbering and
+    start from 1 (which invalidates any inspection record already written).
+
+    Call it after the dimensions are placed and fit_page has run. Returns
+    {count, balloons, assigned, kept, retired, next_balloon}; `balloons` maps each
+    source object name to its number."""
+    return _call("balloon_drawing", page=page, renumber=renumber)
+
+
+@mcp.tool()
+def inspection_plan(page: str, ratio: float = 10.0) -> dict:
+    """The characteristic list for a drawing page as data: every dimension, feature
+    control frame, and feature note, ballooned, with nominal, limits, and a suggested
+    measurement method per row.
+
+    The method follows the tolerance rather than a guess: the gauge-maker's `ratio`:1
+    rule (default 10:1 — the instrument must resolve a tenth of the tolerance band)
+    walked down a per-family instrument ladder, so a loose feature isn't sent to the
+    CMM and a tight bore isn't signed off with a caliper. A bore takes the pin/bore
+    gauge ladder (a micrometer can't reach inside one); a GD&T control referencing a
+    datum frame is CMM work; a datum-free form control is surface-plate work. The
+    required resolution is exact arithmetic, the instrument mapping is shop
+    convention — hence fidelity='correlation'.
+
+    Returns {ok, characteristics, count, by_method, unmeasurable, retired,
+    next_balloon, fidelity, band_pct, basis}. ok=False means a characteristic cannot
+    be inspected as drawn — an untoleranced size the inspector has no limits to
+    accept or reject against (code no_tolerance), or a band finer than any instrument
+    on its ladder (code no_instrument) — with `unmeasurable` naming which and why."""
+    return _call("inspection_plan", page=page, ratio=ratio)
+
+
+@mcp.tool()
+def fai_report(page: str, results: dict | None = None, path: str | None = None,
+               part: str | None = None, rev: str | None = None,
+               reference: str = "", ratio: float = 10.0) -> dict:
+    """First-article inspection report for a drawing page, shaped like AS9102 Rev B
+    Form 3.
+
+    Each ballooned characteristic becomes a row carrying the AS9102 fields (Char No. /
+    Reference Location / Characteristic Designator / Requirement / Results /
+    Designed-Qualified Tooling / Nonconformance Number / Notes) plus its limits, the
+    suggested measurement method, and a computed status.
+
+    results: balloon number -> measured value; each row is then accepted or rejected
+        against its limits. For a `position` control you may pass {"x":.., "y":..} and
+        the diametral deviation 2·√(x²+y²) is used, matching gdt_check. Omit it
+        entirely to get a BLANK form for the inspector — every row comes back
+        'not_evaluated', never a silent pass.
+    path: optionally write the report — .csv (the data), .svg or .pdf (a printable
+        paginated table).
+    part / rev: identity stamped into the file; default to the page's part name and
+        title-block revision.
+    reference: AS9102 field 6 (Reference Location), e.g. the sheet/zone; defaults to
+        the view each characteristic is dimensioned on.
+
+    THIS IS NOT A CERTIFIED AS9102 SUBMISSION — it reproduces the Form 3 field layout
+    so a real form can be filled from it, and says so on every artifact it writes.
+
+    Returns {ok, columns, rows, summary, disclaimer, part, rev, plan_ok,
+    unmeasurable, path?, size?, format?}; ok=False means at least one characteristic
+    measured out of limits."""
+    params: dict = {"page": page, "reference": reference, "ratio": ratio}
+    for k, v in (("results", results), ("path", path), ("part", part), ("rev", rev)):
+        if v is not None:
+            params[k] = v
+    return _call("fai_report", **params)
 
 
 @mcp.tool()
