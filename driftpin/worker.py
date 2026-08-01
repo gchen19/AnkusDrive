@@ -7107,6 +7107,12 @@ def _title_block_svg(page, page_w, page_h):
     x0, y0, x1, y1 = _title_block_box(page_w, page_h)
     xmid = x0 + _TB_W * 0.5
     name = str(fields.get("part") or _page_part_name(page))
+    # A release (#233) gates the block's part NUMBER against the items registry, so
+    # a print may carry both a descriptive name and the allocated number; show both
+    # rather than making the caller pick which one the vendor sees.
+    pn = str(fields.get("part_number") or "")
+    if pn and pn != name:
+        name = f"{name}  ·  {pn}"
     auto = {
         "MATERIAL": str(fields.get("material", "—")),
         "SCALE": _fmt_scale(_page_scale(page)),
@@ -7138,7 +7144,15 @@ def _title_block_svg(page, page_w, page_h):
     seg += cell(x0, 1, "MATERIAL", auto["MATERIAL"])
     seg += cell(xmid, 1, "SCALE", auto["SCALE"])
     seg += cell(x0, 2, "SIZE / UNITS", f"{auto['SIZE']}  ({auto['UNITS']})")
-    seg += cell(xmid, 2, "REV", auto["REV"])
+    # The ECO the current revision was cut under rides in the REV cell (#233): a
+    # revision letter with no change order behind it is the thing a buyer can't
+    # trace, and release_package stamps it here so the print and the release
+    # manifest name the same change.
+    eco = str(fields.get("eco") or "")
+    if eco:
+        seg += cell(xmid, 2, "REV / ECO", f"{auto['REV']}   {eco}")
+    else:
+        seg += cell(xmid, 2, "REV", auto["REV"])
     seg += cell(x0, 3, "DRAWN BY", auto["DRAWN"])
     seg += cell(xmid, 3, "DATE", auto["DATE"])
     if fields.get("project"):
@@ -7458,13 +7472,38 @@ def _compose_page_svg(page):
     return base[:idx] + overlay + base[idx:]
 
 
-def _svg_to_pdf(svg, path):
+def _pdf_capability():
+    """Can this host render a PDF? {ok, reason?, install?} — probed, never assumed.
+
+    release_package (issue #233) checks this BEFORE writing anything, so a machine
+    without the optional renderer refuses the package rather than shipping a bundle
+    quietly missing the sheet a human was supposed to read."""
+    try:
+        _prefer_self_site_packages()
+        import reportlab  # noqa: F401
+        import svglib  # noqa: F401
+    except Exception as exc:
+        return {"ok": False, "reason": f"PDF export needs svglib + reportlab ({exc})",
+                "install": "pip install svglib reportlab"}
+    return {"ok": True}
+
+
+def _svg_to_pdf(svg, path, invariant=False):
     """Rasterise-free SVG -> PDF via svglib + reportlab. Shared by the drawing
-    export and the FAI report (issue #232), so both PDFs come out of one path."""
+    export and the FAI report (issue #232), so both PDFs come out of one path.
+
+    `invariant` (issue #233) sets reportlab's own reproducibility switch before
+    rendering: it fixes the /CreationDate and the document /ID that would otherwise
+    make two renders of the same drawing differ. It cannot be fixed afterwards —
+    rewriting a date shifts the byte offsets the PDF's xref table points at — so a
+    release asks for it here."""
     import tempfile
     _prefer_self_site_packages()
     from svglib.svglib import svg2rlg
     from reportlab.graphics import renderPDF
+    if invariant:
+        from reportlab import rl_config
+        rl_config.invariant = 1
     tmp = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -7910,12 +7949,18 @@ def _h_set_title_block(p):
     """Populate the drawing's title block (issue #85 Part A3). The default FreeCAD
     template is a bare sheet, so DriftPin composes its own bottom-right block on
     SVG/PDF export. Scale, sheet size, units, and part name are auto-derived; the
-    supplied fields override or add to them. Fields: part, material, rev, drawn_by,
-    date, project, units. Calling this opts the page into rendering the block.
-    Returns {handle, name, fields}."""
+    supplied fields override or add to them. Fields: part, part_number, material, rev,
+    drawn_by, date, project, units, eco. Calling this opts the page into rendering the
+    block.
+
+    `part_number` and `eco` are the release-control fields (issue #233):
+    release_package gates part_number / rev / material against the items registry and
+    refuses on a disagreement, and stamps the ECO the revision was cut under into the
+    REV cell. Returns {handle, name, fields}."""
     doc = _active_doc()
     page = _resolve(p["page"])
-    keys = ("part", "material", "rev", "drawn_by", "by", "date", "project", "units")
+    keys = ("part", "part_number", "material", "rev", "drawn_by", "by", "date",
+            "project", "units", "eco")
     fields = {k: p[k] for k in keys if p.get(k) is not None}
     _stamp_title_block(page, fields)
     doc.recompute()
@@ -16753,6 +16798,328 @@ def _h_baseline_verify(p):
     reg = _items.load_registry(reg_path)
     base_dir = p.get("base_dir") or _os.path.dirname(_os.path.abspath(reg_path))
     return _chg.verify_baseline(baseline, reg, base_dir=base_dir)
+
+
+# --- release packages (issue #233, production-readiness epic #229) -----------
+#
+# The one-call vendor/RFQ bundle. Every decision — which kinds, is the item
+# releasable, does the title block agree with the registry, what the file is called,
+# how its bytes are made reproducible, what the manifest says — lives in the
+# FreeCAD-free driftpin/release.py and is unit-tested without a CAD kernel. This
+# shim only does what needs a kernel: find the pages and the geometry, drive the
+# existing exporters, and hand the resulting bytes back to the core.
+#
+# Two structural rules the code below enforces literally:
+#   * NOTHING is written until release_gate passes. A refused release must not
+#     leave a half-populated directory a build script could mistake for a package.
+#   * Every artifact is produced into a scratch directory first and only moved into
+#     out_dir once the whole set exists, so an exporter that blows up half way
+#     through does not leave a partial bundle either.
+
+
+def _release_pages(doc, refs):
+    """The drawing pages a release covers.
+
+    Explicit `refs` (handles, object names, or labels) win. Otherwise EVERY
+    TechDraw page in the active document is included, sorted by object name: the
+    document is the item's artifact, so its pages are the item's drawings, and
+    sorting makes the resulting file set independent of the order the pages were
+    created in. An unresolvable ref fails loudly — a release that quietly skipped a
+    page the caller named would ship an incomplete package."""
+    if refs:
+        out = []
+        for ref in refs:
+            obj = _handles.get(ref) or doc.getObject(str(ref))
+            if obj is None:
+                obj = next((o for o in doc.Objects
+                            if getattr(o, "Label", None) == ref), None)
+            if obj is None:
+                raise KeyError(f"no drawing page {ref!r} in document {doc.Name!r}")
+            out.append(obj)
+        return out
+    return sorted((o for o in doc.Objects if o.TypeId == "TechDraw::DrawPage"),
+                  key=lambda o: o.Name)
+
+
+def _release_geometry(doc, p, pages):
+    """The object the STEP is exported from.
+
+    Preference order: an explicit handle/object/assembly; else the source of the
+    first page's main view (the strongest binding there is — it is literally the
+    solid the drawing dimensions); else the first shaped object in the document."""
+    ref = p.get("handle") or p.get("object") or p.get("assembly")
+    if ref:
+        obj = _handles.get(ref) or doc.getObject(str(ref))
+        if obj is None:
+            raise KeyError(f"no object {ref!r} in document {doc.Name!r}")
+        return obj
+    for page in pages:
+        main = _page_main_view(page)
+        src = getattr(main, "Source", None) if main is not None else None
+        if src:
+            return src[0]
+    for o in doc.Objects:
+        if hasattr(o, "Shape") and not o.Shape.isNull():
+            return o
+    raise RuntimeError(
+        "no geometry to release; pass handle=/object= or open a document with a "
+        "shaped object in it")
+
+
+def _release_bom_rows(obj, p):
+    """The BOM rows for the released item.
+
+    An App::Part container is a real assembly, so it goes through bom_extract
+    (recursive by default — a vendor quoting a weldment needs the leaves, not the
+    node). A single part is a one-line BOM rather than an empty one: a package
+    whose BOM is blank reads as "no parts", which is a different and wrong claim."""
+    if obj.isDerivedFrom("App::Part"):
+        params = {"assembly": _register("release_bom", obj),
+                  "recursive": bool(p.get("recursive", True))}
+        if p.get("density") is not None:
+            params["density"] = float(p["density"])
+        return HANDLERS["bom_extract"](params)
+    shape = obj.Shape if (hasattr(obj, "Shape") and not obj.Shape.isNull()) else None
+    row = {"part": getattr(obj, "Label", None) or obj.Name, "count": 1,
+           "total_volume_mm3": shape.Volume if shape is not None else 0.0}
+    if p.get("density") is not None:
+        row["total_mass_kg"] = row["total_volume_mm3"] * float(p["density"])
+    return [row]
+
+
+def _release_gate_report(page_handle, process, require_ballooned):
+    """drawing_gate for one page, with a failure turned into a report rather than
+    an exception — a page that cannot even be gated (no part-views) is a release
+    problem to report alongside the others, not a crash that hides them."""
+    try:
+        return HANDLERS["drawing_gate"]({"page": page_handle, "process": process,
+                                         "require_ballooned": require_ballooned})
+    except Exception as exc:
+        return {"ok": False, "violations": [{"code": "gate_error", "a": "",
+                                             "reason": str(exc)}]}
+
+
+@handler("release_package")
+def _h_release_package(p):
+    """Produce the vendor/RFQ deliverable bundle for one item at one revision
+    (issue #233): STEP + drawings + BOM + inspection package + a checksummed
+    manifest, gated by the item's lifecycle state and stamped with its ECO.
+
+    Every piece of this already existed as its own tool. What did not exist is the
+    guarantee that ties them together — that the STEP, the PDF, the BOM and the
+    title block all describe the SAME revision of the SAME item. That is what this
+    handler enforces, and it enforces it BEFORE writing anything:
+
+      * the item must be in a releasable lifecycle state (`released`), or `draft`
+        must be set — which watermarks every artifact PRELIMINARY, in the drawing,
+        in the STEP header, in the DXF and in the CSVs. An `obsolete` item is
+        refused in both modes.
+      * `drawing_gate` must pass for every included page (with require_ballooned
+        when the inspection kind is requested).
+      * the title block's part number / revision / material must MATCH the items
+        registry. A mismatch is a failure with a naming diff, never a silent fix.
+
+    params: registry (items.json path), item (id), out_dir, kinds? (default
+    step/drawing_pdf/drawing_dxf/bom_csv/manifest_json; `manifest_json` is always
+    added and `inspection` implies a drawing kind), draft?, rfq?, eco? (defaults to
+    the item's metadata.eco), pages? (handles/names/labels — default every page in
+    the document), handle?/object?/assembly? (the geometry; default the first
+    page's main view source), process? (drawing_gate process), density?,
+    recursive?, quantity_breaks? (rfq, default [1, 10, 100]), cost_process?,
+    material? (rfq fallback when the registry declares none).
+
+    Determinism: same item at the same revision produces a byte-identical package.
+    The exporters' wall-clock header stamps (the STEP FILE_NAME timestamp above
+    all) are scrubbed to a fixed epoch, so a re-released package is diffable by
+    checksum.
+
+    Returns {ok, dir, item, part_number, rev, lifecycle, eco, draft, flavor, kinds,
+    dropped_kinds, implied_kinds, pages, files:[{name,kind,bytes,blake2b}],
+    manifest, manifest_path, verify, problems}. ok=False means the gate refused and
+    NOTHING was written — `problems` carries a code, a reason, and expected/actual
+    for every disagreement."""
+    import shutil
+    import tempfile
+
+    from driftpin import inspection as _insp
+    from driftpin import items as _items
+    from driftpin import release as _rel
+
+    reg = _items.load_registry(p["registry"])
+    item_id = p["item"]
+    rec = _items.get_item(reg, item_id)
+    if rec is None:
+        raise KeyError(f"no item {item_id!r} in registry {p['registry']!r}")
+
+    ident = _rel.identity(item_id, rec, eco=p.get("eco"))
+    resolved = _rel.resolve_kinds(p.get("kinds"), rfq=bool(p.get("rfq")))
+    kinds = resolved["kinds"]
+    draft = bool(p.get("draft"))
+    out_dir = p["out_dir"]
+
+    doc = _active_doc()
+    doc.recompute()
+    pages = _release_pages(doc, p.get("pages")) if _rel.needs_pages(kinds) else []
+    page_handles = {pg.Name: _register("release_page", pg) for pg in pages}
+
+    # --- gate: collect the facts, then let the pure core judge them -----------
+    require_ballooned = _rel.INSPECTION in kinds
+    process = p.get("process", "auto")
+    page_facts = [{
+        "page": pg.Name,
+        "title_block": _page_title_fields(pg),
+        "gate": _release_gate_report(page_handles[pg.Name], process,
+                                     require_ballooned),
+    } for pg in pages]
+    capabilities = ({_rel.DRAWING_PDF: _pdf_capability()}
+                    if _rel.DRAWING_PDF in kinds else {})
+    verdict = _rel.release_gate(ident, kinds=kinds, pages=page_facts, draft=draft,
+                                capabilities=capabilities)
+    if not verdict["ok"]:
+        return {"ok": False, "problems": verdict["problems"], "dir": out_dir,
+                "files": [], "kinds": kinds, "pages": [pg.Name for pg in pages],
+                "item": item_id, "part_number": ident["part_number"],
+                "rev": ident["rev"], "lifecycle": ident["lifecycle"],
+                "eco": ident["eco"], "draft": draft,
+                "flavor": "rfq" if p.get("rfq") else "release"}
+
+    watermark = verdict["watermark"]
+    pn, rev = ident["part_number"], ident["rev"]
+
+    # The one mutation a release makes: stamp the ECO the revision was cut under
+    # into the title block, so the print names the same change order the manifest
+    # does. Only onto a block that already exists — an absent title block is a gate
+    # failure above, never something we quietly invent.
+    if ident["eco"]:
+        for pg in pages:
+            fields = _page_title_fields(pg)
+            if fields is not None and fields.get("eco") != ident["eco"]:
+                fields = dict(fields)
+                fields["eco"] = ident["eco"]
+                _stamp_title_block(pg, fields)
+        doc.recompute()
+
+    # The name the STEP's PRODUCT entity is rewritten to: the model then
+    # self-identifies inside the recipient's CAD system, AND the per-session export
+    # counter OpenCASCADE would otherwise put there — which makes two exports of an
+    # unchanged solid differ — goes away.
+    product = f"{pn} Rev {rev}"
+
+    def _finish(name, kind, data):
+        """Canonicalize, watermark, and record one artifact's final bytes."""
+        data = _rel.canonical_bytes(name, data, product=product)
+        if watermark:
+            data = _rel.stamp_watermark(name, data, watermark)
+        blobs.append((name, kind, data))
+
+    blobs = []
+    work = tempfile.mkdtemp(prefix="release_")
+    try:
+        if _rel.STEP in kinds:
+            geom = _release_geometry(doc, p, pages)
+            name = _rel.artifact_name(pn, rev, _rel.STEP)
+            tmp = os.path.join(work, name)
+            HANDLERS["export_shape"]({"path": tmp, "object": geom.Name})
+            with open(tmp, "rb") as f:
+                _finish(name, _rel.STEP, f.read())
+
+        for pg in pages:
+            ph = page_handles[pg.Name]
+            svg_data = None
+            if _rel.DRAWING_SVG in kinds or _rel.DRAWING_PDF in kinds:
+                svg_name = _rel.artifact_name(pn, rev, _rel.DRAWING_SVG, page=pg.Name)
+                svg_data = _compose_page_svg(pg).encode("utf-8")
+                if watermark:
+                    svg_data = _rel.stamp_watermark(svg_name, svg_data, watermark)
+            if _rel.DRAWING_SVG in kinds:
+                blobs.append((svg_name, _rel.DRAWING_SVG, svg_data))
+            if _rel.DRAWING_PDF in kinds:
+                # rendered from the ALREADY-watermarked SVG, so a draft PDF carries
+                # the mark in its page content rather than bolted onto the container
+                name = _rel.artifact_name(pn, rev, _rel.DRAWING_PDF, page=pg.Name)
+                tmp = os.path.join(work, name)
+                _svg_to_pdf(svg_data.decode("utf-8"), tmp, invariant=True)
+                with open(tmp, "rb") as f:
+                    blobs.append((name, _rel.DRAWING_PDF, f.read()))
+            if _rel.DRAWING_DXF in kinds:
+                import TechDraw
+                name = _rel.artifact_name(pn, rev, _rel.DRAWING_DXF, page=pg.Name)
+                tmp = os.path.join(work, name)
+                TechDraw.writeDXFPage(pg, tmp)
+                with open(tmp, "rb") as f:
+                    _finish(name, _rel.DRAWING_DXF, f.read())
+            if _rel.INSPECTION in kinds:
+                rep = HANDLERS["fai_report"]({"page": ph, "part": pn, "rev": rev})
+                name = _rel.artifact_name(pn, rev, _rel.INSPECTION, page=pg.Name,
+                                          suffix="fai")
+                _finish(name, _rel.INSPECTION,
+                        _insp.fai_csv(rep, part=pn, rev=rev).encode("utf-8"))
+                plan = HANDLERS["inspection_plan"]({"page": ph})
+                name = _rel.artifact_name(pn, rev, _rel.INSPECTION, page=pg.Name,
+                                          suffix="plan")
+                _finish(name, _rel.INSPECTION,
+                        (json.dumps(plan, indent=2, sort_keys=True) + "\n")
+                        .encode("utf-8"))
+
+        bom_rows = None
+        if _rel.BOM_CSV in kinds:
+            geom = _release_geometry(doc, p, pages)
+            bom_rows = _release_bom_rows(geom, p)
+            name = _rel.artifact_name(pn, rev, _rel.BOM_CSV)
+            _finish(name, _rel.BOM_CSV,
+                    _rel.bom_csv(bom_rows, part=pn, rev=rev,
+                                 eco=ident["eco"]).encode("utf-8"))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    # --- the RFQ flavour: quantity breaks + the cost rollup as a baseline -----
+    rfq_block = None
+    if p.get("rfq"):
+        geom = _release_geometry(doc, p, pages)
+        shape = (geom.Shape if (hasattr(geom, "Shape") and not geom.Shape.isNull())
+                 else None)
+        volume = (shape.Volume if shape is not None else
+                  sum(float(r.get("total_volume_mm3") or 0.0)
+                      for r in (bom_rows or [])))
+        material = ident["material"] or p.get("material")
+        if not material:
+            rfq_block = {"ok": False, "rows": [], "reason":
+                         "no material: the item's metadata declares none and none "
+                         "was supplied, so there is nothing to price against"}
+        elif volume <= 0:
+            rfq_block = {"ok": False, "rows": [], "reason":
+                         "no positive volume to price"}
+        else:
+            rfq_block = _rel.quantity_break_table(
+                volume, material, p.get("quantity_breaks") or [1, 10, 100],
+                process=p.get("cost_process", "cnc"))
+
+    manifest = _rel.build_manifest(
+        ident, [_rel.describe_file(n, k, d) for n, k, d in blobs],
+        kinds=kinds, draft=draft, rfq=rfq_block, pages=[pg.Name for pg in pages],
+        dropped=resolved["dropped"], implied=resolved["implied"])
+    man_name = _rel.artifact_name(pn, rev, _rel.MANIFEST_JSON)
+
+    os.makedirs(out_dir, exist_ok=True)
+    for name, _kind, data in blobs:
+        with open(os.path.join(out_dir, name), "wb") as f:
+            f.write(data)
+    man_path = os.path.join(out_dir, man_name)
+    with open(man_path, "w", encoding="utf-8") as f:
+        f.write(_rel.serialize_manifest(manifest))
+
+    return {
+        "ok": True, "problems": [], "dir": out_dir, "item": item_id,
+        "part_number": pn, "rev": rev, "lifecycle": ident["lifecycle"],
+        "eco": ident["eco"], "material": ident["material"], "draft": draft,
+        "watermark": watermark, "flavor": manifest["flavor"], "kinds": kinds,
+        "dropped_kinds": resolved["dropped"], "implied_kinds": resolved["implied"],
+        "pages": [pg.Name for pg in pages], "files": manifest["files"],
+        "manifest": manifest, "manifest_path": man_path,
+        # self-check: re-read what we just wrote so the manifest can never claim a
+        # checksum the bytes on disk don't have
+        "verify": _rel.verify_package(manifest, out_dir),
+    }
 
 
 def _main():

@@ -6761,6 +6761,83 @@ def baseline_verify(baseline: str, registry: str,
                  base_dir=base_dir)
 
 
+# --- release packages (issue #233, production-readiness epic #229) -----------
+
+@mcp.tool()
+def release_package(registry: str, item: str, out_dir: str,
+                    kinds: list | None = None, draft: bool = False,
+                    rfq: bool = False, eco: str | None = None,
+                    pages: list | None = None, handle: str | None = None,
+                    object: str | None = None, process: str = "auto",
+                    density: float | None = None, recursive: bool = True,
+                    quantity_breaks: list | None = None,
+                    cost_process: str = "cnc",
+                    material: str | None = None) -> dict:
+    """Produce the vendor/RFQ deliverable bundle for one item at one revision —
+    STEP + drawings + BOM + inspection package + a checksummed manifest — gated by
+    the item's lifecycle state and stamped with its ECO.
+
+    Every piece of this exists as its own tool. What this adds is the guarantee
+    that ties them together: the STEP, the PDF, the BOM and the title block all
+    describe the SAME revision of the SAME item. That is the whole point of a
+    release, and it is enforced BEFORE a single file is written:
+
+      * the item must be in a releasable lifecycle state (`released`), or `draft`
+        must be set — which watermarks EVERY artifact PRELIMINARY (burned into the
+        drawing, and carried as a format-legal comment in the STEP header, the DXF
+        and the CSVs). An `obsolete` item is refused in both modes.
+      * `drawing_gate` must pass for every included page — with require_ballooned
+        when the inspection kind is requested.
+      * the title block's part number / revision / material must MATCH the items
+        registry. A mismatch is a FAILURE carrying expected-vs-actual, never a
+        silent fix: quietly rewriting the print would destroy the only independent
+        check that it and the model describe the same thing.
+
+    A refused release writes NOTHING — no half-populated directory a build script
+    could mistake for a package.
+
+    registry / item: the items.json sidecar and the item id being released.
+    out_dir: where the bundle is written (created if absent).
+    kinds: any of "step", "drawing_pdf", "drawing_svg", "drawing_dxf", "bom_csv",
+        "inspection", "manifest_json". Default step/drawing_pdf/drawing_dxf/
+        bom_csv/manifest_json. `manifest_json` is always added; `inspection`
+        (ballooned print + plan + blank AS9102 form) implies a drawing kind.
+    draft: cut a PRELIMINARY package from an unreleased item.
+    rfq: the quote flavour — adds quantity breaks and the cost_estimate rollup as a
+        quote-COMPARISON baseline (fidelity "correlation", band_pct 100 — trust the
+        ratios, not the dollars) and drops internal-only artifacts (the inspection
+        package, which states your acceptance criteria).
+    eco: the change order this release is cut under; defaults to the item's
+        metadata.eco. Stamped into the manifest AND the title block's REV cell.
+    pages: page handles/names/labels (default: every page in the document).
+    handle / object: the geometry to export (default: the first page's main view
+        source — literally the solid the drawing dimensions).
+    process: drawing_gate process ("auto" | "prismatic" | "turned").
+    density / recursive: BOM options, as in bom_extract.
+    quantity_breaks / cost_process / material: RFQ pricing inputs (default
+    [1, 10, 100], "cnc", and the item's declared material).
+
+    Determinism: the same item at the same revision produces a BYTE-IDENTICAL
+    package. The exporters' wall-clock header stamps (the STEP FILE_NAME timestamp
+    above all) are scrubbed to a fixed epoch, so a re-released package is diffable
+    by checksum.
+
+    Returns {ok, dir, item, part_number, rev, lifecycle, eco, material, draft,
+    watermark, flavor, kinds, dropped_kinds, implied_kinds, pages,
+    files:[{name, kind, bytes, blake2b}], manifest, manifest_path, verify,
+    problems}. ok=False means the gate refused and nothing was written; each
+    problem carries {code, where, field, expected, actual, reason}."""
+    params: dict = {"registry": registry, "item": item, "out_dir": out_dir,
+                    "draft": draft, "rfq": rfq, "process": process,
+                    "recursive": recursive, "cost_process": cost_process}
+    for k, v in (("kinds", kinds), ("eco", eco), ("pages", pages),
+                 ("handle", handle), ("object", object), ("density", density),
+                 ("quantity_breaks", quantity_breaks), ("material", material)):
+        if v is not None:
+            params[k] = v
+    return _call("release_package", **params)
+
+
 def run():
     mcp.run()
 

@@ -153,6 +153,8 @@ Test-Module 'Drawing gate: legibility regression'        'test_drawing_legibilit
 Test-Module 'Inspection: balloons/plan/FAI (pure core)'  'test_inspection.py'
 Test-Module 'Inspection: balloons/plan/FAI (worker)'     'test_inspection_worker.py'
 Test-Module 'CNC machinability + tolerance-cost (worker)' 'test_machining_worker.py'
+Test-Module 'Release package: gates/manifest (pure core)' 'test_release_package.py'
+Test-Module 'Release package: vendor/RFQ bundle (worker)' 'test_release_package_worker.py'
 Test-Module 'Nonlinear structural FEM (oracles; ccx.exe bundled)' 'test_fem_nonlinear.py'
 Test-Module 'Laminate / composite stack (oracles; layered FEM gated)' 'test_laminate.py'
 Test-Module 'Golden fixtures (issue #19)'                'test_golden_issue19.py'
