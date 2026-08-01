@@ -7146,14 +7146,114 @@ def _title_block_svg(page, page_w, page_h):
     return "<g id=\"driftpin-titleblock\">\n" + "\n".join(seg) + "\n</g>"
 
 
+# --- feature control frames (issue #232) --------------------------------------
+# A GD&T callout is a page annotation carrying a DP_Gdt JSON stamp. It renders as a
+# real feature control frame — the boxed, compartmented symbol — rather than loose
+# text, and the inspection layer reads the stamp back as a characteristic.
+
+# ASME Y14.5 geometric characteristic symbols. Unicode where the glyph exists;
+# a short ASCII word where it doesn't, so a font without the symbol block still
+# produces a readable print instead of tofu.
+_GDT_SYMBOL = {
+    "flatness": "⏥", "straightness": "—", "circularity": "○", "cylindricity": "⌭",
+    "profile_line": "⌒", "profile_surface": "⌓",
+    "perpendicularity": "⊥", "parallelism": "∥", "angularity": "∠",
+    "position": "⌖", "concentricity": "◎", "symmetry": "⌯",
+    "runout": "↗", "total_runout": "⌰",
+}
+
+# controls whose zone is diametral — the zone value is prefixed Ø on the frame
+_GDT_DIAMETRAL = {"position", "concentricity", "cylindricity", "circularity"}
+
+_FCF_H_MM = 5.0        # frame height, mm
+_FCF_PAD_MM = 1.2      # padding inside a compartment
+_FCF_FONT_MM = 3.0
+
+
+def _gdt_spec(ann):
+    """The DP_Gdt stamp on an annotation as a dict, or None."""
+    raw = str(getattr(ann, "DP_Gdt", "") or "")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _fcf_cells(spec):
+    """The frame's compartments, left to right: symbol | zone | datum refs."""
+    control = str(spec.get("control", ""))
+    zone = float(spec.get("zone", 0.0))
+    prefix = "Ø" if control in _GDT_DIAMETRAL else ""
+    mod = str(spec.get("modifier", "") or "")
+    tol = f"{prefix}{zone:g}{(' ' + mod) if mod else ''}"
+    cells = [_GDT_SYMBOL.get(control, control), tol]
+    cells += [str(d) for d in (spec.get("datums") or [])]
+    return cells
+
+
+def _fcf_layout(spec, x, y):
+    """Feature-control-frame geometry in page mm with its top-left at (x, y):
+    the outer box, the internal compartment dividers, and each cell's text anchor.
+    Returns {box, lines, texts} where `box` is [x0,y0,x1,y1]."""
+    cells = _fcf_cells(spec)
+    widths = [max(len(c) * _FCF_FONT_MM * 0.62, _FCF_H_MM) + 2 * _FCF_PAD_MM
+              for c in cells]
+    total = sum(widths)
+    lines, texts = [], []
+    x0, y0, x1, y1 = x, y, x + total, y + _FCF_H_MM
+    lines += [(x0, y0, x1, y0), (x0, y1, x1, y1),
+              (x0, y0, x0, y1), (x1, y0, x1, y1)]
+    cx = x0
+    for i, (cell, w) in enumerate(zip(cells, widths)):
+        if i:
+            lines.append((cx, y0, cx, y1))
+        texts.append((cx + w / 2.0, y0 + _FCF_H_MM * 0.72, cell))
+        cx += w
+    return {"box": [x0, y0, x1, y1], "lines": lines, "texts": texts}
+
+
+def _fcf_to_svg(spec, x, y):
+    lay = _fcf_layout(spec, x, y)
+    seg = [_svg_line(*ln) for ln in lay["lines"]]
+    for (tx, ty, cell) in lay["texts"]:
+        seg.append(f'<text x="{tx:.3f}" y="{ty:.3f}" font-size="{_FCF_FONT_MM}" '
+                   f'font-family="sans-serif" text-anchor="middle" '
+                   f'fill="{_DIM_COLOR}" stroke="none">{_xml_escape(cell)}</text>')
+    return "<g>\n" + "\n".join(seg) + "\n</g>"
+
+
+def _annotation_page_xy(ann, page_h):
+    """An annotation's anchor in SVG page coords (origin top-left, +Y down)."""
+    return (float(getattr(ann, "X", 0.0)), page_h - float(getattr(ann, "Y", 0.0)))
+
+
 def _annotation_to_svg(ann, page_h):
+    x, y = _annotation_page_xy(ann, page_h)
+    spec = _gdt_spec(ann)
+    if spec is not None:
+        # a feature control frame draws itself; its Text is only the fallback label
+        return _fcf_to_svg(spec, x, y - _FCF_H_MM)
     text = getattr(ann, "Text", None)
     if not text:
         return ""
     body = text[0] if isinstance(text, (list, tuple)) and text else str(text)
-    x = float(getattr(ann, "X", 0.0))
-    y = page_h - float(getattr(ann, "Y", 0.0))
     return _svg_text(x, y, body, anchor="start")
+
+
+def _annotation_box(ann, page_h):
+    """The page-mm box an annotation occupies — a real frame box for a GD&T
+    callout, an estimated text box otherwise. Used to hang a balloon off it."""
+    x, y = _annotation_page_xy(ann, page_h)
+    spec = _gdt_spec(ann)
+    if spec is not None:
+        return _fcf_layout(spec, x, y - _FCF_H_MM)["box"]
+    text = getattr(ann, "Text", None)
+    body = ""
+    if text:
+        body = text[0] if isinstance(text, (list, tuple)) and text else str(text)
+    return _text_box(x, y, "start", body)
 
 
 def _dim_axis_interval(dim, cx, cy, h_side, v_side, bbox):
@@ -7217,6 +7317,101 @@ def _iter_placed_dims(page):
                    "idx": idx, "bbox": bbox}
 
 
+# --- inspection balloons (issue #232) -----------------------------------------
+# A ballooned print is the quality engineer's input: every characteristic wears a
+# numbered circle, and the inspection plan / FAI report key off those numbers. The
+# number lives on the FreeCAD object (DP_Balloon), so it survives save/reopen and a
+# re-run reuses it rather than renumbering a print already in an inspector's hands.
+
+_BALLOON_R_MM = 3.0      # balloon circle radius, mm
+_BALLOON_GAP_MM = 1.2    # clearance between the characteristic and its balloon
+_BALLOON_FONT_MM = 3.0
+
+
+def _balloon_of(obj):
+    """The balloon number stamped on a dimension/annotation, or None."""
+    n = getattr(obj, "DP_Balloon", None)
+    try:
+        return int(n) if n else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _stamp_balloon(obj, n):
+    if not hasattr(obj, "DP_Balloon"):
+        try:
+            obj.addProperty("App::PropertyInteger", "DP_Balloon", "DriftPin",
+                            "inspection balloon number (issue #232)")
+        except Exception:
+            return
+    try:
+        obj.DP_Balloon = int(n)
+    except Exception:
+        pass
+
+
+def _balloon_layout(box, n):
+    """Place balloon `n` just clear of the characteristic's box, to its right, with
+    a short leader back to it. Returns {circle, box, leader, text}."""
+    r = _BALLOON_R_MM
+    cx = box[2] + _BALLOON_GAP_MM + r
+    cy = (box[1] + box[3]) / 2.0
+    return {
+        "circle": (cx, cy, r),
+        "box": [cx - r, cy - r, cx + r, cy + r],
+        "leader": (box[2], cy, cx - r, cy),
+        "text": (cx, cy + _BALLOON_FONT_MM * 0.35, str(n)),
+    }
+
+
+def _balloon_to_svg(lay):
+    # class-tagged so a balloon is identifiable in the exported SVG — the part
+    # geometry itself draws <circle> elements (every hole is one), so "is this a
+    # balloon" cannot be answered by element type alone.
+    cx, cy, r = lay["circle"]
+    tx, ty, label = lay["text"]
+    return ('<g class="driftpin-balloon">\n'
+            + _svg_line(*lay["leader"]) + "\n"
+            + f'<circle cx="{cx:.3f}" cy="{cy:.3f}" r="{r:.3f}" fill="#fff" '
+              f'stroke="{_DIM_COLOR}" stroke-width="{_DIM_LINE_MM}"/>\n'
+            + f'<text x="{tx:.3f}" y="{ty:.3f}" font-size="{_BALLOON_FONT_MM}" '
+              f'font-family="sans-serif" text-anchor="middle" '
+              f'fill="{_DIM_COLOR}" stroke="none">{_xml_escape(label)}</text>\n'
+            "</g>")
+
+
+def _iter_placed_balloons(page):
+    """Every ballooned characteristic with the page box its balloon hangs off.
+
+    Dimensions come through the SAME placement iterator the composer renders from
+    (_iter_placed_dims), so a balloon always lands beside the label as actually laid
+    out — including the lane packing. Annotations (feature control frames, feature
+    notes) use their own frame/text box. Yields {id, balloon, box, layout}."""
+    page_h = _page_size_mm(page)[1]
+    for pl in _iter_placed_dims(page):
+        n = _balloon_of(pl["dim"])
+        if not n:
+            continue
+        if pl["mode"] == "leader":
+            lay = _leader_layout(pl["dim"], pl["cx"], pl["cy"], pl["idx"], pl["bbox"])
+        else:
+            lay = _dim_layout(pl["dim"], pl["cx"], pl["cy"], pl["offset"],
+                              pl["h_side"], pl["v_side"], pl["bbox"])
+        if not lay:
+            continue
+        tx, ty, anchor, text = lay["text"]
+        box = _text_box(tx, ty, anchor, text)
+        yield {"id": pl["dim"].Name, "balloon": n, "box": box,
+               "layout": _balloon_layout(box, n)}
+    for ann in _page_annotations(page):
+        n = _balloon_of(ann)
+        if not n:
+            continue
+        box = _annotation_box(ann, page_h)
+        yield {"id": ann.Name, "balloon": n, "box": box,
+               "layout": _balloon_layout(box, n)}
+
+
 def _compose_page_svg(page):
     """Build a complete page SVG headless: the template (frame + title block)
     with each view's geometry fragment placed at its page position, plus
@@ -7250,6 +7445,9 @@ def _compose_page_svg(page):
         svg = _annotation_to_svg(ann, page_h)
         if svg:
             parts.append(svg)
+    # inspection balloons last, so a numbered circle is never buried under geometry
+    for b in _iter_placed_balloons(page):
+        parts.append(_balloon_to_svg(b["layout"]))
     tb = _title_block_svg(page, page_w, page_h)
     if tb:
         parts.append(tb)
@@ -7258,6 +7456,31 @@ def _compose_page_svg(page):
     if idx == -1:
         raise RuntimeError("template SVG has no </svg> to inject before")
     return base[:idx] + overlay + base[idx:]
+
+
+def _svg_to_pdf(svg, path):
+    """Rasterise-free SVG -> PDF via svglib + reportlab. Shared by the drawing
+    export and the FAI report (issue #232), so both PDFs come out of one path."""
+    import tempfile
+    _prefer_self_site_packages()
+    from svglib.svglib import svg2rlg
+    from reportlab.graphics import renderPDF
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".svg", delete=False, encoding="utf-8") as tf:
+            tf.write(svg)
+            tmp = tf.name
+        drawing = svg2rlg(tmp)
+        if drawing is None:
+            raise RuntimeError("svg2rlg could not parse the composed SVG")
+        renderPDF.drawToFile(drawing, path)
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 @handler("export_drawing")
@@ -7279,27 +7502,7 @@ def _h_export_drawing(p):
         with open(path, "w", encoding="utf-8") as f:
             f.write(svg)
     elif ext == ".pdf":
-        svg = _compose_page_svg(page)
-        import tempfile
-        _prefer_self_site_packages()
-        from svglib.svglib import svg2rlg
-        from reportlab.graphics import renderPDF
-        tmp = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                    "w", suffix=".svg", delete=False, encoding="utf-8") as tf:
-                tf.write(svg)
-                tmp = tf.name
-            drawing = svg2rlg(tmp)
-            if drawing is None:
-                raise RuntimeError("svg2rlg could not parse the composed page SVG")
-            renderPDF.drawToFile(drawing, path)
-        finally:
-            if tmp:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
+        _svg_to_pdf(_compose_page_svg(page), path)
     else:
         raise ValueError(
             f"unsupported drawing export extension: {ext!r} (use .pdf/.svg/.dxf)")
@@ -8110,7 +8313,12 @@ def _dim_descriptors(page, datum_faces=None):
                 else float(dim.getRawValue())
         except Exception:
             value = 0.0
+        # `view` is the projection code a print actually references (Front / Top /
+        # Right), falling back to the object name for a standalone view — an
+        # inspection report's Reference Location must read like the drawing, not
+        # like FreeCAD's internal object naming.
         d = {"name": dim.Name, "type": kind, "value": value,
+             "view": str(getattr(pv, "Type", "") or "") or pv.Name,
              "circle": None, "span": None, "from_datum": True}
         # stamped tolerance (add_dimension) — the tolerance-necessity gate (#173)
         # reads plus/minus to judge whether a dim's precision matches its function.
@@ -8237,7 +8445,12 @@ def _h_drawing_gate(p):
     backing (over_toleranced, with the ISO 286 band it could relax to). Function is
     read from annotate_face sealing/mating/datum roles plus optional `functional`
     (list of feature ids) / `fits` (id->fit-code) params. Warnings only unless
-    `necessity_strict` is set."""
+    `necessity_strict` is set.
+
+    Set `require_ballooned` (issue #232) to also demand that every characteristic on
+    the page carries an inspection balloon — the requirement a release flow imposes
+    when the drawing must ship with an inspection plan. Unballooned characteristics
+    become `not_ballooned` violations and fail the gate."""
     from driftpin import drawing_gate
     page = _resolve(p["page"])
     doc = _active_doc()
@@ -8283,7 +8496,36 @@ def _h_drawing_gate(p):
     except Exception as _exc:                                    # pragma: no cover
         rep["tolerance_necessity"] = {"ok": True, "advisory": True,
                                       "violations": [], "error": str(_exc)}
+    # optional release requirement (#232): the drawing must also be ballooned, so
+    # the inspection plan it ships with covers every characteristic. Unlike the
+    # advisories above this DOES fail the gate — a release flow asked for it.
+    rep["ballooned"] = _balloon_coverage(page)
+    if p.get("require_ballooned"):
+        for miss in rep["ballooned"]["missing"]:
+            rep["violations"].append({
+                "code": "not_ballooned", "a": miss["id"],
+                "reason": f"characteristic {miss['characteristic']!r} ({miss['id']}) "
+                          "carries no inspection balloon — run balloon_drawing "
+                          "before release"})
+        rep["ok"] = not rep["violations"]
     return rep
+
+
+def _balloon_coverage(page):
+    """How much of the page is ballooned: {ok, total, ballooned, missing}. `missing`
+    lists the characteristics with no balloon, so drawing_gate can name them."""
+    from driftpin import inspection
+    try:
+        dims, gdt, notes = _page_inspection_inputs(page)
+        chars = inspection.characteristics(dims, gdt, notes)
+    except Exception as _exc:                                    # pragma: no cover
+        return {"ok": True, "total": 0, "ballooned": 0, "missing": [],
+                "error": str(_exc)}
+    stamped = _page_balloon_state(page)
+    missing = [{"id": c["id"], "characteristic": c["characteristic"]}
+               for c in chars if c["id"] not in stamped]
+    return {"ok": not missing, "total": len(chars),
+            "ballooned": len(chars) - len(missing), "missing": missing}
 
 
 def _text_box(tx, ty, anchor, text):
@@ -8337,6 +8579,15 @@ def _page_dim_graphics(page):
         tx, ty, anchor, text = lay["text"]
         labels.append({"id": pl["dim"].Name, "text": text,
                        "box": _text_box(tx, ty, anchor, text)})
+    # Inspection balloons are drawn graphics too (issue #232) — a numbered circle
+    # sitting on top of a neighbouring label, or off the sheet, is a legibility
+    # fault exactly like an overlapping dimension, so the gate sees them as labels.
+    # Their leader stub is deliberately NOT registered as a segment: it is ~1 mm
+    # long and hangs off a label whose own crossing is already checked, so it can
+    # only ever repeat that verdict.
+    for b in _iter_placed_balloons(page):
+        labels.append({"id": f"{b['id']}.balloon", "text": str(b["balloon"]),
+                       "box": b["layout"]["box"]})
     return labels, segments, view_boxes
 
 
@@ -8447,6 +8698,383 @@ def _h_fit_page(p):
     scale = float(views[0].Scale) if hasattr(views[0], "Scale") else 1.0
     return {"scale": scale, "fits": bool(_fits(env)),
             "envelope": env, "border": border}
+
+
+# --- inspection: balloons, plan, FAI report (issue #232) ---------------------
+#
+# The gates above validate the drawing (complete, legible). This layer turns that
+# drawing into the quality engineer's inputs: a numbered print, a characteristic
+# list with a measurement method per row, and an AS9102-Form-3-shaped report. The
+# arithmetic — numbering, instrument selection, limit evaluation, the report shape —
+# lives in driftpin.inspection (FreeCAD-free, unit-tested). These shims only read
+# descriptors off the real page and persist the balloon numbers back onto it.
+
+# feature kinds whose diameter is measured from the INSIDE — a micrometer can't
+# reach into them, so their characteristics take the bore/pin-gauge ladder.
+_INTERNAL_KINDS = {"hole", "counterbore", "bore"}
+
+
+def _page_gdt_callouts(page):
+    """Every feature control frame placed on the page (add_gdt_callout), as
+    inspection descriptors: {name, control, zone, datums, mmc_bonus, feature, view}."""
+    out = []
+    for ann in _page_annotations(page):
+        spec = _gdt_spec(ann)
+        if spec is None:
+            continue
+        out.append({"name": ann.Name,
+                    "control": str(spec.get("control", "")),
+                    "zone": float(spec.get("zone", 0.0)),
+                    "datums": [str(d) for d in (spec.get("datums") or [])],
+                    "mmc_bonus": float(spec.get("mmc_bonus", 0.0) or 0.0),
+                    "feature": spec.get("feature"),
+                    "view": str(spec.get("view", "") or "")})
+    return out
+
+
+def _page_inspection_notes(page):
+    """Feature notes as inspection descriptors — a note is a characteristic too, but
+    an ATTRIBUTE one (verified against the CAD model, not gauged)."""
+    out = []
+    for o in page.Views:
+        fid = getattr(o, "DP_FeatureNote", None)
+        if not fid:
+            continue
+        text = getattr(o, "Text", None)
+        body = ""
+        if text:
+            body = text[0] if isinstance(text, (list, tuple)) and text else str(text)
+        out.append({"name": o.Name, "feature": str(fid), "text": body})
+    return out
+
+
+def _mark_internal_diameters(page, dims):
+    """Set ``internal`` on each Ø/R descriptor by asking the feature enumeration
+    which feature the dimension covers — a hole/counterbore/bore is internal, a
+    turned step or boss is not.
+
+    Reuses drawing_gate's own dim->feature assignment rather than a second
+    heuristic, so "which feature is this dimension about" has exactly one answer in
+    the codebase. Best-effort: an unmatched Ø is left unset and the inspection layer
+    falls back to the external (conservative) ladder."""
+    from driftpin import drawing_gate
+    main = _page_main_view(page)
+    if main is None:
+        return dims
+    try:
+        shape = main.Source[0].Shape
+        process = _infer_process(shape)
+        feats = _enumerate_features(shape, process)
+        kind_by_id = {f["id"]: f["kind"] for f in feats}
+        fmap = drawing_gate._dim_feature_map(feats, dims, process)
+    except Exception:
+        return dims
+    for d in dims:
+        if d.get("type") not in ("Diameter", "Radius"):
+            continue
+        entry = fmap.get(id(d))
+        if not entry:
+            continue
+        kinds = {kind_by_id.get(fid) for fid in entry["feats"]}
+        if kinds & _INTERNAL_KINDS:
+            d["internal"] = True
+        elif kinds:
+            d["internal"] = False
+    return dims
+
+
+def _page_inspection_inputs(page):
+    """(dims, gdt, notes) descriptors for driftpin.inspection, off the real page."""
+    dims = _mark_internal_diameters(page, _dim_descriptors(page))
+    return dims, _page_gdt_callouts(page), _page_inspection_notes(page)
+
+
+def _page_balloon_state(page):
+    """``{source id: balloon}`` already stamped on the page — the memory that makes
+    re-ballooning idempotent and keeps a revision from renumbering the print."""
+    out = {}
+    for dim in _page_dimensions(page):
+        pv = _dim_parent_view(dim)
+        if pv is None:
+            continue
+        n = _balloon_of(dim)
+        if n:
+            out[dim.Name] = n
+    for ann in _page_annotations(page):
+        n = _balloon_of(ann)
+        if n:
+            out[ann.Name] = n
+    for o in page.Views:
+        n = _balloon_of(o)
+        if n:
+            out[o.Name] = n
+    return out
+
+
+def _page_object_by_name(page, name):
+    return page.Document.getObject(name)
+
+
+@handler("add_gdt_callout")
+def _h_add_gdt_callout(p):
+    """Place a GD&T feature control frame on a drawing page (issue #232).
+
+    `control` is an ASME Y14.5 geometric characteristic — the same vocabulary
+    gdt_check accepts, so a callout on the print and a measurement check agree:
+    flatness, straightness, circularity, cylindricity, profile_line,
+    profile_surface, perpendicularity, parallelism, angularity, position,
+    concentricity, runout, total_runout. `zone` is the tolerance zone in mm
+    (diametral for position /
+    concentricity / circularity / cylindricity, and rendered with a Ø); `datums` is
+    the ordered datum reference frame (e.g. ["A","B","C"]); `feature` optionally
+    names the enumerated feature the frame controls; `mmc_bonus` is a
+    material-condition bonus carried into inspection; `modifier` is a free text
+    modifier printed in the tolerance compartment (e.g. "Ⓜ").
+
+    It renders as a real compartmented frame (not loose text) and is read back as a
+    characteristic by inspection_plan / fai_report. Returns
+    {handle, name, control, zone, datums, text}."""
+    from driftpin.analysis import tolerance as _T
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    control = str(p["control"])
+    if control not in _T._FORM_CONTROLS:
+        raise ValueError(f"unknown GD&T control {control!r}; supported: "
+                         f"{sorted(_T._FORM_CONTROLS)}")
+    zone = float(p["zone"])
+    if zone <= 0:
+        raise ValueError("GD&T tolerance zone must be > 0")
+    spec = {"control": control, "zone": zone,
+            "datums": [str(d) for d in (p.get("datums") or [])],
+            "mmc_bonus": float(p.get("mmc_bonus", 0.0) or 0.0),
+            "feature": p.get("feature"),
+            "view": p.get("view", ""),
+            "modifier": p.get("modifier", "")}
+    ann = doc.addObject("TechDraw::DrawViewAnnotation", p.get("name", "Fcf"))
+    page.addView(ann)
+    ann.Text = [" | ".join(_fcf_cells(spec))]
+    ann.X = float(p.get("x", 20.0))
+    ann.Y = float(p.get("y", 40.0))
+    _stamp_str_prop(ann, "DP_Gdt", json.dumps(spec))
+    doc.recompute()
+    return {"handle": _register("fcf", ann), "name": ann.Name, "control": control,
+            "zone": zone, "datums": spec["datums"], "text": ann.Text[0]}
+
+
+@handler("balloon_drawing")
+def _h_balloon_drawing(p):
+    """Number every characteristic on a drawing page with an inspection balloon
+    (issue #232) — each dimension, feature control frame, and feature note gets a
+    numbered circle beside it, rendered on SVG/PDF export.
+
+    Idempotent and revision-stable: numbers are persisted on the FreeCAD objects
+    (DP_Balloon), so re-running on an unchanged page reassigns nothing, adding a
+    dimension appends the next number instead of renumbering, and a deleted
+    dimension RETIRES its number rather than passing it to a different feature — an
+    inspection record written against balloon 7 can never come to mean something
+    else. Pass renumber=True to discard the existing numbering and start from 1.
+
+    Returns {count, balloons, assigned, kept, retired, next_balloon} where
+    `balloons` maps each source object name to its number."""
+    from driftpin import inspection
+    doc = _active_doc()
+    page = _resolve(p["page"])
+    doc.recompute()
+    dims, gdt, notes = _page_inspection_inputs(page)
+    existing = {} if p.get("renumber") else _page_balloon_state(page)
+    chars = inspection.characteristics(dims, gdt, notes)
+    result = inspection.assign_balloons(chars, existing)
+    for c in result["characteristics"]:
+        obj = _page_object_by_name(page, str(c["id"]))
+        if obj is not None:
+            _stamp_balloon(obj, c["balloon"])
+    if p.get("renumber"):
+        # clear stamps on anything that is no longer a characteristic, so a stale
+        # circle can't linger on the print after a renumber
+        live = {str(c["id"]) for c in result["characteristics"]}
+        for name in _page_balloon_state(page):
+            if name not in live:
+                obj = _page_object_by_name(page, name)
+                if obj is not None:
+                    _stamp_balloon(obj, 0)
+    doc.recompute()
+    return {"count": len(result["characteristics"]),
+            "balloons": inspection.balloon_map(result["characteristics"]),
+            "assigned": result["assigned"], "kept": result["kept"],
+            "retired": result["retired"], "next_balloon": result["next_balloon"]}
+
+
+@handler("inspection_plan")
+def _h_inspection_plan(p):
+    """The characteristic list for a drawing page as data (issue #232): every
+    dimension, feature control frame, and feature note, ballooned, with nominal,
+    limits, and a suggested measurement method per row.
+
+    The method follows the tolerance, not a guess: the gauge-maker's `ratio`:1 rule
+    (default 10:1 — the instrument must resolve a tenth of the band) walked down a
+    per-family instrument ladder, so a loose feature isn't sent to the CMM and a
+    tight bore isn't signed off with a caliper. The required resolution is exact
+    arithmetic; the instrument mapping is shop convention, hence
+    fidelity='correlation'.
+
+    Balloons are read from the page when balloon_drawing has run and assigned
+    in-memory otherwise (call balloon_drawing first to persist them).
+
+    Returns {ok, characteristics, count, by_method, unmeasurable, retired,
+    next_balloon, fidelity, band_pct, basis}. ok=False means some characteristic
+    cannot be inspected as drawn — an untoleranced size the inspector has no limits
+    for, or a band finer than any instrument on its ladder (`unmeasurable` says
+    which and why)."""
+    from driftpin import inspection
+    page = _resolve(p["page"])
+    _active_doc().recompute()
+    dims, gdt, notes = _page_inspection_inputs(page)
+    return inspection.inspection_plan(
+        dims, gdt, notes, existing=_page_balloon_state(page),
+        ratio=float(p.get("ratio", inspection.GAUGE_RATIO)))
+
+
+def _fai_table_svg(report, title, subtitle):
+    """Render an FAI characteristic table as a paginated A4-landscape SVG. Columns
+    are laid out proportionally to their content so the print stays readable, and
+    the disclaimer rides on every sheet — a page that escapes its bundle still says
+    what it is and what it isn't."""
+    cols = report["columns"]
+    rows = report["rows"]
+    page_w, page_h = 297.0, 210.0
+    margin, header_h, row_h = 8.0, 22.0, 5.2
+    # column weights: the free-text columns get the room, the numeric ones don't
+    weights = {"Char No.": 0.6, "Reference Location": 1.0,
+               "Characteristic Designator": 1.6, "Requirement": 2.0,
+               "Results": 1.0, "Designed / Qualified Tooling": 1.4,
+               "Nonconformance Number": 1.2, "Notes": 2.4, "Lower Limit": 0.9,
+               "Upper Limit": 0.9, "Measurement Method": 1.8, "Status": 1.0}
+    total_w = page_w - 2 * margin
+    wsum = sum(weights.get(c, 1.0) for c in cols)
+    widths = [total_w * weights.get(c, 1.0) / wsum for c in cols]
+    per_page = max(1, int((page_h - margin - header_h - 10.0) / row_h))
+    pages = [rows[i:i + per_page] for i in range(0, len(rows), per_page)] or [[]]
+
+    def _clip(text, w):
+        """Trim a cell to the width it was given, with an ellipsis when cut."""
+        s = "" if text is None else str(text)
+        n = max(1, int(w / (2.2 * 0.58)))
+        return s if len(s) <= n else s[:max(1, n - 1)] + "…"
+
+    def _txt(x, y, s, size, anchor="start", bold=False):
+        weight = ' font-weight="bold"' if bold else ''
+        return (f'<text x="{x:.2f}" y="{y:.2f}" font-size="{size}" '
+                f'font-family="sans-serif" text-anchor="{anchor}"{weight} '
+                f'fill="#000" stroke="none">{_xml_escape(s)}</text>')
+
+    sheets = []
+    for pno, chunk in enumerate(pages, start=1):
+        seg = [f'<rect x="0" y="0" width="{page_w}" height="{page_h}" '
+               f'fill="#fff" stroke="none"/>']
+        seg.append(_txt(margin, margin + 4.0, title, 4.6, bold=True))
+        seg.append(_txt(margin, margin + 9.0, subtitle, 2.6))
+        seg.append(_txt(margin, margin + 13.0, report["disclaimer"], 2.0))
+        seg.append(_txt(page_w - margin, margin + 4.0,
+                        f"Sheet {pno} of {len(pages)}", 2.6, anchor="end"))
+        y = margin + header_h
+        x = margin
+        for c, w in zip(cols, widths):
+            seg.append(_txt(x + 0.6, y - 1.2, _clip(c, w), 2.2, bold=True))
+            seg.append(f'<line x1="{x:.2f}" y1="{y - 5.0:.2f}" x2="{x:.2f}" '
+                       f'y2="{y + len(chunk) * row_h:.2f}" stroke="#000" '
+                       f'stroke-width="0.2"/>')
+            x += w
+        seg.append(f'<line x1="{margin:.2f}" y1="{y:.2f}" x2="{x:.2f}" '
+                   f'y2="{y:.2f}" stroke="#000" stroke-width="0.4"/>')
+        seg.append(f'<line x1="{x:.2f}" y1="{y - 5.0:.2f}" x2="{x:.2f}" '
+                   f'y2="{y + len(chunk) * row_h:.2f}" stroke="#000" '
+                   f'stroke-width="0.2"/>')
+        for row in chunk:
+            y += row_h
+            cx = margin
+            for c, w in zip(cols, widths):
+                seg.append(_txt(cx + 0.6, y - 1.4, _clip(row.get(c), w), 2.2))
+                cx += w
+            seg.append(f'<line x1="{margin:.2f}" y1="{y:.2f}" x2="{x:.2f}" '
+                       f'y2="{y:.2f}" stroke="#000" stroke-width="0.15"/>')
+        sheets.append(f'<g transform="translate(0,{(pno - 1) * page_h:.2f})">\n'
+                      + "\n".join(seg) + "\n</g>")
+    total_h = page_h * len(pages)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{page_w}mm" '
+            f'height="{total_h}mm" viewBox="0 0 {page_w} {total_h}">\n'
+            + "\n".join(sheets) + "\n</svg>\n")
+
+
+@handler("fai_report")
+def _h_fai_report(p):
+    """First-article inspection report for a drawing page (issue #232), shaped like
+    AS9102 Rev B Form 3.
+
+    Each ballooned characteristic becomes a row carrying the AS9102 fields (Char No.
+    / Reference Location / Characteristic Designator / Requirement / Results /
+    Designed-Qualified Tooling / Nonconformance Number / Notes) plus the limits, the
+    suggested measurement method, and a computed status. Supply `results` — a map of
+    balloon number -> measured value (or {"x":..,"y":..} for a position deviation) —
+    and each row is accepted or rejected against its limits; omit it and you get a
+    blank form for the inspector, with every row 'not_evaluated' rather than a
+    silent pass.
+
+    THIS IS NOT A CERTIFIED AS9102 SUBMISSION. It reproduces the Form 3 field layout
+    so a real form can be filled from it, and says so on every artifact it writes.
+
+    `path` optionally writes the report: .csv (the data), .svg or .pdf (a printable
+    table). `part` / `rev` stamp the identity into the file.
+
+    Returns {ok, columns, rows, summary, disclaimer, path?, size?, format?};
+    ok=False means at least one characteristic is out of limits."""
+    from driftpin import inspection
+    page = _resolve(p["page"])
+    _active_doc().recompute()
+    dims, gdt, notes = _page_inspection_inputs(page)
+    plan = inspection.inspection_plan(
+        dims, gdt, notes, existing=_page_balloon_state(page),
+        ratio=float(p.get("ratio", inspection.GAUGE_RATIO)))
+    chars = plan["characteristics"]
+    # identity follows the title block, not the CAD object label: the part NUMBER a
+    # vendor and an inspector key off is what set_title_block declares, and a report
+    # that quietly carried the modelling label instead would not match the print.
+    fields = _page_title_fields(page) or {}
+    part = p.get("part") or fields.get("part") or _page_part_name(page)
+    rev = p.get("rev") or fields.get("rev")
+    report = inspection.fai_rows(
+        chars, p.get("results"), reference=str(p.get("reference", "")),
+        sheet=str(getattr(page, "Label", "") or page.Name))
+    out = dict(report)
+    out["part"] = part
+    out["rev"] = rev
+    out["plan_ok"] = plan["ok"]
+    out["unmeasurable"] = plan["unmeasurable"]
+
+    path = p.get("path")
+    if path:
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".csv":
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(inspection.fai_csv(report, part=part, rev=rev))
+        elif ext in (".svg", ".pdf"):
+            title = f"FIRST ARTICLE INSPECTION — {part}"
+            sub = (f"Revision {rev}   ·   {len(report['rows'])} characteristics   ·   "
+                   f"pass {report['summary'].get('pass', 0)} / "
+                   f"fail {report['summary'].get('fail', 0)} / "
+                   f"not evaluated {report['summary'].get('not_evaluated', 0)}")
+            svg = _fai_table_svg(report, title, sub)
+            if ext == ".svg":
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(svg)
+            else:
+                _svg_to_pdf(svg, path)
+        else:
+            raise ValueError(f"unsupported FAI report extension: {ext!r} "
+                             "(use .csv/.svg/.pdf)")
+        out["path"] = path
+        out["size"] = os.path.getsize(path)
+        out["format"] = ext.lstrip(".")
+    return out
 
 
 # --- top-right pictorial thumbnail + auto cross-section (drawings-next) -------

@@ -116,6 +116,12 @@ NOT_YET_CLASSIFIED = {
     'bounding_box', 'chamfer_edges', 'check_airtight_path', 'check_shape',
     'classify_face_sides', 'close_document', 'close_sketch', 'contact_setup', 'copy_shape',
     'declare_intent', 'draft', 'drawing_gate', 'drawing_legibility', 'em_field',
+    # inspection artifacts (issue #232): the arithmetic is closed-form and the
+    # balloon numbering is deterministic by construction (both proven directly in
+    # tests/test_inspection.py), but these read a live TechDraw page rather than
+    # plain kwargs, so they park here with the other page-reading drawing tools
+    # pending a representative-kwargs sweep entry.
+    'add_gdt_callout', 'balloon_drawing', 'inspection_plan', 'fai_report',
     'feature_instantiate', 'feature_list', 'feature_schema', 'feature_validate',
     'engrave_text', 'envelope_check', 'export_drawing', 'export_shape', 'fem_add_constraint',
     'engrave_text', 'envelope_check', 'export_drawing', 'export_shape',
