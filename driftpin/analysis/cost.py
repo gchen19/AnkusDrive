@@ -13,13 +13,23 @@ Method (heuristic, documented in the function):
     cost_estimate — material cost (volume·density·price) + a per-process machine-
                     time model + amortized tooling/setup over the lot quantity
 
+Two optional inputs added by the production-readiness epic (#229), both defaulting
+to today's behaviour byte-for-byte:
+
+* ``tolerance_class`` (#235) scales the TABLE machine time by the shared
+  tolerance–cost curve — the gradient that makes a design pay for precision it
+  didn't need.
+* ``machine_time_hr`` (#231) replaces the order-of-magnitude table outright with a
+  time a real model computed (``cnc_time_estimate``), and tightens the rollup's
+  declared band to that model's.
+
 Units: volume mm³, density kg/m³, price USD/kg, machine rate USD/hr, time min/hr,
 mass kg, cost USD — matching the rest of ``analysis/``. See
 ``docs/SIMULATION_EXAMPLES.md`` §9 for the worked toys.
 """
 from __future__ import annotations
 
-from . import materials
+from . import materials, tolerance_cost
 
 
 # --- shared helper ------------------------------------------------------------
@@ -54,6 +64,13 @@ _PROCESS_HR_PER_CM3 = {
 }
 _PROCESS_DEFAULT = "cnc"
 
+# The declared band on the rollup. The default table is order-of-magnitude; a
+# machine time supplied by a real model (cnc_time_estimate) carries its own, much
+# tighter one, and the rollup must not keep claiming ±100 % once the dominant
+# unknown has been measured.
+_TABLE_BAND_PCT = 100.0
+_SUPPLIED_TIME_BAND_PCT = 50.0
+
 
 # --- cost rollup --------------------------------------------------------------
 
@@ -68,6 +85,9 @@ def cost_estimate(
     scrap_fraction: float = 0.0,
     density_kg_m3: float | None = None,
     price_usd_kg: float | None = None,
+    tolerance_class=None,
+    machine_time_hr: float | None = None,
+    machine_time_band_pct: float | None = None,
 ) -> dict:
     """Roll up the per-unit cost of one machined/molded part (Design for Cost).
 
@@ -90,19 +110,37 @@ def cost_estimate(
 
         unit_cost = material_cost + process_cost + tooling_amortized
 
+    **Tolerance (issue #235, optional).** ``tolerance_class`` — an IT grade, e.g.
+    ``'IT7'`` or ``7`` — scales the table machine time by the shared tolerance–cost
+    curve (:func:`driftpin.analysis.tolerance_cost.time_factor`): holding a grade
+    tighter than the process's natural capability buys slower finish passes, spring
+    passes, in-process gauging and sometimes a whole secondary operation, and
+    roughly doubles cost every 1.5 grades. ``None`` (the default) leaves the factor
+    at exactly 1.0, so every pre-#235 call returns exactly what it always did.
+
+    **A real machine time (issue #231, optional).** ``machine_time_hr`` replaces
+    the ``_PROCESS_HR_PER_CM3`` table with a time an actual model computed —
+    ``cnc_time_estimate`` / :func:`driftpin.analysis.machining.machining_time` — and
+    the rollup's ``band_pct`` drops from 100 to that model's band (``50`` by
+    default, or ``machine_time_band_pct``). The tolerance factor is then NOT applied
+    on top: ``cnc_time_estimate`` takes its own ``tolerance_class`` and applies the
+    same curve, so scaling again here would charge for the same precision twice.
+    ``breakdown.tolerance_applied`` records which of the two happened.
+
     Fidelity (``SIMULATION_NEXT.md`` contract): ``material_cost`` is exact given
-    its density/price inputs, but the machine-time table is order-of-magnitude, so
-    the rollup carries ``fidelity = "correlation"`` with ``band_pct = 100`` —
-    trust the *ratios* between processes and quantities, not the absolute dollars,
-    until the factors are calibrated to a real shop.
+    its density/price inputs. With the default table the machine time is
+    order-of-magnitude, so the rollup carries ``fidelity = "correlation"`` with
+    ``band_pct = 100`` — trust the *ratios* between processes and quantities, not
+    the absolute dollars. Supply ``machine_time_hr`` and the band tightens as above.
 
     Returns {material_cost, process_cost, tooling_amortized, unit_cost, mass_kg,
     fidelity, band_pct, breakdown:{volume_mm3, mass_kg, density_kg_m3,
-    price_usd_kg, scrap_fraction, process, machine_time_hr, machine_rate_usd_hr,
-    setup_min, quantity, setup_amortized, machining_cost, tooling_usd,
-    density_basis, price_basis}}. Raises ValueError on a non-positive
-    volume/quantity, an unknown process, or a material with no usable
-    density/price."""
+    price_usd_kg, scrap_fraction, process, machine_time_hr, machine_time_basis,
+    base_machine_time_hr, tolerance_class, tolerance_factor, tolerance_applied,
+    tolerance_basis, machine_rate_usd_hr, setup_min, quantity, setup_amortized,
+    machining_cost, tooling_usd, density_basis, price_basis}}. Raises ValueError on
+    a non-positive volume/quantity/machine time, an unknown process or tolerance
+    class, or a material with no usable density/price."""
     if volume_mm3 <= 0:
         raise ValueError("volume_mm3 must be > 0")
     if quantity < 1:
@@ -139,8 +177,27 @@ def cost_estimate(
     material_cost = mass_kg * price * (1.0 + scrap_fraction)
 
     # --- process cost: machining time + amortized setup ---
+    # The tolerance factor is computed either way so the breakdown always says what
+    # the declared class would have cost, even when it is not the thing applied.
+    tol = tolerance_cost.time_factor(tolerance_class, process=proc)
     volume_cm3 = volume_mm3 / 1000.0
-    machine_time_hr = volume_cm3 * _PROCESS_HR_PER_CM3[proc]
+    base_time_hr = volume_cm3 * _PROCESS_HR_PER_CM3[proc]
+    if machine_time_hr is not None:
+        if machine_time_hr <= 0:
+            raise ValueError("machine_time_hr must be > 0 when supplied")
+        # A supplied time already reflects its own tolerance class (see docstring):
+        # applying the factor again would double-charge for the same precision.
+        machine_time_hr = float(machine_time_hr)
+        time_basis = "supplied"
+        tolerance_applied = False
+        band_pct = float(machine_time_band_pct
+                         if machine_time_band_pct is not None
+                         else _SUPPLIED_TIME_BAND_PCT)
+    else:
+        machine_time_hr = base_time_hr * tol["factor"]
+        time_basis = "table"
+        tolerance_applied = tolerance_class is not None
+        band_pct = _TABLE_BAND_PCT
     machining_cost = machine_time_hr * machine_rate_usd_hr
     setup_amortized = (setup_min / 60.0) / quantity * machine_rate_usd_hr
     process_cost = setup_amortized + machining_cost
@@ -156,11 +213,12 @@ def cost_estimate(
         "tooling_amortized": round(tooling_amortized, 4),
         "unit_cost": round(unit_cost, 4),
         "mass_kg": round(mass_kg, 6),
-        # SIMULATION_NEXT.md fidelity contract: the process-time model is an
-        # order-of-magnitude screen, so the rollup is a focusing estimate, not a
-        # gate. material_cost alone is exact given its inputs.
+        # SIMULATION_NEXT.md fidelity contract: with the default table the
+        # process-time model is an order-of-magnitude screen, so the rollup is a
+        # focusing estimate, not a gate. material_cost alone is exact given its
+        # inputs. A supplied machine_time_hr tightens the band (see docstring).
         "fidelity": "correlation",
-        "band_pct": 100.0,
+        "band_pct": band_pct,
         "breakdown": {
             "volume_mm3": round(volume_mm3, 3),
             "mass_kg": round(mass_kg, 6),
@@ -169,6 +227,12 @@ def cost_estimate(
             "scrap_fraction": scrap_fraction,
             "process": proc,
             "machine_time_hr": round(machine_time_hr, 6),
+            "machine_time_basis": time_basis,
+            "base_machine_time_hr": round(base_time_hr, 6),
+            "tolerance_class": tolerance_class,
+            "tolerance_factor": tol["factor"],
+            "tolerance_applied": tolerance_applied,
+            "tolerance_basis": tol["basis"],
             "machine_rate_usd_hr": machine_rate_usd_hr,
             "setup_min": setup_min,
             "quantity": quantity,

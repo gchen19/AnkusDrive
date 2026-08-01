@@ -5793,6 +5793,9 @@ def cost_estimate(
     machine_rate_usd_hr: float = 60.0,
     setup_min: float = 10.0,
     scrap_fraction: float = 0.0,
+    tolerance_class: str | None = None,
+    machine_time_hr: float | None = None,
+    machine_time_band_pct: float | None = None,
 ) -> dict:
     """Per-unit cost rollup (Design for Cost). material_cost = volume·density·price
     ·(1+scrap) from the Materials DB (process: cnc | fdm | casting | injection).
@@ -5800,13 +5803,220 @@ def cost_estimate(
     over quantity, so unit_cost falls as quantity rises. The machine-time table is
     order-of-magnitude (fidelity='correlation', band_pct=100) — trust the ratios
     between processes/quantities, not the absolute dollars; material_cost alone is
-    exact given its inputs. Returns {material_cost, process_cost, tooling_amortized,
-    unit_cost, mass_kg, fidelity, band_pct, breakdown}. Errors on an unknown
-    material/process or non-positive volume/quantity."""
+    exact given its inputs.
+
+    Two optional inputs sharpen it. `tolerance_class` ('IT7', '9', …) scales the
+    TABLE machine time by the tolerance-cost curve (see tolerance_cost_check):
+    holding tighter than the process's natural capability roughly doubles cost every
+    1.5 IT grades. `machine_time_hr` REPLACES the table with a time a real model
+    computed (cnc_time_estimate) and drops band_pct from 100 to that model's band
+    (50 by default, or machine_time_band_pct); the tolerance factor is then not
+    applied again, because cnc_time_estimate already applied the same curve.
+    Both default to None, reproducing the pre-existing behaviour exactly.
+
+    Returns {material_cost, process_cost, tooling_amortized, unit_cost, mass_kg,
+    fidelity, band_pct, breakdown:{…, machine_time_hr, machine_time_basis,
+    base_machine_time_hr, tolerance_class, tolerance_factor, tolerance_applied,
+    tolerance_basis}}. Errors on an unknown material/process/tolerance class or a
+    non-positive volume/quantity/machine time."""
     return _call("cost_estimate", volume_mm3=volume_mm3, material=material,
                  process=process, quantity=quantity, tooling_usd=tooling_usd,
                  machine_rate_usd_hr=machine_rate_usd_hr, setup_min=setup_min,
-                 scrap_fraction=scrap_fraction)
+                 scrap_fraction=scrap_fraction, tolerance_class=tolerance_class,
+                 machine_time_hr=machine_time_hr,
+                 machine_time_band_pct=machine_time_band_pct)
+
+
+@mcp.tool()
+def tolerance_cost_check(
+    chain: list | None = None,
+    process: str = "cnc",
+    handle: str | None = None,
+    axis: str = "+z",
+    default_tol: float | None = None,
+    general: str = "m",
+) -> dict:
+    """Price a tolerance scheme against the process that has to hold it — the
+    missing link between tolerance_stackup ("what tolerance works") and
+    cost_estimate ("what does it cost").
+
+    Per toleranced dimension: its ISO 286 IT grade as a FLOAT (a band between IT6
+    and IT7 reports 6.4, not 7), the cheapest machining operation that holds that
+    grade naturally (drilling ~IT11, milling ~IT10, turning ~IT9, reaming ~IT7,
+    grinding ~IT6), a relative cost index normalised to 1.0 at `process`'s natural
+    capability, and a verdict: 'ok', 'in_process_tightening' (tighter but reachable
+    in the same operation), or 'needs_secondary_operation' — the flag, meaning the
+    part silently acquired an operation nobody costed. `pass` is false when any link
+    flags. Cost roughly doubles every 1.5 IT grades tightened below natural
+    capability; above it only inspection/scrap falls. `total_cost_index` is the sum,
+    so two tolerance SCHEMES over the same chain compare directly.
+
+    `chain` is the same [{name, nominal, plus, minus | tol}] tolerance_stackup
+    takes; instead pass a live `handle` (+ `axis`, `default_tol`, `general`) and the
+    chain is derived off the solid the same way. `process`: cnc | injection |
+    casting | sheet | fdm | drilling | milling | turning | boring | reaming |
+    grinding | honing | lapping.
+
+    fidelity='correlation', band_pct=50 — the RATIOS are defensible, the absolute
+    index is dimensionless and is not money. Returns {process, links:[{name,
+    nominal_mm, band_mm, it_grade, cost_index, verdict, cheapest_operation,
+    natural_it, note}], n_links, total_cost_index, mean_cost_index, flagged, pass,
+    fidelity, band_pct, basis, escalate_to}."""
+    params: dict = {"process": process}
+    if chain is not None:
+        params["chain"] = chain
+    if handle is not None:
+        params.update({"handle": handle, "axis": axis, "general": general})
+        if default_tol is not None:
+            params["default_tol"] = default_tol
+    return _call("tolerance_cost_check", **params)
+
+
+@mcp.tool()
+def suggest_loosening(
+    chain: list | None = None,
+    spec_min: float | None = None,
+    spec_max: float | None = None,
+    process: str = "cnc",
+    target_cpk: float = 1.33,
+    samples: int = 4000,
+    seed: int = 12345,
+    max_steps: int = 12,
+    step_grades: float = 1.0,
+    coarsest_it: float = 13.0,
+    handle: str | None = None,
+    axis: str = "+z",
+    default_tol: float | None = None,
+    general: str = "m",
+) -> dict:
+    """The loosest tolerance that works: which links can give up tolerance for the
+    biggest cost saving while the stack still passes.
+
+    Greedy, one IT grade at a time — every trial loosening is re-verified against
+    tolerance_stackup's seeded Monte-Carlo cpk before it is committed, so nothing it
+    suggests can fail the spec. Candidates are ranked by the tolerance_cost_check
+    curve, so the tightest (most expensive) links get opened first. Loosening
+    preserves each link's MEAN, so the stack's nominal does not move.
+
+    Two honest refusals: a chain that does not already meet `target_cpk` returns
+    ok=False (there is no margin to give away — tighten or re-spec, do not loosen),
+    and an already-loosest chain returns steps=[] with saving=0 rather than
+    inventing a saving. `stopped` says which: 'no_further_move' | 'max_steps'
+    (re-run on the returned chain to continue) | 'no_margin'.
+
+    `chain` / `handle` / `axis` / `default_tol` / `general` as in
+    tolerance_cost_check; `spec_min`/`spec_max` default to the chain's own
+    worst-case bounds. Returns {ok, steps:[{link, index, from_it, to_it,
+    from_band_mm, to_band_mm, cost_before, cost_after, saving, cpk}], stopped,
+    chain (the loosened scheme), cost_index_before, cost_index_after, saving,
+    saving_pct, cpk_before, cpk_after, target_cpk, spec, note, fidelity, band_pct,
+    basis}."""
+    params: dict = {"process": process, "target_cpk": target_cpk,
+                    "samples": samples, "seed": seed, "max_steps": max_steps,
+                    "step_grades": step_grades, "coarsest_it": coarsest_it}
+    if spec_min is not None:
+        params["spec_min"] = spec_min
+    if spec_max is not None:
+        params["spec_max"] = spec_max
+    if chain is not None:
+        params["chain"] = chain
+    if handle is not None:
+        params.update({"handle": handle, "axis": axis, "general": general})
+        if default_tol is not None:
+            params["default_tol"] = default_tol
+    return _call("suggest_loosening", **params)
+
+
+@mcp.tool()
+def cnc_machinability_check(
+    model: str,
+    max_l_over_d: float = 8.0,
+    min_tool_radius_mm: float = 0.5,
+    min_wall_mm: float = 0.8,
+    max_setups: int = 3,
+) -> dict:
+    """3-axis CNC machinability screen off a live solid — pure geometry, NO CAM
+    engine (no toolpath, no gouge check, no holder collision).
+
+    Counts SETUPS from a tool-approach census: for every machined face, which of
+    ±X/±Y/±Z can both address it (the normal does not point away — a wall parallel
+    to the tool axis is milled by the cutter's periphery) and reach it (a ray from
+    the face escapes the solid, the same caster the moldability undercut check
+    uses), reduced to a minimum cover. Faces lying on the stock envelope are
+    excluded: they are billet surfaces, and counting them would quote six setups
+    for a plain block.
+
+    Findings: 'undercut' (a machined face no principal approach reaches — 5-axis, a
+    special cutter, or a redesign), 'deep_pocket' (depth/(2·corner radius) past
+    max_l_over_d — the corner radius caps the cutter and it cannot reach),
+    'small_radius' (an internal corner below the smallest cutter quoted, including a
+    SHARP planar corner reported as radius 0, which no rotating tool can produce),
+    'thin_wall'. `pass` is false when any fires; more than max_setups is a warning,
+    not a failure. fidelity='correlation', band_pct=None (an ordinal screen — rank
+    variants with `score`, don't gate on it).
+
+    Returns {setups, setup_directions, coverage, machined_faces, stock_faces,
+    machined_area_mm2, min_internal_radius_mm, max_l_over_d_seen, undercut_faces,
+    findings:[{code, severity, feature, detail}], warnings, score, pass, fidelity,
+    band_pct, basis, escalate_to='cnc_time_estimate', limitations, n_faces}."""
+    return _call("cnc_machinability_check", model=model,
+                 max_l_over_d=max_l_over_d,
+                 min_tool_radius_mm=min_tool_radius_mm,
+                 min_wall_mm=min_wall_mm, max_setups=max_setups)
+
+
+@mcp.tool()
+def cnc_time_estimate(
+    model: str,
+    material: str,
+    setups: int | None = None,
+    tolerance_class: str | None = None,
+    stock_allowance_mm: float = 2.0,
+    setup_min: float = 15.0,
+    utilisation: float = 0.65,
+    mrr_cm3_min: float | None = None,
+    finish_cm2_min: float | None = None,
+) -> dict:
+    """Machining time for a live solid from a material-removal-rate model — the
+    honest `cnc` machine time cost_estimate's flat volume table cannot give.
+
+        stock         = bbox grown by stock_allowance_mm per side
+        roughing_min  = (stock − part volume) / MRR(material)
+        finishing_min = machined face area / finish area-rate(material)
+        total         = (roughing + finishing)/utilisation · tolerance factor
+                        + setups · setup_min
+
+    MRR is per material class (aluminium 60, steel 12, stainless 6, titanium 2.5
+    cm³/min …) — ratios that track the standard machinability ratings amplified by
+    the depth-of-cut headroom a soft alloy allows on the same spindle. Stock-envelope
+    faces are excluded from the finishing area: facing a billet is not finishing a
+    pocket. `setups` defaults to the count cnc_machinability_check derives from the
+    same solid, so the two tiers agree. `tolerance_class` ('IT7', 7, …) scales the
+    cutting time through the shared tolerance-cost corpus, so a tolerance costs the
+    same here as in tolerance_cost_check.
+
+    fidelity='correlation', band_pct=50 — the RSS of MRR scatter (±40 %) and
+    cut-time utilisation scatter (±25 %), against the flat table's ±100 %; supply a
+    measured `mrr_cm3_min` and it tightens to 30. Feed `machine_time_hr` into
+    cost_estimate(machine_time_hr=…) to replace the table there too.
+
+    Returns {machine_time_min, machine_time_hr, roughing_min, finishing_min,
+    cutting_min, setup_min_total, removed_volume_mm3, stock_volume_mm3,
+    removal_fraction, machined_area_mm2, setups, setups_basis, material_class,
+    material_basis, mrr_cm3_min, finish_cm2_min, utilisation, tolerance, bbox_mm,
+    part_volume_mm3, fidelity, band_pct, basis, warnings, next}."""
+    params: dict = {"model": model, "material": material,
+                    "stock_allowance_mm": stock_allowance_mm,
+                    "setup_min": setup_min, "utilisation": utilisation}
+    if setups is not None:
+        params["setups"] = setups
+    if tolerance_class is not None:
+        params["tolerance_class"] = tolerance_class
+    if mrr_cm3_min is not None:
+        params["mrr_cm3_min"] = mrr_cm3_min
+    if finish_cm2_min is not None:
+        params["finish_cm2_min"] = finish_cm2_min
+    return _call("cnc_time_estimate", **params)
 
 
 @mcp.tool()
