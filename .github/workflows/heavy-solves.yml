@@ -27,6 +27,15 @@ name: Heavy solver regressions (self-hosted)
 # The gate is RUN_HEAVY_SOLVES, read via tests/heavy_solve.py: unset (the default
 # in test.yml) every live solve skips even where the solver is installed; set
 # they run. Same self-hosted FreeCAD box as test.yml.
+#
+# TWO LANES (issue #220). The Linux job runs the whole suite. A second job runs on a
+# self-hosted Apple-Silicon box and covers only what is macOS-SPECIFIC and therefore
+# invisible to the Linux lane: the Darwin substrate routing (bash_argv ->
+# `multipass exec`), the LIVE preCICE FSI solve executed inside the Multipass VM, and
+# the LIVE SU2 solve through Rosetta 2 (issue #193 / #189 — both were verified by hand
+# and gated by nothing until now). The two jobs are independent: neither `needs` the
+# other, so a down Multipass VM never blocks the Linux regression report and a Linux
+# solver regression is still reported when the Mac is offline.
 
 on:
   push:
@@ -38,8 +47,12 @@ on:
       - "driftpin/jobs.py"
       - "tools/**"
       - "scripts/install-solvers.sh"
+      - "scripts/ci-macos-preflight.sh"
       - "tests/heavy_solve.py"
+      - "tests/run_macos_heavy.sh"
       - "tests/test_fsi.py"
+      - "tests/test_su2_native.py"
+      - "tests/test_wsl_routing.py"
       - "tests/test_em_fullwave.py"
       - "tests/test_openfoam.py"
       - "tests/test_cht.py"
@@ -57,8 +70,10 @@ on:
   schedule:
     - cron: "0 6 * * *"   # 06:00 UTC daily — slow-drift guard
 
-# One heavy run per ref needs the single self-hosted box; supersede the old run
-# instead of queueing behind it.
+# Each lane has exactly one self-hosted box, and the macOS lane's Multipass VM is
+# stateful (a single shared case-dir mount), so two concurrent runs on the same ref
+# would fight over it. Workflow-level, so both jobs are superseded together rather
+# than queueing behind the old run.
 concurrency:
   group: heavy-solves-${{ github.ref }}
   cancel-in-progress: true
@@ -68,7 +83,7 @@ permissions:
 
 jobs:
   heavy-solves:
-    name: Live external-solver regressions (self-hosted)
+    name: Live external-solver regressions (Linux, self-hosted)
     # Pin `Linux`: these live solvers (OpenFOAM/YADE/openEMS/bempp/preCICE) are Linux-only
     # and the steps are bash + AppImage. The Windows box shares the `driftpin` label, so
     # without this an unrelated Windows job could match. OS label is auto-applied.
@@ -94,3 +109,38 @@ jobs:
 
       - name: Run full suite WITH live external-solver solves
         run: bash tests/run_all.sh
+
+  heavy-solves-macos:
+    name: macOS substrate regressions — SU2/Rosetta + FSI/Multipass (self-hosted)
+    # Pin `macOS`: the Linux and Windows self-hosted boxes share the `driftpin` label,
+    # and this job's substrate (Multipass, Rosetta) exists only on the Mac. The OS
+    # label is auto-applied by the Actions runner.
+    runs-on: [self-hosted, driftpin, macOS]
+    # Far short of the Linux lane's 90: this is three files, not the whole suite —
+    # measured ~10s of solve on the reference box (FSI 8.9s for four preCICE windows,
+    # SU2 0.2s). The budget is almost entirely headroom for a WEDGED VM, where
+    # `multipass exec` blocks instead of failing; 30 min bounds that without any risk
+    # of cutting a real run.
+    timeout-minutes: 30
+    env:
+      RUN_HEAVY_SOLVES: "1"
+      # The FSI stack lives INSIDE the Multipass VM, so the four DRIFTPIN_* overrides
+      # and TMPDIR are absolute paths on that specific box — they come from the
+      # runner's own environment (~/actions-runner/.env), NOT from this file. The
+      # preflight step below fails with the exact `.env` lines when they are missing;
+      # docs/MACOS.md ("Self-hosted CI runner") has the setup.
+      DRIFTPIN_SKIP_PREFLIGHT: "1"   # the preflight is its own step, below
+    steps:
+      - uses: actions/checkout@v5
+
+      # Fail here, not four minutes into a coupled solve. A stopped VM, a dropped
+      # multipass-sshfs mount, or a stale in-VM override otherwise surfaces as an
+      # OpenFOAM abort or a preCICE handshake timeout that says nothing about the
+      # real cause. This also catches the silent-no-op case: if the FSI stack does
+      # not resolve, test_fsi.py's live case SKIPs and the job would pass green
+      # having tested nothing.
+      - name: Preflight — Multipass VM, case-dir mount, in-VM stack, Rosetta + SU2
+        run: bash scripts/ci-macos-preflight.sh
+
+      - name: Live macOS heavy solves (SU2 under Rosetta, FSI in the VM)
+        run: bash tests/run_macos_heavy.sh
