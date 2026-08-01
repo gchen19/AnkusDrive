@@ -112,11 +112,13 @@ pwsh tests\run_all.ps1       # the Windows suite (single interpreter)
 [`.github/workflows/test-windows.yml`](../.github/workflows/test-windows.yml) runs this
 suite on a **self-hosted Windows runner** (label `[self-hosted, driftpin, Windows]`) with
 FreeCAD 1.1 preinstalled. It is a separate workflow from the Linux `test.yml` /
-`heavy-solves.yml`, which are now pinned to the `Linux` label — both self-hosted runners
-share the `driftpin` label, so the OS label keeps a job from landing on the wrong box and
-running the other OS's shell scripts. The `Windows`/`Linux` labels are applied
-automatically by the Actions runner from the host OS. The FreeCAD-free `fast-checks.yml`
-(ruff + contracts) stays on a GitHub-hosted Ubuntu runner and covers both.
+`heavy-solves.yml`, which are now pinned to the `Linux` label — every self-hosted runner
+shares the `driftpin` label, so the OS label keeps a job from landing on the wrong box and
+running another OS's shell scripts. `heavy-solves.yml` also carries a `macOS`-pinned job
+for the Apple-Silicon substrate (see [MACOS.md](MACOS.md#ci-the-apple-silicon-lane)). The
+`Windows`/`Linux`/`macOS` labels are applied automatically by the Actions runner from the
+host OS. The FreeCAD-free `fast-checks.yml` (ruff + contracts) stays on a GitHub-hosted
+Ubuntu runner and covers all three.
 
 ## Installing the extra solvers (one script)
 

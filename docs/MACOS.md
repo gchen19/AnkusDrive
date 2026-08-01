@@ -179,6 +179,9 @@ RUN_HEAVY_SOLVES=1 python3 tests/test_fsi.py
 # PASS test_fsi_coupled_plate_deflects — 4 windows converged, tip 0 → 3.47 mm (monotone into the flow)
 ```
 
+This solve is now gated in CI on a self-hosted Apple-Silicon runner — see
+[CI: the Apple-Silicon lane](#ci-the-apple-silicon-lane) below.
+
 ### Injection-molding fill (and any other OpenFOAM app) in the VM
 
 `molding_fill_submit` runs `interFoam` on the ESI OpenFOAM installed in step 2, and prefers
@@ -216,6 +219,101 @@ only: the pinned LuxCore/appleseed/OSPRay tarballs are linux64 **ELF**, which ca
 run on macOS (Rosetta translates x86_64 *macOS* binaries, not Linux ones). POV-Ray is
 the one turnkey renderer here (`brew install povray`). No automated path for the rest
 on any OS yet.
+
+## CI: the Apple-Silicon lane
+
+Everything above was verified by hand. [`heavy-solves.yml`](../.github/workflows/heavy-solves.yml)
+now carries a second job — `heavy-solves-macos`, label `[self-hosted, driftpin, macOS]` —
+so a regression in the Darwin substrate is caught automatically instead of on the next
+manual run (issue [#220](https://github.com/gchen19/DriftPin/issues/220)). It shares the
+Linux lane's triggers (solver-path push to `main`, `workflow_dispatch`, the 06:00 UTC
+cron) and its `RUN_HEAVY_SOLVES: "1"`, but the two jobs are independent — a stopped
+Multipass VM never blocks the Linux regression report, and vice versa.
+
+**What it runs** — deliberately not the whole suite. Most heavy solvers aren't reachable
+on macOS at all (see the table above), so a full run would spend 90 minutes reconfirming
+skips. `tests/run_macos_heavy.sh` runs only the macOS-*specific* paths, the ones the
+Linux lane cannot see:
+
+| File | What would otherwise go untested |
+|---|---|
+| `tests/test_wsl_routing.py` | the Darwin routing contracts — `bash_argv` → `multipass exec`, `runs_in_substrate`, `_fsi_override`'s in-VM path trust, FSI participant routing (pure Python, seconds) |
+| `tests/test_su2_native.py` | the **live** SU2 channel solve — official x86_64 binary under Rosetta 2, through `solvers.run_argvs` |
+| `tests/test_fsi.py` | the **live** preCICE OpenFOAM↔CalculiX coupled solve, executed inside the VM |
+
+The whole lane is ~10 s of solve on the reference box (FSI 8.9 s for four preCICE
+windows, SU2 0.2 s) — verified end-to-end, 29/29 asserts, tip 0 → 3.4696 mm. Add files as
+arguments once their in-VM provisioning is validated — the molding gate is next, and is
+*not* in the default set because the macOS `openInjMoldSim` / `interFoam` solve has never
+been run live (see the section above):
+
+```bash
+bash tests/run_macos_heavy.sh tests/test_molding_fill.py
+```
+
+### One-time runner setup
+
+1. **Provision the box** exactly as the sections above describe: SU2 (`install-solvers.sh su2`)
+   + Rosetta, Multipass with a persistent `openfoam` instance carrying the FSI stack
+   (`install-solvers.sh fsi`), and the host scratch dir mounted at a matching path.
+2. **Register the runner** with the `driftpin` label (the `macOS` and `self-hosted` labels
+   are applied automatically from the host OS):
+
+   ```bash
+   # token from  Settings -> Actions -> Runners -> New self-hosted runner
+   ./config.sh --url https://github.com/gchen19/DriftPin --token <TOKEN> --labels driftpin
+   ./svc.sh install && ./svc.sh start      # run as a service so the cron lane fires unattended
+   ```
+
+3. **Put the box-specific paths in the runner's own environment**, `~/actions-runner/.env`
+   — *not* in the workflow, which must stay portable. The Actions runner applies this file
+   to every job it runs:
+
+   ```
+   TMPDIR=/Users/<you>/fsi-run
+   DRIFTPIN_CCX_PRECICE=/home/ubuntu/calculix-adapter/bin/ccx_preCICE
+   DRIFTPIN_PRECICE_LIB=/home/ubuntu/precice-serial/lib
+   DRIFTPIN_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
+   DRIFTPIN_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+   ```
+
+   `TMPDIR` is the host side of the `multipass mount`, so the `mkdtemp` case dirs land
+   somewhere the VM can `cd` into at the same absolute path. The other four are in-VM
+   paths. Restart the service after editing (`./svc.sh stop && ./svc.sh start`).
+4. **Keep the Mac awake** — `sudo pmset -a sleep 0 disablesleep 1`, or the 06:00 UTC cron
+   lane finds the VM suspended.
+
+### The preflight step
+
+The job's first step is [`scripts/ci-macos-preflight.sh`](../scripts/ci-macos-preflight.sh),
+which health-checks the whole substrate *before* any solve and reports every problem it
+finds at once:
+
+```bash
+bash scripts/ci-macos-preflight.sh          # full check — also useful locally
+bash scripts/ci-macos-preflight.sh --fsi    # VM substrate only
+bash scripts/ci-macos-preflight.sh --su2    # Rosetta + SU2 only
+```
+
+It exists because every failure mode here is stateful runner setup that surfaces as an
+unrelated-looking error minutes later:
+
+- **VM stopped or wedged.** Checks the instance state, `multipass start`s it if it isn't
+  Running, then probes `multipass exec` — a VM can report Running with a wedged agent
+  after a host sleep, which hangs a solve rather than failing it. The fix it prints is
+  `multipass restart`.
+- **The mount dropped.** `multipass-sshfs` is unreliable under load, and a missing mount
+  means `cd <case>` inside the VM silently fails. The check is a real round trip — write
+  a sentinel under `TMPDIR` on the host, `test -f` the same absolute path in the VM — and
+  it remounts once and retries before failing, since one remount beats a red run.
+- **A stale in-VM override.** On Darwin `solvers._fsi_override` *trusts* an absolute
+  override when `multipass` is present (the VM filesystem is opaque from the host), so a
+  typo resolves fine and only explodes mid-solve. The preflight `test -x`/`test -d`s all
+  four inside the VM, where they can actually be checked.
+- **The silent no-op.** If the FSI stack doesn't resolve, `test_fsi.py`'s live case
+  *skips* and the job goes green having tested nothing. So the preflight asserts
+  `solvers.fsi_stack_status()["ok"]` — the exact predicate the test gates on — and fails
+  when the live solve wouldn't run. Same for SU2 resolving.
 
 ## Process cleanup
 

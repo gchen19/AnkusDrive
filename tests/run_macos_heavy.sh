@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Run the macOS-reachable HEAVY solver regressions (issue #220) — the Apple-Silicon
+# lane of .github/workflows/heavy-solves.yml.
+#
+# WHY A SUBSET AND NOT run_all.sh
+#   The Linux heavy lane runs the whole suite with RUN_HEAVY_SOLVES=1 because every
+#   heavy solver is installed on that box. On macOS most of them are not reachable at
+#   all (Elmer has no macOS binaries, YADE/openEMS/bempp have no macOS build path here
+#   — see the per-solver table in docs/MACOS.md), so a full run would spend 90 minutes
+#   re-confirming skips. This lane runs exactly the paths that are macOS-SPECIFIC and
+#   therefore untested by the Linux lane:
+#
+#     tests/test_wsl_routing.py   the Darwin substrate routing contracts (bash_argv ->
+#                                 `multipass exec`, runs_in_substrate, _fsi_override's
+#                                 in-VM path trust, the FSI participant routing) — pure
+#                                 Python, seconds, and the first thing a regression breaks
+#     tests/test_su2_native.py    the LIVE SU2 channel solve: the official x86_64
+#                                 binary under Rosetta 2 through solvers.run_argvs
+#     tests/test_fsi.py           the LIVE preCICE OpenFOAM<->CalculiX coupled solve,
+#                                 executed inside the Multipass VM
+#
+#   Add more files as arguments once their in-VM provisioning is validated (the
+#   OpenFOAM-backed CFD / molding gates are the next candidates):
+#
+#     bash tests/run_macos_heavy.sh tests/test_molding_fill.py
+#
+# Every file runs even if an earlier one fails (unlike run_all.sh's `set -e`), so one
+# flaky coupled solve does not hide an SU2 regression; the exit code is non-zero if any
+# failed and the summary names them.
+#
+# USAGE
+#   bash tests/run_macos_heavy.sh                 # preflight + the default set
+#   bash tests/run_macos_heavy.sh <file>...       # preflight + just these files
+#   DRIFTPIN_SKIP_PREFLIGHT=1 bash tests/run_macos_heavy.sh
+#       skip the substrate health check — the CI job runs it as its own step so a
+#       substrate failure is attributed there instead of to the solves.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+# The gate tests/heavy_solve.py reads; without it every live solve SKIPs and this
+# lane would be a no-op that passes.
+export RUN_HEAVY_SOLVES=1
+
+if [ "${DRIFTPIN_SKIP_PREFLIGHT:-}" != "1" ]; then
+  bash scripts/ci-macos-preflight.sh || {
+    echo
+    echo "Aborting: the macOS heavy-solve substrate is not healthy (see above)." >&2
+    echo "The solves would fail deep inside OpenFOAM/preCICE with an unrelated-looking error." >&2
+    exit 1
+  }
+  echo
+fi
+
+if [ "$#" -gt 0 ]; then
+  FILES=("$@")
+else
+  FILES=(tests/test_wsl_routing.py tests/test_su2_native.py tests/test_fsi.py)
+fi
+
+FAILED=""
+for f in "${FILES[@]}"; do
+  echo
+  echo "== $f =="
+  if python3 "$f"; then
+    echo "-- $f PASSED"
+  else
+    echo "-- $f FAILED"
+    FAILED="$FAILED $f"
+  fi
+done
+
+echo
+if [ -z "$FAILED" ]; then
+  echo "macOS heavy solves: ALL PASSED (${#FILES[@]} file(s))"
+  exit 0
+fi
+echo "macOS heavy solves FAILED:$FAILED" >&2
+exit 1
