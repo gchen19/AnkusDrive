@@ -150,6 +150,8 @@ Test-Module 'Drawing gate: worker'                       'test_drawing_gate_work
 Test-Module 'Drawing gate: curved/periodic'              'test_drawing_gate_curved.py'
 Test-Module 'Drawing gate: thumbnail section'            'test_drawing_thumbnail_section.py'
 Test-Module 'Drawing gate: legibility regression'        'test_drawing_legibility_regression.py'
+Test-Module 'Sheet metal: bends/unfold/DXF (pure core)'   'test_sheetmetal.py'
+Test-Module 'Sheet metal: bends/unfold/DXF (worker)'      'test_sheetmetal_worker.py'
 Test-Module 'Inspection: balloons/plan/FAI (pure core)'  'test_inspection.py'
 Test-Module 'Inspection: balloons/plan/FAI (worker)'     'test_inspection_worker.py'
 Test-Module 'CNC machinability + tolerance-cost (worker)' 'test_machining_worker.py'
