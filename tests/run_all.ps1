@@ -101,6 +101,10 @@ Test-Module 'WSL routing for OpenFOAM families (#193)' 'test_wsl_routing.py'
 
 # --- static contracts + pure-Python toys (all cross-platform, no FreeCAD) -------
 Test-Module 'Static contracts (registry parity + docstrings + determinism coverage)' 'test_contracts.py'
+# Builds a wheel + sdist into a temp dir and asserts every runtime corpus is inside
+# (#234, #249). Cross-platform: it shells out to the SAME interpreter it runs under,
+# needs no FreeCAD, and SKIPs cleanly if that interpreter has no build backend.
+Test-Module 'Packaging: built wheel/sdist carries its data corpora (#249)' 'test_package_data.py'
 Test-Module 'Typed units / quantity layer'          'test_units.py'
 Test-Module 'Materials DB toys'                      'test_materials.py'
 Test-Module 'Machine-element rating toys'            'test_machine_elements.py'

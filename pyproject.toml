@@ -185,4 +185,25 @@ include = ["driftpin*"]
 exclude = ["tests*", "scratch*", "example*", "docs*"]
 
 [tool.setuptools.package-data]
-driftpin = ["worker.py", "analysis/materials/*.json", "analysis/standards/*.json"]
+# Everything the package reads back off disk at runtime. This list is NOT
+# cosmetic: a corpus missing here is absent from the built wheel, so every call
+# that loads it raises FileNotFoundError for pip-installed users while working
+# perfectly from a git checkout — which is how the ISO standards corpus stayed
+# unshipped for the project's whole life (#234) and the FSI case template after
+# it (#249). tests/test_package_data.py builds a distribution and re-derives this
+# list from the loaders themselves, so the next omission fails CI, not a user.
+#   worker.py             — spawned BY PATH inside freecadcmd's bundled Python
+#                           (it opens with `import FreeCAD`), never imported here.
+#   analysis/materials    — seed.json, optical.json, vendored fcmat.json.
+#   analysis/standards    — threads / bearings / stock / catalog ISO corpus.
+#   analysis/fsi_template — the preCICE + OpenFOAM + CalculiX case skeleton
+#                           copied by analysis/fsi_case.write_fsi_case(). Mostly
+#                           extensionless OpenFOAM dictionaries in nested dirs
+#                           with no __init__.py, so it needs a recursive `**/*`
+#                           rather than an extension glob.
+driftpin = [
+    "worker.py",
+    "analysis/materials/*.json",
+    "analysis/standards/*.json",
+    "analysis/fsi_template/**/*",
+]

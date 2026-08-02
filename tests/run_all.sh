@@ -35,6 +35,15 @@ echo "== Static contracts (registry parity + docstrings + escalate_to integrity 
 python3 tests/test_contracts.py
 
 echo
+echo "== Packaging: the BUILT wheel/sdist carries every runtime corpus (no FreeCAD) =="
+# Builds a real distribution into a temp dir and re-derives the expected data-file
+# list from the loaders themselves, so a package-data omission (#234, #249) fails
+# here instead of at a pip-installed user's first thread()/pipe()/write_fsi_case().
+# Picks its own backend: `python -m build` when importable, else setuptools' PEP 517
+# hooks (what the system python3 has), else `pip wheel`; SKIPs if none is available.
+python3 tests/test_package_data.py
+
+echo
 echo "== Typed units / quantity layer (pure-Python; no FreeCAD) =="
 python3 tests/test_units.py
 
