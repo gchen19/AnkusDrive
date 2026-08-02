@@ -11739,6 +11739,464 @@ def _h_cost_estimate(p):
     return cost.cost_estimate(**p)
 
 
+# --- tolerance <-> cost coupling (issue #235) ---------------------------------
+#
+# Both handlers take the SAME chain `tolerance_stackup` takes, and accept the same
+# live-handle shortcut (`_stackup_chain_from_shape`), so a stackup, its price and
+# its loosening all read one input. Nothing here touches geometry beyond that
+# shared derivation — the arithmetic is entirely in analysis/tolerance_cost.py.
+
+def _tolerance_chain(p):
+    """Pop the chain out of a params dict, deriving it off a live solid when a
+    `handle`/`model` is given instead — the same v2 Shape wiring
+    ``tolerance_stackup`` uses. Returns (chain, extras) where `extras` is the echo
+    block (axis, n_step_faces) the caller gets back so it can see what was read."""
+    handle = p.pop("model", None) or p.pop("handle", None)
+    if not handle or p.get("chain"):
+        p.pop("axis", None)
+        p.pop("default_tol", None)
+        p.pop("general", None)
+        return p.pop("chain", None), {}
+    _, shape = _shape_of(handle)
+    axis = p.pop("axis", "+z")
+    chain, n_step = _stackup_chain_from_shape(
+        shape, _pull_vector(axis),
+        default_tol=p.pop("default_tol", None),
+        general=p.pop("general", "m"))
+    p.pop("chain", None)
+    return chain, {"chain": chain, "axis": str(axis), "n_step_faces": n_step}
+
+
+@handler("tolerance_cost_check")
+def _h_tolerance_cost_check(p):
+    """Price a tolerance scheme against the process that has to hold it. For every
+    toleranced dimension: its ISO 286 IT grade (fractional — a band between IT6 and
+    IT7 reports as e.g. 6.4), the cheapest machining operation that holds that grade
+    naturally, a relative cost index normalised to 1.0 at the declared process's
+    natural capability, and a verdict — `ok`, `in_process_tightening`, or
+    `needs_secondary_operation` (the flag: the part quietly acquired an operation
+    nobody costed). `total_cost_index` is the sum, so two tolerance SCHEMES over the
+    same chain compare directly.
+
+    Args: `chain` [{name, nominal, plus, minus | tol}] OR a `handle`/`model`
+    (+ `axis`, `default_tol`, `general`) to derive one off the solid exactly as
+    tolerance_stackup does; `process` (cnc | injection | casting | sheet | fdm |
+    drilling | milling | turning | boring | reaming | grinding | honing | lapping,
+    default cnc). See driftpin.analysis.tolerance_cost. Returns {process, links,
+    n_links, total_cost_index, mean_cost_index, flagged, pass, fidelity, band_pct,
+    basis, escalate_to='suggest_loosening'}."""
+    from driftpin.analysis import tolerance_cost
+    p = dict(p)
+    chain, extras = _tolerance_chain(p)
+    res = tolerance_cost.tolerance_cost_check(chain=chain, **p)
+    res.update(extras)
+    return res
+
+
+@handler("suggest_loosening")
+def _h_suggest_loosening(p):
+    """The loosen-to-save loop: which links can give up tolerance for the biggest
+    cost saving while the stack still passes. Greedy, one IT grade at a time, every
+    committed step re-verified against tolerance.stackup's seeded Monte-Carlo cpk —
+    so nothing it suggests can fail the spec. Refuses (ok=False) when the chain does
+    not already meet target_cpk: there is no margin to give away and the answer is
+    to tighten, not loosen. An already-loosest chain returns steps=[] and saving=0
+    rather than inventing a saving.
+
+    Args: `chain` OR a `handle`/`model` (+ `axis`, `default_tol`, `general`) as in
+    tolerance_cost_check; `spec_min`/`spec_max` (else the chain's own worst-case
+    bounds), `process` (default cnc), `target_cpk` (default 1.33), `samples`,
+    `seed`, `max_steps`, `step_grades`, `coarsest_it`. See
+    driftpin.analysis.tolerance_cost. Returns {ok, steps, stopped, chain,
+    cost_index_before, cost_index_after, saving, saving_pct, cpk_before, cpk_after,
+    target_cpk, spec, note, fidelity, band_pct, basis}."""
+    from driftpin.analysis import tolerance_cost
+    p = dict(p)
+    chain, extras = _tolerance_chain(p)
+    res = tolerance_cost.suggest_loosening(chain=chain, **p)
+    # `chain` in the result is the LOOSENED scheme, so only the non-chain echo
+    # fields from a handle-derived read are merged back.
+    res.update({k: v for k, v in extras.items() if k != "chain"})
+    return res
+
+
+# --- CNC machinability + machining time (issue #231) --------------------------
+#
+# The geometry half of the two screening tiers. Deliberately reuses the moldability
+# ray machinery (`_ray_hits_solid`): "no straight pull frees this face" and "no
+# 3-axis approach reaches this face" are the same occlusion question asked of
+# different direction sets, and there is no reason for two ray casters in one file.
+#
+# NO CAM engine, by design — no toolpath, no gouge check, no holder collision.
+
+def _stock_faces(shape, tol=None):
+    """Per-face flags marking the ones lying ON the stock envelope.
+
+    A planar face whose outward normal is a principal direction and whose centroid
+    sits on the matching bounding-box plane is a sawn/extruded billet surface, not a
+    machined feature. Excluding these is what makes a plain rectangular block quote
+    ONE setup instead of six — see analysis/machining.setup_cover."""
+    bbox = shape.BoundBox
+    if tol is None:
+        tol = max(bbox.DiagonalLength * 1e-6, 1e-6)
+    limits = {"+x": bbox.XMax, "-x": bbox.XMin, "+y": bbox.YMax,
+              "-y": bbox.YMin, "+z": bbox.ZMax, "-z": bbox.ZMin}
+    axis_of = {"+x": 0, "-x": 0, "+y": 1, "-y": 1, "+z": 2, "-z": 2}
+    flags = []
+    for face in shape.Faces:
+        on_stock = False
+        if _surface_kind(face) == "planar":
+            n = _outward_normal(face)
+            if n.Length > 0:
+                n = App.Vector(n).normalize()
+                c = face.CenterOfMass
+                for name, vec in _PULL_AXES.items():
+                    d = App.Vector(*vec)
+                    if n.dot(d) > 1.0 - 1e-4:
+                        coord = (c.x, c.y, c.z)[axis_of[name]]
+                        if abs(coord - limits[name]) <= tol:
+                            on_stock = True
+                        break
+        flags.append(on_stock)
+    return flags
+
+
+def _face_probe_points(face, max_points=5):
+    """A few points that are genuinely ON ``face``, centroid first.
+
+    The centroid alone is not enough and not even always valid: a face with a hole
+    in it (the top of a block with a boss fused on) has its centre of mass sitting
+    in the hole, so a ray from there reports the boss as an obstruction and the
+    ordinary top face reads as an undercut. Walking a small parameter grid and
+    keeping only the points ``isInside`` accepts fixes that, and it also makes the
+    reachability answer the RIGHT question — can the tool get at ANY of this face —
+    rather than the accidental question of what one particular point can see."""
+    pts = []
+    tol = 1e-7
+    c = face.CenterOfMass
+    try:
+        if face.isInside(c, max(face.BoundBox.DiagonalLength * 1e-6, 1e-6), True):
+            pts.append(c)
+    except Exception:
+        pass
+    u0, u1, v0, v1 = face.ParameterRange
+    for fu in (0.5, 0.25, 0.75):
+        for fv in (0.5, 0.25, 0.75):
+            if len(pts) >= max_points:
+                return pts
+            u = u0 + (u1 - u0) * fu
+            v = v0 + (v1 - v0) * fv
+            try:
+                p = face.valueAt(u, v)
+                if face.isInside(p, tol, True):
+                    pts.append(p)
+            except Exception:
+                continue
+    return pts or [c]
+
+
+def _cnc_face_census(shape, directions):
+    """Per-face tool-approach descriptors for analysis/machining.setup_cover.
+
+    A face is REACHABLE from direction d when the tool can address it (the outward
+    normal does not point away from d — a wall parallel to the tool axis is milled
+    by the cutter's periphery, so ``n·d >= 0`` is the test, not ``> 0``) and can get
+    to it (a ray from just off the face along d escapes the solid). The escape test
+    is `_ray_hits_solid`, the moldability undercut caster.
+
+    A handful of points per face are probed (`_face_probe_points`) and the face
+    counts as reachable from d if ANY of them escapes — the tool only has to get at
+    part of the surface. Sampling is still sparse, so a face shadowed everywhere
+    except at a probe point can read as reachable; that limitation is reported on
+    the screen rather than papered over."""
+    bbox = shape.BoundBox
+    reach = bbox.DiagonalLength * 2.0 + 1.0
+    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)
+    stock = _stock_faces(shape)
+    faces = []
+    for i, face in enumerate(shape.Faces):
+        n = _outward_normal(face)
+        if n.Length == 0:
+            continue
+        n = App.Vector(n).normalize()
+        reachable = []
+        if not stock[i]:
+            offsets = [p + App.Vector(n).multiply(eps)
+                       for p in _face_probe_points(face)]
+            for name in directions:
+                d = App.Vector(*_PULL_AXES[name])
+                if n.dot(d) < -1e-6:
+                    continue                       # the tool would be behind it
+                if any(not _ray_hits_solid(shape, pt, App.Vector(d), reach)
+                       for pt in offsets):
+                    reachable.append(name)
+        faces.append({"name": f"Face{i + 1}", "reachable": reachable,
+                      "on_stock": bool(stock[i]), "area_mm2": round(face.Area, 4)})
+    return faces
+
+
+def _cnc_internal_radii(shape, faces, max_edges=400):
+    """Internal (concave) corner records ``{name, radius_mm, depth_mm}``.
+
+    Two sources, both of which cap the tool a machinist can use:
+
+    * a CONCAVE cylindrical face — a bored hole or a filleted pocket corner. Its
+      surface radius is the largest cutter that fits and its axial extent is how far
+      that cutter has to reach, so depth/(2·radius) is the classic L/D number.
+      Concavity is read from the normal: an internal cylinder's outward normal
+      points back toward its own axis.
+    * a SHARP straight internal corner between two planar faces — radius 0. A
+      rotating cutter physically cannot produce one, so it is a hard finding, and
+      reporting it as "radius 0" rather than omitting it is what stops the screen
+      from silently passing an unmakeable pocket.
+
+    Concavity of an edge is decided by how much material surrounds it: intersect a
+    small sphere centred on the edge midpoint with the solid — over half inside means
+    the material wraps around the edge, i.e. it is an internal corner. That is
+    unambiguous, unlike any test built from the two face normals alone (a 90°
+    convex and a 90° concave edge have identical normal pairs).
+
+    **Not every concave edge needs a fillet**, and this is the distinction that
+    keeps the finding useful: a pocket's floor-to-wall corner is cut sharp by the
+    flat END of the cutter and is perfectly ordinary, while a pocket's VERTICAL
+    corner has to be cut by the cutter's periphery and therefore inherits the tool's
+    radius. The discriminator is approach direction: a concave edge is only flagged
+    when every direction the two adjacent faces can BOTH be machined from runs
+    parallel to the edge itself. ``faces`` is the census from
+    :func:`_cnc_face_census`, which is where those directions come from.
+
+    Edges are only examined when at least one neighbouring face is machined (a
+    stock-to-stock edge is a billet arris), and the sphere test is capped at
+    ``max_edges`` so a dense import cannot turn a screen into a solve."""
+    import Part
+    out = []
+    for i, face in enumerate(shape.Faces):
+        if _surface_kind(face) != "cylindrical":
+            continue
+        surf = face.Surface
+        radius = float(getattr(surf, "Radius", 0.0) or 0.0)
+        if radius <= 0:
+            continue
+        # Sample position and normal at the SAME parameter point rather than using
+        # the face centroid: a full 360-degree cylinder's centroid lies exactly ON
+        # its axis, so the radial vector from it is zero and the concavity test
+        # silently drops every through-hole in the part.
+        pr = face.ParameterRange                  # (u0, u1, v0, v1); v is axial (mm)
+        u_mid = (float(pr[0]) + float(pr[1])) / 2.0
+        v_mid = (float(pr[2]) + float(pr[3])) / 2.0
+        try:
+            point = face.valueAt(u_mid, v_mid)
+            n = face.normalAt(u_mid, v_mid)
+        except Exception:
+            continue
+        axis = App.Vector(surf.Axis).normalize()
+        radial = point - App.Vector(surf.Center)
+        radial = radial - App.Vector(axis).multiply(radial.dot(axis))
+        if n.Length == 0 or radial.Length == 0:
+            continue
+        if App.Vector(n).normalize().dot(App.Vector(radial).normalize()) >= 0:
+            continue                              # convex boss, not a bore/fillet
+        depth = abs(float(pr[3]) - float(pr[2]))
+        out.append({"name": f"Face{i + 1}", "radius_mm": round(radius, 4),
+                    "depth_mm": round(depth, 4)})
+
+    stock = _stock_faces(shape)
+    if all(stock):
+        return out                                # a plain billet has no corners
+    reach = {f["name"]: set(f.get("reachable") or []) for f in faces}
+    bbox = shape.BoundBox
+    r_probe = max(min(bbox.DiagonalLength * 0.005, 1.0), 1e-3)
+    examined = 0
+    for j, edge in enumerate(shape.Edges):
+        if examined >= max_edges:
+            break
+        if _surface_kind_of_curve(edge) != "line":
+            continue
+        neighbours = [k for k, f in enumerate(shape.Faces)
+                      if any(e.isSame(edge) for e in f.Edges)]
+        if len(neighbours) != 2:
+            continue
+        if all(stock[k] for k in neighbours):
+            continue
+        if any(_surface_kind(shape.Faces[k]) != "planar" for k in neighbours):
+            continue
+        common = (reach.get(f"Face{neighbours[0] + 1}", set())
+                  & reach.get(f"Face{neighbours[1] + 1}", set()))
+        if not common:
+            # No approach machines both faces — the corner is inside a region the
+            # undercut finding already owns. Reporting it again would just noise up
+            # the same defect.
+            continue
+        tangent = edge.tangentAt(
+            (edge.FirstParameter + edge.LastParameter) / 2.0)
+        if tangent.Length == 0:
+            continue
+        tangent = App.Vector(tangent).normalize()
+        # A sharp corner only needs a fillet when the cutter has to reach it with
+        # its PERIPHERY, i.e. when every shared approach runs along the edge. A
+        # floor-to-wall corner (edge across the approach) is cut by the flat end of
+        # the tool and is perfectly ordinary work.
+        if not all(abs(tangent.dot(App.Vector(*_PULL_AXES[d]))) > 1.0 - 1e-4
+                   for d in common):
+            continue
+        mid = edge.valueAt((edge.FirstParameter + edge.LastParameter) / 2.0)
+        examined += 1
+        try:
+            probe = Part.makeSphere(r_probe, mid)
+            inside = shape.common(probe).Volume
+        except Exception:
+            continue
+        if inside > 0.5 * probe.Volume + 1e-12:
+            out.append({"name": f"Edge{j + 1}", "radius_mm": 0.0,
+                        "depth_mm": round(edge.Length, 4)})
+    return out
+
+
+def _surface_kind_of_curve(edge):
+    """'line' | 'circle' | … for an edge's underlying curve — the edge-side twin of
+    _surface_kind, kept local because only the machinability census needs it."""
+    name = type(edge.Curve).__name__
+    return name.lower()
+
+
+def _cnc_wall_samples(shape):
+    """Local wall thickness per machined face, by the inward chord the moldability
+    tools already use. Only machined faces are probed: the chord across a plain
+    billet is the stock thickness, which says nothing about a thin rib."""
+    import Part
+    bbox = shape.BoundBox
+    reach = bbox.DiagonalLength * 2.0 + 1.0
+    eps = max(bbox.DiagonalLength * 1e-4, 1e-4)
+    stock = _stock_faces(shape)
+    walls = []
+    for i, face in enumerate(shape.Faces):
+        if stock[i]:
+            continue
+        n = _outward_normal(face)
+        if n.Length == 0:
+            continue
+        n = App.Vector(n).normalize()
+        in_pt = face.CenterOfMass - App.Vector(n).multiply(eps)
+        try:
+            chord = shape.common(
+                Part.makeLine(in_pt, in_pt - App.Vector(n).multiply(reach)))
+            if chord.Length > 1e-6:
+                walls.append({"name": f"Face{i + 1}",
+                              "wall_mm": round(chord.Length, 4)})
+        except Exception:
+            pass
+    return walls
+
+
+@handler("cnc_machinability_check")
+def _h_cnc_machinability_check(p):
+    """3-axis CNC machinability screen off a live solid — pure geometry, NO CAM
+    engine (no toolpath, no gouge check, no holder collision; the Path/CAM tier is a
+    separate decision).
+
+    Resolves the `model` handle's shape and derives four things: a tool-approach
+    census (for each machined face, which of ±X/±Y/±Z can both address it and reach
+    it, the reach test being the same ray caster the moldability undercut check
+    uses) reduced to a minimum setup cover; internal corner records (concave
+    cylinders give radius + axial reach, sharp planar internal corners give radius
+    0); and inward-chord wall samples. Faces lying on the stock envelope are
+    excluded from the census — they are billet surfaces, and counting them would
+    quote six setups for a plain block.
+
+    Findings: `undercut` (a machined face no principal approach reaches),
+    `deep_pocket` (L/D past the tooling limit), `small_radius` /
+    `sharp_internal_corner` (below the smallest cutter), `thin_wall`; plus a
+    `many_setups` warning. Fidelity correlation; escalates to cnc_time_estimate.
+
+    Args: model/handle; max_l_over_d (default 8), min_tool_radius_mm (0.5),
+    min_wall_mm (0.8), max_setups (3). See driftpin.analysis.machining. Returns
+    {setups, setup_directions, coverage, machined_faces, stock_faces,
+    machined_area_mm2, min_internal_radius_mm, max_l_over_d_seen, undercut_faces,
+    findings, warnings, score, pass, fidelity, band_pct, basis, escalate_to,
+    limitations, n_faces}."""
+    from driftpin.analysis import machining
+    handle = p.get("model") or p.get("handle")
+    if not handle:
+        raise ValueError("cnc_machinability_check needs a `model` handle")
+    _, shape = _shape_of(handle)
+
+    faces = _cnc_face_census(shape, machining.PRINCIPAL_DIRECTIONS)
+    res = machining.machinability_screen(
+        faces=faces,
+        internal_radii=_cnc_internal_radii(shape, faces),
+        wall_samples=_cnc_wall_samples(shape),
+        max_l_over_d=float(p.get("max_l_over_d", machining.MAX_L_OVER_D)),
+        min_tool_radius_mm=float(
+            p.get("min_tool_radius_mm", machining.MIN_TOOL_RADIUS_MM)),
+        min_wall_mm=float(p.get("min_wall_mm", machining.MIN_WALL_MM)),
+        max_setups=int(p.get("max_setups", machining.MAX_SETUPS)),
+    )
+    res["n_faces"] = len(shape.Faces)
+    return res
+
+
+@handler("cnc_time_estimate")
+def _h_cnc_time_estimate(p):
+    """Machining time for a live solid, from a material-removal-rate model — the
+    honest `cnc` machine time cost_estimate's flat volume table cannot give.
+
+    Reads the part volume, its bounding box and the area of the MACHINED faces off
+    the shape (stock-envelope faces are excluded: facing a billet is not the same
+    work as finishing a pocket), then runs analysis/machining.machining_time:
+    stock box minus part volume is the removed chip volume against a per-material
+    MRR, machined area against a finishing area-rate, divided by the cut-time
+    utilisation and multiplied by the tolerance-class factor from the shared #235
+    corpus, plus per-setup overhead. `setups` defaults to the count
+    cnc_machinability_check derives from the same solid, so the two tiers agree.
+
+    Band ±50 % (±30 % with a measured `mrr_cm3_min`) — the RSS of MRR and
+    utilisation scatter, derived in analysis/machining.py, against the flat table's
+    ±100 %. Feed `machine_time_hr` from here into cost_estimate to replace the
+    table.
+
+    Args: model/handle; material (Materials DB name or a machining class), setups
+    (default: derived), stock_allowance_mm (2.0), setup_min (15.0), utilisation
+    (0.65), tolerance_class ('IT7'/7, optional), mrr_cm3_min / finish_cm2_min
+    overrides. Returns machining_time's dict {machine_time_min, machine_time_hr,
+    roughing_min, finishing_min, cutting_min, setup_min_total, removed_volume_mm3,
+    stock_volume_mm3, removal_fraction, machined_area_mm2, setups, material_class,
+    mrr_cm3_min, finish_cm2_min, utilisation, tolerance, fidelity, band_pct, basis,
+    warnings} plus {bbox_mm, part_volume_mm3, setups_basis, next}."""
+    from driftpin.analysis import machining
+    p = dict(p)
+    handle = p.pop("model", None) or p.pop("handle", None)
+    if not handle:
+        raise ValueError("cnc_time_estimate needs a `model` handle")
+    _, shape = _shape_of(handle)
+    bbox = shape.BoundBox
+    bbox_mm = [round(bbox.XLength, 6), round(bbox.YLength, 6),
+               round(bbox.ZLength, 6)]
+
+    stock = _stock_faces(shape)
+    machined_area = sum(f.Area for f, s in zip(shape.Faces, stock) if not s)
+
+    setups = p.pop("setups", None)
+    if setups is None:
+        cover = machining.setup_cover(
+            _cnc_face_census(shape, machining.PRINCIPAL_DIRECTIONS))
+        setups = cover["setups"]
+        setups_basis = ("derived from the tool-approach census "
+                        f"({'/'.join(cover['directions']) or 'none'})")
+    else:
+        setups = int(setups)
+        setups_basis = "explicit"
+
+    res = machining.machining_time(
+        part_volume_mm3=shape.Volume, bbox_mm=bbox_mm,
+        machined_area_mm2=machined_area, setups=setups, **p)
+    res["bbox_mm"] = bbox_mm
+    res["part_volume_mm3"] = round(shape.Volume, 3)
+    res["setups_basis"] = setups_basis
+    res["next"] = ("cost_estimate(machine_time_hr=<machine_time_hr>) — replaces "
+                   "the order-of-magnitude table and tightens the rollup's band")
+    return res
+
+
 @handler("slice_estimate")
 def _h_slice_estimate(p):
     from driftpin.analysis import slicing

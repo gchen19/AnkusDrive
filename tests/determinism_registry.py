@@ -41,6 +41,13 @@ EXACT_TOOLS = {
     "chain_drive", "weld_group",
     # fits / tolerance / GD&T
     "fit_class", "fit_check", "tolerance_stackup", "gdt_check",
+    # tolerance <-> cost coupling (issue #235). Both are closed-form over a plain
+    # chain; suggest_loosening's cpk comes from tolerance_stackup's SEEDED Monte
+    # Carlo, so — exactly like the tolerance_stackup sweep entry — an unseeded RNG
+    # anywhere in that path is what these catch. Both also accept an optional
+    # `handle` to derive the chain off a solid, the same way tolerance_stackup
+    # already does; the sweep exercises the closed-form kwargs path.
+    "tolerance_cost_check", "suggest_loosening",
     # thermal
     "thermal_lumped", "thermal_transient_1d", "thermal_composite_wall", "h_estimate",
     # structural / vibration screens
@@ -122,6 +129,12 @@ NOT_YET_CLASSIFIED = {
     # plain kwargs, so they park here with the other page-reading drawing tools
     # pending a representative-kwargs sweep entry.
     'add_gdt_callout', 'balloon_drawing', 'inspection_plan', 'fai_report',
+    # CNC machinability + machining time (issue #231): the pure cores
+    # (analysis/machining.py) are closed-form and unit-tested bitwise in
+    # tests/test_machining.py, but BOTH tools read a live solid — a face census,
+    # ray casts and a sphere/solid boolean — so they park here with the other
+    # geometry-reading screens rather than claiming a kwargs-only sweep entry.
+    'cnc_machinability_check', 'cnc_time_estimate',
     'feature_instantiate', 'feature_list', 'feature_schema', 'feature_validate',
     'engrave_text', 'envelope_check', 'export_drawing', 'export_shape', 'fem_add_constraint',
     'engrave_text', 'envelope_check', 'export_drawing', 'export_shape',
@@ -200,6 +213,17 @@ ANALYSIS_SWEEP = [
                {"nominal": 5, "plus": 0.05, "minus": 0.05}],
         method="montecarlo", samples=5000)),
     ("gdt_check", dict(control="position", zone=0.25, offset={"x": 0.1, "y": 0.0})),
+    # --- tolerance <-> cost coupling ---
+    ("tolerance_cost_check", dict(
+        chain=[{"name": "bore", "nominal": 25.0, "plus": 0.0065, "minus": -0.0065},
+               {"name": "slot", "nominal": 40.0, "tol": 0.1}],
+        process="cnc")),
+    # like the tolerance_stackup entry, this one leans on the SEED CONTRACT: every
+    # greedy step re-runs the Monte-Carlo cpk, so an unseeded RNG would surface here.
+    ("suggest_loosening", dict(
+        chain=[{"name": "shaft", "nominal": 50.0, "tol": 0.008},
+               {"name": "spacer", "nominal": 10.0, "tol": 0.01}],
+        spec_min=59.7, spec_max=60.3, samples=2000, max_steps=4)),
     # --- thermal ---
     ("thermal_lumped", dict(mass_g=120, power_w=15, h_conv=12, area_mm2=20000, c_p=900,
                             t_ambient_c=25, duration_s=300)),
