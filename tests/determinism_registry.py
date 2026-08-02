@@ -135,6 +135,13 @@ NOT_YET_CLASSIFIED = {
     # ray casts and a sphere/solid boolean — so they park here with the other
     # geometry-reading screens rather than claiming a kwargs-only sweep entry.
     'cnc_machinability_check', 'cnc_time_estimate',
+    # release packages (issue #233): the bundle is DETERMINISTIC by contract — the
+    # same item at the same revision produces byte-identical files, proven directly
+    # by the checksum-diff gate in tests/test_release_package_worker.py (and the
+    # export-header scrubs that make it true in tests/test_release_package.py). It
+    # parks here rather than in EXACT_TOOLS because it reads a live document plus an
+    # on-disk registry, so it has no representative-kwargs sweep entry.
+    'release_package',
     'feature_instantiate', 'feature_list', 'feature_schema', 'feature_validate',
     'engrave_text', 'envelope_check', 'export_drawing', 'export_shape', 'fem_add_constraint',
     'engrave_text', 'envelope_check', 'export_drawing', 'export_shape',
