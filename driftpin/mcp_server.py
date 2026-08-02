@@ -457,6 +457,7 @@ def add_fastener(
     kind: str,
     size: str,
     length: float | None = None,
+    grade: str | None = None,
     placement: list | None = None,
     name: str | None = None,
 ) -> dict:
@@ -471,6 +472,13 @@ def add_fastener(
     size: ISO designation, one of "M3","M4","M5","M6","M8","M10","M12".
     length: shank length in mm. REQUIRED for socket_head_cap_screw and hex_bolt;
       ignored for nut/washer.
+    grade: optional material / property class AS ORDERED — ISO 898-1 for steel
+      screws ("8.8", "12.9"), ISO 898-2 for nuts ("8", "10"), ISO 3506 for
+      stainless ("A2", "A4-80"). It changes no geometry. What it changes is the
+      ORDERABLE designation stamped on the part: with it you get
+      "ISO 4762 M4×12 A2", which a buyer can quote; without it the designation
+      comes back complete=False saying nobody has chosen between class 8.8 steel
+      and A2 stainless yet. An unrecognised grade is a loud error, never a guess.
     placement: optional [x, y, z] mm translation of the fastener origin (head top
       sits at z=0, shank runs in -z for screws/bolts).
     name: optional object name (default derived from kind).
@@ -478,16 +486,24 @@ def add_fastener(
     All dimensions are in mm. Threads are cosmetic (the shank is a plain cylinder
     of the major diameter).
 
-    Returns {handle, name, kind, size, major_diameter, pitch, volume} plus, by kind:
+    Returns {handle, name, kind, size, major_diameter, pitch, volume,
+    designation, orderable} plus, by kind:
     screws/bolts add {length, head_diameter, head_height, model_thread:false};
     nut adds {head_diameter (wrench across-flats), head_height};
     washer adds {head_diameter (outer diameter), head_height (thickness)}.
     Mating numbers: drill a through-hole of major_diameter (+ clearance) for the
-    shank; head_diameter sizes a counterbore.
+    shank; head_diameter sizes a counterbore. `designation` is the canonical
+    orderable identity ("ISO 4762 M4×12 A2") and `orderable` its full card.
+    `catalog` is the off-the-shelf verdict computed at creation time — code
+    `stocked`, or `not_stocked` naming the lengths either side. A length nobody
+    stocks is a FINDING, not a refusal: the solid is still built, so you can decide
+    whether to move the stack-up or accept a special.
     """
     params = {"kind": kind, "size": size}
     if length is not None:
         params["length"] = length
+    if grade is not None:
+        params["grade"] = grade
     if placement is not None:
         params["placement"] = placement
     if name is not None:
@@ -501,6 +517,7 @@ def add_bearing(
     bore: float | None = None,
     outer_diameter: float | None = None,
     width: float | None = None,
+    seals: str = "open",
     placement: list | None = None,
     name: str = "Bearing",
 ) -> dict:
@@ -520,13 +537,26 @@ def add_bearing(
     the housing bore). width: axial length mm (shoulder spacing). placement:
     optional [x, y, z] mm translation of the bearing's near face.
 
+    seals: open (default) | RS | 2RS | RZ | 2RZ | Z | 2Z. It changes no geometry —
+    the envelope is identical — but it IS part of the orderable identity: 608,
+    608-2Z and 608-2RS are three different purchases with different drag, speed
+    limits and prices. It is folded into the canonical designation stamped on the
+    part ("608-2RS").
+
+    A bearing built from raw bore/OD/width with NO designation is a dimensional
+    envelope, not a purchasable part, and is deliberately left undesignated rather
+    than given a made-up catalog number.
+
     Raises ValueError if the designation is unknown and dims are incomplete, or if
     outer_diameter <= bore.
 
-    Returns {handle, name, designation, bore, outer_diameter, width, volume}.
-    handle starts "bearing_". designation is None when built from explicit dims.
+    Returns {handle, name, designation, bore, outer_diameter, width, volume,
+    orderable, catalog}. handle starts "bearing_". designation is None when built
+    from explicit dims; `orderable` is the designation card, whose own `designation`
+    carries the seal suffix; `catalog` is the off-the-shelf verdict (stocked or not,
+    None for an undesignated envelope).
     """
-    params = {"name": name}
+    params = {"name": name, "seals": seals}
     if designation is not None:
         params["designation"] = designation
     if bore is not None:
@@ -547,6 +577,7 @@ def oring_groove(
     handle: str | None = None,
     face: str | None = None,
     gland_type: str = "static_radial",
+    compound: str | None = None,
     cut: bool = True,
     name: str = "ORingGroove",
 ) -> dict:
@@ -563,6 +594,10 @@ def oring_groove(
     face: the flat face to cut the groove into — a stable f_* tag (preferred),
         a 'FaceN' index string, or an int. Required when cut=True. Must be planar.
     gland_type: seal-geometry label, default 'static_radial' (informational).
+    compound: optional elastomer + durometer the RING is ordered in ("NBR70",
+        "FKM75", "EPDM70"). Changes no geometry; it completes the AS568 designation
+        of the ring itself — the purchased part this groove exists to hold, which
+        no BOM would otherwise contain because the ring is never a modelled object.
     cut: True (default) cuts the groove and returns a new solid; False makes this
         a pure calculator (no geometry, no handle).
     name: name for the resulting solid when cut=True.
@@ -572,14 +607,20 @@ def oring_groove(
     inner diameter equals inner_diameter and it spans outward by groove_width.
 
     Returns {groove_depth, groove_width, groove_inner_diameter,
-    groove_outer_diameter, squeeze_pct, cross_section, gland_type} (all mm except
-    squeeze_pct in percent). When cut=True it ALSO returns {handle, name, volume}
-    for the grooved solid; the host input is hidden. mating numbers: cut a groove
-    of inner_diameter to seat an O-ring of that ID; groove_outer_diameter sizes
-    the radial space the groove occupies.
+    groove_outer_diameter, squeeze_pct, cross_section, gland_type, oring} (all mm
+    except squeeze_pct in percent). When cut=True it ALSO returns {handle, name,
+    volume} for the grooved solid; the host input is hidden. mating numbers: cut a
+    groove of inner_diameter to seat an O-ring of that ID; groove_outer_diameter
+    sizes the radial space the groove occupies. `oring` is the RING's designation
+    card ("AS568-214 NBR70"), or ok=False naming the nearest tabulated sizes when
+    the gland is not an AS568 standard size — an off-table ring is a custom tooled
+    part, and saying so beats naming a dash number that will not seal.
+    `oring_catalog` is the ring's off-the-shelf verdict.
     """
     params = {"cross_section": cross_section, "inner_diameter": inner_diameter,
               "gland_type": gland_type, "cut": cut, "name": name}
+    if compound is not None:
+        params["compound"] = compound
     if handle is not None:
         params["handle"] = handle
     if face is not None:
@@ -651,6 +692,7 @@ def add_thread(
     length: float,
     internal: bool = False,
     starts: int = 1,
+    grade: str | None = None,
     placement: list | None = None,
     name: str = "Thread",
 ) -> dict:
@@ -670,6 +712,11 @@ def add_thread(
       from) a bored hole in your part to produce a threaded bore.
     starts: number of thread starts, >=1. Multi-start repeats the helix rotated
       by 360/starts and uses lead = pitch*starts.
+    grade: optional material / property class as ordered ("8.8", "A2"). Changes no
+      geometry; it completes the DIN 976-1 threaded-rod designation stamped on an
+      EXTERNAL single-start thread — that solid is studding, a thing you buy by the
+      metre. An internal thread is a tap-shaped cutting tool and a multi-start is
+      not a stock item, so neither is designated at all.
     placement: optional [x, y, z] mm translation of the solid's base (default at
       the origin, axis along +Z).
     name: optional object name.
@@ -682,12 +729,17 @@ def add_thread(
     check the modeled flag.
 
     Returns {handle, name, volume (mm^3), major_diameter (mm), minor_diameter
-    (mm), pitch (mm), length (mm), starts (int), internal (bool), modeled (bool)}.
+    (mm), pitch (mm), length (mm), starts (int), internal (bool), modeled (bool),
+    designation, orderable, catalog}. Studding is bought by the bar and cut, so any
+    length up to the longest stock bar reads as `stocked` with a note that it is a
+    cut.
     Mating numbers: drill/bore minor_diameter to tap an internal thread; clear a
     major_diameter (+clearance) hole to pass an external stud.
     """
     params = {"diameter": diameter, "pitch": pitch, "length": length,
               "internal": internal, "starts": starts, "name": name}
+    if grade is not None:
+        params["grade"] = grade
     if placement is not None:
         params["placement"] = placement
     return _call("add_thread", **params)
@@ -1874,19 +1926,222 @@ def interference_check(assembly: str) -> list:
 
 @mcp.tool()
 def bom_extract(
-    assembly: str, density: float | None = None, recursive: bool = True
-) -> list:
+    assembly: str, density: float | None = None, recursive: bool = True,
+    orderable: bool = False, check_stock: bool = True,
+) -> list | dict:
     """Walk an assembly and return [{part, count, total_volume_mm3, total_mass_kg?}, ...]
     grouped by source (component file + object), NOT the bare object name, so two
     distinct components both named "Box" don't collapse into one row. density
     (kg/mm³) is optional.
 
     recursive (default True): descend into linked subassemblies (App::Part) so the
-    BOM flattens to leaf parts. False counts each subassembly as one line."""
-    params = {"assembly": assembly, "recursive": recursive}
+    BOM flattens to leaf parts. False counts each subassembly as one line.
+
+    orderable (default False): opt in to the BUYABILITY view — is every purchased
+    line on this BOM a part that actually exists off the shelf? The default return is
+    unchanged — a bare list — because everything downstream consumes it. With
+    orderable=True you instead get a dict:
+
+      rows          the same BOM rows, each also carrying designation / standard /
+                    part_class plus the catalog verdict (stocked, catalog_code,
+                    catalog)
+      consumables   purchased parts that are NOT modelled objects and would
+                    otherwise never reach a BOM — today the O-ring an oring_groove
+                    was cut for, counted across every part that calls for it
+      undesignated  purchased rows a buyer cannot order from (no designation)
+      not_stocked   rows naming a part nobody stocks, each with a reason and the
+                    nearest stocked alternatives
+      designation   the full designation_check verdict
+      stocked_count how many purchased lines resolved to a stocked item
+      ok            False when anything purchased is undesignated OR not stocked
+
+    check_stock=False designates without checking availability. A design built out of
+    fasteners that do not exist is the failure this catches, and the offending rows
+    stay IN the list rather than being quietly dropped. Availability is a curated
+    snapshot of a market (`captured`, `market`), not physics."""
+    params: dict = {"assembly": assembly, "recursive": recursive}
     if density is not None:
         params["density"] = density
+    if orderable:
+        params.update({"orderable": True, "check_stock": check_stock})
     return _call("bom_extract", **params)
+
+
+@mcp.tool()
+def standard_part_designate(
+    handle: str | None = None, designation: str | None = None,
+    family: str | None = None, spec: dict | None = None,
+) -> dict:
+    """The canonical, orderable designation of a purchased standard part — the string
+    a buyer can actually quote against: "ISO 4762 M4×12 A2", "608-2RS",
+    "AS568-214 NBR70". A BOM row that reads "SocketHeadCapScrew" is not a buyable
+    line; this is what turns it into one.
+
+    Three ways in:
+      handle       read the designation add_fastener / add_bearing / add_thread
+                   stamped on the part when it was built. An object with no stamp
+                   reports designation=None plus whether its NAME reads like a
+                   purchased part. Nothing is ever inferred from geometry, so a
+                   hand-modelled bracket cannot acquire a false designation.
+      designation  normalise/parse a string — 'iso4762 m4x12 a2' becomes
+                   'ISO 4762 M4×12 A2', so two spellings of one part can never
+                   become two BOM lines.
+      family+spec  build one from facts. family is fastener | bearing | oring |
+                   threaded_rod, and spec is respectively
+                   {kind, size, length, grade} / {designation, seals} /
+                   {inner_diameter, cross_section, compound} /
+                   {diameter, pitch, length, grade}.
+
+    Offline and deterministic — no network, no supplier, no credentials.
+
+    Returns the designation card: {ok, family, standard, designation, complete,
+    reason, purchased, ...family-specific fields}. complete=False means the string is
+    not yet enough to order against (typically nobody said which material grade),
+    with `reason` naming the gap — a missing fact is reported, never defaulted to a
+    plausible-looking lie."""
+    params: dict = {}
+    for k, v in (("handle", handle), ("designation", designation),
+                 ("family", family), ("spec", spec)):
+        if v is not None:
+            params[k] = v
+    return _call("standard_part_designate", **params)
+
+
+@mcp.tool()
+def designation_check(assembly: str | None = None, rows: list | None = None,
+                      recursive: bool = True) -> dict:
+    """Gate: every purchased part on this assembly must be orderable.
+
+    Flags BOM rows a buyer cannot act on — a purchased standard part with no
+    canonical designation, or one whose designation is missing a fact needed to order
+    it (no material grade). Run it before quoting or releasing a package: a BOM whose
+    purchased lines are geometry names silently pushes the sourcing work onto a human,
+    once per revision.
+
+    Purchased-ness is EXACT for DriftPin-generated parts (the object carries a stamp)
+    and a documented name heuristic for everything else — so a hand-modelled
+    "Bracket" is never flagged, while a hand-modelled "M6Screw" is. Pass `rows`
+    instead of `assembly` to check BOM rows you already hold.
+
+    Returns {ok, findings, purchased, designated, undesignated, incomplete, basis};
+    each finding carries part / count / code (no_designation |
+    incomplete_designation) / certainty (stamped | name_heuristic) / reason. ok=False
+    means the BOM cannot be ordered as it stands."""
+    params: dict = {"recursive": recursive}
+    if assembly is not None:
+        params["assembly"] = assembly
+    if rows is not None:
+        params["rows"] = rows
+    return _call("designation_check", **params)
+
+
+@mcp.tool()
+def catalog_search(family: str | None = None, standard: str | None = None,
+                   kind: str | None = None, size: str | None = None,
+                   length: float | None = None, min_length: float | None = None,
+                   max_length: float | None = None, grade: str | None = None,
+                   drive: str | None = None, limit: int = 50) -> dict:
+    """Browse the off-the-shelf catalog: which standard components actually EXIST, in
+    which sizes, in which stocked lengths. Call it while designing, before you commit
+    geometry to a number — it is the difference between a design somebody can build
+    and one that needs a special.
+
+    The dimensional corpora (threads/bearings/stock) tell you what a part measures.
+    This one tells you whether it is a thing you can buy. Nothing else in DriftPin
+    knows that an ISO 4762 M4×12 is a stocked item and an M4×13 is not.
+
+    Every argument is an optional filter:
+      family      screw | set_screw | nut | washer | retaining_ring | pin |
+                  bearing | oring | threaded_rod
+      standard    a product standard or alias — "ISO 4762" or "DIN 912"
+      kind        the product's kind tag (socket_head_cap_screw, nyloc_nut, ...)
+      size        thread designation, nominal mm, shaft/bore mm, or AS568 dash
+      length      an exact stocked length, or a min_length/max_length window (mm)
+      grade       property class / material ("8.8", "A2-70", "NBR70")
+      drive       hex_socket | hex
+      limit       max rows (default 50)
+
+    Offline, deterministic, zero network.
+
+    Returns {ok, count, truncated, items, standards, fidelity, captured, market,
+    not_covered}. Each item is {standard, name, family, kind, drive, size, size_kind,
+    lengths (the stocked ladder, narrowed to any length filter), length_count,
+    grades, length_measured, designation?}. Availability is a curated snapshot of a
+    MARKET (see `market` and `captured`), not physics — and read `not_covered` before
+    concluding from an empty result that a part does not exist."""
+    params: dict = {"limit": limit}
+    for k, v in (("family", family), ("standard", standard), ("kind", kind),
+                 ("size", size), ("length", length), ("min_length", min_length),
+                 ("max_length", max_length), ("grade", grade), ("drive", drive)):
+        if v is not None:
+            params[k] = v
+    return _call("catalog_search", **params)
+
+
+@mcp.tool()
+def catalog_nearest(standard: str, size: str, length: float | None = None,
+                    grade: str | None = None) -> dict:
+    """Snap a desired standard part to the nearest one that actually exists.
+
+    This is the call that changes how you design. Ask for an ISO 4762 M4×13 and it
+    tells you that 12 and 16 are stocked and 13 is not — which turns "I need a 13 mm
+    screw" into "I need to adjust my stack-up to 12 or 16". Use it the moment a
+    fastener length falls out of a dimension chain, before the geometry hardens
+    around a size nobody sells.
+
+    standard: a product standard or alias ("ISO 4762", "DIN 912", "ISO 7380-1").
+    size: thread designation, nominal mm, or shaft/bore mm.
+    length: the wanted length in mm. Omit it for a product with no length dimension
+        (a nut, a washer, a circlip), or to list the whole stocked ladder.
+    grade: optional property class / material, used to complete the designation the
+        call hands back.
+
+    Exact arithmetic on a DISCRETE ladder: nothing is interpolated, and nothing is
+    silently rounded on your behalf. A length between two rungs is not a part, so you
+    get both rungs and the signed deltas and you decide which way to move.
+
+    Returns {ok, standard, name, size, requested_length, exact, stocked, below, above,
+    nearest [{length, delta}], lengths, grades, designation, reason, fidelity,
+    captured, market}. `designation` is the canonical designation of the RECOMMENDED
+    part, so the answer is directly usable in a BOM. ok=True means what you asked for
+    is already stocked."""
+    params: dict = {"standard": standard, "size": size}
+    if length is not None:
+        params["length"] = length
+    if grade is not None:
+        params["grade"] = grade
+    return _call("catalog_nearest", **params)
+
+
+@mcp.tool()
+def catalog_check(designation: str | None = None,
+                  handle: str | None = None) -> dict:
+    """Is this exact part something you can buy off the shelf?
+
+    Pass a canonical `designation` ("ISO 4762 M4×12 A2", "608-2RS") or the `handle` of
+    a part whose designation was stamped when it was generated. Offline and
+    deterministic.
+
+    Returns {ok, code, standard, size, length, stocked, grade_ok, reason, nearest,
+    lengths, grades, fidelity, captured, market}, where code is:
+      stocked           the size/length exists and the material is listed (for a
+                        cut-to-length product like threaded rod, any length up to the
+                        longest stock bar counts, with a note that it is a cut)
+      not_stocked       the size exists but the LENGTH is not a stocked rung —
+                        `nearest` names the rungs either side
+      size_not_stocked  the standard does not cover this size at all
+      grade_not_listed  the size exists, that material does not
+      not_catalogued    the product standard is outside this corpus's coverage. That
+                        is an absence of evidence, explicitly NOT a claim that the
+                        part is unavailable — check `not_covered` from catalog_search
+      undesignated      there was no designation to check
+    ok is True only for `stocked`."""
+    params: dict = {}
+    if designation is not None:
+        params["designation"] = designation
+    if handle is not None:
+        params["handle"] = handle
+    return _call("catalog_check", **params)
 
 
 @mcp.tool()

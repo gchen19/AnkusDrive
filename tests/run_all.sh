@@ -200,6 +200,9 @@ python3 tests/test_machining_worker.py
 echo "== Release packages (issue #233 — vendor/RFQ bundle, lifecycle/ECO/title-block gates, byte-identical re-release) =="
 python3 tests/test_release_package.py
 python3 tests/test_release_package_worker.py
+echo "== Orderable standard parts (issue #234 — designations + the off-the-shelf catalog) =="
+python3 tests/test_orderable.py
+python3 tests/test_orderable_worker.py
 
 echo
 echo "== Nonlinear structural FEM (plastic/elastica/Hertz oracles always; ccx gate when present) =="
