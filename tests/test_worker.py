@@ -78,6 +78,95 @@ def test_handles_chain():
         )
 
 
+def test_add_primitive_name_sets_label_not_name():
+    """add_primitive(name=...) actually names the object (issue #247).
+
+    Two identifiers live on every FreeCAD object and conflating them is what
+    made this bug survive 44 call sites:
+      - .Name  is FreeCAD's internal id, assigned by addObject. It must stay
+        unique and stable because handles, register_handle and the manifest
+        layer key off it. add_primitive NEVER overwrites it.
+      - .Label is the human-facing name. That is what `name=` sets and what
+        list_objects / bom_extract / the drawing layer read back.
+    """
+    with Worker() as w:
+        w.call("new_document", name="named")
+        r = w.call("add_primitive", kind="box", w=10, d=20, h=5,
+                   name="MountingPlate")
+
+        # LABEL is the caller's string.
+        assert r["label"] == "MountingPlate", r
+        # NAME is still FreeCAD's — type-derived, untouched by `name=`.
+        assert r["name"].startswith("Box"), r
+        assert r["name"] != "MountingPlate", r
+        # ... and it is the id the handle table and register_handle speak.
+        assert w.call("list_handles")[r["handle"]]["name"] == r["name"], r
+        again = w.call("register_handle", object=r["name"], prefix="re")
+        assert again["label"] == "MountingPlate", again
+
+        objs = {o["name"]: o for o in w.call("list_objects")}
+        assert r["name"] in objs, objs           # listed under Name
+        assert objs[r["name"]]["label"] == "MountingPlate", objs
+
+        # Every kind honours it, and the Name stays type-derived for each.
+        cyl = w.call("add_primitive", kind="cylinder", r=4, h=9, name="Boss")
+        sph = w.call("add_primitive", kind="sphere", r=3, name="Ball")
+        assert (cyl["label"], sph["label"]) == ("Boss", "Ball"), (cyl, sph)
+        assert cyl["name"].startswith("Cylinder"), cyl
+        assert sph["name"].startswith("Sphere"), sph
+
+
+def test_add_primitive_without_name_keeps_type_default():
+    """No `name=` means no rename: the label stays FreeCAD's type default, and
+    is never blank. Guards against a fix that empties the label when the
+    caller supplies nothing (a blank label reads as an unnamed part
+    everywhere downstream)."""
+    with Worker() as w:
+        w.call("new_document", name="unnamed")
+        box = w.call("add_primitive", kind="box", w=10, d=10, h=10)
+        assert box["label"] == "Box", box
+        assert box["name"] == "Box", box
+
+        # A second box of the same type: FreeCAD uniquifies both id and label.
+        box2 = w.call("add_primitive", kind="box", w=4, d=4, h=4)
+        assert box2["name"] != box["name"], (box, box2)
+        assert box2["label"] == box2["name"], box2
+
+        cyl = w.call("add_primitive", kind="cylinder", r=5, h=10)
+        sph = w.call("add_primitive", kind="sphere", r=5)
+        assert cyl["label"] == "Cylinder", cyl
+        assert sph["label"] == "Sphere", sph
+
+        labels = {o["label"] for o in w.call("list_objects")}
+        assert "" not in labels, labels
+
+
+def test_add_primitive_name_survives_save_and_reopen():
+    """The label is document state, not worker state: it must come back after
+    save -> reopen in a FRESH worker, and the object must still be reachable by
+    its unchanged internal Name."""
+    import os
+    import tempfile
+    path = os.path.join(tempfile.mkdtemp(), "named.FCStd")
+    with Worker() as w:
+        w.call("new_document", name="roundtrip")
+        r = w.call("add_primitive", kind="cylinder", r=6, h=12, name="PivotPin")
+        assert r["label"] == "PivotPin", r
+        internal = r["name"]
+        w.call("save_document", path=path)
+
+    with Worker() as w2:
+        w2.call("open_document", path=path)
+        objs = {o["name"]: o for o in w2.call("list_objects")}
+        assert internal in objs, (internal, objs)
+        assert objs[internal]["label"] == "PivotPin", objs
+        # register_handle resolves by Name (not Label) — which is precisely why
+        # `name=` must not touch Name.
+        got = w2.call("register_handle", object=internal, prefix="rt")
+        assert got["label"] == "PivotPin", got
+        assert got["name"] == internal, got
+
+
 def test_add_gear():
     """Involute gear primitive: external + internal, valid solids, correct pitch.
     m=2, N=12 -> pitch r 12, tip r 14; two gears mesh at rp_a + rp_b apart."""

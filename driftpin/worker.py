@@ -198,6 +198,14 @@ def _h_list_handles(p):
 
 @handler("add_primitive")
 def _h_add_primitive(p):
+    """Add a Part primitive (box / cylinder / sphere) to the active document.
+
+    `name`, when given, sets the object's Label — the human-facing name that
+    list_objects, bom_extract, merge_assembly and the drawing/manifest layers
+    read back. The internal Name is left as FreeCAD assigned it ("Box",
+    "Cylinder001", ...): handles, register_handle and the manifest layer key off
+    Name and it has to stay unique and stable. Omitting `name` leaves the Label
+    at the type default. Returns {handle, name, label, volume}."""
     doc = App.ActiveDocument
     if doc is None:
         raise RuntimeError("no active document; call new_document first")
@@ -217,13 +225,18 @@ def _h_add_primitive(p):
     else:
         raise ValueError(f"unknown primitive kind: {kind!r}")
 
+    name = p.get("name")
+    if name:
+        obj.Label = str(name)
+
     placement = p.get("placement")
     if placement:
         obj.Placement.Base = App.Vector(*placement)
 
     doc.recompute()
     h = _register(kind, obj)
-    return {"handle": h, "name": obj.Name, "volume": obj.Shape.Volume}
+    return {"handle": h, "name": obj.Name, "label": obj.Label,
+            "volume": obj.Shape.Volume}
 
 
 @handler("add_gear")
