@@ -307,6 +307,16 @@ def test_the_dxf_reimports_as_a_closed_profile():
         out = os.path.join(tempfile.mkdtemp(), "flat.dxf")
         res = w.call("sheet_flat_export", handle=part["handle"], path=out)
         _check("it wrote a file", os.path.getsize(out) == res["size"], res)
+        # The reported size must be the file's, not the length of the string we
+        # meant to write — those diverge the moment text-mode line-ending
+        # translation is in play, which is how this passed on Linux and failed on
+        # Windows. Pin the byte-level invariant that makes them agree: a flat
+        # pattern is the same FILE on every platform, so a shop (or
+        # release_package's checksum) sees one artifact, not one per OS.
+        raw = open(out, "rb").read()
+        _eq("bytes on disk match the reported size", len(raw), res["size"])
+        _check("LF endings only — no platform-dependent CRLF", b"\r" not in raw,
+               f"{raw.count(bytes([13]))} CR bytes in the DXF")
         _eq("declaring the three shop layers", res["layers"],
             ["CUT", "BEND_UP", "BEND_DOWN"])
         _eq("one profile, one hole, one bend line", res["entities"],

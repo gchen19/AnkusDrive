@@ -17679,9 +17679,18 @@ def _h_sheet_flat_export(p):
             "dimensioned print")
     _, flat = _sheet_flat(p["handle"], p)
     text = sm.to_dxf(flat)
-    with open(path, "w", encoding="utf-8") as f:
+    # newline="" so the composed "\n" endings reach disk untranslated. In text mode
+    # Windows rewrites every \n to \r\n, which made the same flat pattern a
+    # different file on Windows than on Linux — and left the reported size (the
+    # string's length) disagreeing with the file's. A cutting file a shop diffs, or
+    # that release_package checksums (#233), must be byte-identical from the same
+    # inputs on every platform.
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(text)
-    return {"ok": flat["ok"], "path": path, "size": len(text.encode()),
+    return {"ok": flat["ok"], "path": path,
+            # what is ACTUALLY on disk, not the length of the string we meant to
+            # write — the caller checksums and ships the file, not our intent.
+            "size": os.path.getsize(path),
             "layers": list(sm.DXF_LAYERS),
             "entities": {"polylines": 1, "circles": len(flat["holes"]),
                          "bend_lines": len(flat["bend_lines"])},
