@@ -2556,6 +2556,13 @@ def _h_boolean_op(p):
     _set_visibility(base, False)
     _set_visibility(tool, False)
     h = _register(op, obj)
+    # A cut through a sheet-metal part is still a sheet-metal part, so the bend
+    # model rides along and the drilled result stays unfoldable. `cut` only: fusing
+    # arbitrary material onto a sheet part makes it something the flat pattern no
+    # longer describes. The holes themselves are re-read off the solid at unfold
+    # time, so there is nothing to record here.
+    if op == "cut" and p["base"] in _sheet_models:
+        _sheet_models[h] = _sheet_models[p["base"]]
     return {"handle": h, "volume": obj.Shape.Volume}
 
 
@@ -12115,12 +12122,28 @@ def _h_dfm_check(p):
       is the issue #175 acceptance path: dfm_check(handle) reproduces the finding a
       hand-built descriptor produces today, plus a wall_thickness_stats block.
 
+    A SHEET-METAL handle needs no third mode: when the handle carries a sheet-metal
+    feature model (it came from sheet_base and friends) the press-brake rules —
+    minimum bend radius, minimum flange, hole-to-bend, refold collision — are
+    derived from that model and folded in under `sheet`, by DELEGATING to the same
+    `sheetmetal.check_bends` the sheet_check tool calls. Pass an explicit `sheet`
+    block to screen bends on a part DriftPin did not model. Either way there is one
+    implementation of those rules, so dfm_check and sheet_check cannot disagree
+    about the same part.
+
     Args: faces OR handle/model; pull_axis ('+z'/… or [x,y,z]), process, min_wall_mm,
-    min_draft_deg. Returns the dfx.dfm_check verdict (with wall_thickness_stats and
-    n_faces added on the handle path)."""
+    min_draft_deg, sheet. Returns the dfx.dfm_check verdict (with wall_thickness_stats
+    and n_faces added on the handle path, and `sheet` on the sheet-metal path)."""
     from driftpin.analysis import dfx
     p = dict(p)
     handle = p.pop("model", None) or p.pop("handle", None)
+    if handle and p.get("sheet") is None and handle in _sheet_models:
+        model, flat = _sheet_flat(handle, p)
+        p["sheet"] = {
+            "thickness_mm": model["thickness"], "material": model.get("material"),
+            "bends": [dict(b, id=b["name"]) for b in flat["bends"]],
+            "interferences": _sheet_interferences(model),
+        }
     if handle and not p.get("faces"):
         _, shape = _shape_of(handle)
         pull_axis = p.get("pull_axis", "+z")
@@ -12130,7 +12153,8 @@ def _h_dfm_check(p):
         res = dfx.dfm_check(
             faces=faces, pull_axis=str(pull_axis),
             process=p.get("process", "injection"),
-            min_wall_mm=p.get("min_wall_mm"), min_draft_deg=min_draft)
+            min_wall_mm=p.get("min_wall_mm"), min_draft_deg=min_draft,
+            sheet=p.get("sheet"))
         res["n_faces"] = len(shape.Faces)
         if walls:
             res["wall_thickness_stats"] = {
@@ -17497,6 +17521,629 @@ def _h_release_package(p):
         # checksum the bytes on disk don't have
         "verify": _rel.verify_package(manifest, out_dir),
     }
+# --- sheet metal (issue #230) -------------------------------------------------
+#
+# FreeCAD's SheetMetal workbench is an unbundled addon that imports FreeCADGui, so
+# it is unavailable inside freecadcmd; the bend arithmetic and the flat-pattern
+# development live in the FreeCAD-free `driftpin.sheetmetal` core instead. These
+# handlers are a thin shim: they resolve edges through the existing stable-tag
+# layer, hand the pure core the picked segment, and turn the build recipes it
+# emits back into OCC solids. All the geometry decisions are made over there where
+# they can be unit-tested in milliseconds.
+
+_sheet_models = {}
+
+
+def _sheet_model(handle):
+    """The sheet-metal feature model behind a handle, or a clear error.
+
+    Sheet operations are model-driven, not shape-driven: the flat pattern is
+    developed from the bend tree, never reverse-engineered out of a fused solid. So
+    a handle produced by boolean_op or fillet_edges is not a sheet part even if it
+    happens to look like one, and saying so is better than silently developing
+    nonsense."""
+    if handle not in _sheet_models:
+        raise ValueError(
+            f"{handle!r} is not a sheet-metal part — it must come from sheet_base "
+            "or a sheet_flange/sheet_tab/sheet_hem built on one")
+    return _sheet_models[handle]
+
+
+def _sheet_face(points):
+    pts = [App.Vector(*p) for p in points]
+    return Part.Face(Part.makePolygon(pts + [pts[0]]))
+
+
+def _sheet_build(steps):
+    """Turn `driftpin.sheetmetal` build recipes into one fused OCC shape.
+
+    A bend is a REVOLVE of the sheet's end cross-section about the bend axis — exact
+    for a constant-thickness sheet, no lofting and no tessellation — and a straight
+    leg is an extrude of the same rectangle. Two primitives cover flanges, tabs and
+    hems alike."""
+    shapes = []
+    for step in steps:
+        face = _sheet_face(step["profile"])
+        if step["op"] == "revolve":
+            solid = face.revolve(App.Vector(*step["axis_point"]),
+                                 App.Vector(*step["axis_dir"]),
+                                 float(step["angle_deg"]))
+        elif step["op"] == "extrude":
+            solid = face.extrude(App.Vector(*step["vector"]))
+        else:
+            raise RuntimeError(f"unknown sheet build op {step['op']!r}")
+        if solid.Volume <= 0 or not solid.isValid():
+            raise RuntimeError(f"sheet step {step.get('name')!r} produced an "
+                               "invalid or zero-volume solid")
+        shapes.append(solid)
+    if not shapes:
+        raise RuntimeError("no sheet build steps to run")
+    fused = shapes[0] if len(shapes) == 1 else shapes[0].fuse(shapes[1:])
+    return fused.removeSplitter()
+
+
+def _sheet_publish(model, shape, name, prefix, consumed=None):
+    doc = _active_doc()
+    obj = doc.addObject("Part::Feature", name)
+    obj.Shape = shape
+    doc.recompute()
+    if consumed is not None:
+        _set_visibility(consumed, False)
+    h = _register(prefix, obj)
+    _sheet_models[h] = model
+    return h, obj
+
+
+def _sheet_edge_points(handle, ref):
+    """Resolve an edge ref (e_* tag / 'EdgeN' / 1-based int) to its two endpoints.
+
+    Only straight edges can carry a bend: a bend line is the intersection of two
+    planes, so picking an arc would be picking a fold that does not exist."""
+    _, shape = _shape_of(handle)
+    if isinstance(ref, str) and ref.startswith("e_"):
+        idx = int(_h_resolve_edge({"handle": handle, "tag": ref})["index"][len("Edge"):])
+    elif isinstance(ref, str) and ref.startswith("Edge"):
+        idx = int(ref[len("Edge"):])
+    else:
+        idx = int(ref)
+    if idx < 1 or idx > len(shape.Edges):
+        raise ValueError(f"edge index {idx} out of range (1..{len(shape.Edges)})")
+    edge = shape.Edges[idx - 1]
+    if _edge_kind(edge) != "line":
+        raise ValueError(
+            f"edge {ref!r} is a {_edge_kind(edge)}, not a straight line — a bend "
+            "can only be placed on a straight edge")
+    a = edge.Vertexes[0].Point
+    b = edge.Vertexes[-1].Point
+    return (a.x, a.y, a.z), (b.x, b.y, b.z), idx
+
+
+def _sheet_locate(handle, ref, width_mm=None, offset_mm=0.0):
+    """Map a picked edge onto a flat region's local boundary segment.
+
+    `width_mm`/`offset_mm` trim that segment, which is how a partial-width flange or
+    tab is placed without inventing a second selection API: the segment is what the
+    flange hangs off, so narrowing it narrows the flange."""
+    from driftpin import sheetmetal as sm
+    model = _sheet_model(handle)
+    pa, pb, idx = _sheet_edge_points(handle, ref)
+    hit = sm.locate_edge(model, pa, pb)
+    if hit is None:
+        raise ValueError(
+            f"edge {ref!r} (Edge{idx}) is not on the boundary of any flat region of "
+            "this sheet part — pick a free edge of the sheet, not one of the bend "
+            "or thickness edges")
+    a, b = tuple(hit["a"]), tuple(hit["b"])
+    span = math.hypot(b[0] - a[0], b[1] - a[1])
+    off = float(offset_mm or 0.0)
+    width = span - off if width_mm is None else float(width_mm)
+    if off < -1e-9 or width <= 0 or off + width > span + 1e-9:
+        raise ValueError(
+            f"offset_mm={off:g} + width_mm={width:g} does not fit the picked edge "
+            f"(usable length {span:.4g} mm)")
+    if abs(off) > 1e-9 or abs(width - span) > 1e-9:
+        ux, uy = (b[0] - a[0]) / span, (b[1] - a[1]) / span
+        a = (a[0] + ux * off, a[1] + uy * off)
+        b = (a[0] + ux * width, a[1] + uy * width)
+    return model, hit["region"], a, b
+
+
+def _sheet_attach(p, kind, **overrides):
+    """Shared body of sheet_flange / sheet_tab / sheet_hem.
+
+    All three are the same operation with different defaults — a tab is a zero-angle
+    bend and a hem is a 180-degree one — so they share one implementation rather
+    than three that can drift apart."""
+    from driftpin import sheetmetal as sm
+    handle = p["handle"]
+    obj, shape = _shape_of(handle)
+    model, region, a, b = _sheet_locate(handle, p["edge"], p.get("width_mm"),
+                                        p.get("offset_mm", 0.0))
+    model = json.loads(json.dumps(model))   # branch the model; never mutate history
+    kwargs = {"kind": kind, "length_mm": float(p["length_mm"]),
+              "direction": p.get("direction", "up"),
+              "length_from": p.get("length_from", "outer"),
+              "k": p.get("k_factor"), "name": p.get("feature_name")}
+    kwargs.update(overrides)
+    feature = sm.attach(model, region, a, b, **kwargs)
+    steps = sm.build_recipes(model, feature_id=feature["id"])
+    added = _sheet_build(steps)
+    fused = shape.fuse(added).removeSplitter()
+    if not fused.isValid():
+        raise RuntimeError(f"{feature['name']} produced an invalid solid")
+    h, out = _sheet_publish(model, fused, p.get("name", f"Sheet{kind.title()}"),
+                            f"sheet_{kind}", consumed=obj)
+    return {"handle": h, "name": out.Name, "feature": feature["name"],
+            "kind": kind, "volume": fused.Volume,
+            "angle_deg": feature["angle_deg"],
+            "inner_radius_mm": feature["inner_radius"],
+            "leg_tangent_mm": round(feature["leg_tangent"], 6),
+            "length_from": feature["length_from"],
+            "direction": feature["direction"],
+            "span_mm": round(feature["span"], 6),
+            "thickness_mm": model["thickness"]}
+
+
+@handler("sheet_base")
+def _h_sheet_base(p):
+    """Base flange: the first flat face of a sheet-metal part, from a closed
+    straight-sided profile extruded to `thickness_mm`.
+
+    Give either `profile` ([[x, y], ...] in the XY plane, implicitly closed) or
+    `sketch` (a handle to a closed, planar, straight-sided sketch — arcs are
+    rejected rather than silently faceted, because a faceted flat pattern is a wrong
+    flat pattern). `material` selects the K-factor and minimum-bend-radius corpus
+    rows and can be any Materials-DB name.
+
+    IMPORTANT, and the thing most often got wrong: the profile is the flat face
+    TANGENT TO TANGENT, not the outside dimension. Bends grow OUTWARD from the
+    profile boundary, exactly as a base-flange sketch behaves in any sheet-metal
+    CAD — so a U-channel of 100 mm outside width with R=t=2 starts from a 92 mm
+    profile.
+
+    Returns {handle, name, volume, thickness_mm, material, profile, area_mm2}."""
+    from driftpin import sheetmetal as sm
+    _active_doc()
+    thickness = float(p["thickness_mm"])
+    material = p.get("material")
+    if p.get("sketch") is not None:
+        src, shp = _shape_of(p["sketch"])
+        wires = shp.Wires
+        if len(wires) != 1 or not wires[0].isClosed():
+            raise ValueError(
+                f"sheet_base needs exactly one CLOSED wire, got {len(wires)}")
+        wire = wires[0]
+        for e in wire.Edges:
+            if _edge_kind(e) != "line":
+                raise ValueError(
+                    f"sketch contains a {_edge_kind(e)} edge; sheet_base develops "
+                    "straight-sided profiles only (a curved boundary would have to "
+                    "be faceted, and a faceted flat pattern is a wrong one)")
+        verts = [v.Point for v in wire.OrderedVertexes]
+        face = Part.Face(wire)
+        normal = _outward_normal(face)
+        o = verts[0]
+        e1 = (verts[1] - verts[0]).normalize()
+        n = App.Vector(normal.x, normal.y, normal.z).normalize()
+        e2 = n.cross(e1)
+        profile, seen = [], set()
+        for v in verts:
+            d = v - o
+            q = (round(d.dot(e1), 9), round(d.dot(e2), 9))
+            if q not in seen:
+                seen.add(q)
+                profile.append([q[0], q[1]])
+        model = sm.new_part(thickness, profile, material=material,
+                            origin=(o.x, o.y, o.z), e1=(e1.x, e1.y, e1.z),
+                            e2=(e2.x, e2.y, e2.z))
+        consumed = src
+    else:
+        model = sm.new_part(thickness, p["profile"], material=material)
+        consumed = None
+    shape = _sheet_build(sm.build_recipes(model))
+    h, obj = _sheet_publish(model, shape, p.get("name", "SheetBase"), "sheet_base",
+                            consumed=consumed)
+    return {"handle": h, "name": obj.Name, "volume": shape.Volume,
+            "thickness_mm": thickness, "material": material,
+            "profile": model["profile"],
+            "area_mm2": round(shape.Volume / thickness, 6)}
+
+
+@handler("sheet_flange")
+def _h_sheet_flange(p):
+    """Bend a flange off a free edge of a sheet part.
+
+    `edge` is a stable e_* tag from list_edges (or 'EdgeN'/int) on a straight free
+    edge of a flat region. `angle_deg` is the bend angle — the deviation from flat,
+    so 90 is a right-angle flange — and must be in (0, 180]. `inner_radius_mm`
+    defaults to the material thickness. `direction` is 'up' (toward the region's
+    outward normal) or 'down'.
+
+    `length_from` decides what `length_mm` measures, which is the number most often
+    misread on a sheet drawing: 'outer' (default) to the outside virtual apex — what
+    a drawing dimension normally means — 'inner' to the inside apex, or 'tangent'
+    for the straight leg past the end of the bend. `width_mm`/`offset_mm` narrow the
+    flange to part of the picked edge.
+
+    `k_factor` pins K for this bend only; leaving it unset defers the choice to
+    sheet_unfold, since the folded geometry does not depend on K at all — only the
+    flat pattern does.
+
+    Consumes the input handle (hidden) and returns {handle, name, feature, kind,
+    volume, angle_deg, inner_radius_mm, leg_tangent_mm, length_from, direction,
+    span_mm, thickness_mm}."""
+    from driftpin import sheetmetal as sm
+    return _sheet_attach(p, sm.FLANGE, angle_deg=float(p.get("angle_deg", 90.0)),
+                         inner_radius_mm=p.get("inner_radius_mm"))
+
+
+@handler("sheet_tab")
+def _h_sheet_tab(p):
+    """Extend a sheet part with a coplanar tab — a flat ear off a free edge, with no
+    bend (a mounting lug, a weld tab, a snap-off).
+
+    Mechanically it is a zero-angle flange and shares that code path exactly, so
+    `length_mm` is simply how far the tab reaches past the edge and `width_mm` /
+    `offset_mm` place it along the edge. It adds no bend to the bend report and no
+    bend line to the DXF, but it does grow the flat pattern.
+
+    Returns the same dict sheet_flange does."""
+    from driftpin import sheetmetal as sm
+    return _sheet_attach(p, sm.TAB)
+
+
+# Hem geometry: the gap between the folded-back leg and the parent is 2*R, so the
+# hem style is really a choice of inside radius. A closed hem is formed at R = t/2
+# and pinched shut in a second hit; an open hem keeps a visible round.
+_HEM_RADIUS_T = {"closed": 0.5, "open": 1.0}
+
+
+@handler("sheet_hem")
+def _h_sheet_hem(p):
+    """Fold a hem back on itself — the 180-degree return that stiffens a free edge
+    and buries the sharp cut line so the part is safe to handle.
+
+    `kind` is 'closed' (inside radius t/2, gap t) or 'open' (radius t, gap 2t);
+    `radius_mm` or `gap_mm` override it directly (gap wins as radius = gap/2). A
+    teardrop hem wraps past 180 degrees and is out of scope.
+
+    `length_mm` is ALWAYS the return leg measured from the end of the bend: a
+    180-degree bend has no virtual apex to dimension to (the outside surfaces are
+    parallel and never meet), so an 'outer' dimension would be infinite. For the
+    same reason the hem reports a bend allowance but no bend deduction.
+
+    Returns the same dict sheet_flange does."""
+    from driftpin import sheetmetal as sm
+    model = _sheet_model(p["handle"])
+    t = model["thickness"]
+    kind = p.get("kind", "closed")
+    if p.get("gap_mm") is not None:
+        radius = float(p["gap_mm"]) / 2.0
+    elif p.get("radius_mm") is not None:
+        radius = float(p["radius_mm"])
+    else:
+        if kind not in _HEM_RADIUS_T:
+            raise ValueError(
+                f"unknown hem kind {kind!r} (known: "
+                f"{', '.join(sorted(_HEM_RADIUS_T))}); or pass radius_mm/gap_mm")
+        radius = _HEM_RADIUS_T[kind] * t
+    out = _sheet_attach(p, sm.HEM, angle_deg=180.0, inner_radius_mm=radius,
+                        length_from="tangent")
+    out["hem_kind"] = kind
+    out["gap_mm"] = round(2.0 * radius, 6)
+    return out
+
+
+def _sheet_holes(model, shape):
+    """Find through-holes in the folded solid and record them in flat-region
+    coordinates, so they land in the flat pattern and in the hole-to-bend screen.
+
+    A hole is a cylindrical face whose axis is normal to some flat region, whose
+    axial extent is the sheet thickness, and whose centre falls inside that region.
+    OCC often splits a full bore into two half-cylinders, so hits are deduped by
+    (region, centre, diameter) rather than counted per face."""
+    from driftpin import sheetmetal as sm
+    t = model["thickness"]
+    found = {}
+    for i, face in enumerate(shape.Faces):
+        if _surface_kind(face) != "cylindrical":
+            continue
+        surf = face.Surface
+        axis = (surf.Axis.x, surf.Axis.y, surf.Axis.z)
+        centre = (surf.Center.x, surf.Center.y, surf.Center.z)
+        bb = face.BoundBox
+        for region in model["regions"]:
+            n = tuple(region["n_3"])
+            if abs(sm._d3(sm._n3(axis), n)) < 1.0 - 1e-6:
+                continue
+            depth = abs(bb.XLength * n[0]) + abs(bb.YLength * n[1]) \
+                + abs(bb.ZLength * n[2])
+            if abs(depth - t) > 1e-4:
+                continue
+            d = sm._s3(centre, tuple(region["origin3"]))
+            q = (sm._d3(d, tuple(region["e1_3"])), sm._d3(d, tuple(region["e2_3"])))
+            if abs(sm._d3(d, n)) > t + 1e-4:
+                continue
+            if not _point_in_polygon(q, [tuple(v) for v in region["polygon"]]):
+                continue
+            key = (region["id"], round(q[0], 4), round(q[1], 4),
+                   round(surf.Radius, 4))
+            found.setdefault(key, {
+                "id": _edge_descriptor(face.Edges[0], i + 1)["tag"].replace("e_", "h_"),
+                "region": region["id"], "x": q[0], "y": q[1],
+                "diameter_mm": round(2.0 * surf.Radius, 6)})
+            break
+    return sorted(found.values(), key=lambda h: (h["region"], h["x"], h["y"]))
+
+
+def _point_in_polygon(q, poly):
+    """Standard ray-crossing test — used to decide which flat region a detected
+    hole belongs to, never for anything the flat pattern's exactness rests on."""
+    x, y = q
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        if (y0 > y) != (y1 > y):
+            xc = x0 + (y - y0) * (x1 - x0) / (y1 - y0)
+            if x < xc:
+                inside = not inside
+    return inside
+
+
+def _sheet_flat(handle, p):
+    """Develop a sheet part, folding in any holes read off its solid."""
+    from driftpin import sheetmetal as sm
+    model = _sheet_model(handle)
+    _, shape = _shape_of(handle)
+    model = json.loads(json.dumps(model))
+    model["holes"] = _sheet_holes(model, shape)
+    return model, sm.unfold(model, k=p.get("k_factor"),
+                            bend_table=p.get("bend_table"))
+
+
+@handler("sheet_unfold")
+def _h_sheet_unfold(p):
+    """Develop a sheet part into its flat pattern — the blank the part is cut from —
+    and report every bend.
+
+    The flat pattern is derived from the bend tree, not reverse-engineered from the
+    solid, so it is exact rather than fitted: each bend contributes its bend
+    allowance BA = angle*(R + K*t), the arc length of the neutral fibre, and the
+    flat regions are laid out around them.
+
+    K comes from `k_factor` if you pin one, else from a matching `bend_table` row
+    (a list of measured {thickness_mm, inner_radius_mm, angle_deg, allowance_mm |
+    deduction_mm} — a shop's own table outranks any chart), else from a press-brake
+    corpus keyed by material and r/t. WHICHEVER IT IS, IT IS ECHOED BACK per bend as
+    k_factor + k_source, because a flat length whose K you cannot see is a number
+    you cannot check.
+
+    `build=True` (default) also creates the flat blank as a real solid at `origin`
+    in the XY plane, holes included, so it can be measured, exported or nested.
+
+    Fidelity: 'exact' only when EVERY bend's K was supplied or table-derived — BA
+    given K is pure arithmetic. One corpus-defaulted bend makes the development a
+    'correlation', and `developed_band_mm` gives the resulting millimetre spread of
+    the blank over the K band.
+
+    Returns {ok, handle?, outline, holes, bend_lines, bends, regions, flat_size,
+    flat_bbox, flat_area_mm2, blank_area_mm2, blank_volume_mm3, thickness,
+    material, fidelity, band_pct, developed_band_mm, warnings}. `regions` is each
+    flat region's polygon in flat coordinates — sheet_refold consumes it, so the
+    whole report can be round-tripped. ok=False means the blank cannot be cut as
+    drawn (two feature footprints overlap — `warnings` says which)."""
+    handle = p["handle"]
+    model, flat = _sheet_flat(handle, p)
+    out = dict(flat)
+    if p.get("build", True):
+        origin = p.get("origin") or [0.0, 0.0, 0.0]
+        shape = _sheet_flat_solid(flat, origin)
+        doc = _active_doc()
+        obj = doc.addObject("Part::Feature", p.get("name", "SheetFlat"))
+        obj.Shape = shape
+        doc.recompute()
+        out["handle"] = _register("sheet_flat", obj)
+        out["name"] = obj.Name
+        out["volume"] = shape.Volume
+    return out
+
+
+def _sheet_flat_solid(flat, origin=(0.0, 0.0, 0.0)):
+    """The flat blank as a solid: the outline extruded through thickness, less every
+    hole. Built in the XY plane at `origin` as a body in its own right — a flat
+    pattern is a separate manufacturing artifact, not a view of the folded part."""
+    ox, oy, oz = (float(v) for v in origin)
+    pts = [App.Vector(x + ox, y + oy, oz) for x, y in flat["outline"]]
+    face = Part.Face(Part.makePolygon(pts + [pts[0]]))
+    solid = face.extrude(App.Vector(0, 0, flat["thickness"]))
+    for hole in flat.get("holes", []):
+        drill = Part.makeCylinder(
+            hole["diameter_mm"] / 2.0, flat["thickness"] * 3.0,
+            App.Vector(hole["x"] + ox, hole["y"] + oy, oz - flat["thickness"]),
+            App.Vector(0, 0, 1))
+        solid = solid.cut(drill)
+    if not solid.isValid() or solid.Volume <= 0:
+        raise RuntimeError("flat pattern did not produce a valid solid")
+    return solid.removeSplitter()
+
+
+@handler("sheet_refold")
+def _h_sheet_refold(p):
+    """Fold a flat pattern back up and check it reproduces the part — the other half
+    of the unfold gate.
+
+    This does NOT replay the feature model. It reads the flat pattern back: each
+    leg length is measured off the flat outline, walking outward from the bend's
+    attachment past its reported bend allowance to the far edge of that region. So a
+    wrong allowance, angle or bend direction lands the refolded solid somewhere the
+    original is not, and this reports the disagreement instead of hiding it.
+
+    Pass `handle` (a sheet part) to unfold-then-refold it, or `flat` (a sheet_unfold
+    report) to refold a development from elsewhere. `compare` names the handle to
+    check against — it defaults to `handle`, and is skipped entirely when only
+    `flat` is given.
+
+    Tolerances: `volume_tol_pct` (default 0.1) and `bbox_tol_mm` (default 0.01).
+
+    Returns {handle, name, volume_mm3, bbox, bends, compare?} where `compare` is
+    {matches, volume_error_pct, bbox_max_error_mm, volume_mm3, tolerance}."""
+    from driftpin import sheetmetal as sm
+    handle = p.get("handle")
+    flat = p.get("flat")
+    base_placement = p.get("base_placement")
+    if flat is None:
+        if handle is None:
+            raise ValueError("sheet_refold needs `handle` or `flat`")
+        model, flat = _sheet_flat(handle, p)
+        base = model["regions"][0]
+        base_placement = {"origin3": base["origin3"], "e1_3": base["e1_3"],
+                          "e2_3": base["e2_3"]}
+    shape = _sheet_build(sm.refold(flat, base_placement=base_placement))
+    doc = _active_doc()
+    obj = doc.addObject("Part::Feature", p.get("name", "SheetRefold"))
+    obj.Shape = shape
+    doc.recompute()
+    bb = shape.BoundBox
+    out = {"handle": _register("sheet_refold", obj), "name": obj.Name,
+           "volume_mm3": shape.Volume,
+           "bbox": [bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax],
+           "bends": len([b for b in flat["bends"] if b["angle_deg"] > 1e-9])}
+    ref = p.get("compare", handle)
+    if ref:
+        _, want = _shape_of(ref)
+        wb = want.BoundBox
+        vol_err = (abs(shape.Volume - want.Volume) / want.Volume * 100.0
+                   if want.Volume else float("inf"))
+        bbox_err = max(abs(a - b) for a, b in zip(
+            out["bbox"], [wb.XMin, wb.YMin, wb.ZMin, wb.XMax, wb.YMax, wb.ZMax]))
+        vtol = float(p.get("volume_tol_pct", 0.1))
+        btol = float(p.get("bbox_tol_mm", 0.01))
+        out["compare"] = {
+            "handle": ref, "volume_mm3": want.Volume,
+            "volume_error_pct": round(vol_err, 6),
+            "bbox_max_error_mm": round(bbox_err, 6),
+            "matches": vol_err <= vtol and bbox_err <= btol,
+            "tolerance": {"volume_pct": vtol, "bbox_mm": btol}}
+    return out
+
+
+@handler("sheet_flat_export")
+def _h_sheet_flat_export(p):
+    """Write the flat pattern as a LAYERED DXF — the file a laser/punch/press-brake
+    shop actually quotes and cuts from.
+
+    Three layers, because a flat pattern without them is not a shop deliverable:
+    CUT carries the closed outer profile and every hole, BEND_UP and BEND_DOWN carry
+    one centreline per bend so the operator reads the fold direction off the print
+    rather than inferring it. DXF R12 ASCII, millimetres, written directly rather
+    than through TechDraw — a flat pattern is not a drawing view and does not want a
+    sheet frame, a scale or a title block around it.
+
+    Takes the same `k_factor` / `bend_table` arguments as sheet_unfold, since the
+    outline it writes IS the development.
+
+    Returns {ok, path, size, layers, entities, flat_size, blank_area_mm2, bends,
+    k_factors, fidelity, band_pct, warnings}."""
+    from driftpin import sheetmetal as sm
+    path = p["path"]
+    ext = os.path.splitext(path)[1].lower()
+    if ext != ".dxf":
+        raise ValueError(
+            f"sheet_flat_export writes DXF only, got {ext!r} — the flat pattern is "
+            "a cutting file; use export_shape for solids or export_drawing for a "
+            "dimensioned print")
+    _, flat = _sheet_flat(p["handle"], p)
+    text = sm.to_dxf(flat)
+    # newline="" so the composed "\n" endings reach disk untranslated. In text mode
+    # Windows rewrites every \n to \r\n, which made the same flat pattern a
+    # different file on Windows than on Linux — and left the reported size (the
+    # string's length) disagreeing with the file's. A cutting file a shop diffs, or
+    # that release_package checksums (#233), must be byte-identical from the same
+    # inputs on every platform.
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    return {"ok": flat["ok"], "path": path,
+            # what is ACTUALLY on disk, not the length of the string we meant to
+            # write — the caller checksums and ships the file, not our intent.
+            "size": os.path.getsize(path),
+            "layers": list(sm.DXF_LAYERS),
+            "entities": {"polylines": 1, "circles": len(flat["holes"]),
+                         "bend_lines": len(flat["bend_lines"])},
+            "flat_size": flat["flat_size"],
+            "blank_area_mm2": flat["blank_area_mm2"],
+            "bends": [{"name": b["name"], "angle_deg": b["angle_deg"],
+                       "direction": b["direction"],
+                       "bend_allowance_mm": b["bend_allowance_mm"],
+                       "bend_deduction_mm": b["bend_deduction_mm"],
+                       "k_factor": b["k_factor"], "k_source": b["k_source"]}
+                      for b in flat["bends"]],
+            "fidelity": flat["fidelity"], "band_pct": flat["band_pct"],
+            "warnings": flat["warnings"]}
+
+
+def _sheet_interferences(model):
+    """Pairwise solid overlap between features once folded.
+
+    Built feature-by-feature and intersected rather than inferred from a rule: a
+    refold collision is geometric fact, and OCC is right here. Adjacent features
+    share a face, whose intersection has no volume, so only real overlaps register."""
+    from driftpin import sheetmetal as sm
+    parts = {"base": _sheet_build(
+        [s for s in sm.build_recipes(model) if s["name"] == "base"])}
+    for feature in model["features"]:
+        parts[feature["name"]] = _sheet_build(
+            sm.build_recipes(model, feature_id=feature["id"]))
+    names = list(parts)
+    hits = []
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            common = parts[names[i]].common(parts[names[j]])
+            if common.Volume > sm.COLLISION_VOLUME_MM3:
+                hits.append({"a": names[i], "b": names[j],
+                             "volume_mm3": common.Volume})
+    return hits
+
+
+@handler("sheet_check")
+def _h_sheet_check(p):
+    """Press-brake manufacturability screen for a sheet part.
+
+    Four rules, each with the number it came from:
+
+      min_bend_radius   — inside radius below the material's minimum (a corpus
+                          value per material, e.g. 3t for 6061-T6, 1t for A36)
+                          cracks the outer fibre.
+      min_flange_length — an outer leg under 4t + R has no die shoulder to sit on
+                          and dives into the vee.
+      hole_to_bend      — a hole whose EDGE is nearer the bend tangent than 2t + R
+                          draws into an oval. Holes are read off the real solid.
+      refold_collision  — two features that occupy the same space once folded,
+                          found by actually intersecting them, not by a rule.
+
+    A hem is screened as a two-hit hem (bend, then flatten) and exempted from the
+    air-bend radius and flange rules, which would otherwise fail every hem drawn.
+    A flat pattern whose footprints overlap is a finding too, not a dropped warning.
+
+    Thresholds are settable: min_flange_t, hole_to_bend_t (multiples of thickness).
+    An unrecognised material degrades to a bend-class fallback with an info finding
+    rather than skipping the rule silently — the screen never raises on a thin
+    corpus.
+
+    fidelity='correlation' with band_pct=None: these are press-brake rules of thumb,
+    thresholds for ranking and gating rather than measured predictions.
+
+    Returns {ok, findings, fail_count, rules, min_bend_radius_mm, flat_size,
+    blank_area_mm2, k_factors, thickness_mm, material, fidelity, band_pct}."""
+    from driftpin import sheetmetal as sm
+    model, flat = _sheet_flat(p["handle"], p)
+    kw = {}
+    for key in ("min_flange_t", "hole_to_bend_t"):
+        if p.get(key) is not None:
+            kw[key] = float(p[key])
+    return sm.check(model, flat=flat, interferences=_sheet_interferences(model), **kw)
+
 
 
 def _main():

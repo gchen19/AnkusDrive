@@ -185,6 +185,14 @@ NOT_YET_CLASSIFIED = {
     'revolve', 'run_script', 'save_document', 'scale_shape', 'seal_check',
     'section_view', 'set_active_document', 'set_property', 'set_title_block',
     'set_visibility', 'shell_solid', 'solve_capabilities', 'substitutability_check',
+    # sheet metal (issue #230): the bend arithmetic underneath is closed-form and
+    # deterministic — the flat pattern is DEVELOPED from the feature model rather
+    # than fitted to geometry, and that is proven directly in
+    # tests/test_sheetmetal.py — but every one of these takes a live sheet handle
+    # rather than plain kwargs, so they park here with the other geometry tools
+    # pending a representative-kwargs sweep entry.
+    'sheet_base', 'sheet_flange', 'sheet_tab', 'sheet_hem', 'sheet_unfold',
+    'sheet_refold', 'sheet_flat_export', 'sheet_check',
     'sweep', 'thickness',
     'topology_to_solid', 'transaction_abort', 'transaction_commit', 'transaction_open',
     'transform', 'validate_manifest', 'verify_contract', 'verify_feature', 'verify_intent',

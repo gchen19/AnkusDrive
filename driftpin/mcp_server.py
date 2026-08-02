@@ -5645,6 +5645,7 @@ def dfm_check(
     process: str = "injection",
     min_wall_mm: float | None = None,
     min_draft_deg: float = 1.0,
+    sheet: dict | None = None,
 ) -> dict:
     """Screen a part for manufacturability against a pull/tool axis. Give a
     hand-built `faces` list of {name, draft_deg, wall_mm?} — draft_deg relative to
@@ -5653,9 +5654,20 @@ def dfm_check(
     the pull axis + a ray-cast undercut test + inward-chord wall sampling) and
     scored identically (v2 Shape wiring). draft_violations are 0≤draft<min_draft_deg,
     undercut_faces are draft<0, min_wall_violations are wall_mm<min_wall_mm
-    (defaults by process: injection 1.0, cnc 0.5, sheet/fdm 0.8). Returns {process,
-    pull_axis, min_wall_mm, draft_violations, undercut_faces, min_wall_violations,
-    score, pass} (plus n_faces + wall_thickness_stats on the handle path)."""
+    (defaults by process: injection 1.0, cnc 0.5, sheet/fdm 0.8).
+
+    Sheet metal: a `handle` built by sheet_base/sheet_flange/sheet_tab/sheet_hem is
+    ALSO screened against the press-brake rules (minimum bend radius by material,
+    minimum flange length, hole-to-bend distance, refold collision) with no extra
+    argument — those rules are DELEGATED to the same implementation sheet_check
+    calls, so the two tools cannot return different verdicts on one part. Pass an
+    explicit `sheet` block {thickness_mm, material?, bends, holes?, interferences?}
+    to screen bends on a part DriftPin did not model.
+
+    Returns {process, pull_axis, min_wall_mm, draft_violations, undercut_faces,
+    min_wall_violations, score, pass} — plus n_faces + wall_thickness_stats on the
+    handle path, and a `sheet` sub-result {ok, findings, rules, fidelity, band_pct}
+    whose failures also gate `pass` on the sheet-metal path."""
     params = {"pull_axis": pull_axis, "process": process, "min_draft_deg": min_draft_deg}
     if faces is not None:
         params["faces"] = faces
@@ -5663,6 +5675,8 @@ def dfm_check(
         params["handle"] = handle
     if min_wall_mm is not None:
         params["min_wall_mm"] = min_wall_mm
+    if sheet is not None:
+        params["sheet"] = sheet
     return _call("dfm_check", **params)
 
 
@@ -7091,6 +7105,286 @@ def release_package(registry: str, item: str, out_dir: str,
         if v is not None:
             params[k] = v
     return _call("release_package", **params)
+# --- sheet metal (issue #230) -------------------------------------------------
+
+
+@mcp.tool()
+def sheet_base(thickness_mm: float, profile: list | None = None,
+               sketch: str | None = None, material: str | None = None,
+               name: str = "SheetBase") -> dict:
+    """Start a sheet-metal part: the base flange, a closed straight-sided profile
+    extruded to `thickness_mm`. Everything else (flanges, tabs, hems, the flat
+    pattern, the DXF) hangs off the handle this returns.
+
+    profile: [[x, y], ...] in the XY plane, implicitly closed.
+    sketch: alternatively a handle to a closed, planar, straight-sided sketch — on
+        any plane. Arcs are REJECTED rather than silently faceted, because a
+        faceted flat pattern is a wrong flat pattern.
+    material: any Materials-DB name (e.g. "Steel-A36", "AL6061-T6", "SS304"); it
+        selects the K-factor and minimum-bend-radius corpus rows.
+
+    IMPORTANT — the profile is the flat face TANGENT TO TANGENT, not the outside
+    dimension. Bends grow OUTWARD from the profile boundary, exactly as a base
+    flange behaves in any sheet-metal CAD, so a U-channel of 100 mm outside width
+    with R = t = 2 starts from a 92 mm profile.
+
+    The bend model lives alongside the handle for the life of the worker session,
+    like every other handle: unfolding is a property of the FEATURE TREE, not of the
+    fused solid, so a part reopened from disk in a new session is a solid rather
+    than a sheet part. Cutting one (boolean_op cut, e.g. to drill it) keeps it a
+    sheet part; fusing arbitrary material onto it does not.
+
+    Returns {handle, name, volume, thickness_mm, material, profile, area_mm2}."""
+    params: dict = {"thickness_mm": thickness_mm, "name": name}
+    for key, value in (("profile", profile), ("sketch", sketch),
+                       ("material", material)):
+        if value is not None:
+            params[key] = value
+    return _call("sheet_base", **params)
+
+
+@mcp.tool()
+def sheet_flange(handle: str, edge: str, length_mm: float, angle_deg: float = 90.0,
+                 inner_radius_mm: float | None = None, direction: str = "up",
+                 length_from: str = "outer", width_mm: float | None = None,
+                 offset_mm: float = 0.0, k_factor: float | None = None,
+                 feature_name: str | None = None, name: str = "SheetFlange") -> dict:
+    """Bend a flange off a free edge of a sheet part.
+
+    edge: a stable e_* tag from list_edges (or 'EdgeN'/int) on a STRAIGHT free edge
+        of a flat region — a bend line is the intersection of two planes, so an arc
+        cannot carry one and is rejected.
+    angle_deg: the bend angle, i.e. the deviation from flat, so 90 is a right-angle
+        flange. Must be in (0, 180].
+    inner_radius_mm: inside bend radius; defaults to the material thickness.
+    direction: 'up' (toward the region's outward normal) or 'down'.
+    length_from: what `length_mm` measures — the number most often misread on a
+        sheet drawing. 'outer' (default) to the outside virtual apex, which is what
+        a drawing dimension normally means; 'inner' to the inside apex; 'tangent'
+        for the straight leg past the end of the bend.
+    width_mm / offset_mm: narrow the flange to part of the picked edge.
+    k_factor: pins K for THIS bend only. Leave it unset and the choice defers to
+        sheet_unfold — the folded solid does not depend on K at all, only the flat
+        pattern does.
+
+    Consumes the input handle (it is hidden, having become part of the result).
+
+    Returns {handle, name, feature, kind, volume, angle_deg, inner_radius_mm,
+    leg_tangent_mm, length_from, direction, span_mm, thickness_mm}."""
+    params: dict = {"handle": handle, "edge": edge, "length_mm": length_mm,
+                    "angle_deg": angle_deg, "direction": direction,
+                    "length_from": length_from, "offset_mm": offset_mm,
+                    "name": name}
+    for key, value in (("inner_radius_mm", inner_radius_mm), ("width_mm", width_mm),
+                       ("k_factor", k_factor), ("feature_name", feature_name)):
+        if value is not None:
+            params[key] = value
+    return _call("sheet_flange", **params)
+
+
+@mcp.tool()
+def sheet_tab(handle: str, edge: str, length_mm: float,
+              width_mm: float | None = None, offset_mm: float = 0.0,
+              feature_name: str | None = None, name: str = "SheetTab") -> dict:
+    """Extend a sheet part with a coplanar tab — a flat ear off a free edge with no
+    bend at all (a mounting lug, a weld tab, a snap-off).
+
+    Mechanically it is a zero-angle flange and shares that code path exactly:
+    `length_mm` is how far the tab reaches past the edge, `width_mm`/`offset_mm`
+    place it along the edge (default: the whole edge). It adds no bend to the bend
+    report and no bend line to the DXF, but it does grow the flat pattern.
+
+    Returns the same dict sheet_flange does (angle_deg 0, inner_radius_mm 0)."""
+    params: dict = {"handle": handle, "edge": edge, "length_mm": length_mm,
+                    "offset_mm": offset_mm, "name": name}
+    for key, value in (("width_mm", width_mm), ("feature_name", feature_name)):
+        if value is not None:
+            params[key] = value
+    return _call("sheet_tab", **params)
+
+
+@mcp.tool()
+def sheet_hem(handle: str, edge: str, length_mm: float, kind: str = "closed",
+              radius_mm: float | None = None, gap_mm: float | None = None,
+              direction: str = "up", width_mm: float | None = None,
+              offset_mm: float = 0.0, feature_name: str | None = None,
+              name: str = "SheetHem") -> dict:
+    """Fold a hem back on itself — the 180-degree return that stiffens a free edge
+    and buries the sharp cut line so the part is safe to handle.
+
+    kind: 'closed' (inside radius t/2, gap t) or 'open' (radius t, gap 2t).
+    radius_mm / gap_mm: override the style directly; the gap between the returned
+        leg and the parent is exactly 2R, so gap wins as radius = gap/2.
+
+    length_mm is ALWAYS the return leg measured from the end of the bend: a
+    180-degree bend has no virtual apex to dimension to — the outside surfaces are
+    parallel and never meet — so an 'outer' dimension would be infinite. For the
+    same reason a hem reports a bend allowance but no bend deduction, and
+    sheet_check screens it as a two-hit hem (bend, then flatten in a hemming die)
+    exempt from the air-bend radius and flange rules. A teardrop hem wraps past 180
+    degrees and is out of scope.
+
+    Returns the same dict sheet_flange does, plus {hem_kind, gap_mm}."""
+    params: dict = {"handle": handle, "edge": edge, "length_mm": length_mm,
+                    "kind": kind, "direction": direction, "offset_mm": offset_mm,
+                    "name": name}
+    for key, value in (("radius_mm", radius_mm), ("gap_mm", gap_mm),
+                       ("width_mm", width_mm), ("feature_name", feature_name)):
+        if value is not None:
+            params[key] = value
+    return _call("sheet_hem", **params)
+
+
+@mcp.tool()
+def sheet_unfold(handle: str, k_factor: float | None = None,
+                 bend_table: list | None = None, build: bool = True,
+                 origin: list | None = None, name: str = "SheetFlat") -> dict:
+    """Develop a sheet part into its flat pattern — the blank the part is cut from —
+    and report every bend.
+
+    The flat pattern is derived from the bend tree, not reverse-engineered out of
+    the fused solid, so it is exact rather than fitted: each bend contributes its
+    bend allowance BA = angle·(R + K·t), the arc length of the neutral fibre.
+
+    k_factor: pins K for every bend.
+    bend_table: a shop's own measured rows [{thickness_mm, inner_radius_mm,
+        angle_deg, allowance_mm | deduction_mm}] — a matching row OUTRANKS the
+        chart, because the shop's press is the ground truth for the shop's press.
+    Without either, K comes from a press-brake corpus keyed by material and r/t.
+    WHICHEVER IT IS, IT IS ECHOED BACK per bend as k_factor + k_source: a flat
+    length whose K you cannot see is a number you cannot check.
+
+    build: also create the flat blank as a real solid (holes included) at `origin`
+        in the XY plane, so it can be measured, exported or nested.
+
+    Fidelity: 'exact' only when EVERY bend's K was supplied or table-derived — BA
+    given K is pure arithmetic. One corpus-defaulted bend makes the development a
+    'correlation' with band_pct, and `developed_band_mm` gives the resulting
+    millimetre spread of the blank across that K band.
+
+    Returns {ok, handle?, name?, volume?, outline, holes, bend_lines, bends,
+    regions, flat_size, flat_bbox, flat_area_mm2, blank_area_mm2,
+    blank_volume_mm3, thickness, material, fidelity, band_pct, developed_band_mm,
+    warnings} — `regions` being each flat region's polygon, which is what lets the
+    whole report be handed straight back to sheet_refold. Each
+    bend row carries angle_deg, direction, inner_radius_mm, leg_tangent_mm,
+    outer_length_mm, bend_allowance_mm, bend_deduction_mm, outside_setback_mm,
+    k_factor, k_source, and the bend_line / tangent_start / tangent_end segments in
+    flat coordinates. ok=False means the blank cannot be cut as drawn — two feature
+    footprints overlap — with `warnings` naming which."""
+    params: dict = {"handle": handle, "build": build, "name": name}
+    for key, value in (("k_factor", k_factor), ("bend_table", bend_table),
+                       ("origin", origin)):
+        if value is not None:
+            params[key] = value
+    return _call("sheet_unfold", **params)
+
+
+@mcp.tool()
+def sheet_refold(handle: str | None = None, flat: dict | None = None,
+                 compare: str | None = None, k_factor: float | None = None,
+                 bend_table: list | None = None, volume_tol_pct: float = 0.1,
+                 bbox_tol_mm: float = 0.01, name: str = "SheetRefold") -> dict:
+    """Fold a flat pattern back up and check it reproduces the part — the other half
+    of the unfold gate.
+
+    This does NOT replay the feature model. It reads the flat pattern back: each leg
+    length is measured off the flat outline, walking outward from the bend's
+    attachment past its reported bend allowance to the far edge of that region. So a
+    wrong allowance, angle or bend direction lands the refolded solid somewhere the
+    original is not, and this reports the disagreement instead of hiding it.
+
+    handle: a sheet part to unfold and then refold.
+    flat: alternatively a sheet_unfold report, to refold a development produced
+        elsewhere (or a deliberately corrupted one, to prove the check bites).
+    compare: the handle to check against; defaults to `handle`, and is skipped when
+        only `flat` is given.
+    volume_tol_pct / bbox_tol_mm: agreement tolerances.
+
+    Note the round trip that is meaningful and the one that is not: refold-vs-folded
+    must match, but flat-vs-folded VOLUME must not, and does not. Bending preserves
+    neutral-fibre length, not material volume — a bend sector's true volume is
+    angle·t·(R + t/2)·w while its flat footprint is angle·(R + K·t)·t·w, and those
+    agree only at K = 0.5.
+
+    Returns {handle, name, volume_mm3, bbox, bends, compare?} where compare is
+    {handle, matches, volume_mm3, volume_error_pct, bbox_max_error_mm, tolerance}."""
+    params: dict = {"volume_tol_pct": volume_tol_pct, "bbox_tol_mm": bbox_tol_mm,
+                    "name": name}
+    for key, value in (("handle", handle), ("flat", flat), ("compare", compare),
+                       ("k_factor", k_factor), ("bend_table", bend_table)):
+        if value is not None:
+            params[key] = value
+    return _call("sheet_refold", **params)
+
+
+@mcp.tool()
+def sheet_flat_export(handle: str, path: str, k_factor: float | None = None,
+                      bend_table: list | None = None) -> dict:
+    """Write the flat pattern as a LAYERED DXF — the file a laser, punch or
+    press-brake shop actually quotes and cuts from. This is the deliverable the
+    whole sheet-metal family exists to produce.
+
+    Three layers, because a flat pattern without them is not a shop deliverable:
+    CUT carries the closed outer profile and every hole; BEND_UP and BEND_DOWN carry
+    one centreline per bend, so the operator reads the fold direction off the print
+    rather than inferring it. DXF R12 ASCII in millimetres, written directly rather
+    than through TechDraw — a flat pattern is not a drawing view and does not want a
+    sheet frame, a scale or a title block around it. `path` must end in .dxf.
+
+    Takes the same k_factor / bend_table arguments as sheet_unfold, since the
+    outline it writes IS the development.
+
+    Returns {ok, path, size, layers, entities, flat_size, blank_area_mm2, bends
+    (with bend_allowance_mm, bend_deduction_mm, k_factor and k_source per bend),
+    fidelity, band_pct, warnings}."""
+    params: dict = {"handle": handle, "path": path}
+    for key, value in (("k_factor", k_factor), ("bend_table", bend_table)):
+        if value is not None:
+            params[key] = value
+    return _call("sheet_flat_export", **params)
+
+
+@mcp.tool()
+def sheet_check(handle: str, k_factor: float | None = None,
+                bend_table: list | None = None, min_flange_t: float | None = None,
+                hole_to_bend_t: float | None = None) -> dict:
+    """Press-brake manufacturability screen for a sheet part — four rules, each with
+    the number it came from:
+
+      min_bend_radius   — an inside radius below the material's minimum (a corpus
+                          value per material: 3t for 6061-T6, 1t for A36, 0.5t for
+                          annealed 1100) cracks the outer fibre.
+      min_flange_length — an outer leg under 4t + R has no die shoulder to sit on
+                          and dives into the vee.
+      hole_to_bend      — a hole whose EDGE is nearer the bend tangent than 2t + R
+                          draws into an oval. Holes are read off the real solid, not
+                          declared.
+      refold_collision  — two features that occupy the same space once folded,
+                          found by actually intersecting them rather than by a rule.
+
+    A hem is screened as a two-hit hem (bend, then flatten) and exempted from the
+    air-bend radius and flange rules, which would otherwise fail every hem ever
+    drawn. A flat pattern whose feature footprints overlap is a finding too, not a
+    warning dropped on the floor. An unrecognised material degrades to a bend-class
+    fallback WITH an info finding saying so, rather than skipping the rule silently.
+
+    min_flange_t / hole_to_bend_t: override the thresholds (multiples of thickness).
+
+    fidelity='correlation' with band_pct=None — these are press-brake rules of
+    thumb, thresholds for ranking and gating rather than measured predictions.
+
+    Returns {ok, findings, fail_count, rules, min_bend_radius_mm,
+    min_bend_radius_source, flat_size, blank_area_mm2, k_factors, thickness_mm,
+    material, fidelity, band_pct}. Each finding carries {code, severity, message}
+    plus the measured value and the limit it missed."""
+    params: dict = {"handle": handle}
+    for key, value in (("k_factor", k_factor), ("bend_table", bend_table),
+                       ("min_flange_t", min_flange_t),
+                       ("hole_to_bend_t", hole_to_bend_t)):
+        if value is not None:
+            params[key] = value
+    return _call("sheet_check", **params)
 
 
 def run():

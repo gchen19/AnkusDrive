@@ -60,6 +60,7 @@ def dfm_check(
     process: str = "injection",
     min_wall_mm: float | None = None,
     min_draft_deg: float = 1.0,
+    sheet: dict | None = None,
 ) -> dict:
     """Screen a part for manufacturability against a pull/tool axis.
 
@@ -77,8 +78,18 @@ def dfm_check(
     ``1 - (#violations / max(#faces, 1))`` and ``pass`` is true only when no face
     is flagged.
 
+    ``sheet`` opts a sheet-metal part into the press-brake rules — minimum bend
+    radius by material, minimum flange length, hole-to-bend distance, refold
+    collision — as ``{thickness_mm, material?, bends: [...], holes: [...],
+    interferences: [...], min_flange_t?, hole_to_bend_t?}``. It DELEGATES to
+    ``driftpin.sheetmetal.check_bends``, the same function the worker's
+    ``sheet_check`` calls, so the face-level screen and the bend-level screen can
+    never drift into two different answers about the same part. The sub-result lands
+    under ``sheet`` and its failures gate ``pass``; ``score`` stays a face-coverage
+    ratio and is untouched by it.
+
     Returns {process, pull_axis, min_wall_mm, draft_violations, undercut_faces,
-    min_wall_violations, score, pass}."""
+    min_wall_violations, score, pass, sheet?}."""
     if min_wall_mm is None:
         if process not in _MIN_WALL_MM:
             raise ValueError(
@@ -105,7 +116,7 @@ def dfm_check(
     n_viol = len(draft_violations) + len(undercut_faces) + len(min_wall_violations)
     n_faces = max(len(faces), 1)
     score = 1.0 - n_viol / n_faces
-    return {
+    result = {
         "process": process,
         "pull_axis": pull_axis,
         "min_wall_mm": round(min_wall_mm, 3),
@@ -115,6 +126,20 @@ def dfm_check(
         "score": round(score, 3),
         "pass": n_viol == 0,
     }
+    if sheet is not None:
+        # One implementation of the press-brake rules, two front doors. Imported
+        # here rather than at module load so `analysis` stays importable without
+        # touching the sheet-metal core.
+        from ..sheetmetal import check_bends
+        kw = {k: float(sheet[k]) for k in ("min_flange_t", "hole_to_bend_t")
+              if sheet.get(k) is not None}
+        sub = check_bends(sheet.get("bends") or [], sheet["thickness_mm"],
+                          material=sheet.get("material"),
+                          holes=sheet.get("holes"),
+                          interferences=sheet.get("interferences"), **kw)
+        result["sheet"] = sub
+        result["pass"] = result["pass"] and sub["ok"]
+    return result
 
 
 # --- 2. DfA: assembly efficiency ----------------------------------------------
