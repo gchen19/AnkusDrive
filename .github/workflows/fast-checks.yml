@@ -33,8 +33,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ruff
-        run: pip install "ruff==0.15.15"
+      - name: Install ruff + a PEP 517 build frontend
+        # `build` backs the packaging suite below. Without it that test degrades to
+        # a SKIP (by design, for dev machines) and this lane would silently stop
+        # covering the wheel — the exact blind spot #249 is about.
+        # setuptools is pinned above pyproject's build-system floor too: the runner
+        # image ships an older one, and the packaging test refuses to build with a
+        # backend too old to honour the config (it would report a false failure).
+        run: pip install "ruff==0.15.15" build "setuptools>=68" wheel
 
       - name: Ruff (syntax + pyflakes, config in pyproject.toml)
         run: ruff check driftpin tests
@@ -44,3 +50,9 @@ jobs:
 
       - name: Registry parity + docstring contracts
         run: python tests/test_contracts.py
+
+      - name: Packaging — built wheel/sdist carries every runtime corpus (#249)
+        # Builds a real distribution into a temp dir, re-derives the expected data
+        # files from the loaders, and rebuilds once with a trimmed package-data to
+        # prove the assertion can fail. Seconds, no FreeCAD, no network.
+        run: python tests/test_package_data.py
