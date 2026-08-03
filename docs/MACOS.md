@@ -182,6 +182,38 @@ RUN_HEAVY_SOLVES=1 python3 tests/test_fsi.py
 This solve is now gated in CI on a self-hosted Apple-Silicon runner — see
 [CI: the Apple-Silicon lane](#ci-the-apple-silicon-lane) below.
 
+### Plain CFD (pipe, flat plate, mesh bridge, wind tunnel) in the VM
+
+The built-in CFD case builders — `cfd_internal_flow_submit`, `cfd_external_flow_submit`
+(including the geometry wind tunnel) — are OpenFOAM-only, and OpenFOAM lives in the VM.
+Two exports on top of the step-3 mount wire them up; they need none of the preCICE stack:
+
+```bash
+export TMPDIR=$HOME/fsi-run                            # case dirs land in the mount
+export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+export DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
+```
+
+**Verified live on Apple Silicon** (issue #223), whole suites, no skips:
+
+```bash
+RUN_HEAVY_SOLVES=1 python3 tests/test_openfoam.py     # 18/18 — Hagen-Poiseuille, D^4, Blasius, Colebrook
+RUN_HEAVY_SOLVES=1 python3 tests/test_meshbridge.py   # 19/19 — snappy bridge + the wind-tunnel drag-curve gates
+RUN_HEAVY_SOLVES=1 python3 tests/test_wind_tunnel.py  #  3/3  — a FreeCAD solid through the real handler
+```
+
+Two macOS-specific defects had to be fixed before those could pass, both of which had
+hidden on Linux:
+
+* `snappyHexMesh` v2512 **rejects a `locationInMesh` that lands exactly on a cell
+  vertex** ("Point (…) is not inside the mesh or on a face or edge") — which the internal
+  bridge's default seed (the solid's bbox centre) does for any symmetric solid. The seed
+  is now nudged off the grid by a fraction of a cell.
+* `multipass exec` **forwards stdin into the VM**, so a solve launched from a worker job
+  thread inherited — and consumed — the client's JSON-RPC pipe. The solve finished fine
+  while every `job_status` poll timed out. All substrate launches now pin
+  `stdin=DEVNULL`. `bash -c` on Linux never reads stdin, which is why it hid there.
+
 ### Injection-molding fill (and any other OpenFOAM app) in the VM
 
 `molding_fill_submit` runs `interFoam` on the ESI OpenFOAM installed in step 2, and prefers

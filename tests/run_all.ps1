@@ -217,6 +217,7 @@ $env:RUN_RELIABILITY = $savedRel
 # leg rides the same WSL route.
 Test-Module 'OpenFOAM CFD (structure + WSL-gated solves)'  'test_openfoam.py'
 Test-Module 'Mesh bridge (ElmerGrid native / snappy via WSL)' 'test_meshbridge.py'
+Test-Module 'Virtual wind tunnel (screen + WSL-gated body solve)' 'test_wind_tunnel.py'
 Test-Module 'FSI preCICE (degradation + WSL-gated solve)'  'test_fsi.py'
 
 # --- Linux-only families: skipped on Windows (documented, not silent) -----------

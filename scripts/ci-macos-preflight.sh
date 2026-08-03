@@ -174,6 +174,15 @@ if [ "$WANT_FSI" = 1 ]; then
   # -r, not -x: the bashrc is SOURCED, and the ESI deb ships it 644.
   check_in_vm DRIFTPIN_FSI_OPENFOAM_BASHRC  -r "OpenFOAM etc/bashrc the adapter was built against"
 
+  # --- 5b. the plain-CFD overrides (issue #223) -------------------------------
+  # The built-in CFD case builders (pipe, flat plate, snappy bridge, wind tunnel)
+  # are OpenFOAM-only and resolve through DRIFTPIN_OPENFOAM_*, NOT the FSI pair
+  # above. Without them test_openfoam / test_meshbridge / test_wind_tunnel SKIP
+  # their live halves and the lane goes green having solved nothing.
+  step "In-VM plain-CFD overrides"
+  check_in_vm DRIFTPIN_OPENFOAM_BASHRC -r "OpenFOAM etc/bashrc for the built-in CFD cases"
+  check_in_vm DRIFTPIN_OPENFOAM_PATH   -x "OpenFOAM solver binary (simpleFoam/interFoam)"
+
   # --- 6. driftpin's own host-side view --------------------------------------
   # The overrides above can all be right and the stack still report not-ok if the
   # config layer disagrees (e.g. config.toml shadowing, multipass off PATH). This
@@ -195,6 +204,26 @@ PY
     "OK "*)      ok "fsi_stack_status().ok — the live FSI test will run, not skip" ;;
     "MISSING "*) fail "fsi_stack_status() reports missing: ${status#MISSING } — test_fsi.py's live solve would SKIP silently, so the lane would pass without testing anything" ;;
     *)           fail "could not evaluate fsi_stack_status(): ${status#ERR }" ;;
+  esac
+
+  # The CFD files gate on this exact predicate, so check it rather than infer it
+  # from the overrides (config.toml shadowing, multipass off PATH, ...).
+  step "driftpin find_solver('openfoam') (the predicate the CFD files gate on)"
+  foam=$(python3 - <<'FOAMPY' 2>&1
+import sys
+sys.path.insert(0, ".")
+try:
+    from driftpin import solvers
+    info = solvers.find_solver("openfoam")
+except Exception as e:
+    print("ERR " + str(e)); sys.exit(0)
+print(("OK " + info.get("path", "")) if info["available"] else "MISSING " + info["status"])
+FOAMPY
+)
+  case "$foam" in
+    "OK "*)      ok "openfoam resolves -> ${foam#OK }" ;;
+    "MISSING "*) fail "openfoam does not resolve (status: ${foam#MISSING }) — the live CFD / mesh-bridge / wind-tunnel gates would SKIP silently. See docs/MACOS.md, 'Plain CFD ... in the VM'" ;;
+    *)           fail "could not evaluate find_solver('openfoam'): ${foam#ERR }" ;;
   esac
 fi
 

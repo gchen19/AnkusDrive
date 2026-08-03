@@ -253,14 +253,40 @@ Each family lists: the agent question it answers · backend · new-dependency we
     -> {ok:false, reason, install}                            # when no CFD solver resolves
      | {job_id, status, cache_hit}  # poll job_result for {ok, reynolds_l, cd, cf_solved,
        cf_blasius, blasius_ratio (≈1, ~15%), drag_force_n, drag_momentum_n, n_cells}
+  cfd_body_drag(shape, diameter_mm|frontal_area_mm2|model, velocity_m_s, fluid)  # screen, no solver
+    -> {cd, drag_force_n, frontal_area_m2, reynolds, regime, fidelity, band_pct,
+        valid_range_ok, warnings, escalate_to}                 # sphere / cylinder / Cd table
+  cfd_external_flow_submit(model, velocity_m_s, flow_direction, …)  # THE WIND TUNNEL, async
+    -> {job_id, …}  # poll job_result for {ok, cd, cl, cm, drag_force_n, drag_pressure_n,
+       drag_viscous_n, lift_force_n, force_total_n, moment_total_nm, force_drift_pct,
+       reynolds, frontal_area_m2, blockage_ratio, converged, gated, warnings}
   ```
+- **The virtual wind tunnel** (issue #223/#224): pass `cfd_external_flow_submit` a
+  **solid handle** and it solves THAT BODY, not a stand-in. Faces tessellate into an
+  STL, `external_domain_box` sizes a farfield box by standard practice (5L up / 10L
+  down / 5L lateral; `blockage_ratio` warns past 5 %), snappyHexMesh carves the body
+  out, and the OpenFOAM `forces` function object integrates pressure + viscous traction
+  over the body patch — Cd/Cl/Cm on the **measured silhouette** (`projected_area`,
+  exact for a convex body). Two guards exist because their failure modes are SILENT: a
+  background cell as coarse as the body makes snappyHexMesh mesh an **empty tunnel**
+  and report ~1e-14 N with rc=0, so a too-coarse `base_cell_mm` is refused; and a
+  steady laminar request past Re≈1000 is flagged in `warnings` rather than answered
+  quietly. `turbulence='kOmegaSST'` runs but has no verified oracle for arbitrary
+  bodies and returns `gated:false`. Gates: sphere vs the Clift–Gauvin drag curve at
+  Re=1 and Re=100 (live 0.8 % / 2.0 %, banded 10 %) and a same-body broadside-vs-edge-on
+  ordering, in `tests/test_meshbridge.py`; end to end through the handler in
+  `tests/test_wind_tunnel.py`.
 - **External-flow oracles** (`analysis/cfd.py`): **Stokes sphere** Cd = 24/Re,
-  F = 6πμUR (exact at Re≪1) and the **laminar flat plate** (Blasius
-  Cf = 1.328/√Re_L). The external builder (P3 M3) builds a 2-D flat plate with a clean
+  F = 6πμUR (exact at Re≪1); the **standard sphere drag curve** (Clift–Gauvin, ±10 %,
+  collapsing to Stokes as Re→0 and stopping at the drag crisis); the **cylinder in
+  crossflow** (Sucker–Brauer, ±15 %); a **bluff/streamlined Cd table** (±20 %); and the
+  **laminar flat plate** (Blasius Cf = 1.328/√Re_L). The external builder (P3 M3) builds a 2-D flat plate with a clean
   leading edge (slip→plate→slip, far-field top), runs simpleFoam, and integrates the
-  **wall-shear drag straight from the converged U field** — OpenFOAM's force /
-  wallShearStress function objects abort with a `sha1` IOstream error in this build, so
-  drag is read from fields (τ_w ≈ μ·u₁/y₁ over the plate; trailing-edge momentum
+  **wall-shear drag straight from the converged U field** — originally because
+  OpenFOAM's force / wallShearStress function objects aborted with a `sha1` IOstream
+  error in the build it was written against (they work on v2512, and the arbitrary-body
+  wind tunnel below relies on them), and still, because it is the gated number
+  (τ_w ≈ μ·u₁/y₁ over the plate; trailing-edge momentum
   thickness as a cross-check), gating Cd vs Blasius within ~15% (it lands ~9% high and
   converges with Re). Acceptance: **Example F** + `external.png`; oracle gates in
   `tests/test_cfd.py`, the simpleFoam gate (Blasius + U^1.5 law) in

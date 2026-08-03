@@ -167,6 +167,10 @@ echo "== Geometry bridge (case gen always; ElmerGrid/snappyHexMesh gates when pr
 python3 tests/test_meshbridge.py
 
 echo
+echo "== Virtual wind tunnel (screen always; OpenFOAM body solve when present) =="
+python3 tests/test_wind_tunnel.py
+
+echo
 echo "== Conjugate heat transfer (composite-wall oracle always; Elmer gate when present) =="
 python3 tests/test_cht.py
 

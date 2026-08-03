@@ -18,9 +18,15 @@
 #                                 binary under Rosetta 2 through solvers.run_argvs
 #     tests/test_fsi.py           the LIVE preCICE OpenFOAM<->CalculiX coupled solve,
 #                                 executed inside the Multipass VM
+#     tests/test_openfoam.py      the LIVE built-in CFD cases (Hagen-Poiseuille, D^4,
+#                                 Blasius, Colebrook) on the in-VM OpenFOAM (#223)
+#     tests/test_meshbridge.py    the LIVE snappyHexMesh bridge + the virtual wind
+#                                 tunnel gated on the sphere drag curve (#223/#224)
+#     tests/test_wind_tunnel.py   the same tunnel end to end, through the real
+#                                 cfd_external_flow_submit handler and job registry
 #
 #   Add more files as arguments once their in-VM provisioning is validated (the
-#   OpenFOAM-backed CFD / molding gates are the next candidates):
+#   OpenFOAM-backed molding gates are the next candidate):
 #
 #     bash tests/run_macos_heavy.sh tests/test_molding_fill.py
 #
@@ -54,7 +60,8 @@ fi
 if [ "$#" -gt 0 ]; then
   FILES=("$@")
 else
-  FILES=(tests/test_wsl_routing.py tests/test_su2_native.py tests/test_fsi.py)
+  FILES=(tests/test_wsl_routing.py tests/test_su2_native.py tests/test_fsi.py
+         tests/test_openfoam.py tests/test_meshbridge.py tests/test_wind_tunnel.py)
 fi
 
 FAILED=""

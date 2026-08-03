@@ -12191,6 +12191,59 @@ def _h_cfd_pipe_flow(p):
     return cfd.pipe_pressure_drop(**p)
 
 
+@handler("cfd_body_drag")
+def _h_cfd_body_drag(p):
+    """Analytic EXTERNAL-flow drag screen (no solver) — the external twin of
+    cfd_pipe_flow and the oracle band the wind-tunnel solve
+    (cfd_external_flow_submit(body=…)) is gated against.
+
+    Three shape families, picked by `shape`:
+      * 'sphere' — Clift–Gauvin across the whole drag curve (exact Stokes limit,
+        Newton plateau); needs `diameter_mm` + `velocity_m_s`.
+      * 'cylinder' — Sucker–Brauer crossflow Cd; `diameter_mm`, `velocity_m_s`,
+        optional `length_mm` (default 1 m = per unit span).
+      * anything in the bluff/streamlined table (`shape='list'` returns it) — a
+        Re-independent textbook Cd on `frontal_area_mm2`, or your own `cd`.
+
+    When the caller passes a `model`/`body` handle instead of an area, the frontal
+    area is measured off the live solid's tessellated silhouette along `flow_direction`
+    (exact for a convex body) and used as the reference area.
+
+    Returns the driftpin.analysis.cfd verdict: {cd, drag_force_n, frontal_area_m2,
+    dynamic_pressure_pa, velocity_m_s, fidelity, band_pct, escalate_to} plus
+    {reynolds, regime, warnings, valid_range_ok} for sphere/cylinder, or
+    {shapes: {...}} for shape='list'."""
+    from driftpin.analysis import cfd
+    from driftpin.analysis import meshbridge as _mb
+    p = dict(p)
+    shape = p.pop("shape", "sphere")
+    handle = p.pop("model", None) or p.pop("body", None)
+    direction = p.pop("flow_direction", None) or (1.0, 0.0, 0.0)
+    stl_tol = float(p.pop("stl_tolerance_mm", 0.2))
+    # each family takes its own argument set; drop what it cannot accept so a stray
+    # kwarg is an ignorable extra rather than a TypeError from deep inside the core
+    keep = {"sphere": ("diameter_mm", "velocity_m_s", "fluid", "mu_pa_s", "rho_kg_m3"),
+            "cylinder": ("diameter_mm", "length_mm", "velocity_m_s", "fluid",
+                         "mu_pa_s", "rho_kg_m3")}.get(
+        shape, ("frontal_area_mm2", "velocity_m_s", "fluid", "cd", "mu_pa_s",
+                "rho_kg_m3"))
+    if (handle and "frontal_area_mm2" in keep
+            and p.get("frontal_area_mm2") is None):
+        _, shp = _shape_of(handle)
+        tris = []                                    # mm in, so mm^2 out
+        for face in shp.Faces:
+            pts, idx = face.tessellate(stl_tol)
+            tris.extend(tuple((pts[i].x, pts[i].y, pts[i].z) for i in tri)
+                        for tri in idx)
+        p["frontal_area_mm2"] = _mb.projected_area(tris, direction)
+    p = {k: v for k, v in p.items() if k in keep}
+    if shape == "sphere":
+        return cfd.sphere_drag(**p)
+    if shape == "cylinder":
+        return cfd.cylinder_crossflow_drag(**p)
+    return cfd.bluff_body_drag(shape, **p)
+
+
 @handler("dfm_check")
 def _h_dfm_check(p):
     """Manufacturability screen (dfx.dfm_check). Two input modes:
@@ -15747,8 +15800,15 @@ def _run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False):
     script += chain
     # case_dir lets the macOS branch cd into the VM-mounted case (issue #193); Linux/
     # Windows ignore it and use the subprocess cwd (WSL auto-maps it to /mnt/<drive>).
+    #
+    # stdin=DEVNULL is load-bearing, not tidiness. This runs on a JOB THREAD inside the
+    # worker, whose stdin is the client's JSON-RPC pipe; an inherited stdin lets the
+    # relay READ FROM IT. `multipass exec` forwards stdin into the VM and does exactly
+    # that — the solve then silently swallows the caller's next request and every
+    # subsequent job_status times out while the solve itself completes fine. Verified
+    # live on macOS (bash -c on Linux never reads stdin, which is why it hid there).
     proc = subprocess.run(solvers.bash_argv(script, case_dir), cwd=case_dir,
-                          capture_output=True, text=True)
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True)
     tail = solvers.clean_wsl_text((proc.stdout or "") + (proc.stderr or ""))
     return proc.returncode, tail[-2000:]
 
@@ -16217,8 +16277,10 @@ def _cfd_flat_plate_submit(p):
     instead (banded mixed-transition Cf gate — SIMULATION_NEXT B3). Returns the
     solved drag/Cd next to the analytic `flat_plate_drag` (Blasius Cf=1.328/√Re_L)
     reference; the solve runs OFF the MCP channel and never touches FreeCAD. Drag is
-    read straight from the converged U field (OpenFOAM force function objects abort
-    with a 'sha1' IOstream error in this build)."""
+    read straight from the converged U field — the gated, byte-stable number for this
+    case (the `forces` function object, which the arbitrary-body tunnel relies on,
+    aborted with a 'sha1' IOstream error in the build this was written against and
+    works on v2512; see openfoam.forces_function_object)."""
     if _is_rans(p):
         return _cfd_flat_plate_rans_submit(p)
     info = _require_solver("openfoam")
@@ -16291,32 +16353,214 @@ def _cfd_flat_plate_submit(p):
                              "velocity_m_s": velocity})
 
 
+def _cfd_external_body_submit(p):
+    """The virtual wind tunnel (#223/#224) — put an ARBITRARY FreeCAD solid in external
+    flow and integrate the force on it.
+
+    Tessellates every face of the solid into a single-region (`walls`) STL on the MAIN
+    thread, sizes a farfield box around it by standard practice, and runs blockMesh +
+    snappyHexMesh (body carved OUT) + simpleFoam in the background with the `forces`
+    function object on the body patch. The headline numbers are the pressure+viscous
+    force vector and, on the measured frontal area, Cd/Cl. Degrades cleanly when no CFD
+    solver resolves."""
+    info = _require_solver("openfoam")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import math
+    import tempfile
+
+    from driftpin import jobs, solvers
+    from driftpin.analysis import cfd as _cfd
+    from driftpin.analysis import meshbridge as _mb
+
+    obj = _shape_handle_to_obj(p.get("body") or p.get("model"))
+    faces = obj.Shape.Faces
+    if not faces:
+        raise ValueError("the body has no faces to put in the tunnel")
+    if p.get("velocity_m_s") is None:
+        raise ValueError("velocity_m_s is required for the external-flow body mode")
+    velocity = float(p["velocity_m_s"])
+    if velocity <= 0:
+        raise ValueError("velocity_m_s must be > 0")
+    direction = p.get("flow_direction") or (1.0, 0.0, 0.0)
+    direction = tuple(float(v) for v in direction)
+    dmag = math.sqrt(sum(v * v for v in direction))
+    if len(direction) != 3 or dmag == 0:
+        raise ValueError("flow_direction must be a non-zero 3-vector")
+    dhat = tuple(v / dmag for v in direction)
+    mu, rho = _cfd._fluid_props(p.get("fluid", "air-20c"),
+                                p.get("mu_pa_s"), p.get("rho_kg_m3"))
+    nu = mu / rho
+    stl_tol = float(p.get("stl_tolerance_mm", 0.2))
+    end_time = int(p.get("end_time", 1500))
+    turbulence = "kOmegaSST" if _is_rans(p) else "laminar"
+
+    def face_tris(face):
+        pts, tris = face.tessellate(stl_tol)         # mm -> m
+        return [tuple((pts[i].x * 1e-3, pts[i].y * 1e-3, pts[i].z * 1e-3)
+                      for i in tri) for tri in tris]
+
+    tris = [t for f in faces for t in face_tris(f)]
+    stl_text = _mb.ascii_stl_regions({"walls": tris})
+
+    bb = obj.Shape.BoundBox
+    bbox_min = (bb.XMin * 1e-3, bb.YMin * 1e-3, bb.ZMin * 1e-3)
+    bbox_max = (bb.XMax * 1e-3, bb.YMax * 1e-3, bb.ZMax * 1e-3)
+    # frontal area: the tessellated silhouette (exact for a convex body — see
+    # meshbridge.projected_area), overridable when the body is re-entrant
+    if p.get("frontal_area_mm2") is not None:
+        frontal = float(p["frontal_area_mm2"]) / 1e6
+        frontal_source = "override"
+    else:
+        frontal = _mb.projected_area(tris, dhat)
+        frontal_source = "projected"
+    ref_len = (float(p["reference_length_mm"]) / 1000.0
+               if p.get("reference_length_mm") is not None
+               else max(bb.XLength, bb.YLength, bb.ZLength) * 1e-3)
+    reynolds = velocity * ref_len / nu
+
+    # honesty guard: a steady LAMINAR solve past the laminar envelope is a number
+    # that looks converged and is physically meaningless. Say so in the payload.
+    warnings = []
+    if turbulence == "laminar" and reynolds > 1000.0:
+        warnings.append(
+            f"Re = {reynolds:.3g} (on the {ref_len * 1000:.4g} mm reference length) is "
+            "past the steady-laminar envelope: the real wake is unsteady/turbulent and "
+            "this laminar steady solve will not represent it — pass "
+            "turbulence='kOmegaSST' (itself UNGATED for arbitrary bodies) or treat the "
+            "result as indicative only")
+
+    case_dir = tempfile.mkdtemp(prefix="foam_tunnel_")
+    built = _mb.write_snappy_external_case(
+        case_dir, stl_text=stl_text, bbox_min_m=bbox_min, bbox_max_m=bbox_max,
+        freestream_velocity_m_s=tuple(v * velocity for v in dhat),
+        nu_m2_s=nu, rho_kg_m3=rho, frontal_area_m2=frontal,
+        base_cell_m=(float(p["base_cell_mm"]) / 1000.0
+                     if p.get("base_cell_mm") is not None else None),
+        upstream_factor=float(p.get("upstream_factor", 5.0)),
+        downstream_factor=float(p.get("downstream_factor", 10.0)),
+        lateral_factor=float(p.get("lateral_factor", 5.0)),
+        surface_refine=tuple(p.get("surface_refine", (2, 3))),
+        wake_refine=int(p.get("wake_refine", 1)),
+        end_time=end_time, turbulence=turbulence)
+    dom = built["domain"]
+    warnings.extend(dom["warnings"])
+    env_bashrc = solvers.openfoam_bashrc()
+
+    key = jobs.content_key("cfd_external_flow", {"tunnel": {
+        "volume": round(obj.Shape.Volume, 6), "area": round(obj.Shape.Area, 6),
+        "bbox": [round(v, 9) for v in (*bbox_min, *bbox_max)],
+        "U": velocity, "dir": [round(v, 9) for v in dhat], "nu": nu, "rho": rho,
+        "A": round(frontal, 12), "stl_tol": stl_tol, "cell": dom["base_cell_m"],
+        "refine": list(p.get("surface_refine", (2, 3))),
+        "wake": int(p.get("wake_refine", 1)), "turb": turbulence, "et": end_time,
+        "dom": [float(p.get("upstream_factor", 5.0)),
+                float(p.get("downstream_factor", 10.0)),
+                float(p.get("lateral_factor", 5.0))]}})
+
+    def _work():
+        from driftpin.analysis import meshbridge as _mb2
+        from driftpin.analysis import openfoam as _of
+        rc, tail = _run_foam(case_dir, _mb2.snappy_mesh_cmds(), env_bashrc)
+        out = {
+            "ok": rc == 0,
+            "returncode": rc,
+            "solver": "openfoam",
+            "kind": "external",
+            "mode": "body",
+            "turbulence": turbulence,
+            "case_dir": case_dir,
+            "reynolds": round(reynolds, 3),
+            "reference_length_m": ref_len,
+            "frontal_area_m2": frontal,
+            "frontal_area_source": frontal_source,
+            "moment_reference_m": list(built["centre_of_rotation_m"]),
+            "blockage_ratio": round(dom["blockage_ratio"], 6),
+            "base_cell_m": dom["base_cell_m"],
+            "converged": _of.solve_converged(tail),
+            "gated": turbulence == "laminar",
+            "warnings": list(warnings),
+            "stdout_tail": tail,
+        }
+        parsed = _of.parse_forces(
+            case_dir, velocity_m_s=velocity, rho_kg_m3=rho,
+            reference_area_m2=frontal, reference_length_m=ref_len,
+            flow_direction=dhat)
+        if parsed:
+            out.update({
+                "cd": round(parsed["cd"], 6) if parsed["cd"] is not None else None,
+                "cl": round(parsed["cl"], 6) if parsed["cl"] is not None else None,
+                "cm": round(parsed["cm"], 6) if parsed["cm"] is not None else None,
+                "drag_force_n": parsed["drag_force_n"],
+                "drag_pressure_n": parsed["drag_pressure_n"],
+                "drag_viscous_n": parsed["drag_viscous_n"],
+                "lift_force_n": parsed["lift_force_n"],
+                "force_total_n": list(parsed["force_total_n"]),
+                "moment_total_nm": (list(parsed["moment_total_nm"])
+                                    if parsed["moment_total_nm"] else None),
+                "force_drift_pct": parsed["force_drift_pct"],
+                "n_force_samples": parsed["n_samples"],
+            })
+            # a mesh that never saw the body still converges and reports ~0 force
+            if abs(parsed["drag_force_n"]) < 1e-12 * max(1.0, frontal):
+                out["ok"] = False
+                out["warnings"] = out["warnings"] + [
+                    "drag is numerically zero — the body was almost certainly not "
+                    "meshed into the domain (check base_cell_mm against the body size)"]
+        else:
+            out["ok"] = False
+            out["warnings"] = out["warnings"] + [
+                "the forces function object wrote nothing — no force to report"]
+        return out
+
+    return jobs.submit("cfd_external_flow", _work, key=key,
+                       meta={"mode": "body", "velocity_m_s": velocity,
+                             "turbulence": turbulence})
+
+
 @handler("cfd_external_flow_submit")
 def _h_cfd_external_flow_submit(p):
-    """External-flow CFD (drag) via OpenFOAM or SU2, OFF the MCP channel. Degrades to
-    {ok:false, reason, install} when no CFD solver resolves (never raises).
+    """External-flow CFD (drag/lift) via OpenFOAM or SU2, OFF the MCP channel. Degrades
+    to {ok:false, reason, install} when no CFD solver resolves (never raises).
 
-    Two ways to drive it:
+    Three ways to drive it:
+      * **Put a real FreeCAD solid in the virtual wind tunnel (#223)** — pass a `body`
+        (or `model`) handle plus `velocity_m_s`, and optionally `flow_direction`
+        (default +x), `fluid`, `frontal_area_mm2`/`reference_length_mm` overrides, and
+        the mesh/domain knobs (`base_cell_mm`, `surface_refine`, `wake_refine`,
+        `upstream_factor`/`downstream_factor`/`lateral_factor`). The solid's faces
+        tessellate into an STL, a farfield box is auto-sized around it, snappyHexMesh
+        carves the body out and the `forces` function object integrates pressure +
+        viscous traction over it. Returns the force vector and Cd/Cl/Cm on the measured
+        frontal area. Laminar is gated live against the sphere drag curve at Re=1 and
+        Re=100; `turbulence='kOmegaSST'` runs but is UNGATED (`gated:false`).
       * **Build the flat-plate validation case** — pass `velocity_m_s` (and optionally
         `plate_length_mm`, a `fluid` name or `mu_pa_s`+`rho_kg_m3`, mesh knobs). The
         handler builds a 2-D laminar flat plate (clean leading edge: slip→plate→slip),
         runs blockMesh+simpleFoam, integrates the wall-shear drag from the converged U
         field, and returns the solved Cd next to the Blasius reference Cf=1.328/√Re_L —
-        the kickoff's external gate (`blasius_ratio` ~ 1, within ~15%).
+        the kickoff's external gate (`blasius_ratio` ~ 1, within ~15%). THIS SOLVES A
+        FLAT PLATE, not the caller's geometry.
       * **Run a prepared OpenFOAM `case_dir`** containing its own mesh + dictionaries.
 
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. For
-    the flat-plate case: {ok, returncode, reynolds_l, cd, cf_solved, cf_blasius,
-    blasius_ratio, drag_force_n, drag_momentum_n, drag_blasius_n, n_cells, case_dir}.
-    For a prepared case: {ok, returncode, solver, application, case_dir, kind,
-    stdout_tail}."""
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Body
+    mode: {ok, returncode, cd, cl, cm, drag_force_n, drag_pressure_n, drag_viscous_n,
+    lift_force_n, force_total_n, moment_total_nm (about the body's bbox centre,
+    echoed as moment_reference_m), force_drift_pct, reynolds, frontal_area_m2,
+    blockage_ratio, converged, gated, warnings, case_dir}. Flat plate:
+    {ok, returncode, reynolds_l, cd, cf_solved, cf_blasius, blasius_ratio, drag_force_n,
+    drag_momentum_n, drag_blasius_n, n_cells, case_dir}. Prepared case: {ok, returncode,
+    solver, application, case_dir, kind, stdout_tail}."""
+    if p.get("body") or p.get("model"):              # --- the wind tunnel (#223) ---
+        return _cfd_external_body_submit(p)
     if p.get("case_dir"):
         return _openfoam_submit(p, "external")
     if p.get("velocity_m_s") is not None:
         return _cfd_flat_plate_submit(p)
     raise ValueError(
-        "provide a prepared `case_dir`, or the flat-plate params (velocity_m_s, and "
-        "optionally plate_length_mm/fluid) to build the Blasius validation case")
+        "provide a `body` handle (the geometry wind tunnel), a prepared `case_dir`, or "
+        "the flat-plate params (velocity_m_s, and optionally plate_length_mm/fluid) to "
+        "build the Blasius validation case")
 
 
 # --- injection-molding FILL (issue #105; interFoam VOF on the existing OpenFOAM,

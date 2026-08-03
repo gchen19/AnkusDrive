@@ -275,6 +275,209 @@ def parse_pressure_drop(case_dir: str, *, rho_kg_m3: float,
     }
 
 
+# --- forces and moments on a patch (issue #224) --------------------------------
+#
+# The `forces` function object integrates the pressure and viscous traction over a
+# set of patches every iteration and writes postProcessing/forces/<t>/{force,moment}.dat.
+# Historical note: the P3 flat-plate work found forces/forceCoeffs aborting with a
+# 'sha1' IOstream error and worked around it by hand-integrating drag from the raw U
+# field (parse_flat_plate_drag). That was a property of THAT OpenFOAM build — verified
+# working on OpenFOAM v2512 (ESI), where the FO writes both files cleanly and its pipe
+# wall-shear force matches the Hagen-Poiseuille wall traction to ~1 %. The hand
+# integration stays as the flat plate's primary number (it is gated and byte-stable);
+# the FO is what makes drag on an ARBITRARY body possible at all, since there is no
+# indexable cell layout to hand-integrate on a snapped mesh.
+#
+# rho: incompressible OpenFOAM p is kinematic (m^2/s^2), so the FO is told `rho rhoInf`
+# + the density and returns forces in NEWTONS. writeInterval is 1 on purpose — the run
+# stops the moment SIMPLE's residualControl is met, which is almost never a multiple of
+# a coarser interval, and a force file that was never written is indistinguishable
+# downstream from a solve that produced no force.
+
+
+def forces_function_object(*, patches, rho_kg_m3: float,
+                           centre_of_rotation=(0.0, 0.0, 0.0),
+                           name: str = "forces") -> str:
+    """The ``functions { … }`` block appending a ``forces`` function object to a
+    controlDict: pressure + viscous force and moment over ``patches``, written every
+    iteration to ``postProcessing/<name>/<startTime>/{force,moment}.dat`` in newtons
+    (``rho rhoInf`` + ``rhoInf`` = ``rho_kg_m3``, since incompressible p is kinematic).
+    Moments are about ``centre_of_rotation``. Returns the text to CONCATENATE onto the
+    controlDict; parse the result with :func:`parse_forces`. Raises ValueError on an
+    empty patch list or non-positive density."""
+    names = [str(p) for p in (patches or [])]
+    if not names or any((not p) or " " in p for p in names):
+        raise ValueError("patches must be a non-empty list of patch names")
+    if rho_kg_m3 <= 0:
+        raise ValueError("rho_kg_m3 must be > 0")
+    cofr = tuple(float(v) for v in centre_of_rotation)
+    if len(cofr) != 3:
+        raise ValueError("centre_of_rotation must be a 3-vector")
+    return f"""
+functions
+{{
+    {name}
+    {{
+        type            forces;
+        libs            ("libforces.so");
+        writeControl    timeStep;
+        writeInterval   1;
+        log             true;
+        patches         ({" ".join(names)});
+        rho             rhoInf;
+        rhoInf          {rho_kg_m3:.10g};
+        CofR            ({cofr[0]:.10g} {cofr[1]:.10g} {cofr[2]:.10g});
+    }}
+}}
+"""
+
+
+def _last_force_row(path: str):
+    """Last non-comment row of a forces ``*.dat`` as a list of floats, or None."""
+    try:
+        rows = [r for r in open(path, encoding="utf-8").read().splitlines()
+                if r.strip() and not r.lstrip().startswith("#")]
+    except OSError:
+        return None
+    for row in reversed(rows):
+        try:
+            return [float(v) for v in row.replace("(", " ").replace(")", " ").split()]
+        except ValueError:
+            continue
+    return None
+
+
+def parse_forces(case_dir: str, *, name: str = "forces",
+                 velocity_m_s: float | None = None,
+                 rho_kg_m3: float | None = None,
+                 reference_area_m2: float | None = None,
+                 reference_length_m: float | None = None,
+                 flow_direction=(1.0, 0.0, 0.0),
+                 lift_direction=None) -> dict | None:
+    """Read the converged force/moment integral written by :func:`forces_function_object`
+    and resolve it into drag, lift and (optionally) the coefficients.
+
+    Reads the LAST row of ``postProcessing/<name>/<t>/force.dat`` (highest start time)
+    and its ``moment.dat`` twin: total / pressure / viscous vectors, in newtons and
+    newton-metres. Drag is the total force projected on ``flow_direction``; lift is the
+    projection on ``lift_direction`` (default: the component of +z orthogonal to the
+    flow, falling back to +y when the flow is along z). The pressure/viscous split is
+    reported separately — for a bluff body form drag dominates, for a streamlined one
+    friction does, and a body whose "drag" is ~100 % pressure at low Re is a signal the
+    mesh never resolved the boundary layer.
+
+    Coefficients need all of ``velocity_m_s``, ``rho_kg_m3`` and ``reference_area_m2``
+    (``cd``/``cl``); ``reference_length_m`` additionally gives ``cm``. Without them the
+    force vectors come back and the coefficient keys are None.
+
+    Also returns ``n_samples`` and ``force_drift_pct`` — |ΔD| over the last two written
+    samples as a percentage of the final drag. A converged steady solve drifts ≲0.1 %
+    per iteration; a large drift means the force has not settled and the number should
+    not be quoted. Returns None when the function object wrote nothing (the solve
+    failed, or the FO never ran)."""
+    root = os.path.join(case_dir, "postProcessing", name)
+    if not os.path.isdir(root):
+        return None
+    times = []
+    for d in os.listdir(root):
+        try:
+            times.append((float(d), d))
+        except ValueError:
+            continue
+    if not times:
+        return None
+    tdir = os.path.join(root, max(times)[1])
+    fpath = os.path.join(tdir, "force.dat")
+    row = _last_force_row(fpath)
+    if not row or len(row) < 10:
+        return None
+    total = tuple(row[1:4])
+    pressure = tuple(row[4:7])
+    viscous = tuple(row[7:10])
+
+    d = tuple(float(v) for v in flow_direction)
+    dmag = math.sqrt(sum(v * v for v in d))
+    if len(d) != 3 or dmag == 0:
+        raise ValueError("flow_direction must be a non-zero 3-vector")
+    d = tuple(v / dmag for v in d)
+    if lift_direction is None:
+        up = (0.0, 0.0, 1.0) if abs(d[2]) < 0.9 else (0.0, 1.0, 0.0)
+        proj = sum(up[i] * d[i] for i in range(3))
+        lift_direction = tuple(up[i] - proj * d[i] for i in range(3))
+    lift_direction = tuple(float(v) for v in lift_direction)
+    lmag = math.sqrt(sum(v * v for v in lift_direction))
+    lhat = tuple(v / lmag for v in lift_direction) if lmag else (0.0, 0.0, 0.0)
+
+    def dot(v, u):
+        return sum(v[i] * u[i] for i in range(3))
+
+    drag = dot(total, d)
+    lift = dot(total, lhat)
+
+    # convergence witness: how much the drag moved over the last written interval
+    rows = [r for r in open(fpath, encoding="utf-8").read().splitlines()
+            if r.strip() and not r.lstrip().startswith("#")]
+    drift = None
+    if len(rows) >= 2:
+        prev = [float(v) for v in
+                rows[-2].replace("(", " ").replace(")", " ").split()]
+        if len(prev) >= 4 and drag != 0:
+            drift = abs(dot(tuple(prev[1:4]), d) - drag) / abs(drag) * 100.0
+
+    out = {
+        "time": max(times)[1],
+        "force_total_n": total,
+        "force_pressure_n": pressure,
+        "force_viscous_n": viscous,
+        "drag_force_n": drag,
+        "drag_pressure_n": dot(pressure, d),
+        "drag_viscous_n": dot(viscous, d),
+        "lift_force_n": lift,
+        "flow_direction": d,
+        "lift_direction": lhat,
+        "n_samples": len(rows),
+        "force_drift_pct": drift,
+        "cd": None,
+        "cl": None,
+        "cm": None,
+        "moment_total_nm": None,
+    }
+    mrow = _last_force_row(os.path.join(tdir, "moment.dat"))
+    if mrow and len(mrow) >= 4:
+        out["moment_total_nm"] = tuple(mrow[1:4])
+    if velocity_m_s and rho_kg_m3 and reference_area_m2:
+        q = 0.5 * float(rho_kg_m3) * float(velocity_m_s) ** 2
+        denom = q * float(reference_area_m2)
+        if denom > 0:
+            out["cd"] = drag / denom
+            out["cl"] = lift / denom
+            if reference_length_m and out["moment_total_nm"]:
+                # pitching moment about the axis normal to both flow and lift
+                axis = (d[1] * lhat[2] - d[2] * lhat[1],
+                        d[2] * lhat[0] - d[0] * lhat[2],
+                        d[0] * lhat[1] - d[1] * lhat[0])
+                out["cm"] = dot(out["moment_total_nm"], axis) / (
+                    denom * float(reference_length_m))
+    return out
+
+
+def solve_converged(log_tail: str) -> bool | None:
+    """Did SIMPLE reach its ``residualControl`` targets, or did it just run out of
+    iterations? True when the run's tail carries "SIMPLE solution converged", False when
+    it carries the end-of-run marker without it, None when neither is present (the tail
+    is too short to tell). A steady case that stops at ``endTime`` unconverged returns
+    numbers that look exactly like converged ones — this is the cheap witness that says
+    which happened. (The full trust layer — checkMesh, residual histories, mesh
+    independence — is issue #225.)"""
+    if not log_tail:
+        return None
+    if "SIMPLE solution converged" in log_tail:
+        return True
+    if "\nEnd\n" in log_tail or log_tail.rstrip().endswith("End"):
+        return False
+    return None
+
+
 # --- external flow: laminar flat plate (Blasius) — P3 M3 ----------------------
 # The external counterpart of the internal pipe: a 2-D laminar flat plate whose
 # friction drag has the exact Blasius average skin friction Cf = 1.328/√Re_L
@@ -283,9 +486,12 @@ def parse_pressure_drop(case_dir: str, *, rho_kg_m3: float,
 # uniform flow, not the inlet corner); the top is a far-field symmetryPlane and the
 # ±z faces are empty (2-D). simpleFoam (steady, laminar) solves it.
 #
-# Drag is read STRAIGHT FROM THE CONVERGED U FIELD — OpenFOAM's forces/wallShearStress
-# function objects abort with a "sha1" IOstream error in this OpenFOAM build (the same
-# reason parse_pressure_drop reads p directly). The friction drag is the wall-shear
+# Drag is read STRAIGHT FROM THE CONVERGED U FIELD, not from a function object. That
+# started as a workaround (forces/wallShearStress aborted with a "sha1" IOstream error
+# in the build this was written against — the same reason parse_pressure_drop reads p
+# directly) and stays as the primary number now that the FO works on v2512, because it
+# is the gated, byte-stable one; forces_function_object above is the cross-check and is
+# what the arbitrary-body tunnel uses. The friction drag is the wall-shear
 # integral over the plate, τ_w ≈ μ·u₁/y₁ from the first off-wall cell (μ·u₁/y₁·face
 # area, summed); the trailing-edge momentum thickness θ gives an independent
 # cross-check (D = ρ·U²·θ·b). Validated vs Blasius to ~10 % (wall shear; it converges
