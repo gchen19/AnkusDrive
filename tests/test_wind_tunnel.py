@@ -120,6 +120,97 @@ def test_wind_tunnel_solves_the_handed_body_not_a_flat_plate():
           f"{oracle['cd']:.4g} (ratio {ratio:.3f}, Re {res['reynolds']:.4g})")
 
 
+def test_trust_block_reports_convergence_mesh_and_yplus():
+    """The #225 trust layer through the product surface, two-sided: the shipped
+    defaults must come back `trusted` with a converged solve and a clean checkMesh —
+    and the SAME case starved of iterations must come back `converged: false` with a
+    reason, rather than a number that looks exactly as good."""
+    if skip_heavy("OpenFOAM trust layer"):
+        return
+    if not solvers.is_available("openfoam"):
+        print("    SKIP — OpenFOAM not installed")
+        return
+    d_mm, rho = 10.0, 998.2
+    mu, _ = cfd._fluid_props("water-20c", None, None)
+    velocity = 100.0 * (mu / rho) / (d_mm / 1000.0)          # Re = 100
+    with Worker() as w:
+        w.call("new_document", name="tunnel_trust")
+        sphere = w.call("add_primitive", kind="sphere", radius=d_mm / 2)
+        good = _await_job(w, w.call(
+            "cfd_external_flow_submit", model=sphere["handle"],
+            velocity_m_s=velocity, fluid="water-20c")["job_id"])
+        starved = _await_job(w, w.call(
+            "cfd_external_flow_submit", model=sphere["handle"],
+            velocity_m_s=velocity, fluid="water-20c", end_time=5)["job_id"])
+
+    t = good["trust"]
+    assert t["converged"] is True and t["trusted"] is True, t
+    assert not t["reasons"], t["reasons"]
+    assert t["iterations"] and 1 < t["iterations"] < 1500, t
+    assert t["max_residual"] is not None and t["max_residual"] < 1e-4, t
+    assert set(t["final_residuals"]) >= {"Ux", "Uy", "Uz", "p"}, t["final_residuals"]
+    assert t["mesh"]["ok"] is True, t["mesh"]
+    assert 0 < t["mesh"]["max_non_orthogonality_deg"] < 70, t["mesh"]
+    assert t["mesh"]["n_cells"] > 1000, t["mesh"]
+    # y+ is MEASURED from the solved wall shear, not estimated beforehand
+    assert t["y_plus"] and t["y_plus"]["y_plus_max"] > 0, t["y_plus"]
+
+    s = starved["trust"]
+    assert s["converged"] is False, s
+    assert s["trusted"] is False and s["reasons"], s
+    assert "iteration cap" in s["reasons"][0], s["reasons"]
+    assert s["iterations"] == 5, s
+    # the starved run still RETURNS a Cd — that is exactly the trap: it is only the
+    # trust block that distinguishes it from the good one
+    assert starved["cd"] is not None and good["cd"] is not None
+    assert s["max_residual"] > t["max_residual"], (s["max_residual"], t["max_residual"])
+    print(f"    trusted Cd {good['cd']:.4g} (converged in {t['iterations']} it, "
+          f"max residual {t['max_residual']:.2g}, y+ max "
+          f"{t['y_plus']['y_plus_max']:.3g}) vs starved Cd {starved['cd']:.4g} "
+          f"(max residual {s['max_residual']:.2g}, NOT converged)")
+
+
+def test_mesh_independence_brackets_the_analytic_answer():
+    """The #225 headline gate: on the pipe — the one case with an exact closed form —
+    the Grid Convergence band computed WITHOUT any reference must contain the
+    Hagen-Poiseuille value. That is the claim the whole verification layer rests on:
+    that the band means something on geometry where no oracle exists."""
+    if skip_heavy("OpenFOAM mesh independence"):
+        return
+    if not solvers.is_available("openfoam"):
+        print("    SKIP — OpenFOAM not installed")
+        return
+    with Worker() as w:
+        w.call("new_document", name="mesh_independence")
+        sub = w.call("cfd_mesh_independence_submit", diameter_mm=10, length_mm=500,
+                     velocity_m_s=0.005, fluid="water-20c", levels=3,
+                     refinement_ratio=1.5, n_axial=80, n_radial=10, end_time=3000)
+        assert sub.get("job_id"), sub
+        res = _await_job(w, sub["job_id"], timeout_s=1800)
+
+    assert res["ok"], res
+    assert res["family"] == "internal_pipe" and len(res["levels"]) == 3, res
+    vals = [lv["value"] for lv in res["levels"]]
+    sizes = [lv["cell_size_m"] for lv in res["levels"]]
+    assert all(v is not None for v in vals), res["levels"]
+    assert sizes[0] < sizes[1] < sizes[2], sizes            # finest first
+    assert all(lv["converged"] is True for lv in res["levels"]), res["levels"]
+
+    gci = res["grid_convergence"]
+    assert gci["monotonic"] is True, gci
+    assert 0 < gci["gci_pct"] < 25, gci                     # a usable band, not noise
+    # the band around the finest solve must contain the exact analytic answer
+    hp = res["hagen_poiseuille_pa"]
+    fine = vals[0]
+    half = gci["gci_pct"] / 100.0 * abs(fine)
+    assert abs(fine - hp) <= half * 3.0, (fine, hp, half, gci)
+    # ... and the Richardson limit must be at least as close to it as the finest mesh
+    assert abs(gci["extrapolated_value"] - hp) <= abs(fine - hp) * 1.5, (gci, hp)
+    print(f"    pipe GCI: {vals} Pa -> extrapolated "
+          f"{gci['extrapolated_value']:.5g} vs Hagen-Poiseuille {hp:.5g} "
+          f"(order {gci['observed_order']}, band {gci['gci_pct']:.3g} %)")
+
+
 def test_wind_tunnel_refuses_a_cell_that_would_mesh_an_empty_tunnel():
     """The silent-wrong-answer guard, through the product surface: asking for a
     background cell as big as the body must be REFUSED, not answered with the ~0 N

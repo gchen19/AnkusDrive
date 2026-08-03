@@ -15789,12 +15789,37 @@ def _run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False):
     On Windows the script runs inside the WSL distro (``solvers.bash_argv`` —
     issue #193): ``case_dir`` stays a Windows path, auto-mapped to /mnt/<drive>
     as the in-distro cwd, while ``env_bashrc`` arrives as a POSIX path from the
-    \\\\wsl$-probing resolvers."""
+    \\\\wsl$-probing resolvers.
+
+    Each app is TEE'd to ``<case_dir>/log.<app>`` as well as captured (issue #225).
+    The captured stream is truncated to a 2000-char tail for the payload, which is
+    enough to say whether the run ended but not to say how it converged — the trust
+    parsers (``openfoam.parse_residuals`` / ``parse_checkmesh``) need the whole log,
+    and a file in the case dir is also the first thing anyone debugging a failed solve
+    asks for. ``set -o pipefail`` keeps the tee from masking a solver failure: without
+    it the pipeline's status is tee's, so a crashed app would report success and the
+    chain would keep going."""
     import subprocess
 
     from driftpin import solvers
-    chain = " && ".join(" ".join(a) for a in argv_list)
-    script = (f"source '{env_bashrc}' >/dev/null 2>&1\n" if env_bashrc else "")
+    seen, parts = {}, []
+    for a in argv_list:
+        args = [str(x) for x in a]
+        app = os.path.basename(args[0])
+        # A post-process pass runs the SAME binary as the solve (`simpleFoam
+        # -postProcess -func yPlus`), so naming the log after argv[0] alone would let
+        # the audit clobber the solve's own log — and the residual parser would then
+        # read a file with no iterations in it and report a converged run as
+        # unconverged. Verified live. The function name goes in the log name.
+        if "-postProcess" in args:
+            func = args[args.index("-func") + 1] if "-func" in args else "postProcess"
+            app = f"{app}-{func}"
+        seen[app] = seen.get(app, 0) + 1             # backstop for a repeated app
+        suffix = "" if seen[app] == 1 else f"_{seen[app]}"
+        parts.append(f"{' '.join(args)} 2>&1 | tee log.{app}{suffix}")
+    chain = " && ".join(parts)
+    script = "set -o pipefail\n"
+    script += (f"source '{env_bashrc}' >/dev/null 2>&1\n" if env_bashrc else "")
     if unset_sigfpe:
         script += "unset FOAM_SIGFPE\n"
     script += chain
@@ -15811,6 +15836,66 @@ def _run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False):
                           stdin=subprocess.DEVNULL, capture_output=True, text=True)
     tail = solvers.clean_wsl_text((proc.stdout or "") + (proc.stderr or ""))
     return proc.returncode, tail[-2000:]
+
+
+def _cfd_audit(case_dir, env_bashrc, *, app="simpleFoam", wall_treatment=None,
+               want_yplus=False):
+    """The trust block for a finished steady CFD solve (issue #225): did it converge,
+    is the mesh sound, and — for a wall-modelled case — is y+ where the model needs it.
+
+    Runs ``checkMesh`` (and optionally the ``yPlus`` post-process) as a SEPARATE pass
+    after the solve, deliberately: checkMesh reads the mesh, which still exists, and
+    keeping it out of the solve chain means its exit status can never abort or fail a
+    run that actually succeeded. The whole thing is best-effort — an audit that blows
+    up must never turn a good solve into a failed job — so every step is guarded and a
+    missing piece comes back as None rather than an exception.
+
+    Returns {trusted, reasons, converged, iterations, final_residuals, max_residual,
+    mesh, y_plus}. ``trusted`` is the AND of every check that could be evaluated, and
+    ``reasons`` names each one that failed, so a caller can quote the number with a
+    caveat instead of either trusting it blindly or throwing it away."""
+    from driftpin.analysis import openfoam as _of
+
+    audit = [["checkMesh"]] + ([_of.yplus_command(app)] if want_yplus else [])
+    try:
+        _run_foam(case_dir, audit, env_bashrc)
+    except Exception:                                # noqa: BLE001 - audit is advisory
+        pass
+    res = mesh = yp = None
+    for fn in ("residuals", "checkmesh", "yplus"):
+        try:
+            if fn == "residuals":
+                res = _of.parse_residuals(case_dir, app=app)
+            elif fn == "checkmesh":
+                mesh = _of.parse_checkmesh(case_dir)
+            elif want_yplus:
+                yp = _of.parse_yplus(case_dir, wall_treatment=wall_treatment)
+        except Exception:                            # noqa: BLE001
+            pass
+
+    reasons = []
+    if res and res["converged"] is False:
+        reasons.append(
+            f"the solve stopped at its {res['iterations']}-iteration cap without "
+            "meeting residualControl — it is NOT a converged steady solution, and the "
+            "numbers below are whatever the last iteration happened to hold")
+    if mesh and not mesh["ok"]:
+        reasons.append(
+            f"checkMesh failed {mesh['failed_checks']} check(s) "
+            f"(max non-orthogonality {mesh['max_non_orthogonality_deg']}, max skewness "
+            f"{mesh['max_skewness']})")
+    if yp and yp["in_band"] is False:
+        reasons.extend(yp["warnings"])
+    return {
+        "trusted": not reasons and bool(res and res["converged"]),
+        "reasons": reasons,
+        "converged": (res["converged"] if res else None),
+        "iterations": (res["iterations"] if res else None),
+        "final_residuals": (res["final_residuals"] if res else None),
+        "max_residual": (res["max_residual"] if res else None),
+        "mesh": mesh,
+        "y_plus": yp,
+    }
 
 
 def _openfoam_submit(p, kind):
@@ -15927,9 +16012,12 @@ def _cfd_pipe_rans_submit(p):
             cdir, diameter_m=D, length_m=L, velocity_m_s=velocity, nu_m2_s=nu,
             n_axial=n_axial, n_radial=n_radial, end_time=end_time)
         rc, tail = _run_foam(cdir, [["blockMesh"], ["simpleFoam"]], env_bashrc)
+        trust = _cfd_audit(cdir, env_bashrc, wall_treatment="wall_function",
+                           want_yplus=True)
         dpdx_cole = built["friction_factor_colebrook"] / D * 0.5 * rho * velocity ** 2
         out = {
             "ok": rc == 0,
+            "trust": trust,
             "returncode": rc,
             "solver": "openfoam",
             "kind": "internal",
@@ -16009,6 +16097,7 @@ def _cfd_pipe_submit(p):
         rc, tail = _run_foam(cdir, [["blockMesh"], ["simpleFoam"]], env_bashrc)
         out = {
             "ok": rc == 0,
+            "trust": _cfd_audit(cdir, env_bashrc),
             "returncode": rc,
             "solver": "openfoam",
             "kind": "internal",
@@ -16126,6 +16215,7 @@ def _cfd_body_submit(p):
         rc, tail = _run_foam(case_dir, _mb.snappy_mesh_cmds(), env_bashrc)
         out = {
             "ok": rc == 0,
+            "trust": _cfd_audit(case_dir, env_bashrc),
             "returncode": rc,
             "solver": "openfoam",
             "kind": "internal",
@@ -16234,6 +16324,8 @@ def _cfd_flat_plate_rans_submit(p):
         rc, tail = _run_foam(cdir, [["blockMesh"], ["simpleFoam"]], env_bashrc)
         out = {
             "ok": rc == 0,
+            "trust": _cfd_audit(cdir, env_bashrc, wall_treatment="wall_function",
+                                want_yplus=True),
             "returncode": rc,
             "solver": "openfoam",
             "kind": "external",
@@ -16323,6 +16415,7 @@ def _cfd_flat_plate_submit(p):
         rc, tail = _run_foam(cdir, [["blockMesh"], ["simpleFoam"]], env_bashrc)
         out = {
             "ok": rc == 0,
+            "trust": _cfd_audit(cdir, env_bashrc),
             "returncode": rc,
             "solver": "openfoam",
             "kind": "external",
@@ -16353,23 +16446,18 @@ def _cfd_flat_plate_submit(p):
                              "velocity_m_s": velocity})
 
 
-def _cfd_external_body_submit(p):
-    """The virtual wind tunnel (#223/#224) — put an ARBITRARY FreeCAD solid in external
-    flow and integrate the force on it.
+def _tunnel_inputs(p):
+    """Everything the virtual wind tunnel needs from FreeCAD and the fluid, resolved on
+    the MAIN thread (per the jobs.py threading contract): the body's tessellation, its
+    bbox, the measured frontal silhouette, the flow vector, ν/ρ, and the honesty
+    warnings that depend only on inputs.
 
-    Tessellates every face of the solid into a single-region (`walls`) STL on the MAIN
-    thread, sizes a farfield box around it by standard practice, and runs blockMesh +
-    snappyHexMesh (body carved OUT) + simpleFoam in the background with the `forces`
-    function object on the body patch. The headline numbers are the pressure+viscous
-    force vector and, on the measured frontal area, Cd/Cl. Degrades cleanly when no CFD
-    solver resolves."""
-    info = _require_solver("openfoam")
-    if not info["ok"]:                               # graceful degradation (verified)
-        return info
+    Split out from :func:`_cfd_external_body_submit` because the mesh-independence
+    driver (#225) needs the SAME body at several mesh densities and must not
+    re-tessellate — an STL that changed between levels would put geometry error into a
+    study whose whole point is isolating mesh error."""
     import math
-    import tempfile
 
-    from driftpin import jobs, solvers
     from driftpin.analysis import cfd as _cfd
     from driftpin.analysis import meshbridge as _mb
 
@@ -16401,19 +16489,15 @@ def _cfd_external_body_submit(p):
                       for i in tri) for tri in tris]
 
     tris = [t for f in faces for t in face_tris(f)]
-    stl_text = _mb.ascii_stl_regions({"walls": tris})
-
     bb = obj.Shape.BoundBox
     bbox_min = (bb.XMin * 1e-3, bb.YMin * 1e-3, bb.ZMin * 1e-3)
     bbox_max = (bb.XMax * 1e-3, bb.YMax * 1e-3, bb.ZMax * 1e-3)
     # frontal area: the tessellated silhouette (exact for a convex body — see
     # meshbridge.projected_area), overridable when the body is re-entrant
     if p.get("frontal_area_mm2") is not None:
-        frontal = float(p["frontal_area_mm2"]) / 1e6
-        frontal_source = "override"
+        frontal, frontal_source = float(p["frontal_area_mm2"]) / 1e6, "override"
     else:
-        frontal = _mb.projected_area(tris, dhat)
-        frontal_source = "projected"
+        frontal, frontal_source = _mb.projected_area(tris, dhat), "projected"
     ref_len = (float(p["reference_length_mm"]) / 1000.0
                if p.get("reference_length_mm") is not None
                else max(bb.XLength, bb.YLength, bb.ZLength) * 1e-3)
@@ -16430,22 +16514,69 @@ def _cfd_external_body_submit(p):
             "turbulence='kOmegaSST' (itself UNGATED for arbitrary bodies) or treat the "
             "result as indicative only")
 
-    case_dir = tempfile.mkdtemp(prefix="foam_tunnel_")
-    built = _mb.write_snappy_external_case(
-        case_dir, stl_text=stl_text, bbox_min_m=bbox_min, bbox_max_m=bbox_max,
-        freestream_velocity_m_s=tuple(v * velocity for v in dhat),
-        nu_m2_s=nu, rho_kg_m3=rho, frontal_area_m2=frontal,
-        base_cell_m=(float(p["base_cell_mm"]) / 1000.0
-                     if p.get("base_cell_mm") is not None else None),
+    return {
+        "p": p, "obj": obj, "tris": tris,
+        "stl_text": _mb.ascii_stl_regions({"walls": tris}),
+        "bbox_min": bbox_min, "bbox_max": bbox_max,
+        "velocity": velocity, "dhat": dhat, "nu": nu, "rho": rho,
+        "frontal": frontal, "frontal_source": frontal_source,
+        "ref_len": ref_len, "reynolds": reynolds, "turbulence": turbulence,
+        "stl_tol": stl_tol, "end_time": end_time, "warnings": warnings,
+    }
+
+
+def _tunnel_write(inp, case_dir, *, base_cell_m=None):
+    """Write one wind-tunnel case from :func:`_tunnel_inputs`. ``base_cell_m`` overrides
+    the caller's cell size — the one knob a mesh-independence study varies."""
+    from driftpin.analysis import meshbridge as _mb
+    p = inp["p"]
+    cell = base_cell_m
+    if cell is None and p.get("base_cell_mm") is not None:
+        cell = float(p["base_cell_mm"]) / 1000.0
+    return _mb.write_snappy_external_case(
+        case_dir, stl_text=inp["stl_text"], bbox_min_m=inp["bbox_min"],
+        bbox_max_m=inp["bbox_max"],
+        freestream_velocity_m_s=tuple(v * inp["velocity"] for v in inp["dhat"]),
+        nu_m2_s=inp["nu"], rho_kg_m3=inp["rho"], frontal_area_m2=inp["frontal"],
+        base_cell_m=cell,
         upstream_factor=float(p.get("upstream_factor", 5.0)),
         downstream_factor=float(p.get("downstream_factor", 10.0)),
         lateral_factor=float(p.get("lateral_factor", 5.0)),
         surface_refine=tuple(p.get("surface_refine", (2, 3))),
         wake_refine=int(p.get("wake_refine", 1)),
-        end_time=end_time, turbulence=turbulence)
+        end_time=inp["end_time"], turbulence=inp["turbulence"])
+
+
+def _cfd_external_body_submit(p):
+    """The virtual wind tunnel (#223/#224) — put an ARBITRARY FreeCAD solid in external
+    flow and integrate the force on it.
+
+    Tessellates every face of the solid into a single-region (`walls`) STL on the MAIN
+    thread, sizes a farfield box around it by standard practice, and runs blockMesh +
+    snappyHexMesh (body carved OUT) + simpleFoam in the background with the `forces`
+    function object on the body patch. The headline numbers are the pressure+viscous
+    force vector and, on the measured frontal area, Cd/Cl. Degrades cleanly when no CFD
+    solver resolves."""
+    info = _require_solver("openfoam")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import tempfile
+
+    from driftpin import jobs, solvers
+
+    inp = _tunnel_inputs(p)
+    velocity, dhat, nu, rho = inp["velocity"], inp["dhat"], inp["nu"], inp["rho"]
+    frontal, frontal_source = inp["frontal"], inp["frontal_source"]
+    ref_len, reynolds, turbulence = inp["ref_len"], inp["reynolds"], inp["turbulence"]
+    warnings = list(inp["warnings"])
+
+    case_dir = tempfile.mkdtemp(prefix="foam_tunnel_")
+    built = _tunnel_write(inp, case_dir)
     dom = built["domain"]
     warnings.extend(dom["warnings"])
     env_bashrc = solvers.openfoam_bashrc()
+    obj, bbox_min, bbox_max = inp["obj"], inp["bbox_min"], inp["bbox_max"]
+    stl_tol, end_time = inp["stl_tol"], inp["end_time"]
 
     key = jobs.content_key("cfd_external_flow", {"tunnel": {
         "volume": round(obj.Shape.Volume, 6), "area": round(obj.Shape.Area, 6),
@@ -16464,6 +16595,10 @@ def _cfd_external_body_submit(p):
         rc, tail = _run_foam(case_dir, _mb2.snappy_mesh_cmds(), env_bashrc)
         out = {
             "ok": rc == 0,
+            "trust": _cfd_audit(
+                case_dir, env_bashrc, want_yplus=True,
+                wall_treatment=("wall_function" if turbulence != "laminar"
+                                else "resolved")),
             "returncode": rc,
             "solver": "openfoam",
             "kind": "external",
@@ -16516,6 +16651,235 @@ def _cfd_external_body_submit(p):
     return jobs.submit("cfd_external_flow", _work, key=key,
                        meta={"mode": "body", "velocity_m_s": velocity,
                              "turbulence": turbulence})
+
+
+@handler("grid_convergence")
+def _h_grid_convergence(p):
+    """Grid Convergence Index over the same quantity solved on 2-3 refined meshes
+    (no solver — pure arithmetic on results you already have). See
+    driftpin.analysis.verification.grid_convergence: fits the observed order of
+    convergence, Richardson-extrapolates to zero cell size, and returns the
+    percentage band around the finest value.
+
+    This is the honest `band_pct` for a solve with no analytic oracle, and it is
+    family-agnostic: feed it three CFD drag coefficients, three FEM peak stresses,
+    or three modal frequencies — only the caller knows what the mesh size means.
+
+    Args: `values` (finest first) plus exactly one of `cell_sizes` / `cell_counts`;
+    optional `assumed_order` (2-level studies only) and `dimensions` (for the
+    count->size conversion, default 3).
+
+    Returns {n_levels, values, cell_sizes, refinement_ratios, observed_order,
+    order_used, order_clamped, extrapolated_value, gci_pct, gci_coarse_pct, band_pct,
+    relative_error_pct, monotonic, asymptotic_ratio, safety_factor, converged_fit,
+    fidelity, warnings}."""
+    from driftpin.analysis import verification
+    return verification.grid_convergence(**p)
+
+
+def _level_end_time(base_end_time, mult):
+    """Iteration cap for a refinement level whose cells are ``mult`` times the
+    caller's size.
+
+    A steady solve needs MORE iterations on a finer mesh — information crosses one cell
+    per sweep, so halving the cell size roughly doubles the sweeps to propagate it. A
+    ladder that gave every level the same cap would leave the finest one — the level the
+    whole extrapolation leans on — sitting at its cap unconverged while the coarse ones
+    finished early. Measured live on the pipe: 196 iterations at the coarsest level,
+    1303 one level finer, >3000 at the finest. The cap therefore scales as 1/``mult``."""
+    return max(int(base_end_time), int(round(float(base_end_time) / max(mult, 1e-9))))
+
+
+def _mesh_independence_levels(p):
+    """The (label, cell-size multiplier) ladder a mesh-independence study runs, FINEST
+    FIRST — the order ``verification.grid_convergence`` requires.
+
+    The study REFINES from the caller's own settings rather than coarsening from them:
+    the COARSEST level is exactly the mesh a plain submit would have built (multiplier
+    1.0) and each finer level divides the cell size by ``refinement_ratio``. Coarsening
+    is not an option for the wind tunnel — its default cell is already the coarsest that
+    can resolve the body at all (anything bigger meshes an empty tunnel), so a
+    coarsening ladder would be refused at level 1.
+
+    Cost scales as the cube of the ratio per level: 3 levels at 1.5 means the finest
+    mesh has ~11x the cells of the coarsest."""
+    levels = int(p.get("levels", 3))
+    ratio = float(p.get("refinement_ratio", 1.5))
+    if levels not in (2, 3):
+        raise ValueError("levels must be 2 or 3 (the GCI procedure is defined on "
+                         "2 or 3 meshes; 3 measures the order, 2 assumes it)")
+    if ratio <= 1.0:
+        raise ValueError("refinement_ratio must be > 1 (it is the cell-size step "
+                         "between levels); ASME recommends >= 1.3")
+    return [(f"L{i}", ratio ** (i - (levels - 1))) for i in range(levels)]
+
+
+@handler("cfd_mesh_independence_submit")
+def _h_cfd_mesh_independence_submit(p):
+    """Is the answer a property of the flow or of the mesh? (issue #225)
+
+    Runs the SAME case at 2-3 systematically coarsened meshes, extracts one metric from
+    each, and returns the Grid Convergence Index — the band inside which the
+    mesh-independent answer lies. On geometry with no analytic twin this is the only
+    honest error bar there is; it is also the check that catches a drag coefficient
+    that looks beautiful and moves 40 % when you refine.
+
+    Two case families, dispatched like their single-solve twins:
+      * **the wind tunnel** — pass a `body`/`model` handle + `velocity_m_s` (plus any
+        cfd_external_flow_submit knob). The ladder varies `base_cell_mm`; the body is
+        tessellated ONCE and reused, so the study isolates mesh error rather than
+        mixing in a changing STL. Default metric `cd`.
+      * **the straight pipe** — pass `diameter_mm`, `length_mm`, `velocity_m_s`. The
+        ladder scales `n_axial`/`n_radial`. Default metric `pressure_drop_pa`.
+
+    `levels` (2 or 3, default 3) and `refinement_ratio` (default 1.5) set the ladder.
+    The COARSEST level is the mesh a plain submit would have built and the study refines
+    from there, so cost grows as the cube of the ratio: 3 levels at 1.5 puts ~11x the
+    cells in the finest mesh. `metric` picks the quantity. Every level runs inside ONE
+    job, sequentially, so the result is a single poll. `end_time` is the cap for the
+    COARSEST level and scales up for finer ones (see `_level_end_time`).
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, family, metric, levels: [{label, value, n_cells, cell_size_m, converged,
+    case_dir}], grid_convergence: {observed_order, extrapolated_value, gci_pct,
+    monotonic, asymptotic_ratio, warnings, ...}, band_pct, warnings}."""
+    info = _require_solver("openfoam")
+    if not info["ok"]:                               # graceful degradation (verified)
+        return info
+    import tempfile
+
+    from driftpin import jobs, solvers
+    from driftpin.analysis import cfd as _cfd
+
+    ladder = _mesh_independence_levels(p)
+    env_bashrc = solvers.openfoam_bashrc()
+    is_body = bool(p.get("body") or p.get("model"))
+    if not is_body and p.get("diameter_mm") is None:
+        raise ValueError(
+            "provide a `body`/`model` handle (the wind tunnel) or the straight-pipe "
+            "params (diameter_mm, length_mm, velocity_m_s) — a mesh-independence study "
+            "needs a case it can rebuild at several densities, so a prepared case_dir "
+            "cannot be used")
+
+    cases = []                                       # built on the MAIN thread
+    if is_body:
+        inp = _tunnel_inputs(p)
+        metric = p.get("metric", "cd")
+        # the coarsest level (multiplier 1.0) resolves the caller's own cell size;
+        # every finer level is that size divided down, so all levels share one STL
+        coarsest = _tunnel_write(inp, tempfile.mkdtemp(prefix="foam_mesh_probe_"))
+        cell0 = coarsest["domain"]["base_cell_m"]
+        base_end = inp["end_time"]
+        for label, mult in ladder:
+            cdir = tempfile.mkdtemp(prefix=f"foam_mesh_{label}_")
+            cell = cell0 * mult
+            inp = dict(inp, end_time=_level_end_time(base_end, mult))
+            _tunnel_write(inp, cdir, base_cell_m=cell)
+            cases.append({"label": label, "case_dir": cdir, "cell_size_m": cell,
+                          "end_time": inp["end_time"]})
+        family, rho = "external_body", inp["rho"]
+        velocity, frontal, dhat = inp["velocity"], inp["frontal"], inp["dhat"]
+        key_body = {"vol": round(inp["obj"].Shape.Volume, 6), "U": velocity,
+                    "A": round(frontal, 12), "turb": inp["turbulence"]}
+    else:
+        import math as _math
+        diameter_mm, length_mm = float(p["diameter_mm"]), float(p["length_mm"])
+        D, L = diameter_mm / 1000.0, length_mm / 1000.0
+        mu, rho = _cfd._fluid_props(p.get("fluid", "water-20c"),
+                                    p.get("mu_pa_s"), p.get("rho_kg_m3"))
+        nu = mu / rho
+        velocity = p.get("velocity_m_s")
+        if velocity is None:
+            if p.get("flow_rate_lpm") is None:
+                raise ValueError("provide velocity_m_s or flow_rate_lpm")
+            velocity = (float(p["flow_rate_lpm"]) / 1000.0 / 60.0) / (
+                _math.pi * D * D / 4.0)
+        velocity = float(velocity)
+        n_axial0, n_radial0 = int(p.get("n_axial", 120)), int(p.get("n_radial", 15))
+        end_time = int(p.get("end_time", 4000))
+        metric = p.get("metric", "pressure_drop_pa")
+        from driftpin.analysis import openfoam as _of0
+        for label, mult in ladder:
+            cdir = tempfile.mkdtemp(prefix=f"foam_mesh_{label}_")
+            na = max(8, int(round(n_axial0 / mult)))    # mult <= 1 -> finer
+            nr = max(3, int(round(n_radial0 / mult)))
+            et = _level_end_time(end_time, mult)
+            _of0.write_pipe_case(cdir, diameter_m=D, length_m=L,
+                                 velocity_m_s=velocity, nu_m2_s=nu, n_axial=na,
+                                 n_radial=nr, end_time=et)
+            cases.append({"label": label, "case_dir": cdir, "end_time": et,
+                          "cell_size_m": L / na, "n_axial": na, "n_radial": nr})
+        family = "internal_pipe"
+        hp = _cfd.pipe_pressure_drop(diameter_mm=diameter_mm, length_mm=length_mm,
+                                     velocity_m_s=velocity, mu_pa_s=mu, rho_kg_m3=rho)
+        key_body = {"D": D, "L": L, "U": velocity, "na": n_axial0, "nr": n_radial0}
+
+    key = jobs.content_key("cfd_mesh_independence", {
+        "family": family, "metric": metric, "ladder": [m for _, m in ladder],
+        **key_body})
+
+    def _work():
+        from driftpin.analysis import meshbridge as _mb2
+        from driftpin.analysis import openfoam as _of
+        from driftpin.analysis import verification as _ver
+        out = {"ok": True, "family": family, "metric": metric, "levels": [],
+               "warnings": []}
+        for case in cases:
+            cmds = (_mb2.snappy_mesh_cmds() if family == "external_body"
+                    else [["blockMesh"], ["simpleFoam"]])
+            rc, tail = _run_foam(case["case_dir"], cmds, env_bashrc)
+            res = _of.parse_residuals(case["case_dir"])
+            value = n_cells = None
+            if rc == 0 and family == "external_body":
+                parsed = _of.parse_forces(
+                    case["case_dir"], velocity_m_s=velocity, rho_kg_m3=rho,
+                    reference_area_m2=frontal, flow_direction=dhat)
+                if parsed:
+                    value = parsed.get(metric, parsed.get("drag_force_n"))
+            elif rc == 0:
+                parsed = _of.parse_pressure_drop(case["case_dir"], rho_kg_m3=rho)
+                if parsed:
+                    value = parsed["dp_developed_pa"]
+                    n_cells = parsed["n_cells"]
+            mesh = _of.parse_checkmesh(case["case_dir"])
+            out["levels"].append({
+                "label": case["label"], "value": value,
+                "cell_size_m": case["cell_size_m"],
+                "end_time": case["end_time"],
+                "n_cells": (mesh or {}).get("n_cells", n_cells),
+                "converged": (res or {}).get("converged"),
+                "returncode": rc, "case_dir": case["case_dir"],
+                "stdout_tail": tail[-400:],
+            })
+            if value is None:
+                out["ok"] = False
+                out["warnings"].append(
+                    f"level {case['label']} produced no {metric} (returncode {rc}) — "
+                    "the study cannot be completed without it")
+            elif (res or {}).get("converged") is False:
+                out["warnings"].append(
+                    f"level {case['label']} hit its iteration cap without converging; "
+                    "an unconverged level makes the extrapolation meaningless")
+
+        vals = [lv["value"] for lv in out["levels"]]
+        if all(v is not None for v in vals):
+            try:
+                gci = _ver.grid_convergence(
+                    vals, cell_sizes=[lv["cell_size_m"] for lv in out["levels"]])
+                out["grid_convergence"] = gci
+                out["band_pct"] = gci["gci_pct"]
+                out["extrapolated_value"] = gci["extrapolated_value"]
+                out["warnings"].extend(gci["warnings"])
+            except ValueError as e:
+                out["ok"] = False
+                out["warnings"].append(f"grid convergence could not be computed: {e}")
+        if family == "internal_pipe":
+            out["hagen_poiseuille_pa"] = hp["hagen_poiseuille_pa"]
+        return out
+
+    return jobs.submit("cfd_mesh_independence", _work, key=key,
+                       meta={"family": family, "metric": metric,
+                             "levels": len(ladder)})
 
 
 @handler("cfd_external_flow_submit")
