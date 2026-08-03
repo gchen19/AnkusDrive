@@ -31,8 +31,16 @@ import time
 
 # Cap on retained jobs so abandoned results don't accumulate for the worker
 # session. Only terminal (done/failed) jobs are evicted; a running job is never
-# dropped. Oldest-first by submit order.
-_MAX_JOBS = 32
+# dropped, and neither is a PINNED one. Oldest-first by submit order.
+#
+# The cap was 32, which a fan-out study (#227) blows through trivially: a 5x5 grid
+# with two responses is 50 children plus a collector, and eviction would drop the
+# points that finished FIRST — so the collector's own jobs.result() would raise
+# JobNotFound mid-join and the study would lose exactly the cheapest points. Two
+# defences, because a cap alone is only ever "big enough until it isn't":
+# pin()/unpin() makes a dependency explicit, and the cap is high enough that
+# unpinned interactive work is never the reason a study fails.
+_MAX_JOBS = 256
 
 _lock = threading.Lock()
 _jobs: dict = {}          # job_id -> job record
@@ -68,10 +76,12 @@ def _elapsed(job) -> float:
 
 def _evict_locked() -> None:
     """Drop oldest terminal jobs while over the cap. Caller holds _lock. Running
-    jobs are never evicted (the thread still writes into the record)."""
+    jobs are never evicted (the thread still writes into the record), and neither
+    are pinned ones (another job is waiting to read their result)."""
     while len(_jobs) > _MAX_JOBS:
         victim = next(
-            (jid for jid, j in _jobs.items() if j["status"] != "running"), None
+            (jid for jid, j in _jobs.items()
+             if j["status"] != "running" and not j.get("pins")), None
         )
         if victim is None:
             break                                     # all running -> nothing to free
@@ -127,12 +137,44 @@ def submit(kind: str, fn, key: str | None = None, meta: dict | None = None) -> d
         _jobs[job_id] = {
             "id": job_id, "kind": kind, "status": "running",
             "result": None, "error": None, "key": key, "meta": meta or {},
-            "t_submit": time.monotonic(), "t_finish": None,
+            "t_submit": time.monotonic(), "t_finish": None, "pins": 0,
         }
         _evict_locked()
     threading.Thread(target=_run, args=(job_id, fn), daemon=True,
                      name=f"job-{job_id}").start()
     return {"job_id": job_id, "status": "running", "cache_hit": False}
+
+
+def pin(job_id: str) -> dict:
+    """Protect a job from cap eviction while something else depends on its result.
+
+    A fan-out driver (a study, a performance verification) submits N children and then
+    joins them from ONE collector job. Without a pin, submitting the last child can evict
+    the first — terminal, cheap, and therefore first in line — and the collector's
+    ``result()`` raises JobNotFound for work that actually succeeded. Pinning makes that
+    dependency explicit rather than relying on the cap being generous.
+
+    Pins nest (a job pinned twice needs two unpins). Returns {job_id, pins}. Raises
+    JobNotFound on an unknown id — pinning something already gone is a bug worth
+    hearing about, unlike unpinning."""
+    with _lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            raise JobNotFound(f"unknown job: {job_id!r}")
+        job["pins"] = job.get("pins", 0) + 1
+        return {"job_id": job_id, "pins": job["pins"]}
+
+
+def unpin(job_id: str) -> dict:
+    """Release one pin taken by :func:`pin`, making the job evictable again once no pins
+    remain. Safe on an unknown or unpinned id (it no-ops), so a collector can unpin in a
+    ``finally`` without guarding. Returns {job_id, pins}."""
+    with _lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return {"job_id": job_id, "pins": 0}
+        job["pins"] = max(0, job.get("pins", 0) - 1)
+        return {"job_id": job_id, "pins": job["pins"]}
 
 
 def status(job_id: str) -> dict:

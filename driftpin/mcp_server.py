@@ -5382,6 +5382,80 @@ def verify_performance(handle: str, tier: str = "auto") -> dict:
 
 
 @mcp.tool()
+def study_submit(
+    variables: list,
+    responses: list,
+    recipe: str | None = None,
+    fixed_inputs: dict | None = None,
+    handle: str | None = None,
+    sampling: dict | None = None,
+    objective: dict | None = None,
+    max_points: int = 64,
+) -> dict:
+    """Sweep parameters over a sampled design space and record the WHOLE search as a
+    table — the DOE primitive between the parametric layer and the solver catalog.
+
+    Without it, exploring a design space means hand-rolling `recipe(params)` -> solve ->
+    mutate -> repeat and keeping only the last point, so nobody can tell afterwards
+    whether the design is good or merely the one you stopped on. A study keeps every
+    point, with the parameters that produced it.
+
+    `variables` declares the space; each entry is either explicit levels or a range:
+    - `{"name": "diameter_mm", "values": [8, 10, 12]}` — these and only these
+    - `{"name": "diameter_mm", "min": 8, "max": 12, "levels": 3}` — evenly spaced
+
+    `sampling` picks how they combine:
+    - `{"method": "grid"}` (default) — full factorial. Exhaustive, and the only thing
+      that can prove a trend, but it is the PRODUCT of the level counts: three variables
+      at five levels is 125 evaluations.
+    - `{"method": "lhs", "n_samples": 20, "seed": 0}` — Latin hypercube. Each variable's
+      range is cut into `n_samples` strata and every stratum used once, so cost is
+      decoupled from dimensionality: 20 points cover 6 variables as well as 2. Use it
+      past 2-3 variables.
+    Both are deterministic from `seed`, which is what makes a re-run hit the cache.
+
+    `responses` says how to measure each point, in the same mapping a performance
+    requirement uses: `{"name": "dp", "tool": "cfd_pipe_flow", "metric":
+    "pressure_drop_pa", "conditions": {"diameter_mm": "$diameter_mm", "length_mm": 200}}`.
+    Inside `conditions`, `"$<variable>"` is that point's value and `"$handle"` is the part
+    it built; an unknown `$token` is refused up front, because a sweep that silently
+    measured a literal string at every point returns a flat, plausible, wrong table.
+
+    `tool` can be ANY DriftPin tool, including `verify_performance` — and that is the
+    interesting case. A response that is a contract verdict carries a band, a trust block
+    and a pass/fail/indeterminate state, so points stay comparable across fidelity tiers
+    instead of being bare floats of unknown quality.
+
+    `recipe` (+ `fixed_inputs`) rebuilds geometry per point; omit it and pass `handle`
+    (or nothing) to sweep analysis parameters against fixed geometry. Screening-tier
+    responses evaluate inline in milliseconds, so thousand-point studies are viable;
+    solver-tier responses fan out concurrently and one collector job joins them.
+
+    Caching IS resumability: identical points hash to the same job content key, so
+    re-submitting a study after a crash, or widening its grid, re-runs only what is new —
+    `n_cached` is what tells you the re-run was free. `max_points` (default 64) refuses a
+    sweep larger than you probably meant.
+
+    `objective` — `{"response": "dp", "sense": "min"}` — additionally reports `best`.
+
+    Returns EITHER the finished table or {job_id, status, points, pending}; poll
+    job_result for the completed table. A point that failed to build or measure is a row
+    with `ok: false`, never an exception. Result: {ok, n_points, n_evaluated, n_cached,
+    n_failed, sampling, variables, points: [{index, params, handle?, ok, responses:
+    {name: {ok, value, band_pct?, converged?, state?, job_id?, cache_hit?, detail?}},
+    warnings}], responses: {name: {n, n_missing, min, max, mean, argmin, argmax}},
+    best?}."""
+    params = {"variables": variables, "responses": responses,
+              "max_points": max_points}
+    for k, v in (("recipe", recipe), ("fixed_inputs", fixed_inputs),
+                 ("handle", handle), ("sampling", sampling),
+                 ("objective", objective)):
+        if v is not None:
+            params[k] = v
+    return _call("study_submit", **params)
+
+
+@mcp.tool()
 def grid_convergence(
     values: list,
     cell_sizes: list | None = None,

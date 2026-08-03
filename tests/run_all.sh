@@ -175,6 +175,10 @@ echo "== Solution verification (Richardson/GCI on constructed sequences; no solv
 python3 tests/test_verification.py
 
 echo
+echo "== DOE studies (sampling; swept Hagen-Poiseuille D^-4 oracle; async fan-out) =="
+python3 tests/test_study.py
+
+echo
 echo "== Virtual wind tunnel + CFD trust layer (screen always; solves when present) =="
 python3 tests/test_wind_tunnel.py
 
