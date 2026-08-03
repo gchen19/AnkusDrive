@@ -25,6 +25,7 @@ Docs fall into two kinds:
 | [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) | The analysis-family catalog + result schemas (pure-Python oracle vs external-solver split). |
 | [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) | Per-family proof harness (toy problems with known answers). |
 | [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md) | Forward-looking assessment of the next simulation work. |
+| [`DESIGN_TO_SPEC_KICKOFF.md`](DESIGN_TO_SPEC_KICKOFF.md) | Epic #222 handoff: what shipped (wind tunnel, trust layer, performance contracts), what remains (`study_submit`, `optimize_submit`), and the CFD gotchas worth not rediscovering. |
 | [`MOLDING_FILL_SOLVER.md`](MOLDING_FILL_SOLVER.md) | Injection-molding fill/pack/cool/warp solver reference + gotchas. |
 | [`VALIDATE_THE_ARTIFACT.md`](VALIDATE_THE_ARTIFACT.md) | "Validate the artifact, not the model" — the geometry-realizes-declaration oracle. |
 | [`AIRTIGHT_INVARIANTS_PLAN.md`](AIRTIGHT_INVARIANTS_PLAN.md) | Functional-invariant checks for enclosed-flow parts (`declare_intent`/`verify_intent`). |
