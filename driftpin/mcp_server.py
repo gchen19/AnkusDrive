@@ -266,17 +266,28 @@ def add_primitive(
     h: float = 10.0,
     r: float = 5.0,
     placement: list | None = None,
+    name: str | None = None,
 ) -> dict:
     """Add a primitive to the active document.
 
     kind: 'box' (uses w, d, h), 'cylinder' (uses r, h), or 'sphere' (uses r).
     placement: optional [x, y, z] mm translation.
-    Returns {handle, name, volume}. The handle (e.g. 'box_1') is how you
-    reference this object in subsequent boolean_op calls.
+    name: optional human-facing name. It sets the object's LABEL — what
+      list_objects, bom_extract and the drawing/manifest layers display — and
+      leaves the internal FreeCAD Name alone, since handles and register_handle
+      key off Name and it must stay unique and stable. Omit it and the label
+      stays the type default ('Box' / 'Cylinder' / 'Sphere'), which BOM and
+      designation checks read as an unnamed generic solid.
+    Returns {handle, name, label, volume}: `name` is FreeCAD's internal id and
+    `label` is the display name (equal to `name` when you passed none). The
+    handle (e.g. 'box_1') is how you reference this object in subsequent
+    boolean_op calls.
     """
     params = {"kind": kind, "w": w, "d": d, "h": h, "r": r}
     if placement is not None:
         params["placement"] = placement
+    if name is not None:
+        params["name"] = name
     return _call("add_primitive", **params)
 
 
