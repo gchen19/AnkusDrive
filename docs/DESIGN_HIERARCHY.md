@@ -258,6 +258,7 @@ rest of the software-module toolbox first-class.
 | **Semantic versioning** (semver.org — MAJOR = public-API break, MINOR/PATCH = compatible) | Interface-tied revision: moved hole pattern = MAJOR (new part number); added internal rib = PATCH (revise) | ⛏ C2's **Form/Fit/Function predicate** *is* semver's backward-compat rule, made testable |
 | **Namespacing / packages** (scoped unique identifiers, no collisions) | Part-number scheme, library/project prefixes, the assembly tree scoping names | ⛏ item model (C1) + project container (D1); fixes today's "two components named *Box* collide" class of bug (`MULTI_AGENT.md` §5) |
 | **Class invariants / unit tests** (an object must always satisfy its contract) | "This part is *for* an airtight flow path"; "this seat stays Ø within tol" | ✅ `declare_intent`/`verify_intent` + `verify_contract` (the per-module test) |
+| **Performance contracts** (an object must always meet a *quantitative* spec) | "Cd ≤ 0.30 at 30 m/s"; "Δp ≤ 50 Pa at 10 L/min"; "first mode ≥ 200 Hz" | ✅ `declare_performance`/`verify_performance` (issue #226) — metric-agnostic, laddered screen→solver evidence, and a three-state verdict where a band straddling the limit is `indeterminate` rather than a pass |
 
 Two equivalences are worth stating outright because they convert a fuzzy CAD convention
 into a hard, testable rule:

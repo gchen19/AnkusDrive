@@ -130,6 +130,11 @@ NOT_YET_CLASSIFIED = {
     'bounding_box', 'chamfer_edges', 'check_airtight_path', 'check_shape',
     'classify_face_sides', 'close_document', 'close_sketch', 'contact_setup', 'copy_shape',
     'declare_intent', 'draft', 'drawing_gate', 'drawing_legibility', 'em_field',
+    # performance contracts (issue #226): declare_ persists a JSON bag on a live
+    # part; verify_ orchestrates OTHER tools (and may submit solves), so its
+    # determinism is theirs, not its own. The pure verdict arithmetic is proven
+    # bitwise in tests/test_performance.py.
+    'declare_performance', 'verify_performance',
     # inspection artifacts (issue #232): the arithmetic is closed-form and the
     # balloon numbering is deterministic by construction (both proven directly in
     # tests/test_inspection.py), but these read a live TechDraw page rather than

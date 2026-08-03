@@ -5315,6 +5315,73 @@ def cfd_internal_flow_submit(
 
 
 @mcp.tool()
+def declare_performance(handle: str, requirements: list) -> dict:
+    """Record a quantitative PERFORMANCE spec on a part so it can be re-proved after
+    every edit — the performance twin of declare_intent, which only covers geometry.
+    Persists in the .FCStd as a JSON property bag; one contract per part, re-declaring
+    replaces it.
+
+    Each requirement is metric-agnostic — the contract layer only orchestrates, so the
+    metric is whatever the named tool already returns, and "Cd ≤ 0.30", "Δp ≤ 50 Pa",
+    "first mode ≥ 200 Hz" and "ΔT ≤ 40 K" are the same machinery:
+
+        {"name": "drag_at_cruise",
+         "metric": "cd",                        # dotted path into the tool's result
+         "tool": "cfd_external_flow_submit",    # what measures it at solver tier
+         "conditions": {"model": "$handle", "velocity_m_s": 30, "fluid": "air-20c"},
+         "limit": {"max": 0.30},                # max, min, or both (a window)
+         "screen": {"tool": "cfd_body_drag", "metric": "cd",
+                    "conditions": {"shape": "sphere", "diameter_mm": 50,
+                                   "velocity_m_s": 30}},
+         "fidelity_floor": "solver",            # "screen" if an estimate is proof enough
+         "trust": {"converged": true, "band_max_pct": 5}}
+
+    `"$handle"` anywhere in `conditions` is replaced with this part's handle at
+    verification time, so a contract is portable between parts. `trust` demands are
+    enforced by verify_performance against the solver's own trust block: a requirement
+    asking for `converged: true` can never be satisfied by an unconverged solve.
+
+    Returns {handle, contract: {requirements: [...]}, n_requirements}. Raises ValueError
+    on a malformed requirement, naming the offending one."""
+    return _call("declare_performance", handle=handle, requirements=requirements)
+
+
+@mcp.tool()
+def verify_performance(handle: str, tier: str = "auto") -> dict:
+    """Prove (or fail to prove) every requirement declared with declare_performance —
+    the step that turns "a solver printed 0.29" into a claim with a band and a
+    provenance.
+
+    A verdict has THREE states. `pass` and `fail` each require the measurement's whole
+    uncertainty band to sit on one side of the limit; a band that straddles it is
+    `indeterminate`, meaning "escalate", not "probably fine". A correlation reading
+    Cd = 0.28 ± 10 % against a limit of 0.30 spans 0.252–0.308 and has NOT shown the
+    part passes — collapsing that to a pass is how a spec silently goes unmet.
+
+    `tier` picks the evidence:
+    - `'screen'` — each requirement's cheap estimator only. Milliseconds, no solver.
+    - `'solver'` — the real solve for every requirement.
+    - `'auto'` (default) — screen first, escalate only what the screen could not decide
+      or what declares `fidelity_floor: 'solver'`. This is the ladder that keeps a
+      design loop cheap: cheap measurements eliminate candidates, solves confirm
+      survivors.
+
+    Trust is part of the measurement, not a footnote: `trust: {converged: true}` or a
+    `band_max_pct` cap makes an unconverged (or insufficiently mesh-converged) solve
+    come back `indeterminate` with the reason, never `pass`.
+
+    Solver-tier measurements are asynchronous, so this returns EITHER the finished
+    verdict (screen-only, or everything already decided) or {job_id, status, pending,
+    results} — poll job_result for the completed verdict. Never raises on a failing
+    requirement; a failure is a row.
+
+    Returns {handle, tier, ok, n_requirements, passed, failed, indeterminate, escalate,
+    results: [{name, tier, metric, state, measured, limit, band_pct, worst_case,
+    best_case, margin, margin_pct, detail, trust_reasons?, screen?, job_id?}]}."""
+    return _call("verify_performance", handle=handle, tier=tier)
+
+
+@mcp.tool()
 def grid_convergence(
     values: list,
     cell_sizes: list | None = None,
