@@ -4821,6 +4821,267 @@ def _h_verify_performance(p):
             "pending": [i["job_id"] for i in pending], **sub}
 
 
+def _subst_params(value, params, handle=None):
+    """Replace the study's substitution tokens anywhere in a conditions tree: ``"$name"``
+    becomes that design point's value for the swept variable ``name``, and ``"$handle"``
+    becomes the part this point materialized.
+
+    An unknown ``$token`` is a hard error, not a pass-through. A sweep whose response
+    silently measured a literal string ``"$diamter_mm"`` at every point produces a
+    perfectly flat, perfectly wrong table — the single most expensive failure mode this
+    layer has, and the cheapest to refuse at the door."""
+    if isinstance(value, str):
+        if value == "$handle":
+            if handle is None:
+                raise ValueError(
+                    "a response references \"$handle\" but this study builds no geometry "
+                    "— give study_submit a 'recipe' so each point has a part, or measure "
+                    "with tools that take plain parameters")
+            return handle
+        if value.startswith("$") and len(value) > 1:
+            key = value[1:]
+            if key not in params:
+                raise ValueError(
+                    f"a response references {value!r}, which is not a swept variable "
+                    f"(this study varies {sorted(params)})")
+            return params[key]
+        return value
+    if isinstance(value, dict):
+        return {k: _subst_params(v, params, handle) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_subst_params(v, params, handle) for v in value]
+    return value
+
+
+def _study_cell(resp, payload):
+    """Turn one tool payload into one cell of the study table: the measured value plus
+    whatever evidence the tool volunteered about it.
+
+    A degraded tool (solver absent) and a tool that produced no such metric are both
+    ``ok: false`` rows with a reason, never an exception and never a missing column — a
+    study that hits a missing solver must still return its table."""
+    from driftpin.analysis import performance as _pf
+    if isinstance(payload, dict) and payload.get("ok") is False and "reason" in payload:
+        return {"ok": False, "value": None,
+                "detail": f"{payload.get('solver', 'solver')} unavailable: "
+                          f"{payload['reason']}",
+                "install": payload.get("install")}
+    metric = resp.get("metric")
+    value = _pf._get_path(payload, metric) if metric else payload
+    if value is None:
+        return {"ok": False, "value": None,
+                "detail": f"the tool produced no {metric!r} to record"}
+    cell = {"ok": True, "value": value}
+    if isinstance(payload, dict):
+        # carry the evidence forward: a band and a convergence flag are what let a later
+        # reader (or an optimizer) tell a trustworthy point from a lucky one
+        for key in ("band_pct", "gci_pct", "converged", "state", "margin", "fidelity"):
+            if payload.get(key) is not None:
+                cell[key] = payload[key]
+        if isinstance(payload.get("trust"), dict):
+            cell["converged"] = payload["trust"].get("converged", cell.get("converged"))
+    return cell
+
+
+@handler("study_submit")
+def _h_study_submit(p):
+    """Sweep recipe/tool parameters over a sampled design space and record the whole
+    search as a table (issue #227).
+
+    This is the primitive that was missing between the parametric layer and the solver
+    catalog. Without it an agent hand-rolls every loop and keeps only the last point,
+    which is how a design ends up "good" for no recorded reason.
+
+    `variables` declares the space — `{"name": "diameter_mm", "values": [8, 10, 12]}` or
+    `{"name": ..., "min": 8, "max": 12, "levels": 3}`. `sampling` picks `'grid'` (full
+    factorial, the default) or `'lhs'` (Latin hypercube, `n_samples` points, for past
+    2-3 variables where a grid is unaffordable); both are deterministic from `seed`.
+
+    `responses` says how to measure each point, using the SAME mapping as a performance
+    requirement: `{"name": "dp", "tool": "cfd_pipe_flow", "metric": "pressure_drop_pa",
+    "conditions": {...}}`. In `conditions`, `"$<variable>"` is that point's value and
+    `"$handle"` is the part it built. Because `tool` is any DriftPin tool, a response can
+    be a raw solver number OR a whole `verify_performance` verdict — the latter is what
+    makes points comparable across fidelity tiers, since it carries a band and a trust
+    block instead of a bare float.
+
+    `recipe` (+ `fixed_inputs`) rebuilds geometry per point: the recipe is built on the
+    MAIN thread for every point before any solve is submitted, honoring the jobs.py
+    threading contract. Omit it to sweep pure analysis parameters against fixed (or no)
+    geometry.
+
+    Caching IS resumability: identical points hash to the jobs-layer content key, so
+    re-submitting a study after a crash — or widening its grid — re-runs only what is
+    new and reports the rest in `n_cached`. Solver-tier points fan out concurrently and
+    one collector job joins them, so the whole study is a single poll. `max_points`
+    (default 64) refuses a sweep bigger than you probably meant; raise it deliberately.
+
+    Returns EITHER the finished table (everything measured inline) or {job_id, status,
+    points, pending} — poll job_result for the completed table. Never raises on a point
+    that failed to build or measure; that is a row with `ok: false`.
+
+    Returns {ok, n_points, n_evaluated, n_cached, n_failed, sampling, variables,
+    points: [{index, params, handle?, ok, responses: {name: {ok, value, band_pct?,
+    converged?, state?, job_id?, cache_hit?, detail?}}, warnings}],
+    responses: {name: {n, n_missing, min, max, mean, argmin, argmax}}, best?}."""
+    import json as _json
+    import time as _time
+
+    from driftpin import jobs
+    from driftpin.analysis import study as _st
+
+    variables = _st.validate_variables(p.get("variables"))
+    responses = _st.validate_responses(p.get("responses"))
+    for resp in responses:
+        if resp["tool"] not in HANDLERS:
+            raise ValueError(f"response {resp['name']!r} names unknown tool "
+                             f"{resp['tool']!r}; a response must measure with a real "
+                             "DriftPin tool")
+    sampling = dict(p.get("sampling") or {})
+    method = sampling.get("method", "grid")
+    seed = int(sampling.get("seed", 0))
+    points = _st.sample_points(variables, method=method,
+                               n_samples=sampling.get("n_samples"), seed=seed)
+    max_points = int(p.get("max_points", 64))
+    if len(points) > max_points:
+        raise ValueError(
+            f"this study is {len(points)} points ({' x '.join(str(v['levels']) for v in variables)}"
+            f") but max_points is {max_points}. Every point is a real evaluation and "
+            "solver points are real solves — narrow the grid, switch to "
+            "sampling={'method':'lhs','n_samples':N}, or raise max_points on purpose")
+    objective = p.get("objective")
+    if objective:                                    # fail at the door, not after N solves
+        names = {r["name"] for r in responses}
+        target = objective.get("response") or objective.get("name") if isinstance(
+            objective, dict) else None
+        if target not in names:
+            raise ValueError(f"objective names response {target!r}, which this study does "
+                             f"not measure (it measures {sorted(names)})")
+    recipe = p.get("recipe")
+    fixed = dict(p.get("fixed_inputs") or {})
+    by_name = {r["name"]: r for r in responses}
+
+    # Two responses that read different metrics off the SAME tool call (a solved Δp and
+    # its hp_ratio; a Cd and its y+) must not solve twice. The jobs-layer content cache
+    # cannot help here — it only serves COMPLETED jobs, and during a fan-out the twin is
+    # still running — so the study dedupes identical (tool, conditions) calls itself,
+    # within the study, before dispatching. Measured live: 3 diameters x 2 responses went
+    # from 6 solves to 3.
+    seen_calls = {}
+
+    def _dispatch(tool, conds):
+        sig = _json.dumps([tool, conds], sort_keys=True, default=str)
+        if sig not in seen_calls:
+            seen_calls[sig] = HANDLERS[tool](conds)
+        return seen_calls[sig]
+
+    rows, pending = [], []
+    for i, params in enumerate(points):
+        row = {"index": i, "params": params, "responses": {}, "ok": True,
+               "warnings": []}
+        rows.append(row)
+        handle = p.get("handle")                     # a fixed part, when there's no recipe
+        if recipe:
+            try:
+                built = HANDLERS["recipe"]({"recipe": recipe,
+                                            "inputs": {**fixed, **params}})
+                handle = built.get("handle")
+                row["handle"] = handle
+            except Exception as e:                   # noqa: BLE001 - a row, never a raise
+                row["ok"] = False
+                row["warnings"].append(
+                    f"the recipe did not build at these parameters: "
+                    f"{type(e).__name__}: {e}")
+                continue
+        for resp in responses:
+            name = resp["name"]
+            try:
+                conds = _subst_params(resp["conditions"], params, handle)
+                payload = _dispatch(resp["tool"], conds)
+            except Exception as e:                   # noqa: BLE001
+                row["responses"][name] = {"ok": False, "value": None,
+                                          "detail": f"{type(e).__name__}: {e}"}
+                row["ok"] = False
+                continue
+            if isinstance(payload, dict) and payload.get("job_id"):
+                jid = payload["job_id"]
+                jobs.pin(jid)                        # the collector must outlive the cap
+                pending.append({"index": i, "name": name, "job_id": jid})
+                row["responses"][name] = {
+                    "ok": None, "value": None, "job_id": jid,
+                    "cache_hit": bool(payload.get("cache_hit")),
+                    "detail": "solve submitted; poll job_result for the value"}
+            else:
+                row["responses"][name] = _study_cell(resp, payload)
+                if not row["responses"][name]["ok"]:
+                    row["ok"] = False
+
+    def _finish():
+        n_cached = sum(1 for r in rows for c in r["responses"].values()
+                       if isinstance(c, dict) and c.get("cache_hit"))
+        n_measured = sum(1 for r in rows for c in r["responses"].values()
+                         if isinstance(c, dict) and c.get("ok"))
+        out = {
+            "ok": all(r["ok"] for r in rows),
+            "n_points": len(rows),
+            "n_evaluated": n_measured,
+            "n_cached": n_cached,
+            "n_failed": sum(1 for r in rows if not r["ok"]),
+            "sampling": {"method": method, "seed": seed,
+                         "n_samples": sampling.get("n_samples")},
+            "variables": variables,
+            "recipe": recipe,
+            "points": rows,
+            "responses": _st.summarize_responses(rows, [r["name"] for r in responses]),
+        }
+        best = _st.best_point(rows, objective)
+        if objective:
+            out["best"] = best
+            out["objective"] = objective
+        return out
+
+    if not pending:
+        return _finish()
+
+    # Solves are running. They were all submitted from the MAIN thread (every recipe
+    # build and case write is already done), so they run concurrently and ONE collector
+    # job joins them — the same fan-out-then-collect shape verify_performance uses, and
+    # the reason a study is a single poll rather than N.
+    def _collect():
+        for item in pending:
+            jid = item["job_id"]
+            try:
+                while jobs.status(jid)["status"] not in ("done", "failed"):
+                    _time.sleep(0.5)
+                st = jobs.status(jid)
+                row = rows[item["index"]]
+                prior = row["responses"].get(item["name"]) or {}
+                if st["status"] == "failed":
+                    cell = {"ok": False, "value": None,
+                            "detail": f"the solve failed: {st.get('error')}"}
+                else:
+                    payload = jobs.result(jid)["result"]
+                    cell = _study_cell(by_name[item["name"]], payload)
+                    if isinstance(payload, dict) and payload.get("case_dir"):
+                        cell["case_dir"] = payload["case_dir"]
+                cell["job_id"] = jid
+                cell["cache_hit"] = prior.get("cache_hit", False)
+                row["responses"][item["name"]] = cell
+                if not cell["ok"]:
+                    row["ok"] = False
+            finally:
+                jobs.unpin(jid)                      # released even if the join blew up
+        return _finish()
+
+    # distinct solves, not (point, response) pairs — two responses reading different
+    # metrics off one call share a job, and reporting it twice would overstate the cost
+    solves = list(dict.fromkeys(i["job_id"] for i in pending))
+    return {"n_points": len(rows), "points": rows, "pending": solves,
+            **jobs.submit("study", _collect,
+                          meta={"n_points": len(rows), "recipe": recipe,
+                                "pending": len(solves)})}
+
+
 @handler("verify_intent")
 def _h_verify_intent(p):
     """Re-run every invariant declared with declare_intent — the regression gate

@@ -87,6 +87,14 @@ BOUNDED_TOOLS = {
     "molding_fill_submit", "molding_warpage_submit", "render_photoreal_submit",
     "slice_gcode_submit", "thermal_radiation_submit", "thermal_transient_submit",
     "topology_optimize_submit",
+    # DOE studies (issue #227). The study layer's OWN contribution is exact and
+    # proven so in tests/test_study.py: a grid is deterministic by construction and
+    # a Latin hypercube is reproducible from `seed` alone (which is also what lets a
+    # re-submitted study hit the job cache instead of re-solving). The measured
+    # values are whatever the named response tools return, so a study composed of
+    # exact tools reproduces bitwise and one composed of solver submits inherits
+    # their bound — bounded is the honest envelope for the pair.
+    "study_submit",
 }
 
 # No tool is intentionally non-reproducible today, but the class is declared so a

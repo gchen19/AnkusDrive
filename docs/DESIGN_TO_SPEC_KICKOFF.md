@@ -22,9 +22,9 @@ Read alongside:
 | #223 | CFD external-flow geometry bridge — the virtual wind tunnel | **merged** (PR #253) |
 | #224 | Force/moment extraction (Cd/Cl/Cm) | **merged** with #223 |
 | #236 | `cfd_external_flow_submit` silently ignored `model` | **merged** with #223 |
-| #225 | CFD trust layer + Richardson/GCI | PR #255 |
-| #226 | Performance contracts | PR #256 (stacked on #255) |
-| #227 | `study_submit` — DOE / parameter sweep | **open, not started** |
+| #225 | CFD trust layer + Richardson/GCI | **merged** (PR #255) |
+| #226 | Performance contracts | **merged** (PR #256) |
+| #227 | `study_submit` — DOE / parameter sweep | PR #258 |
 | #228 | `optimize_submit` — optimize-to-spec | **open, not started** |
 
 The target workflow from the epic now runs end to end for everything except the search
@@ -37,7 +37,7 @@ spec ──► declare_performance                                    ✅ #226
      screening tier (cfd_body_drag / cfd_pipe_flow / …)         ✅ #226 tier='auto'
              │
              ▼
-     study_submit (DOE over recipe params × solver)             ⬜ #227
+     study_submit (DOE over recipe params × solver)             ✅ #227
              │
              ▼
      optimize_submit (vary params until the contract is met)    ⬜ #228
@@ -82,7 +82,12 @@ flat-plate cases dominate).
 
 ---
 
-## #227 — `study_submit`: DOE over recipe params × solver
+## #227 — `study_submit`: DOE over recipe params × solver — **built (PR #258)**
+
+Shipped as `driftpin/analysis/study.py` (pure sampling + table arithmetic) plus a
+`study_submit` worker handler that fans out and collects the way `verify_performance`
+does. Gates in `tests/test_study.py` (20, fast lane). What the notes below predicted
+correctly, and the two things they missed, are recorded after the original text.
 
 **The gap.** Nothing connects `recipe(params) → *_submit → objective`. An agent
 hand-rolls every sweep, and nothing records the search.
@@ -114,6 +119,25 @@ hand-rolls every sweep, and nothing records the search.
 4. Record the search. `{points: [{params, value, state, job_id, cache_hit}], best,
    n_cached}` — `n_cached` is what tells a user their re-run was free.
 
+**What building it actually turned up.** Notes 1–4 all held. Two things they missed,
+both worth carrying into #228:
+
+- **The retention fix needed a pin, not just a bigger cap.** Raising `_MAX_JOBS`
+  alone is "big enough until it isn't" — eviction takes *terminal* jobs first, which
+  are exactly the points that finished early, so a long study still loses its cheapest
+  results. `jobs.pin()` / `jobs.unpin()` now make the dependency explicit (pins nest);
+  the cap also went 32 → 256 so unpinned interactive work is never the cause.
+- **The content cache cannot dedupe a live fan-out.** `jobs.submit` serves a cache hit
+  only from a *completed* job, so two responses reading different metrics off the same
+  tool call (a solved Δp and its `hp_ratio`) both miss and both solve — measured live
+  as 6 OpenFOAM solves for 3 cases. `study_submit` therefore dedupes identical
+  `(tool, conditions)` calls itself, before dispatch. **Any future fan-out driver has
+  this same hole**; do not assume the content key covers it.
+
+Live result on the in-VM OpenFOAM pipe (3 diameters at fixed flow rate, 7.1 s wall):
+solved Δp rides D⁻⁴ at exponent −3.9986, r² = 0.99999999, `hp_ratio` 1.0884/1.0887/
+1.0890. A re-submit reported 6/6 cached in 0.02 s.
+
 ---
 
 ## #228 — `optimize_submit`: vary params until the contract is met
@@ -135,6 +159,19 @@ a **`verify_performance` verdict**, not a solver number, and that changes the lo
 
 **Precedent:** `optics_lens_optimize` is still the only shipped "vary variables until
 targets met" tool — read it before designing the driver.
+
+**What #227 hands it.** The evaluate function already exists: one `study_submit` call
+with a single-point `variables` list *is* one objective evaluation, and it already
+handles recipe materialization on the main thread, the solver fan-out, the collector
+join, and the cache. An optimizer should drive that rather than re-implementing the
+dispatch. Two shapes it inherits for free:
+
+- A response may name **`verify_performance`**, so "the objective is a contract verdict"
+  needs no new plumbing — the cell carries `state` alongside `value`, which is exactly
+  the pass / fail / **indeterminate** signal the escalation rule below keys off.
+- The point table is deliberately self-describing (parameters attached to each row, not
+  positional), so the accumulated history is already in the shape a surrogate would
+  consume when solve counts start to hurt.
 
 **Budget the search.** Each solver-tier point is a real solve. The epic's own horizon
 notes surrogate-assisted search (RBF/GP over study results) for when solve counts hurt;
