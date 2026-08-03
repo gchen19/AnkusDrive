@@ -6439,8 +6439,11 @@ def _generate_library_part(tool, spec, path):
 # on modal), runs a CalculiX frequency extraction, and compares mode 1 against the
 # floor. A bare `min_first_mode_hz` number (or one with no fixture, or bonding other
 # than `fused`) still surfaces as `skipped` — the assumptions aren't declared, so the
-# gate won't fake them. It NEVER raises: a modelling/solve failure is reported as a
-# loud violation (like a mass budget with no density), never a silent pass.
+# gate won't fake them. It NEVER raises: a MODELLING failure is reported as a loud
+# violation (like a mass budget with no density), never a silent pass; and a solve
+# that never produced a frequency (ccx absent/killed, issue #248) is a third outcome
+# — `skipped` with a `solve: incomplete` marker, because a run that didn't finish is
+# not a statement about the part. driftpin.gates.modal owns that classification.
 
 _TIER1_REQ_KEYS = {"max_mass_g", "cg_window", "density_kg_mm3"}
 _PHYSICS_REQ_KEYS = {"min_first_mode_hz"}
@@ -6577,6 +6580,31 @@ def _fixture_world_plane(fixture, fused, links_by_inst):
     return None
 
 
+def _ccx_absent_or_failed():
+    """Cause tag for a modal solve that produced nothing: was CalculiX even
+    there? Resolved at failure time (a long-lived worker can outlive a solver
+    install), and only ever used to word the reason — either way there is no
+    measurement and therefore no verdict."""
+    from driftpin import solvers as _solvers
+    from driftpin.gates import modal as _modal
+    try:
+        present = _solvers.ccx_bin() is not None
+    except Exception:
+        present = True
+    return _modal.SOLVE_FAILED if present else _modal.SOLVER_ABSENT
+
+
+class _ModalSolveIncomplete(RuntimeError):
+    """The modal solve produced no frequency — CalculiX absent, killed, or its
+    results never written (issue #248). Distinct from a MODELLING error (bad
+    material, fixture matching nothing), which is the design's fault and stays a
+    loud violation; this one is the RUN's fault and yields no verdict at all."""
+
+    def __init__(self, cause, message):
+        super().__init__(message)
+        self.cause = cause
+
+
 def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
     """Physics-tier gate (issue #172): the merged assembly's first natural
     frequency vs a floor, via FEM modal on the FUSED solid.
@@ -6591,13 +6619,23 @@ def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
                       "PoissonRatio": "0.30", "Density": "7900 kg/m^3"},
          "mesh_size_mm": 3.5, "n_modes": 6}  # optional
 
-    Returns {skipped, report, violation}. NEVER raises: a modelling or solve
-    failure comes back as a loud violation, not a silent pass. On a `skipped`
-    result the requirement rides in the gate's `skipped` list (never met, never
-    dropped). A failed physics gate does NOT auto-re-dispatch components in v1
-    (RFC §13) — it fails the merge report; re-dispatch is the coordinator's call."""
+    Returns {skipped, report, violation}. NEVER raises: a MODELLING failure (no
+    material, a fixture plane that matches nothing) comes back as a loud
+    violation, not a silent pass. On a `skipped` result the requirement rides in
+    the gate's `skipped` list (never met, never dropped). A failed physics gate
+    does NOT auto-re-dispatch components in v1 (RFC §13) — it fails the merge
+    report; re-dispatch is the coordinator's call.
+
+    Third outcome (issue #248): a solve that produces no frequency at all — ccx
+    absent, ccx killed, a run abandoned under load — is NOT a statement about the
+    part, so it is neither a pass nor a violation. It comes back `skipped` with a
+    `skipped_reason` naming the cause and a machine-readable `solve: incomplete`
+    marker, built by driftpin.gates.modal so every consumer classifies it the
+    same way. See that module for the three-outcome contract."""
+    from driftpin.gates import modal as _modal
     if not isinstance(spec, dict):
         return {"skipped": True, "report": {
+            "solve": _modal.NOT_DECLARED,
             "skipped_reason": "min_first_mode_hz is a bare number — declare a "
             "`fixture` and `bonding` to run the FEM modal gate"}}
     value = spec.get("value")
@@ -6605,6 +6643,7 @@ def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
     bonding = spec.get("bonding", "fused")
     if value is None or fixture is None:
         return {"skipped": True, "report": {
+            "solve": _modal.NOT_DECLARED,
             "skipped_reason": "min_first_mode_hz needs both `value` and `fixture` "
             "to run the FEM modal gate"}}
     if bonding != "fused":
@@ -6612,6 +6651,7 @@ def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
         # merged assembly held by contact/tie is a real modelling step v1 doesn't
         # fake. Surface it rather than silently applying `fused`.
         return {"skipped": True, "report": {
+            "solve": _modal.NOT_DECLARED,
             "skipped_reason": f"bonding={bonding!r} not implemented (v1 = 'fused'); "
             "tied is reserved"}}
 
@@ -6620,8 +6660,11 @@ def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
         return {"violation": {"requirement": "min_first_mode_hz",
                               "error": "needs a `material` "
                               "{YoungsModulus, PoissonRatio, Density} for the modal solve"},
-                "report": {"min_hz": value, "bonding": bonding}}
+                "report": {"min_hz": value, "bonding": bonding,
+                           "solve": _modal.ERROR}}
 
+    import time as _time
+    t0 = _time.time()
     try:
         solids = [s for _, s in shapes if s is not None and not s.isNull()]
         if not solids:
@@ -6638,6 +6681,7 @@ def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
         if plane is None:
             return {"skipped": True, "report": {
                 "min_hz": value, "bonding": bonding,
+                "solve": _modal.NOT_DECLARED,
                 "skipped_reason": f"fixture {fixture!r} could not be resolved to a "
                 "clamp plane"}}
         point, normal, tol = plane
@@ -6647,7 +6691,7 @@ def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
                                   "error": "fixture plane matched no faces on the "
                                   "fused assembly (check axis/side/tol_mm)"},
                     "report": {"min_hz": value, "bonding": bonding,
-                               "fixture": fixture}}
+                               "fixture": fixture, "solve": _modal.ERROR}}
 
         f1, freqs, mesh_info = _solve_fused_first_mode(
             fused, fix_faces, material, spec, assembly_handle)
@@ -6665,18 +6709,33 @@ def _first_mode_requirement(assembly_handle, spec, shapes, links_by_inst):
                     "reason": f"first mode {f1:.1f} Hz < floor {value} Hz "
                               f"(too floppy)"}
         return {"report": rep, "violation": viol}
+    except _ModalSolveIncomplete as e:
+        # The solve never produced a frequency (issue #248). That says nothing
+        # about the part, so it is neither a pass nor a violation — it is a loud
+        # skip carrying the cause and the wall-clock it burned.
+        return {"skipped": True,
+                "report": _modal.incomplete_report(
+                    value, e.cause, str(e), elapsed_s=_time.time() - t0,
+                    bonding=bonding, fixture=fixture)}
     except Exception as e:  # never raise out of a gate
         return {"violation": {"requirement": "min_first_mode_hz",
                               "error": f"modal gate failed to evaluate: {e}"},
                 "report": {"min_hz": value, "bonding": bonding,
-                           "fixture": fixture}}
+                           "fixture": fixture, "solve": _modal.ERROR}}
 
 
 def _solve_fused_first_mode(fused, fix_faces, material, spec, assembly_handle):
     """Mesh the fused solid with 2nd-order tets, clamp `fix_faces`, run a CalculiX
     frequency extraction, and return (first_mode_hz, all_freqs, mesh_info). Runs in
     a scratch document so nothing lands in the merged assembly's saved .FCStd; the
-    active document is restored on the way out."""
+    active document is restored on the way out.
+
+    Raises `_ModalSolveIncomplete` when the SOLVE (as opposed to the model) is
+    what failed — ccx missing, ccx killed under load, no .frd/.dat written, no
+    eigenfrequencies extracted. The caller turns that into a skip, not a verdict
+    (issue #248). Everything before the solve — meshing, material, constraints —
+    is a modelling step and keeps raising normally, so a bad model still fails
+    the merge loudly."""
     import tempfile as _tempfile
     prev = App.ActiveDocument.Name if App.ActiveDocument is not None else None
     doc = App.newDocument("_modal_gate")
@@ -6708,10 +6767,19 @@ def _solve_fused_first_mode(fused, fix_faces, material, spec, assembly_handle):
             "analysis": analysis, "body": body_h, "char_length": mesh_size,
             "element_order": "2nd"})
         HANDLERS["fem_modal"]({"analysis": analysis, "n_modes": n_modes})
-        HANDLERS["fem_run"]({"analysis": analysis, "workdir": workdir})
-        freqs = HANDLERS["fem_modal_results"]({"analysis": analysis})["frequencies_hz"]
+        # Only the SOLVE is wrapped: everything above is the model, and a bad
+        # model must keep failing loudly. Below this line a failure means ccx
+        # didn't answer — which is a non-verdict, not a floppy part (#248).
+        try:
+            HANDLERS["fem_run"]({"analysis": analysis, "workdir": workdir})
+            freqs = HANDLERS["fem_modal_results"](
+                {"analysis": analysis})["frequencies_hz"]
+        except Exception as e:
+            raise _ModalSolveIncomplete(_ccx_absent_or_failed(), str(e)) from e
         if not freqs:
-            raise RuntimeError("modal solve produced no frequencies")
+            raise _ModalSolveIncomplete(
+                _ccx_absent_or_failed(),
+                "CalculiX wrote no eigenfrequencies (no .frd/.dat results)")
         return freqs[0], freqs, {"nodes": mesh_info["nodes"],
                                  "tets": mesh_info["tets"],
                                  "char_length_mm": mesh_size,

@@ -750,11 +750,22 @@ no fixture, or `bonding: tied` → `skipped`; a *declared-but-unsolvable* requir
 (missing material, a fixture matching no faces) → a **loud violation**, never a silent
 pass.
 
+**Three outcomes, not two** (issue #248, 2026-08-01). A solve that produces no
+frequency at all — ccx absent, ccx killed, a run abandoned on a loaded box — is a
+statement about the *run*, not the part, so it is neither of the above. It comes back
+`skipped` with `first_mode: {solve: "incomplete", cause, elapsed_s, skipped_reason}`:
+loud in the log, impossible to read as "requirement met", and it does not fail a merge
+for something the design didn't do. Consumers classify a report through the shared
+pure predicate `driftpin.gates.modal.classify` (`pass` / `fail` / `incomplete` /
+`not_declared` / `error` / `not_gated`, plus `has_verdict`) instead of reaching for
+`measured_first_mode_hz` and tripping over the hole — which is exactly how #248
+surfaced: a `KeyError` in the test that blocked an unrelated PR.
+
 Two-sided gate-validated in `tests/test_requirements_gates.py` (tier-1: mass/CG) and
 `tests/test_merge_modal_gate.py` (physics tier: a two-box "tuning-fork" whose clamped
 prongs the `beam_modal` closed-form cantilever brackets to ~3% — a stiff fork clears a
-600 Hz floor, a floppy fork is rejected by it; the skip/stub/loud-failure paths run
-without a solver), in `run_all.sh`, no key.
+600 Hz floor, a floppy fork is rejected by it; the skip/stub/loud-failure paths and the
+three-outcome classification run without a solver), in `run_all.sh`, no key.
 
 ### 11.7 Manifest formalization *(shipped)*
 
