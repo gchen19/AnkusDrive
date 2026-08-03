@@ -307,11 +307,18 @@ bash tests/run_macos_heavy.sh tests/test_molding_fill.py
    DRIFTPIN_PRECICE_LIB=/home/ubuntu/precice-serial/lib
    DRIFTPIN_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
    DRIFTPIN_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+   DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+   DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
    ```
 
    `TMPDIR` is the host side of the `multipass mount`, so the `mkdtemp` case dirs land
-   somewhere the VM can `cd` into at the same absolute path. The other four are in-VM
-   paths. Restart the service after editing (`./svc.sh stop && ./svc.sh start`).
+   somewhere the VM can `cd` into at the same absolute path. The other six are in-VM
+   paths. The last two are the plain-CFD pair from
+   [Plain CFD … in the VM](#plain-cfd-pipe-flat-plate-mesh-bridge-wind-tunnel-in-the-vm):
+   the built-in CFD builders resolve through `DRIFTPIN_OPENFOAM_*`, *not* the FSI pair
+   above, so omitting them leaves `test_openfoam` / `test_meshbridge` / `test_wind_tunnel`
+   skipping their live halves — which is exactly what the preflight refuses to let pass.
+   Restart the service after editing (`./svc.sh stop && ./svc.sh start`).
 4. **Keep the Mac awake** — `sudo pmset -a sleep 0 disablesleep 1`, or the 06:00 UTC cron
    lane finds the VM suspended.
 
