@@ -179,6 +179,10 @@ echo "== DOE studies (sampling; swept Hagen-Poiseuille D^-4 oracle; async fan-ou
 python3 tests/test_study.py
 
 echo
+echo "== Optimize-to-spec (bounded Nelder-Mead; closed-form binding-constraint oracle) =="
+python3 tests/test_optimize.py
+
+echo
 echo "== Virtual wind tunnel + CFD trust layer (screen always; solves when present) =="
 python3 tests/test_wind_tunnel.py
 

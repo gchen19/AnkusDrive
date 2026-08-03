@@ -5082,6 +5082,306 @@ def _h_study_submit(p):
                                 "pending": len(solves)})}
 
 
+_GEOMETRY_KEYS = ("handle", "model", "body", "part", "shape")
+
+
+def _refuse_live_geometry(where, conditions):
+    """The optimizer's search loop runs on a background thread (its budget is minutes,
+    far past the client's per-call timeout), and the jobs.py threading contract forbids
+    FreeCAD there. A measurement that reads a live document therefore cannot be an
+    optimizer response — refuse it at the door with the alternative, rather than
+    crashing a solve deep inside the search."""
+    hits = [k for k in _GEOMETRY_KEYS if k in (conditions or {})]
+    tokens = [v for v in (conditions or {}).values() if v == "$handle"]
+    if hits or tokens:
+        raise ValueError(
+            f"{where} measures live geometry ({', '.join(hits) or '$handle'}), which an "
+            "optimizer cannot do: its search runs on a background thread and FreeCAD's "
+            "document API is main-thread only (see the jobs.py threading contract). "
+            "Optimize over parameter-driven tools (cfd_pipe_flow, "
+            "cfd_internal_flow_submit's pipe family, the correlation screens), or use "
+            "study_submit for a grid over recipe geometry — it builds every point on "
+            "the main thread up front, which is why it can")
+
+
+@handler("optimize_submit")
+def _h_optimize_submit(p):
+    """Vary parameters until the spec is met, then say whether it was PROVEN (issue
+    #228) — the step that closes the design-to-spec loop.
+
+    Everything before this measures; this searches. Two things make it different from a
+    generic minimizer, and both come from the contract layer underneath it:
+
+    A constraint verdict has THREE states. `indeterminate` — the measurement's band
+    straddles the limit — is NOT a failed step. Walking away from it abandons good
+    designs; treating it as a pass converges on unproven ones. During the search an
+    indeterminate constraint is scored on its nominal value (so it neither attracts nor
+    repels) and the point is proved properly at the end, at solver tier.
+
+    Convergence is not proof. A simplex can converge on a point that clears its limit by
+    2 % while its own grid-convergence band is 5 % wide — that is noise with a
+    favourable sign. `proven` is therefore reported separately from `converged`, and is
+    True only when the final solver-tier check has every constraint at `pass` AND no
+    margin swallowed by its own band.
+
+    Runs in three phases: `screen` (search cheaply on each block's `screen` estimator),
+    `solver` (polish from where the screen landed, using the real tool), then a final
+    acceptance measurement of the winner. `tier='screen'` or `'solver'` runs just that
+    one. The optimizer is a bounded Nelder-Mead — derivative-free because there is no
+    adjoint through a CFD solve — so every evaluation is a real measurement, budgeted by
+    `budget: {max_evals, max_wall_s}`. Revisited points are served from cache and do NOT
+    count against the budget.
+
+    `variables` must be continuous and bounded: {"name": "diameter_mm", "min": 5,
+    "max": 25, "start": 10}. `objective` and each `constraints` entry use the
+    performance-requirement mapping ({tool, metric, conditions, limit, screen}), with
+    `"$<variable>"` in `conditions` carrying the candidate's value.
+
+    Because the search runs off the request thread, responses must be PARAMETER-driven:
+    a tool reading live geometry is refused at the door (FreeCAD is main-thread only).
+    Use study_submit for a grid over recipe geometry.
+
+    Returns {job_id, status}; poll job_result for {ok, proven, stop_reason,
+    best_params, best_value, objective, constraints: [{name, state, measured, limit,
+    margin_pct, band_pct, detail}], phases: [{tier, n_evals, best_params, best_value,
+    converged, reason}], history: [{i, tier, params, value, score, feasible, cached}],
+    n_evals, n_cached, budget, warnings}."""
+    import time as _time
+
+    from driftpin import jobs
+    from driftpin.analysis import optimize as _opt
+    from driftpin.analysis import performance as _pf
+
+    variables = _opt.validate_design_vars(p.get("variables"))
+    objective = _opt.validate_objective(p.get("objective"))
+    budget = _opt.validate_budget(p.get("budget"))
+    tier = p.get("tier", "auto")
+    if tier not in ("auto", "screen", "solver"):
+        raise ValueError("tier must be 'auto', 'screen' or 'solver'")
+
+    constraints = p.get("constraints") or []
+    if isinstance(constraints, dict):
+        constraints = [constraints]
+    norm_cons = []
+    for con in constraints:
+        norm_cons.append(_pf.validate_requirement(con))
+
+    # door checks: every named tool must exist, and none may read live geometry
+    for label, block in ([("the objective", objective)]
+                         + [(f"constraint {c['name']!r}", c) for c in norm_cons]):
+        for sub in (block, block.get("screen")):
+            if not sub:
+                continue
+            if sub.get("tool") not in HANDLERS:
+                raise ValueError(f"{label} names unknown tool {sub.get('tool')!r}")
+            _refuse_live_geometry(label, sub.get("conditions") or sub.get("args"))
+
+    names = [v["name"] for v in variables]
+    lower = [v["min"] for v in variables]
+    upper = [v["max"] for v in variables]
+    start = [v["start"] for v in variables]
+    t_start = _time.monotonic()
+    memo, history, warnings = {}, [], []
+    counters = {"evals": 0, "cached": 0}
+
+    def _measure_block(block, params, use_screen):
+        """One measurement of one block at one tier: run the tool, wait out an async
+        solve, and return (value, band_pct, payload)."""
+        src = block.get("screen") if (use_screen and block.get("screen")) else block
+        conds = _subst_params(dict(src.get("conditions") or src.get("args") or {}),
+                              params)
+        payload = HANDLERS[src["tool"]](conds)
+        if isinstance(payload, dict) and payload.get("job_id"):
+            jid = payload["job_id"]
+            jobs.pin(jid)
+            try:
+                while jobs.status(jid)["status"] not in ("done", "failed"):
+                    _time.sleep(0.25)
+                if jobs.status(jid)["status"] == "failed":
+                    return None, None, {"ok": False,
+                                        "reason": jobs.status(jid).get("error")}
+                payload = jobs.result(jid)["result"]
+            finally:
+                jobs.unpin(jid)
+        metric = src.get("metric") or block.get("metric")
+        value = _pf._get_path(payload, metric)
+        # a block may override the band it inherits from the tool: a pipe correlation
+        # reports band_pct=10 for its FRICTION FACTOR, but the bulk velocity it also
+        # returns is exact kinematics and should not be tarred with it
+        band = src.get("band_pct", block.get("band_pct"))
+        return (value,
+                _band_of(payload if isinstance(payload, dict) else {}, band),
+                payload)
+
+    def _evaluate(params, use_screen):
+        """Objective + every constraint at one point. Returns the recorded row."""
+        key = (bool(use_screen),
+               tuple(round(float(params[n]), 9) for n in names))
+        if key in memo:
+            counters["cached"] += 1
+            row = dict(memo[key])
+            row["cached"] = True
+            return row
+        obj_value, obj_band, _ = _measure_block(objective, params, use_screen)
+        cons_rows, violations = [], []
+        for con in norm_cons:
+            value, band, payload = _measure_block(con, params, use_screen)
+            if value is None:
+                cons_rows.append({"name": con["name"], "state": "indeterminate",
+                                  "measured": None,
+                                  "detail": "the tool produced no measurement here"})
+                continue
+            verdict = _pf.evaluate_limit(value, con["limit"], band)
+            verdict["name"] = con["name"]
+            reasons = _pf.check_trust(payload if isinstance(payload, dict) else {},
+                                      con.get("trust"))
+            if reasons and verdict["state"] == "pass":
+                verdict["state"] = "indeterminate"
+                verdict["trust_reasons"] = reasons
+            cons_rows.append(verdict)
+            # scored on the NOMINAL value, so an indeterminate constraint neither
+            # attracts nor repels the search — it is a measurement problem, not a
+            # design problem, and gets resolved at proof time
+            violations.append(_opt.relative_violation(value, con["limit"]))
+        row = {"params": dict(params), "value": obj_value, "band_pct": obj_band,
+               "constraints": cons_rows,
+               "feasible": all(v <= 0 for v in violations),
+               "score": (_opt.score(obj_value, objective["sense"], violations)
+                         if obj_value is not None else None),
+               "cached": False}
+        memo[key] = row
+        counters["evals"] += 1
+        return row
+
+    def _phase(tier_name, x0, evals):
+        """Run one Nelder-Mead phase and return (result, best_row)."""
+        use_screen = tier_name == "screen"
+        best = {"row": None}
+
+        def f(x):
+            if budget["max_wall_s"] is not None and (
+                    _time.monotonic() - t_start) > budget["max_wall_s"]:
+                raise _BudgetExhausted("max_wall_s")
+            params = {n: v for n, v in zip(names, x)}
+            row = _evaluate(params, use_screen)
+            history.append({"i": len(history), "tier": tier_name,
+                            "params": row["params"], "value": row["value"],
+                            "score": row["score"], "feasible": row["feasible"],
+                            "cached": row["cached"]})
+            if row["score"] is None:
+                return None
+            if best["row"] is None or row["score"] < best["row"]["score"]:
+                best["row"] = row
+            return row["score"]
+
+        # the BUDGET is the worker's count of uncached measurements, not the simplex's
+        # count of calls: a shrink step revisits coordinates constantly, and charging
+        # for results served from memo would let bookkeeping end the search
+        baseline = counters["evals"]
+        res = _opt.nelder_mead(f, x0, lower, upper, max_evals=evals,
+                               spent=lambda: counters["evals"] - baseline)
+        return res, best["row"]
+
+    def _work():
+        phases, stop_reason = [], "converged"
+        x = list(start)
+        best_row = None
+        try:
+            legs = []
+            want_screen = tier in ("auto", "screen") and (
+                objective.get("screen") or tier == "screen")
+            want_solver = tier in ("auto", "solver")
+            # the screen leg only gives up part of the budget when a solver leg is
+            # actually going to follow it; a screen-only run gets the whole thing,
+            # otherwise asking for tier='screen' silently buys 60 % of what you paid for
+            if want_screen:
+                legs.append(("screen", max(2, int(budget["max_evals"] * 0.6))
+                             if want_solver else budget["max_evals"]))
+            if want_solver:
+                legs.append(("solver", budget["max_evals"]))
+            if not legs:                          # tier='screen' with nothing to screen
+                legs = [("solver", budget["max_evals"])]
+            for tier_name, evals in legs:
+                spent = counters["evals"]
+                # max_evals is a TOTAL ceiling, not a per-leg allowance: the solver leg
+                # gets what the screen leg left, so an 'auto' run costs what was asked
+                # for rather than 1.6x it
+                remaining = budget["max_evals"] - spent
+                if remaining < 2:
+                    stop_reason = "max_evals"
+                    break
+                res, row = _phase(tier_name, x, min(evals, remaining))
+                phases.append({"tier": tier_name, "n_evals": counters["evals"] - spent,
+                               "best_params": row["params"] if row else None,
+                               "best_value": row["value"] if row else None,
+                               "converged": res["converged"], "reason": res["reason"]})
+                if row is not None:
+                    best_row = row
+                    x = [row["params"][n] for n in names]      # polish from here
+                if counters["evals"] >= budget["max_evals"]:
+                    stop_reason = "max_evals"
+                    break
+        except _BudgetExhausted as e:
+            stop_reason = str(e)
+
+        out = {"ok": best_row is not None, "stop_reason": stop_reason,
+               "phases": phases, "history": history,
+               "n_evals": counters["evals"], "n_cached": counters["cached"],
+               "budget": budget, "variables": variables, "warnings": warnings}
+        if best_row is None:
+            out.update({"proven": False, "best_params": None, "best_value": None,
+                        "constraints": []})
+            warnings.append("no point could be measured — nothing was searched")
+            return out
+
+        # --- acceptance: prove the winner at the highest tier available -------------
+        final = _evaluate(best_row["params"], use_screen=False)
+        out["best_params"] = final["params"]
+        out["best_value"] = final["value"]
+        out["objective"] = {"name": objective.get("name"),
+                            "metric": objective["metric"],
+                            "sense": objective["sense"],
+                            "value": final["value"],
+                            "band_pct": final["band_pct"]}
+        out["constraints"] = final["constraints"]
+        out["n_evals"], out["n_cached"] = counters["evals"], counters["cached"]
+
+        undecided = [c["name"] for c in final["constraints"]
+                     if c.get("state") == "indeterminate"]
+        failed = [c["name"] for c in final["constraints"] if c.get("state") == "fail"]
+        noisy = [c["name"] for c in final["constraints"]
+                 if _opt.band_covers_margin(c.get("margin_pct"), c.get("band_pct"))]
+        out["proven"] = not (undecided or failed or noisy) and bool(final["constraints"])
+        if failed:
+            warnings.append(
+                f"the spec was NOT met: {', '.join(failed)} still fails at the best "
+                "point found. The limit may be below the physical floor for these "
+                "variables — check best_value against the bounds before widening them")
+        if undecided:
+            warnings.append(
+                f"{', '.join(undecided)} could not be decided even at the final "
+                "measurement; escalate the fidelity floor or tighten the band "
+                "(cfd_mesh_independence_submit) before claiming this design")
+        if noisy:
+            warnings.append(
+                f"{', '.join(noisy)} clears its limit by less than its own uncertainty "
+                "band — the search converged but the answer is inside the noise, so it "
+                "is not proof")
+        if not final["constraints"]:
+            warnings.append(
+                "no constraints were declared, so there is nothing to prove — this run "
+                "optimized the objective but cannot report a spec as met")
+        return out
+
+    return jobs.submit("optimize", _work,
+                       meta={"variables": names, "tier": tier,
+                             "max_evals": budget["max_evals"]})
+
+
+class _BudgetExhausted(RuntimeError):
+    """Raised inside the objective to unwind a search that ran out of wall clock."""
+
+
 @handler("verify_intent")
 def _h_verify_intent(p):
     """Re-run every invariant declared with declare_intent — the regression gate

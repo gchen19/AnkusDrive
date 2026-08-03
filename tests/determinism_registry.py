@@ -95,6 +95,12 @@ BOUNDED_TOOLS = {
     # exact tools reproduces bitwise and one composed of solver submits inherits
     # their bound — bounded is the honest envelope for the pair.
     "study_submit",
+    # optimize-to-spec (issue #228). Same reasoning as study_submit, one step further
+    # out: the Nelder-Mead search is pure and deterministic given the same evaluations
+    # (proven directly in tests/test_optimize.py), so the run reproduces exactly when
+    # its objective and constraints are exact tools, and within the composed solver's
+    # bound when they are solves.
+    "optimize_submit",
 }
 
 # No tool is intentionally non-reproducible today, but the class is declared so a

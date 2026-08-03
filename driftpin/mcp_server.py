@@ -5456,6 +5456,67 @@ def study_submit(
 
 
 @mcp.tool()
+def optimize_submit(
+    variables: list,
+    objective: dict,
+    constraints: list | None = None,
+    budget: dict | None = None,
+    tier: str = "auto",
+) -> dict:
+    """Vary parameters until the spec is met, then say whether it was PROVEN — the step
+    that closes the design-to-spec loop.
+
+    Everything else in this family measures; this searches. Two things make it different
+    from a generic minimizer, and both come from the performance-contract layer
+    underneath it:
+
+    **A constraint verdict has three states.** `indeterminate` — the measurement's
+    uncertainty band straddles the limit — is NOT a failed step. An optimizer that reads
+    it as a failure walks away from good designs; one that reads it as a pass converges
+    on unproven ones. During the search an indeterminate constraint is scored on its
+    nominal value, so it neither attracts nor repels, and the winner is proved properly
+    at the end.
+
+    **Convergence is not proof.** A simplex can settle on a point that clears its limit
+    by 2 % while its own grid-convergence band is 5 % wide — noise with a favourable
+    sign. `proven` is therefore reported separately from `converged`, and is True only
+    when the final measurement has every constraint at `pass` and no margin swallowed by
+    its own band.
+
+    `variables` must be continuous and bounded — `{"name": "diameter_mm", "min": 5,
+    "max": 25, "start": 10}`. An optimizer without a box walks to values that satisfy the
+    arithmetic and mean nothing physically.
+
+    `objective` and each `constraints` entry use the performance-requirement mapping
+    (`{tool, metric, conditions, limit, screen, band_pct}`), with `"$<variable>"` in
+    `conditions` carrying the candidate's value. `tier='auto'` searches cheaply on each
+    block's `screen` estimator, then polishes on the real tool from where the screen
+    landed; `'screen'` or `'solver'` runs just that leg.
+
+    The search is a bounded Nelder-Mead — derivative-free because there is no adjoint
+    through a CFD solve — so every evaluation is a real measurement. `budget`
+    (`{max_evals, max_wall_s}`, default 40 evaluations) is the ceiling; revisited points
+    are served from cache and do NOT count against it.
+
+    Because the search runs off the request thread, responses must be PARAMETER-driven:
+    a tool reading live geometry (`handle`, `model`, `body`, `"$handle"`) is refused at
+    the door, since FreeCAD's document API is main-thread only. Use `study_submit` for a
+    grid over recipe geometry — it builds every point on the main thread up front.
+
+    Returns {job_id, status}; poll job_result for {ok, proven, stop_reason, best_params,
+    best_value, objective: {name, metric, sense, value, band_pct}, constraints: [{name,
+    state, measured, limit, band_pct, margin, margin_pct, detail, trust_reasons?}],
+    phases: [{tier, n_evals, best_params, best_value, converged, reason}], history:
+    [{i, tier, params, value, score, feasible, cached}], n_evals, n_cached, budget,
+    variables, warnings}."""
+    params = {"variables": variables, "objective": objective, "tier": tier}
+    for k, v in (("constraints", constraints), ("budget", budget)):
+        if v is not None:
+            params[k] = v
+    return _call("optimize_submit", **params)
+
+
+@mcp.tool()
 def grid_convergence(
     values: list,
     cell_sizes: list | None = None,
