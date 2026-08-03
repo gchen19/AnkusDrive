@@ -6,8 +6,9 @@
 > adaptive **shape** optimization over a recipe (blocked on a main-thread work queue —
 > see the boundary note under #228), and
 > [#261](https://github.com/gchen19/DriftPin/issues/261) nothing consulting a
-> performance contract (#226's unbuilt integration section). The remaining loose threads
-> at the bottom are still untracked.
+> performance contract (#226's unbuilt integration section), and
+> [#262](https://github.com/gchen19/DriftPin/issues/262) no verified oracle for RANS
+> external flow. The remaining loose threads at the bottom are still untracked.
 
 Epic [#222](https://github.com/gchen19/DriftPin/issues/222) set a goal one step past "an
 agent can construct parts": **an agent designs to a quantitative performance spec and
@@ -270,11 +271,10 @@ any `add_*` tool.
 
 - ~~**#226's integration section is unbuilt.**~~ Now tracked as
   [#261](https://github.com/gchen19/DriftPin/issues/261).
-- **The RANS wind-tunnel path ships `gated: false`.** Its numbers carry convergence,
-  mesh and y+ evidence, but there is no verified oracle for RANS on an arbitrary body.
-  Trust evidence is not validation. A requirement can demand `trust: {gated: true}` to
-  refuse it. Closing this needs a turbulent external-flow oracle — a cylinder in
-  crossflow at Re ≈ 1e4 with a spanwise-periodic setup is the most tractable candidate.
+- ~~**The RANS wind-tunnel path ships `gated: false`.**~~ Now tracked as
+  [#262](https://github.com/gchen19/DriftPin/issues/262). Worth knowing regardless: a
+  requirement may demand `trust: {gated: true}`, which is therefore **unsatisfiable for
+  any turbulent external-flow spec** until that oracle exists.
 - **#237 items 2 and 3 are still open** (state-aware capabilities/hints; an SU2 case
   builder). Item 1 — wiring the built-in cases through Multipass — is effectively done.
 - **Mesh independence for non-CFD families.** `grid_convergence` is family-agnostic and
