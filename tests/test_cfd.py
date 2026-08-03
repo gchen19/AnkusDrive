@@ -177,6 +177,100 @@ def test_turbulent_plate_correlations():
     assert t["escalate_to"] == "cfd_external_flow_submit"
 
 
+# --- external-flow drag screens (issue #223's oracle tier) ---------------------
+
+def _u_for_re(re, diameter_mm, fluid="air-20c"):
+    """The velocity giving Reynolds number ``re`` on ``diameter_mm``."""
+    mu, rho = cfd._fluid_props(fluid, None, None)
+    return re * mu / (rho * diameter_mm / 1000.0)
+
+
+def test_sphere_drag_collapses_to_stokes_at_low_re():
+    # Clift-Gauvin must reduce to the EXACT 24/Re as inertia vanishes
+    for re, tol in ((0.01, 0.01), (0.1, 0.04)):
+        r = cfd.sphere_drag(50, _u_for_re(re, 50))
+        assert abs(r["cd"] / r["cd_stokes"] - 1.0) < tol, (re, r["cd"], r["cd_stokes"])
+    creep = cfd.sphere_drag(50, _u_for_re(0.01, 50))
+    assert creep["regime"] == "stokes" and creep["fidelity"] == "exact"
+    assert creep["band_pct"] is None, creep
+    # and it must agree with the independent exact Stokes tool at the same state
+    exact = cfd.stokes_sphere_drag(50, _u_for_re(0.01, 50), fluid="air-20c")
+    assert abs(creep["cd_stokes"] - exact["cd"]) / exact["cd"] < 1e-6, (creep, exact)
+
+
+def test_sphere_drag_tracks_the_published_curve():
+    # standard drag-curve landmarks (Schlichting/Clift), 5 % of the published value
+    for re, cd_published in ((1.0, 27.0), (100.0, 1.09), (1000.0, 0.47)):
+        r = cfd.sphere_drag(50, _u_for_re(re, 50))
+        assert abs(r["cd"] / cd_published - 1.0) < 0.05, (re, r["cd"], cd_published)
+    # Cd falls monotonically with Re right through the Newton plateau
+    cds = [cfd.sphere_drag(50, _u_for_re(re, 50))["cd"]
+           for re in (1, 10, 100, 1000, 1e4)]
+    assert all(a > b for a, b in zip(cds, cds[1:])), cds
+    # drag itself still RISES with velocity even though Cd falls
+    slow = cfd.sphere_drag(50, 1.0)
+    fast = cfd.sphere_drag(50, 10.0)
+    assert fast["drag_force_n"] > slow["drag_force_n"] * 50, (slow, fast)
+
+
+def test_sphere_drag_flags_the_drag_crisis_and_bad_input():
+    ok = cfd.sphere_drag(50, _u_for_re(1e4, 50))
+    assert ok["valid_range_ok"] is True and ok["band_pct"] == 10.0
+    crisis = cfd.sphere_drag(50, _u_for_re(1e6, 50))
+    assert crisis["valid_range_ok"] is False and crisis["warnings"], crisis
+    assert "drag crisis" in crisis["warnings"][0]
+    for bad in ((0, 10), (50, 0), (-1, 10)):
+        try:
+            cfd.sphere_drag(*bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"sphere_drag{bad} should have raised")
+
+
+def test_cylinder_crossflow_tracks_the_published_curve():
+    for re, cd_published in ((1.0, 10.0), (100.0, 1.45), (1e5, 1.2)):
+        r = cfd.cylinder_crossflow_drag(50, _u_for_re(re, 50), length_mm=5000)
+        assert abs(r["cd"] / cd_published - 1.0) < 0.05, (re, r["cd"], cd_published)
+    # a cylinder is bluffer than a sphere at the same Re, all the way down
+    for re in (1.0, 100.0, 1e4):
+        u = _u_for_re(re, 50)
+        assert (cfd.cylinder_crossflow_drag(50, u, length_mm=5000)["cd"]
+                > cfd.sphere_drag(50, u)["cd"] * 0.3), re
+    # short cylinders get the end-relief warning rather than a silent answer
+    short = cfd.cylinder_crossflow_drag(50, 10, length_mm=100)
+    assert short["valid_range_ok"] is False and any(
+        "end relief" in w for w in short["warnings"]), short
+    assert cfd.cylinder_crossflow_drag(50, 10, length_mm=5000)["valid_range_ok"] is True
+    assert cfd.cylinder_crossflow_drag(50, 10)["band_pct"] == 15.0
+
+
+def test_bluff_body_table_orders_and_overrides():
+    tbl = cfd.bluff_body_drag("list")["shapes"]
+    assert tbl["streamlined_body"] < tbl["car_modern"] < tbl["cube_face_on"], tbl
+    # same frontal area, same speed: the bluff shape must drag far more
+    area, u = 10000.0, 30.0
+    bluff = cfd.bluff_body_drag("cube_face_on", area, u)
+    slick = cfd.bluff_body_drag("streamlined_body", area, u)
+    assert bluff["drag_force_n"] / slick["drag_force_n"] > 20, (bluff, slick)
+    assert bluff["cd_source"] == "table" and bluff["band_pct"] == 20.0
+    # F = Cd*q*A (q is reported rounded, hence the 1e-6 N slack)
+    assert abs(bluff["drag_force_n"]
+               - bluff["cd"] * bluff["dynamic_pressure_pa"] * area / 1e6) < 1e-6
+    over = cfd.bluff_body_drag("whatever", area, u, cd=0.9)
+    assert over["cd"] == 0.9 and over["cd_source"] == "override"
+    for bad in (lambda: cfd.bluff_body_drag("no_such_shape", area, u),
+                lambda: cfd.bluff_body_drag("cube_face_on"),
+                lambda: cfd.bluff_body_drag("cube_face_on", 0, u),
+                lambda: cfd.bluff_body_drag("cube_face_on", area, u, cd=-1)):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("bluff_body_drag should have raised")
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

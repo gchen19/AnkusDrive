@@ -160,7 +160,8 @@ def _stop_participant(proc, workdir: str) -> None:
                 "2>/dev/null; sleep 2; "
                 "kill -KILL $(cat .driftpin-participant.pid 2>/dev/null) "
                 "2>/dev/null; true", workdir),
-                cwd=workdir, capture_output=True, timeout=30)
+                cwd=workdir, stdin=subprocess.DEVNULL, capture_output=True,
+                timeout=30)
         except Exception:
             pass
 
@@ -197,9 +198,15 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     # 1) blockMesh (fluid mesh) — needs the OpenFOAM env. The workdir is passed to
     # bash_argv so the macOS Multipass branch cd's into the (VM-mounted) case dir
     # (issue #193); Linux/Windows ignore it and use the subprocess cwd.
+    #
+    # Every launch below pins stdin=DEVNULL. These run on a worker JOB THREAD whose
+    # stdin is the client's JSON-RPC pipe, and `multipass exec` forwards stdin into
+    # the VM — an inherited stdin lets the relay eat the caller's next request, so
+    # the solve succeeds while every subsequent poll times out. Verified live.
     bm = subprocess.run(
         solvers.bash_argv(f"source '{of_bashrc}' >/dev/null 2>&1 && blockMesh", fluid),
-        cwd=fluid, capture_output=True, text=True, timeout=timeout_s)
+        cwd=fluid, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        timeout=timeout_s)
     if bm.returncode != 0:
         return {"ok": False, "reason": "blockMesh failed",
                 "log_tail": solvers.clean_wsl_text(bm.stdout + bm.stderr)[-1500:]}
@@ -229,12 +236,14 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     with open(solid_log, "w", encoding="utf-8") as sl:
         solid_proc = subprocess.Popen(
             solvers.bash_argv(solid_script, solid),
-            cwd=solid, stdout=sl, stderr=subprocess.STDOUT)
+            cwd=solid, stdin=subprocess.DEVNULL, stdout=sl,
+            stderr=subprocess.STDOUT)
     time.sleep(2.0)  # let the solid participant bind the preCICE socket first
     with open(fluid_log, "w", encoding="utf-8") as fl:
         fluid_proc = subprocess.Popen(
             solvers.bash_argv(fluid_script, fluid),
-            cwd=fluid, stdout=fl, stderr=subprocess.STDOUT)
+            cwd=fluid, stdin=subprocess.DEVNULL, stdout=fl,
+            stderr=subprocess.STDOUT)
 
     deadline = time.time() + timeout_s
     rc_fluid = rc_solid = None

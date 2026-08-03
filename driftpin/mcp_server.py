@@ -4916,6 +4916,56 @@ def cfd_internal_flow_submit(
 
 
 @mcp.tool()
+def cfd_body_drag(
+    shape: str = "sphere",
+    diameter_mm: float | None = None,
+    velocity_m_s: float | None = None,
+    length_mm: float | None = None,
+    frontal_area_mm2: float | None = None,
+    model: str | None = None,
+    flow_direction: list | None = None,
+    cd: float | None = None,
+    fluid: str = "air-20c",
+    mu_pa_s: float | None = None,
+    rho_kg_m3: float | None = None,
+    stl_tolerance_mm: float = 0.2,
+) -> dict:
+    """Analytic EXTERNAL-flow drag screen (NO solver, milliseconds) — the external twin
+    of cfd_pipe_flow, and the banded oracle the wind-tunnel solve
+    cfd_external_flow_submit(model=…) is checked against. Use this FIRST to narrow a
+    design space; escalate to the solve only for the shapes that survive.
+
+    Three families:
+    - `shape='sphere'` — Clift–Gauvin over the whole standard drag curve, Cd =
+      24/Re·(1+0.15·Re^0.687) + 0.42/(1+4.25e4·Re^-1.16). Collapses to the EXACT Stokes
+      24/Re as Re→0; valid to Re=2e5 (it does not model the drag crisis). Pass
+      `diameter_mm` + `velocity_m_s`.
+    - `shape='cylinder'` — Sucker–Brauer crossflow Cd (axis ⟂ flow), Cd ≈ 10 at Re=1,
+      1.45 at Re=100, 1.2 at Re=1e5. Pass `diameter_mm`, `velocity_m_s`, optional
+      `length_mm` (default 1 m, i.e. drag per unit span; L/D<10 warns about end relief).
+    - a tabulated bluff/streamlined shape — 'cube_face_on', 'flat_plate_normal',
+      'hemisphere_open_back', 'streamlined_body', 'car_modern', … (`shape='list'`
+      returns the whole table). Needs `frontal_area_mm2` (or a `model` handle, whose
+      silhouette along `flow_direction` is measured off the live solid) + `velocity_m_s`;
+      `cd` overrides the table with a known value.
+
+    Fidelity: sphere/cylinder are correlations with band_pct 10/15; the table is
+    band_pct 20 and only valid for Re ≈ 1e4–1e6 on a shape that genuinely matches.
+
+    Returns {cd, drag_force_n, frontal_area_m2, dynamic_pressure_pa, velocity_m_s,
+    fidelity, band_pct, escalate_to} plus {reynolds, regime, valid_range_ok, warnings}
+    for sphere/cylinder — or {shapes: {name: cd}} for shape='list'."""
+    params = {"shape": shape, "fluid": fluid, "stl_tolerance_mm": stl_tolerance_mm}
+    for k, v in (("diameter_mm", diameter_mm), ("velocity_m_s", velocity_m_s),
+                 ("length_mm", length_mm), ("frontal_area_mm2", frontal_area_mm2),
+                 ("model", model), ("flow_direction", flow_direction), ("cd", cd),
+                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3)):
+        if v is not None:
+            params[k] = v
+    return _call("cfd_body_drag", **params)
+
+
+@mcp.tool()
 def cfd_external_flow_submit(
     velocity_m_s: float | None = None,
     plate_length_mm: float | None = None,
@@ -4925,42 +4975,78 @@ def cfd_external_flow_submit(
     case_dir: str | None = None,
     application: str | None = None,
     model: str | None = None,
+    body: str | None = None,
+    flow_direction: list | None = None,
+    frontal_area_mm2: float | None = None,
+    reference_length_mm: float | None = None,
+    base_cell_mm: float | None = None,
+    surface_refine: list | None = None,
+    wake_refine: int | None = None,
+    upstream_factor: float | None = None,
+    downstream_factor: float | None = None,
+    lateral_factor: float | None = None,
+    stl_tolerance_mm: float = 0.2,
     nx_plate: int | None = None,
     n_y: int | None = None,
     end_time: int | None = None,
     turbulence: str = "laminar",
 ) -> dict:
-    """External-flow CFD (drag) via OpenFOAM or SU2, asynchronous. Requires an OpenFOAM
-    (apt/conda) or SU2 binary; when none resolves this returns {ok:false, reason,
-    install} rather than raising. `turbulence='kOmegaSST'` upgrades the plate to RANS
-    (SIMULATION_NEXT B3, default plate_length 1000 mm so Re_L > transition): the
-    headline drag is the trailing-edge momentum-thickness integral, gated BANDED
-    against the mixed-transition Cf = 0.074·Re^(−1/5) − A/Re (`cf_mixed_ratio` ≈ 1
-    ± 15 % — the 1/7-power family is itself a band); the (ν+ν_t)-corrected wall-shear
-    sum is the cross-check. Two modes:
+    """External-flow CFD (drag/lift) via OpenFOAM or SU2, asynchronous. Requires an
+    OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
+    reason, install} rather than raising. Three modes:
 
-    - **Build the flat-plate validation case** (no case prep): pass `velocity_m_s`, with
+    - **Put a real solid in the virtual wind tunnel** (issue #223): pass a `model` (or
+      `body`) handle + `velocity_m_s`. The solid's faces tessellate into an STL, a
+      farfield box is auto-sized around it by standard practice (5L upstream / 10L
+      downstream / 5L lateral, overridable via `upstream_factor`/`downstream_factor`/
+      `lateral_factor`; the reported `blockage_ratio` warns past 5 %), snappyHexMesh
+      carves the body out, and the `forces` function object integrates pressure +
+      viscous traction over it. Cd/Cl/Cm come back on the MEASURED frontal silhouette
+      along `flow_direction` (default +x; exact for a convex body — override with
+      `frontal_area_mm2` for a re-entrant one) and `reference_length_mm` (default: the
+      largest bbox dimension). Mesh knobs: `base_cell_mm` (default L/2 — a coarser cell
+      is REJECTED, since snappy would then mesh an empty tunnel and report ~0 drag),
+      `surface_refine` [min,max] levels, `wake_refine`, `stl_tolerance_mm`, `end_time`.
+      **Trust**: the laminar path is gated live against the sphere drag curve at Re=1
+      and Re=100 (within ~2 %); `turbulence='kOmegaSST'` runs but has no verified
+      oracle for arbitrary bodies and comes back `gated:false`. Past Re≈1000 a laminar
+      request is flagged in `warnings` rather than silently answered.
+    - **Build the flat-plate validation case** (no `model`): pass `velocity_m_s`, with
       optional `plate_length_mm` (default 100), a `fluid` name ('air-20c','water-20c',…)
-      or explicit `mu_pa_s`+`rho_kg_m3`, and mesh knobs `nx_plate`/`n_y`/`end_time`. The
-      handler builds a 2-D laminar flat plate with a clean leading edge (slip→plate→slip,
-      far-field top), runs blockMesh+simpleFoam, integrates the wall-shear drag straight
-      from the converged U field (OpenFOAM's force function objects abort with a 'sha1'
-      IOstream error in this build), and returns the solved Cd next to the Blasius
-      reference Cf=1.328/√Re_L — the kickoff's external gate (`blasius_ratio`≈1, ~15%).
+      or explicit `mu_pa_s`+`rho_kg_m3`, and mesh knobs `nx_plate`/`n_y`/`end_time`.
+      THIS MODE SOLVES A FLAT PLATE, never the caller's geometry: a 2-D laminar plate
+      with a clean leading edge (slip→plate→slip, far-field top), whose wall-shear drag
+      is integrated from the converged U field and returned next to the Blasius
+      reference Cf=1.328/√Re_L (`blasius_ratio`≈1, ~15 %). `turbulence='kOmegaSST'`
+      upgrades it to RANS (default plate_length 1000 mm so Re_L > transition), gated
+      BANDED against the mixed-transition Cf = 0.074·Re^(−1/5) − A/Re.
     - **Run a prepared `case_dir`** (optionally an `application`); OpenFOAM runs with
       its environment sourced, an SU2 case (`*.cfg` + `*.su2` mesh) runs as a direct
       native subprocess — no bash/WSL needed, including on Windows.
 
-    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Flat
-    plate: {ok, returncode, reynolds_l, cd, cf_solved, cf_blasius, blasius_ratio,
-    drag_force_n, drag_momentum_n, drag_blasius_n, n_cells, case_dir}; RANS plate
-    swaps the gate fields for {cf_solved (momentum), cf_mixed_ref, cf_mixed_ratio,
-    cf_turbulent_ref, cf_wall_corrected, y_plus_estimate, band_pct}. Prepared case:
-    {ok, returncode, solver, application, case_dir, kind, stdout_tail}."""
-    params = {"fluid": fluid, "turbulence": turbulence}
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result. Body
+    mode: {ok, returncode, cd, cl, cm, drag_force_n, drag_pressure_n, drag_viscous_n,
+    lift_force_n, force_total_n, moment_total_nm, force_drift_pct, n_force_samples,
+    reynolds, reference_length_m, frontal_area_m2, frontal_area_source,
+    moment_reference_m (the bbox centre moments are taken about, not the global origin),
+    blockage_ratio, base_cell_m, converged, gated, warnings, case_dir}. Flat plate: {ok, returncode,
+    reynolds_l, cd, cf_solved, cf_blasius, blasius_ratio, drag_force_n, drag_momentum_n,
+    drag_blasius_n, n_cells, case_dir}; RANS plate swaps the gate fields for {cf_solved
+    (momentum), cf_mixed_ref, cf_mixed_ratio, cf_turbulent_ref, cf_wall_corrected,
+    y_plus_estimate, band_pct}. Prepared case: {ok, returncode, solver, application,
+    case_dir, kind, stdout_tail}."""
+    params = {"fluid": fluid, "turbulence": turbulence,
+              "stl_tolerance_mm": stl_tolerance_mm}
     for k, v in (("velocity_m_s", velocity_m_s), ("plate_length_mm", plate_length_mm),
                  ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3), ("case_dir", case_dir),
-                 ("application", application), ("model", model),
+                 ("application", application), ("model", model), ("body", body),
+                 ("flow_direction", flow_direction),
+                 ("frontal_area_mm2", frontal_area_mm2),
+                 ("reference_length_mm", reference_length_mm),
+                 ("base_cell_mm", base_cell_mm), ("surface_refine", surface_refine),
+                 ("wake_refine", wake_refine), ("upstream_factor", upstream_factor),
+                 ("downstream_factor", downstream_factor),
+                 ("lateral_factor", lateral_factor),
                  ("nx_plate", nx_plate), ("n_y", n_y), ("end_time", end_time)):
         if v is not None:
             params[k] = v

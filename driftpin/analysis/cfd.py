@@ -212,6 +212,238 @@ def stokes_sphere_drag(
     }
 
 
+def sphere_drag(
+    diameter_mm: float,
+    velocity_m_s: float,
+    fluid: str = "air-20c",
+    mu_pa_s=None,
+    rho_kg_m3=None,
+) -> dict:
+    """Drag on a smooth sphere over the whole standard drag curve — the BANDED oracle
+    the geometry-bridge wind tunnel (``cfd_external_flow_submit(body=…)``) is gated
+    against on its canonical shape.
+
+    Clift–Gauvin (1971), the standard smooth-sphere correlation for Re < 2·10⁵:
+
+        Cd = 24/Re·(1 + 0.15·Re^0.687) + 0.42/(1 + 4.25·10⁴·Re^−1.16)
+
+    It collapses to the EXACT Stokes limit Cd = 24/Re as Re → 0 (``stokes_sphere_drag``
+    is that exact form; the two differ by ~3 % at Re = 0.1 and 0.6 % at Re = 0.01,
+    which is the physical inertial correction, not a fitting error) and carries the
+    Newton-regime plateau Cd ≈ 0.44 through Re ≈ 10⁵. It does NOT model the drag crisis
+    (the laminar→turbulent separation drop to Cd ≈ 0.1 near Re ≈ 3·10⁵): past Re = 2·10⁵
+    ``valid_range_ok`` is False and the reason lands in ``warnings``. Frontal area is
+    π·R², Re = ρ·U·D/μ.
+
+    Fidelity contract: fidelity='correlation', band_pct=10 (the literature scatter of
+    the drag curve itself) — gates against this must stay banded, never exact. Below
+    Re = 0.1 the Stokes form is exact and ``fidelity`` reports 'exact' with no band.
+
+    Diameter mm, velocity m/s; fluid μ,ρ from a name or explicit ``mu_pa_s``+``rho_kg_m3``.
+    Returns {reynolds, cd, cd_stokes, drag_force_n, frontal_area_m2, dynamic_pressure_pa,
+    velocity_m_s, regime, stokes_valid, fidelity, band_pct, valid_range_ok, warnings,
+    escalate_to}. Raises ValueError on non-positive geometry/velocity."""
+    mu, rho = _fluid_props(fluid, mu_pa_s, rho_kg_m3)
+    D = diameter_mm / 1000.0
+    if D <= 0 or velocity_m_s <= 0:
+        raise ValueError("diameter_mm and velocity_m_s must be > 0")
+    U = float(velocity_m_s)
+    Re = rho * U * D / mu if mu > 0 else float("inf")
+    if Re <= 0:
+        raise ValueError("Reynolds number must be > 0")
+
+    cd = (24.0 / Re) * (1.0 + 0.15 * Re ** 0.687) \
+        + 0.42 / (1.0 + 4.25e4 * Re ** -1.16)
+    warnings: list[str] = []
+    if Re > 2e5:
+        warnings.append(
+            f"Re = {Re:.3g} is past the 2e5 envelope — the drag crisis (separation "
+            "goes turbulent, Cd drops toward ~0.1) is NOT modelled by Clift-Gauvin")
+    if Re < 0.1:
+        regime, fidelity, band = "stokes", "exact", None
+    elif Re < 1000:
+        regime, fidelity, band = "intermediate", "correlation", 10.0
+    else:
+        regime, fidelity, band = "newton", "correlation", 10.0
+
+    area = math.pi * (D / 2.0) ** 2
+    q = 0.5 * rho * U * U
+    return {
+        "reynolds": round(Re, 6),
+        "cd": round(cd, 6),
+        "cd_stokes": round(24.0 / Re, 6),
+        "drag_force_n": cd * q * area,
+        "frontal_area_m2": area,
+        "dynamic_pressure_pa": round(q, 6),
+        "velocity_m_s": U,
+        "regime": regime,
+        "stokes_valid": Re < 1.0,
+        "fidelity": fidelity,
+        "band_pct": band,
+        "valid_range_ok": not warnings,
+        "warnings": warnings,
+        "escalate_to": "cfd_external_flow_submit",
+    }
+
+
+def cylinder_crossflow_drag(
+    diameter_mm: float,
+    velocity_m_s: float,
+    length_mm: float | None = None,
+    fluid: str = "air-20c",
+    mu_pa_s=None,
+    rho_kg_m3=None,
+) -> dict:
+    """Drag on a circular cylinder in crossflow (axis ⟂ flow) — the wind tunnel's
+    SECOND canonical shape family, so the geometry bridge is gated on more than one
+    body type.
+
+    Sucker–Brauer (1975), the standard 2-D infinite-cylinder correlation for
+    Re < 2·10⁵:
+
+        Cd = 1.18 + 6.8/Re^0.89 + 1.96/√Re − 4·10⁻⁴·Re/(1 + 3.64·10⁻⁷·Re²)
+
+    It tracks the measured curve across six decades (Cd ≈ 10 at Re = 1, 1.45 at
+    Re = 100, 1.2 at Re = 10⁵). Like the sphere it stops at the drag crisis — past
+    Re = 2·10⁵ ``valid_range_ok`` is False. Frontal area is D·L (``length_mm``, default
+    1 m — i.e. drag per unit span); the correlation is the INFINITE-cylinder value, so a
+    short cylinder's real Cd is lower (finite-span end relief, ~0.6–0.9× for L/D < 10) —
+    reported in ``warnings``, never silently applied.
+
+    Fidelity contract: fidelity='correlation', band_pct=15 — wider than the sphere's
+    because the cylinder wake is unsteady (vortex shedding) over most of the range and
+    the published curves scatter accordingly.
+
+    Returns {reynolds, cd, drag_force_n, drag_per_length_n_m, frontal_area_m2,
+    dynamic_pressure_pa, velocity_m_s, length_over_diameter, fidelity, band_pct,
+    valid_range_ok, warnings, escalate_to}. Raises ValueError on non-positive
+    geometry/velocity."""
+    mu, rho = _fluid_props(fluid, mu_pa_s, rho_kg_m3)
+    D = diameter_mm / 1000.0
+    if D <= 0 or velocity_m_s <= 0:
+        raise ValueError("diameter_mm and velocity_m_s must be > 0")
+    L = (length_mm / 1000.0) if length_mm else 1.0
+    if L <= 0:
+        raise ValueError("length_mm must be > 0")
+    U = float(velocity_m_s)
+    Re = rho * U * D / mu if mu > 0 else float("inf")
+    if Re <= 0:
+        raise ValueError("Reynolds number must be > 0")
+
+    cd = (1.18 + 6.8 / Re ** 0.89 + 1.96 / math.sqrt(Re)
+          - 4.0e-4 * Re / (1.0 + 3.64e-7 * Re * Re))
+    warnings: list[str] = []
+    if Re > 2e5:
+        warnings.append(
+            f"Re = {Re:.3g} is past the 2e5 envelope — the drag crisis is NOT "
+            "modelled by Sucker-Brauer")
+    l_over_d = L / D
+    if l_over_d < 10.0:
+        warnings.append(
+            f"L/D = {l_over_d:.2g} < 10 — this is the INFINITE-cylinder Cd; a short "
+            "cylinder sheds less drag (end relief, ~0.6-0.9x) and no correction is "
+            "applied here")
+
+    area = D * L
+    q = 0.5 * rho * U * U
+    return {
+        "reynolds": round(Re, 6),
+        "cd": round(cd, 6),
+        "drag_force_n": cd * q * area,
+        "drag_per_length_n_m": cd * q * D,
+        "frontal_area_m2": area,
+        "dynamic_pressure_pa": round(q, 6),
+        "velocity_m_s": U,
+        "length_over_diameter": round(l_over_d, 4),
+        "fidelity": "correlation",
+        "band_pct": 15.0,
+        "valid_range_ok": not warnings,
+        "warnings": warnings,
+        "escalate_to": "cfd_external_flow_submit",
+    }
+
+
+# Re-independent drag coefficients for bluff/streamlined shapes in the fully
+# turbulent regime (Re ~ 1e4-1e6), on the shape's FRONTAL area. Standard textbook
+# values (Hoerner "Fluid-Dynamic Drag"; White "Fluid Mechanics" Table 7.3). Sphere
+# and cylinder are deliberately absent — they get their Re-resolved correlations
+# above rather than a single plateau number.
+_BLUFF_CD = {
+    "cube_face_on": 1.05,          # cube, face normal to flow
+    "cube_edge_on": 0.80,          # cube rotated 45 deg about the vertical
+    "flat_plate_normal": 1.17,     # square flat plate, face normal to flow
+    "disk_normal": 1.17,           # circular disk, face normal to flow
+    "hemisphere_open_back": 1.42,  # open side downstream (a parachute/cup)
+    "hemisphere_closed": 0.42,     # dome facing the flow
+    "cone_60deg": 0.50,            # 60 deg apex cone, point upstream
+    "streamlined_body": 0.04,      # 4:1 streamlined half-body (the low-drag limit)
+    "airfoil_symmetric": 0.045,    # symmetric section at zero incidence (on frontal)
+    "car_modern": 0.30,            # a contemporary passenger car
+}
+
+
+def bluff_body_drag(
+    shape: str,
+    frontal_area_mm2: float | None = None,
+    velocity_m_s: float | None = None,
+    fluid: str = "air-20c",
+    cd: float | None = None,
+    mu_pa_s=None,
+    rho_kg_m3=None,
+) -> dict:
+    """Drag from a tabulated shape Cd on a frontal area — the coarsest external-flow
+    screen, for shapes whose Cd is essentially Re-independent in the turbulent regime.
+
+    F = Cd·½·ρ·U²·A on the FRONTAL (projected) area. ``shape`` selects a standard
+    textbook coefficient (``shape='list'`` returns the table); ``cd`` overrides it with
+    a measured/known value, in which case ``shape`` is only a label. Sphere and cylinder
+    are NOT in the table — use ``sphere_drag`` / ``cylinder_crossflow_drag``, which
+    resolve Re instead of assuming the plateau.
+
+    Fidelity contract: fidelity='correlation', band_pct=20 — a table lookup is the
+    weakest tier in the CFD family, valid only for Re ≈ 10⁴–10⁶ and only for a shape
+    that genuinely matches the tabulated one. Escalate to the solve for anything else.
+
+    Returns {shape, cd, cd_source ('table'|'override'), drag_force_n, frontal_area_m2,
+    dynamic_pressure_pa, velocity_m_s, fidelity, band_pct, escalate_to} — or, for
+    ``shape='list'``, {shapes: {name: cd}}. Raises ValueError on an unknown shape (the
+    message names the known ones) or a missing/non-positive area or velocity."""
+    if shape == "list":
+        return {"shapes": dict(sorted(_BLUFF_CD.items()))}
+    if frontal_area_mm2 is None or velocity_m_s is None:
+        raise ValueError("frontal_area_mm2 and velocity_m_s are required "
+                         "(shape='list' returns the Cd table instead)")
+    if cd is None:
+        if shape not in _BLUFF_CD:
+            raise ValueError(
+                f"unknown shape {shape!r}; known: {sorted(_BLUFF_CD)} "
+                "(or pass an explicit cd; use sphere_drag/cylinder_crossflow_drag "
+                "for spheres and cylinders)")
+        cd_value, source = _BLUFF_CD[shape], "table"
+    else:
+        cd_value, source = float(cd), "override"
+        if cd_value <= 0:
+            raise ValueError("cd must be > 0")
+    _, rho = _fluid_props(fluid, mu_pa_s, rho_kg_m3)
+    area = float(frontal_area_mm2) / 1e6
+    if area <= 0 or velocity_m_s <= 0:
+        raise ValueError("frontal_area_mm2 and velocity_m_s must be > 0")
+    U = float(velocity_m_s)
+    q = 0.5 * rho * U * U
+    return {
+        "shape": shape,
+        "cd": round(cd_value, 6),
+        "cd_source": source,
+        "drag_force_n": cd_value * q * area,
+        "frontal_area_m2": area,
+        "dynamic_pressure_pa": round(q, 6),
+        "velocity_m_s": U,
+        "fidelity": "correlation",
+        "band_pct": 20.0,
+        "escalate_to": "cfd_external_flow_submit",
+    }
+
+
 def flat_plate_drag(
     length_mm: float,
     velocity_m_s: float,
