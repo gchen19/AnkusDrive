@@ -1,10 +1,13 @@
 # Kickoff — finishing the design-to-spec epic (#222)
 
-> **Status 2026-08-03: all six children are merged and the target workflow below runs
-> end to end.** This doc is now a record rather than a handoff. The one piece of the
-> epic's ambition still missing is adaptive **shape** optimization over a recipe — see
-> the boundary note under #228 — plus the loose threads at the bottom, none of which are
-> tracked as issues.
+> **Status 2026-08-03: epic #222 is closed — all six children merged, and the target
+> workflow below runs end to end.** This doc is now a record rather than a handoff.
+> What did NOT get done is tracked: [#260](https://github.com/gchen19/DriftPin/issues/260)
+> adaptive **shape** optimization over a recipe (blocked on a main-thread work queue —
+> see the boundary note under #228), and
+> [#261](https://github.com/gchen19/DriftPin/issues/261) nothing consulting a
+> performance contract (#226's unbuilt integration section). The remaining loose threads
+> at the bottom are still untracked.
 
 Epic [#222](https://github.com/gchen19/DriftPin/issues/222) set a goal one step past "an
 agent can construct parts": **an agent designs to a quantitative performance spec and
@@ -265,10 +268,8 @@ any `add_*` tool.
 
 ## Loose threads not tracked as issues
 
-- **#226's integration section is unbuilt.** The contract persists and verifies
-  standalone, but nothing else consults it: `substitutability_check`, `merge_assembly`
-  and the `component_contract_check` brief were all named in the issue and are untouched.
-  Worth its own issue if component-level performance gating matters.
+- ~~**#226's integration section is unbuilt.**~~ Now tracked as
+  [#261](https://github.com/gchen19/DriftPin/issues/261).
 - **The RANS wind-tunnel path ships `gated: false`.** Its numbers carry convergence,
   mesh and y+ evidence, but there is no verified oracle for RANS on an arbitrary body.
   Trust evidence is not validation. A requirement can demand `trust: {gated: true}` to
