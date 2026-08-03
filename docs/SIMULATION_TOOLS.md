@@ -301,6 +301,35 @@ Each family lists: the agent question it answers · backend · new-dependency we
   wall shear as cross-check). Builders/parsers in `analysis/openfoam.py`
   (`*_rans_*`), oracles in `analysis/cfd.py` (`colebrook_friction_factor`,
   `flat_plate_drag_turbulent`), gates in `tests/test_openfoam.py`.
+- **The trust layer** (issue #225): every steady CFD result now carries a `trust` block
+  saying what the numerics actually did, because a solve that hit its iteration cap
+  unconverged is otherwise indistinguishable in the payload from one that converged.
+  `converged` + `iterations` + per-field `final_residuals` come from the solver log
+  (`openfoam.parse_residuals`; `_run_foam` tees every app to `log.<app>`), `mesh` from a
+  post-solve `checkMesh` (`parse_checkmesh` — it exits 0 either way, so the verdict is
+  read from the TEXT), and `y_plus` from the `yPlus` function object — **measured** from
+  the solved wall shear, next to the a-priori `y_plus_estimate` the RANS builders
+  report. `trusted` is the AND of every check that could be run and `reasons` names each
+  failure. The audit runs as a separate pass so it can never fail a good solve.
+  - This layer's first catch was in DriftPin's own flagship case: the axisymmetric wedge
+    pipe never satisfied `residualControl` and always ran to `endTime`, because the
+    out-of-plane `Uz` residual is normalized by a near-zero field and floors at ~1.6e-5
+    at ANY mesh density while `Ux` reaches 5.8e-16. Controlling on `p` alone converges it
+    in 74 iterations to a pressure drop identical to the 3000-iteration one to six
+    decimals — and the live pipe gates got ~5x faster as a side effect.
+- **Solution verification** — `grid_convergence` ([`analysis/verification.py`](../driftpin/analysis/verification.py))
+  is Roache's GCI as codified in ASME V&V 20: the same quantity on 2-3 refined meshes,
+  finest first, gives the observed order of convergence, the Richardson extrapolation to
+  h→0, and the percentage band around the finest value. It is family-agnostic on purpose
+  (three drag coefficients, three peak stresses, three modal frequencies all work), and
+  `cfd_mesh_independence_submit` is the driver that produces the CFD values — one job for
+  the whole ladder, coarsest level = the mesh a plain submit would build, refining from
+  there, with the iteration cap scaled per level. Where validation compares a solve to an
+  oracle, this compares a solve to ITSELF, which is the only band available on geometry
+  with no closed form. Gated two ways: exactly, against constructed sequences with known
+  order and limit (`tests/test_verification.py`), and live on the pipe, where the band
+  computed with no reference must contain the analytic answer — measured order 2.01,
+  extrapolation within 0.04 % of Hagen-Poiseuille, band 0.11 %.
 - Long solves run async via [`jobs.py`](../driftpin/jobs.py) so a CFD run never blocks
   the MCP channel.
 

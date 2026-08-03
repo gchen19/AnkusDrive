@@ -54,7 +54,7 @@ EXACT_TOOLS = {
     "beam_modal", "beam_buckling", "plate_check", "random_vibration",
     "plastic_collapse", "elastica_deflection", "hertz_contact",
     # fluids
-    "cfd_pipe_flow", "cfd_body_drag",
+    "cfd_pipe_flow", "cfd_body_drag", "grid_convergence",
     # impact / acoustics / EM closed-form twins
     "drop_impact", "acoustic_screen", "em_skin_depth", "em_dc_resistance",
     "waveguide_cutoff", "dipole_resonance", "monopole_sphere", "rigid_sphere_scattering",
@@ -79,7 +79,8 @@ EXACT_TOOLS = {
 # Solver / external-CLI / async-job submits: reproducible within a documented bound.
 BOUNDED_TOOLS = {
     "acoustic_fem_submit", "acoustic_radiation_submit", "async_demo_submit",
-    "cfd_external_flow_submit", "cfd_internal_flow_submit", "cht_channel_submit",
+    "cfd_external_flow_submit", "cfd_internal_flow_submit",
+    "cfd_mesh_independence_submit", "cht_channel_submit",
     "cht_graetz_submit", "dem_flow_submit", "dem_pack_submit", "em_conduction_submit",
     "em_fullwave_submit", "em_induction_heating_submit", "em_induction_submit",
     "fsi_pressure_plate_submit", "harmonic_response_submit", "mechanism_simulate_submit",
@@ -275,6 +276,8 @@ ANALYSIS_SWEEP = [
     # --- fluids ---
     ("cfd_pipe_flow", dict(diameter_mm=10, length_mm=1000, flow_rate_lpm=0.5)),
     ("cfd_body_drag", dict(shape="sphere", diameter_mm=50, velocity_m_s=10.0)),
+    ("grid_convergence", dict(values=[1003.0, 1012.0, 1048.0],
+                             cell_sizes=[1.0, 2.0, 4.0])),
     # --- impact / acoustics / EM twins ---
     ("drop_impact", dict(drop_height_mm=1000, crush_distance_mm=10)),
     ("acoustic_screen", dict(kind="cavity_modes", lx_mm=4000, ly_mm=3000, lz_mm=2500)),
