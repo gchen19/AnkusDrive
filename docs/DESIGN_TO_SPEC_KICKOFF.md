@@ -1,5 +1,11 @@
 # Kickoff — finishing the design-to-spec epic (#222)
 
+> **Status 2026-08-03: all six children are merged and the target workflow below runs
+> end to end.** This doc is now a record rather than a handoff. The one piece of the
+> epic's ambition still missing is adaptive **shape** optimization over a recipe — see
+> the boundary note under #228 — plus the loose threads at the bottom, none of which are
+> tracked as issues.
+
 Epic [#222](https://github.com/gchen19/DriftPin/issues/222) set a goal one step past "an
 agent can construct parts": **an agent designs to a quantitative performance spec and
 proves it hit the spec with a solver run.** Four of its six children are built. This doc
@@ -25,7 +31,7 @@ Read alongside:
 | #225 | CFD trust layer + Richardson/GCI | **merged** (PR #255) |
 | #226 | Performance contracts | **merged** (PR #256) |
 | #227 | `study_submit` — DOE / parameter sweep | **merged** (PR #258) |
-| #228 | `optimize_submit` — optimize-to-spec | PR #259 |
+| #228 | `optimize_submit` — optimize-to-spec | **merged** (PR #259) |
 
 The target workflow from the epic now runs end to end:
 
@@ -81,7 +87,7 @@ flat-plate cases dominate).
 
 ---
 
-## #227 — `study_submit`: DOE over recipe params × solver — **built (PR #258)**
+## #227 — `study_submit`: DOE over recipe params × solver — **built (PR #258, merged)**
 
 Shipped as `driftpin/analysis/study.py` (pure sampling + table arithmetic) plus a
 `study_submit` worker handler that fans out and collects the way `verify_performance`
@@ -139,7 +145,7 @@ solved Δp rides D⁻⁴ at exponent −3.9986, r² = 0.99999999, `hp_ratio` 1.0
 
 ---
 
-## #228 — `optimize_submit`: vary params until the contract is met — **built (PR #259)**
+## #228 — `optimize_submit`: vary params until the contract is met — **built (PR #259, merged)**
 
 Shipped as `driftpin/analysis/optimize.py` (pure bounded Nelder-Mead, no scipy) plus an
 `optimize_submit` handler. Gates in `tests/test_optimize.py` (15, fast lane). The
