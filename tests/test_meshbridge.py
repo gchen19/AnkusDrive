@@ -376,6 +376,120 @@ def test_forces_object_and_parser_resolve_drag_and_lift():
     assert openfoam.parse_forces(tempfile.mkdtemp()) is None
 
 
+_LOG_CONVERGED = """\
+Time = 144
+
+smoothSolver:  Solving for Ux, Initial residual = 1.17e-08, Final residual = 7.8e-10, No Iterations 2
+GAMG:  Solving for p, Initial residual = 2.72e-08, Final residual = 1.7e-10, No Iterations 2
+ExecutionTime = 4.7 s
+
+Time = 145
+
+smoothSolver:  Solving for Ux, Initial residual = 9.1e-09, Final residual = 6.0e-10, No Iterations 2
+smoothSolver:  Solving for Uy, Initial residual = 4.3e-09, Final residual = 2.0e-10, No Iterations 2
+GAMG:  Solving for p, Initial residual = 3.0e-10, Final residual = 3.0e-10, No Iterations 0
+SIMPLE solution converged in 145 iterations
+
+End
+"""
+
+_LOG_RAN_OUT = """\
+Time = 3000
+
+smoothSolver:  Solving for Ux, Initial residual = 4.2e-03, Final residual = 8.8e-05, No Iterations 4
+GAMG:  Solving for p, Initial residual = 7.7e-02, Final residual = 9.1e-04, No Iterations 11
+ExecutionTime = 91 s
+
+End
+"""
+
+_LOG_CHECKMESH_OK = """\
+Mesh stats
+    points:           23883
+    faces:            63424
+    cells:            19932
+Checking geometry...
+    Max aspect ratio = 2.83 OK.
+    Mesh non-orthogonality Max: 30.03786958 average: 7.763974904
+    Non-orthogonality check OK.
+    Max skewness = 0.5930602261 OK.
+Mesh OK.
+
+End
+"""
+
+_LOG_CHECKMESH_BAD = """\
+Mesh stats
+    points:           900
+    faces:            2100
+    cells:            700
+Checking geometry...
+    Max aspect ratio = 812.4 OK.
+    Mesh non-orthogonality Max: 88.71 average: 41.2
+ ***Number of non-orthogonality errors: 214.
+    Max skewness = 12.44 FAILED. 31 highly skew faces detected
+ ***Max skewness check failed.
+Failed 2 mesh checks.
+
+End
+"""
+
+
+def test_parse_residuals_separates_converged_from_out_of_iterations():
+    ok = openfoam.parse_residuals("", log_text=_LOG_CONVERGED)
+    assert ok["converged"] is True and ok["iterations"] == 145, ok
+    # the LAST initial residual per field is the level the solution settled at
+    assert abs(ok["final_residuals"]["Ux"] - 9.1e-09) < 1e-20, ok["final_residuals"]
+    assert abs(ok["final_residuals"]["p"] - 3.0e-10) < 1e-20, ok["final_residuals"]
+    assert ok["fields"] == ["Ux", "Uy", "p"] and ok["max_residual"] == 9.1e-09
+
+    # the case this whole layer exists for: a run that hit endTime looks identical in
+    # its result fields and is NOT a converged steady solution
+    ran_out = openfoam.parse_residuals("", log_text=_LOG_RAN_OUT)
+    assert ran_out["converged"] is False and ran_out["iterations"] == 3000, ran_out
+    assert ran_out["max_residual"] > 1e-3, ran_out          # visibly unconverged
+    # a log that says neither must not claim either
+    assert openfoam.parse_residuals("", log_text="Time = 12\n")["converged"] is None
+    assert openfoam.parse_residuals("", log_text="") is None
+    assert openfoam.parse_residuals(tempfile.mkdtemp()) is None
+
+
+def test_parse_checkmesh_reads_the_verdict_from_the_text():
+    ok = openfoam.parse_checkmesh("", log_text=_LOG_CHECKMESH_OK)
+    assert ok["ok"] is True and ok["failed_checks"] == 0
+    assert abs(ok["max_non_orthogonality_deg"] - 30.03786958) < 1e-9
+    assert abs(ok["avg_non_orthogonality_deg"] - 7.763974904) < 1e-9
+    assert abs(ok["max_skewness"] - 0.5930602261) < 1e-9
+    assert ok["n_cells"] == 19932 and ok["n_points"] == 23883
+    assert not ok["severe_warnings"]
+
+    bad = openfoam.parse_checkmesh("", log_text=_LOG_CHECKMESH_BAD)
+    assert bad["ok"] is False and bad["failed_checks"] == 2, bad
+    assert bad["max_non_orthogonality_deg"] > 85 and bad["max_skewness"] > 4
+    assert len(bad["severe_warnings"]) == 2, bad["severe_warnings"]
+    assert openfoam.parse_checkmesh(tempfile.mkdtemp()) is None
+
+
+def test_parse_yplus_measures_and_judges_against_the_wall_treatment():
+    with tempfile.TemporaryDirectory() as d:
+        ydir = os.path.join(d, "postProcessing", "yPlus", "0")
+        os.makedirs(ydir)
+        with open(os.path.join(ydir, "yPlus.dat"), "w", encoding="utf-8") as f:
+            f.write("# y+ ()\n# Time\tpatch\tmin\tmax\taverage\n")
+            f.write("145\twalls\t7.0998e-02\t1.5838e+00\t6.4476e-01\n")
+            f.write("145\thub\t2.0e-01\t9.0e-01\t5.0e-01\n")
+        raw = openfoam.parse_yplus(d)
+        assert set(raw["patches"]) == {"walls", "hub"} and raw["time"] == "145"
+        assert abs(raw["y_plus_max"] - 1.5838) < 1e-4
+        assert raw["in_band"] is None and not raw["warnings"]   # no intent declared
+        # y+ ~ 1.6 is a RESOLVED mesh: fine for low-Re, wrong for wall functions
+        assert openfoam.parse_yplus(d, wall_treatment="resolved")["in_band"] is True
+        wf = openfoam.parse_yplus(d, wall_treatment="wall_function")
+        assert wf["in_band"] is False and wf["warnings"], wf
+        assert "wall-function band" in wf["warnings"][0]
+    assert openfoam.parse_yplus(tempfile.mkdtemp()) is None
+
+
 def test_solve_converged_distinguishes_converged_from_out_of_iterations():
     assert openfoam.solve_converged(
         "Time = 219\nSIMPLE solution converged in 219 iterations\nEnd\n") is True

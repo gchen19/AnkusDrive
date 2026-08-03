@@ -47,15 +47,33 @@ def _header(cls: str, obj: str, location: str) -> str:
     )
 
 
-def steady_laminar_common_files(*, nu_m2_s: float, end_time: int) -> dict:
+# SIMPLE's stopping criterion. `endTime` is only the CAP — a steady case is meant to
+# stop the moment every controlled field's initial residual drops below its tolerance,
+# and a case that runs to the cap instead is, by its own definition, not converged
+# (issue #225 exists because that state used to be invisible in the payload).
+_RESIDUAL_CONTROL = {"p": 1e-7, "U": 1e-7}
+
+
+def _residual_control_text(control: dict | None) -> str:
+    items = " ".join(f"{k} {v:.10g};" for k, v in (control or _RESIDUAL_CONTROL).items())
+    return f"residualControl {{ {items} }}"
+
+
+def steady_laminar_common_files(*, nu_m2_s: float, end_time: int,
+                                residual_control: dict | None = None) -> dict:
     """The case files every central-scheme steady laminar ``simpleFoam`` builder
     shares verbatim — ``constant/transportProperties`` (Newtonian ``nu_m2_s``),
     ``constant/turbulenceProperties`` (laminar), ``system/controlDict`` (``end_time``
     iterations, final write only) and the central-scheme ``system/fvSchemes`` /
     ``system/fvSolution`` (SIMPLEC, Gauss linear) used by the wedge pipe and the M4
     snappy bridge. The flat plate keeps its own bounded-linearUpwind variants, NOT
-    these. Returns ``{relpath: contents}`` for the caller to extend with its mesh
-    and 0/ fields."""
+    these.
+
+    ``residual_control`` overrides SIMPLE's stopping criterion (default
+    ``{p: 1e-7, U: 1e-7}``) — needed by geometries where one velocity component is a
+    numerical artifact rather than a physical quantity; see ``pipe_case_files``.
+    Returns ``{relpath: contents}`` for the caller to extend with its mesh and 0/
+    fields."""
     if nu_m2_s <= 0:
         raise ValueError("nu_m2_s must be > 0")
     files = {}
@@ -90,7 +108,7 @@ def steady_laminar_common_files(*, nu_m2_s: float, end_time: int) -> dict:
         "    U { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }\n"
         "}\n"
         "SIMPLE\n{\n    nNonOrthogonalCorrectors 2;\n    consistent yes;\n"
-        "    residualControl { p 1e-7; U 1e-7; }\n}\n"
+        f"    {_residual_control_text(residual_control)}\n}}\n"
         "relaxationFactors { equations { U 0.9; } fields { p 0.9; } }\n")
     return files
 
@@ -155,7 +173,18 @@ def pipe_case_files(*, diameter_m: float, length_m: float, velocity_m_s: float,
     ``constant/transportProperties``, ``constant/turbulenceProperties``, ``0/U``,
     ``0/p``, ``system/{controlDict,fvSchemes,fvSolution}``)."""
     U = velocity_m_s
-    files = steady_laminar_common_files(nu_m2_s=nu_m2_s, end_time=end_time)
+    # U is deliberately ABSENT from this case's stopping criterion. The two wedge
+    # patches pin an essentially 2-D solution into a 3-D solver, so the out-of-plane
+    # momentum residual is normalized by a near-zero field and is round-off noise, not
+    # a convergence measure: measured live, Uz floors at ~1.6e-5 REGARDLESS of mesh
+    # density while Ux reaches 5.8e-16. Gating on U therefore never trips and the case
+    # runs to endTime — 3000+ iterations for an answer that was complete at 74. With p
+    # alone the pipe converges in 74 iterations (n_axial=80) / 102 (n_axial=180) to a
+    # pressure drop identical to the 3000-iteration one to six decimals, with Ux at
+    # 1.8e-8. Nothing is hidden by this: the trust block reports every field's measured
+    # final residual, so a caller can see Uz for themselves.
+    files = steady_laminar_common_files(
+        nu_m2_s=nu_m2_s, end_time=end_time, residual_control={"p": 1e-7})
     files["system/blockMeshDict"] = pipe_blockmeshdict(
         diameter_m=diameter_m, length_m=length_m, half_angle_deg=half_angle_deg,
         n_axial=n_axial, n_radial=n_radial)
@@ -459,6 +488,223 @@ def parse_forces(case_dir: str, *, name: str = "forces",
                 out["cm"] = dot(out["moment_total_nm"], axis) / (
                     denom * float(reference_length_m))
     return out
+
+
+# --- the trust layer: what the numerics actually did (issue #225) ---------------
+#
+# Every parser below reads an artifact the solver already writes, so nothing here
+# changes a case or costs a solve. The point is that a steady CFD result which hit
+# endTime unconverged, or converged beautifully on a mesh with 89-degree
+# non-orthogonality, is INDISTINGUISHABLE in the payload from a good one — the
+# numbers have the same shape and the same rc=0. These turn that into fields.
+#
+# `_run_foam` tees each app's output to <case_dir>/log.<app>, which is what
+# parse_residuals and parse_checkmesh read. parse_yplus reads the postProcessing
+# tree the `yPlus` function object writes (run as `simpleFoam -postProcess -func
+# yPlus -latestTime`, which works for laminar cases too — nut is simply zero).
+
+
+def parse_residuals(case_dir: str, *, app: str = "simpleFoam",
+                    log_text: str | None = None) -> dict | None:
+    """Convergence state and final residuals from a solver log.
+
+    Reads ``<case_dir>/log.<app>`` (or ``log_text`` directly) and scrapes the SIMPLE
+    iteration lines — ``smoothSolver:  Solving for Ux, Initial residual = 1.2e-08,
+    …`` — keeping each field's LAST initial residual, which is the level the solution
+    actually settled at. ``converged`` is True when the log carries "SIMPLE solution
+    converged", False when the run reached its end marker without it (i.e. it ran out
+    of iterations at ``endTime`` — a result that looks converged and is not), and None
+    when the log says neither.
+
+    Returns {converged, iterations, final_residuals: {field: value}, max_residual,
+    fields}, or None when no log is readable. ``iterations`` is the last ``Time = N``
+    reached, so an unconverged run reports the iteration cap it hit."""
+    import glob as _glob
+    text = log_text
+    if text is None:
+        path = os.path.join(case_dir, f"log.{app}")
+        if not os.path.isfile(path):
+            hits = sorted(_glob.glob(os.path.join(case_dir, "log.*Foam*")))
+            if not hits:
+                return None
+            path = hits[-1]
+        try:
+            text = open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            return None
+    if not text:
+        return None
+
+    residuals: dict[str, float] = {}
+    for m in re.finditer(r"Solving for (\w+),\s*Initial residual = ([\d.eE+-]+)", text):
+        try:
+            residuals[m.group(1)] = float(m.group(2))
+        except ValueError:
+            continue
+    iterations = None
+    times = re.findall(r"^Time = (\d+)", text, re.M)
+    if times:
+        iterations = int(times[-1])
+    m = re.search(r"SIMPLE solution converged in (\d+) iterations", text)
+    if m:
+        converged, iterations = True, int(m.group(1))
+    elif re.search(r"^End\s*$", text, re.M):
+        converged = False
+    else:
+        converged = None
+    return {
+        "converged": converged,
+        "iterations": iterations,
+        "final_residuals": {k: v for k, v in sorted(residuals.items())},
+        "max_residual": (max(residuals.values()) if residuals else None),
+        "fields": sorted(residuals),
+    }
+
+
+def parse_checkmesh(case_dir: str, log_text: str | None = None) -> dict | None:
+    """Mesh quality from a ``checkMesh`` log (``<case_dir>/log.checkMesh``).
+
+    checkMesh exits 0 whether the mesh passes or not — the verdict is in the TEXT
+    ("Mesh OK." vs "Failed N mesh checks"), so this parses rather than trusting the
+    return code. Surfaces the two numbers that actually decide whether a finite-volume
+    solve can be believed: maximum non-orthogonality (the corrector-loop killer; > 70°
+    is where OpenFOAM's own default gives up) and maximum skewness (> 4 internal / > 20
+    boundary is checkMesh's own fail threshold).
+
+    Returns {ok, failed_checks, max_non_orthogonality_deg, avg_non_orthogonality_deg,
+    max_skewness, max_aspect_ratio, n_cells, n_faces, n_points, severe_warnings}, or
+    None when no log is readable. ``ok`` False means checkMesh itself failed the mesh;
+    the caller decides whether that is fatal, since a snapped mesh often carries a
+    handful of bad cells that do not touch the region of interest."""
+    text = log_text
+    if text is None:
+        path = os.path.join(case_dir, "log.checkMesh")
+        if not os.path.isfile(path):
+            return None
+        try:
+            text = open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            return None
+    if not text:
+        return None
+
+    def _num(pattern, cast=float):
+        m = re.search(pattern, text, re.M)           # the stats block is line-anchored
+        try:
+            return cast(m.group(1)) if m else None
+        except ValueError:
+            return None
+
+    failed = _num(r"Failed (\d+) mesh checks", int)
+    out = {
+        "ok": failed in (None, 0) and "Mesh OK." in text,
+        "failed_checks": failed or 0,
+        "max_non_orthogonality_deg": _num(r"non-orthogonality Max:\s*([\d.eE+-]+)"),
+        "avg_non_orthogonality_deg": _num(
+            r"non-orthogonality Max:\s*[\d.eE+-]+\s*average:\s*([\d.eE+-]+)"),
+        "max_skewness": _num(r"Max skewness = ([\d.eE+-]+)"),
+        "max_aspect_ratio": _num(r"Max aspect ratio = ([\d.eE+-]+)"),
+        "n_cells": _num(r"^\s*cells:\s*(\d+)", int),
+        "n_faces": _num(r"^\s*faces:\s*(\d+)", int),
+        "n_points": _num(r"^\s*points:\s*(\d+)", int),
+    }
+    out["severe_warnings"] = [
+        line.strip() for line in text.splitlines()
+        if line.lstrip().startswith("***")][:8]
+    return out
+
+
+def yplus_command(app: str = "simpleFoam") -> list:
+    """The argv that computes y+ on every wall patch from the converged field:
+    ``<app> -postProcess -func yPlus -latestTime``. Writes
+    ``postProcessing/yPlus/<t>/yPlus.dat``; read it with :func:`parse_yplus`. Works on
+    a laminar case too (ν_t is simply zero there), so it needs no turbulence branch."""
+    return [app, "-postProcess", "-func", "yPlus", "-latestTime"]
+
+
+# Wall-function validity band: below ~30 the first cell sits inside the buffer/viscous
+# layer the log-law wall function assumes it is above, and above ~300 the log layer has
+# been over-shot. A resolved (low-Re) mesh wants y+ ~ 1 instead — a different, equally
+# valid target, which is why the verdict needs to know which one was intended.
+_YPLUS_WALL_FUNCTION = (30.0, 300.0)
+_YPLUS_RESOLVED_MAX = 5.0
+
+
+def parse_yplus(case_dir: str, *, name: str = "yPlus",
+                wall_treatment: str | None = None) -> dict | None:
+    """Measured y+ per wall patch, from the ``yPlus`` function object's output.
+
+    This is the MEASURED value — computed from the solved wall shear — as opposed to
+    the a-priori ``y_plus_estimate`` the RANS case builders report from a correlation
+    before any solving happens. The two disagreeing is itself information.
+
+    ``wall_treatment`` turns the numbers into a verdict: ``'wall_function'`` expects
+    30 ≤ y+ ≤ 300, ``'resolved'`` expects y+ ≲ 5, and None (the default) reports the
+    values with ``in_band`` left None rather than inventing an intent.
+
+    Returns {time, patches: {name: {min, max, average}}, y_plus_max, y_plus_min,
+    wall_treatment, in_band, warnings}, or None when the function object wrote
+    nothing."""
+    root = os.path.join(case_dir, "postProcessing", name)
+    if not os.path.isdir(root):
+        return None
+    times = []
+    for d in os.listdir(root):
+        try:
+            times.append((float(d), d))
+        except ValueError:
+            continue
+    if not times:
+        return None
+    tdir = max(times)[1]
+    path = os.path.join(root, tdir, "yPlus.dat")
+    if not os.path.isfile(path):
+        return None
+    patches: dict[str, dict] = {}
+    stamp = None
+    for line in open(path, encoding="utf-8", errors="replace"):
+        if line.lstrip().startswith("#") or not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        try:
+            stamp = parts[0]
+            patches[parts[1]] = {"min": float(parts[2]), "max": float(parts[3]),
+                                 "average": float(parts[4])}
+        except ValueError:
+            continue
+    if not patches:
+        return None
+    y_max = max(p["max"] for p in patches.values())
+    y_min = min(p["min"] for p in patches.values())
+    warnings: list[str] = []
+    in_band = None
+    if wall_treatment == "wall_function":
+        lo, hi = _YPLUS_WALL_FUNCTION
+        in_band = lo <= y_max <= hi
+        if not in_band:
+            warnings.append(
+                f"measured y+ max {y_max:.3g} is outside the {lo:g}-{hi:g} wall-function "
+                "band: the log-law the wall functions assume does not apply at the "
+                "first cell, so the wall shear (and any drag built on it) is off by "
+                "more than the model's own uncertainty")
+    elif wall_treatment == "resolved":
+        in_band = y_max <= _YPLUS_RESOLVED_MAX
+        if not in_band:
+            warnings.append(
+                f"measured y+ max {y_max:.3g} exceeds {_YPLUS_RESOLVED_MAX:g}: the "
+                "boundary layer is NOT resolved to the wall, so a low-Re model is "
+                "being applied on a mesh that cannot support it")
+    return {
+        "time": stamp,
+        "patches": patches,
+        "y_plus_max": y_max,
+        "y_plus_min": y_min,
+        "wall_treatment": wall_treatment,
+        "in_band": in_band,
+        "warnings": warnings,
+    }
 
 
 def solve_converged(log_tail: str) -> bool | None:
@@ -796,8 +1042,12 @@ def _rans_inlet_k_omega(velocity_m_s: float, length_scale_m: float,
     return k, omega
 
 
+_RESIDUAL_CONTROL_RANS = {"p": 1e-6, "U": 1e-6, "k": 1e-6, "omega": 1e-6}
+
+
 def _rans_overlay(files: dict, *, k_in: float, omega_in: float,
-                  k_bcs: dict, omega_bcs: dict, nut_bcs: dict) -> dict:
+                  k_bcs: dict, omega_bcs: dict, nut_bcs: dict,
+                  residual_control: dict | None = None) -> dict:
     """Turn a laminar simpleFoam case-file dict into the kOmegaSST one: RAS
     turbulence properties, 0/k + 0/omega + 0/nut, upwind k/omega divergence +
     wallDist in fvSchemes, k/omega solvers + 0.7 relaxation in fvSolution."""
@@ -820,7 +1070,7 @@ def _rans_overlay(files: dict, *, k_in: float, omega_in: float,
         "    k { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }\n"
         "    omega { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.1; }")
     s = re.sub(r"residualControl \{[^}]*\}",
-               "residualControl { p 1e-6; U 1e-6; k 1e-6; omega 1e-6; }", s)
+               _residual_control_text(residual_control or _RESIDUAL_CONTROL_RANS), s)
     s = re.sub(r"relaxationFactors.*",
                "relaxationFactors { equations { U 0.7; k 0.7; omega 0.7; } "
                "fields { p 0.7; } }", s, flags=re.S)
@@ -855,6 +1105,8 @@ def pipe_rans_case_files(
     wedges = {"wedge1": "type wedge;", "wedge2": "type wedge;"}
     return _rans_overlay(
         files, k_in=k_in, omega_in=omega_in,
+        # same wedge-Uz artifact as the laminar pipe — see pipe_case_files
+        residual_control={"p": 1e-6, "k": 1e-6, "omega": 1e-6},
         k_bcs={"inlet": f"type fixedValue; value uniform {k_in:.10g};",
                "outlet": "type zeroGradient;",
                "wall": f"type kqRWallFunction; value uniform {k_in:.10g};",

@@ -150,7 +150,11 @@ echo "== Geometry bridge (case gen always; ElmerGrid/snappyHexMesh gates when pr
 python3 tests/test_meshbridge.py
 
 echo
-echo "== Virtual wind tunnel (screen always; OpenFOAM body solve when present) =="
+echo "== Solution verification (Richardson/GCI on constructed sequences; no solver) =="
+python3 tests/test_verification.py
+
+echo
+echo "== Virtual wind tunnel + CFD trust layer (screen always; solves when present) =="
 python3 tests/test_wind_tunnel.py
 
 echo

@@ -125,6 +125,7 @@ Test-Module 'Solver degradation contract'            'test_solve_degradation.py'
 Test-Module 'Persistent config layer'                'test_config.py'
 Test-Module 'Planar-kinematics toys'                 'test_kinematics.py'
 Test-Module 'Internal-flow / Hagen-Poiseuille toys'  'test_cfd.py'
+Test-Module 'Solution verification (Richardson/GCI)'  'test_verification.py'
 Test-Module 'Optics toys (Snell/Fresnel oracle; rayoptics gate when present)' 'test_optics.py'
 
 # --- external-solver families: analytic-oracle / case-gen halves ----------------
@@ -202,7 +203,7 @@ $env:RUN_RELIABILITY = $savedRel
 # leg rides the same WSL route.
 Test-Module 'OpenFOAM CFD (structure + WSL-gated solves)'  'test_openfoam.py'
 Test-Module 'Mesh bridge (ElmerGrid native / snappy via WSL)' 'test_meshbridge.py'
-Test-Module 'Virtual wind tunnel (screen + WSL-gated body solve)' 'test_wind_tunnel.py'
+Test-Module 'Virtual wind tunnel + CFD trust layer (WSL-gated)' 'test_wind_tunnel.py'
 Test-Module 'FSI preCICE (degradation + WSL-gated solve)'  'test_fsi.py'
 
 # --- Linux-only families: skipped on Windows (documented, not silent) -----------

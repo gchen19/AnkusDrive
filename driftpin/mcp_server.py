@@ -4916,6 +4916,117 @@ def cfd_internal_flow_submit(
 
 
 @mcp.tool()
+def grid_convergence(
+    values: list,
+    cell_sizes: list | None = None,
+    cell_counts: list | None = None,
+    assumed_order: float = 2.0,
+    dimensions: int = 3,
+) -> dict:
+    """Grid Convergence Index — how much of a solved number is the MESH (no solver,
+    milliseconds). Give it the same quantity solved on 2-3 systematically refined
+    meshes, FINEST FIRST, and it fits the observed order of convergence,
+    Richardson-extrapolates to zero cell size, and returns the percentage band inside
+    which the mesh-independent answer lies. Roache's GCI as codified in ASME V&V 20.
+
+    This is the honest `band_pct` for a result with no analytic oracle — the
+    verification counterpart to every validation ratio in the solver families — and it
+    is deliberately family-agnostic: three CFD drag coefficients, three FEM peak
+    stresses and three modal frequencies are all valid input; only you know what the
+    mesh size means. `cfd_mesh_independence_submit` is the driver that produces the
+    three CFD values for you.
+
+    Describe the meshes with either `cell_sizes` (representative cell length, same
+    order as `values`) or `cell_counts` (total cells; h = N^(-1/`dimensions`)). With
+    THREE values the order is measured and the safety factor is 1.25; with TWO it must
+    be assumed (`assumed_order`, default 2.0) and the factor triples to 3.0 — a much
+    wider band, which is the honest price of the missing mesh.
+
+    Watch three fields before quoting the band: `monotonic` False means the solutions
+    oscillate and the extrapolation is not meaningful (usually an unconverged level,
+    not a mesh effect); `asymptotic_ratio` far from 1 means the meshes have not reached
+    the range where the theory holds, so `gci_pct` is a LOWER bound; `order_clamped`
+    True means the fitted order was unphysical and a clamped one was used.
+
+    Returns {n_levels, values, cell_sizes, refinement_ratios, observed_order,
+    order_used, order_clamped, extrapolated_value, gci_pct, gci_coarse_pct, band_pct,
+    relative_error_pct, monotonic, asymptotic_ratio, safety_factor, converged_fit,
+    fidelity, warnings}."""
+    params = {"values": values, "assumed_order": assumed_order,
+              "dimensions": dimensions}
+    for k, v in (("cell_sizes", cell_sizes), ("cell_counts", cell_counts)):
+        if v is not None:
+            params[k] = v
+    return _call("grid_convergence", **params)
+
+
+@mcp.tool()
+def cfd_mesh_independence_submit(
+    model: str | None = None,
+    body: str | None = None,
+    velocity_m_s: float | None = None,
+    diameter_mm: float | None = None,
+    length_mm: float | None = None,
+    flow_rate_lpm: float | None = None,
+    levels: int = 3,
+    refinement_ratio: float = 1.5,
+    metric: str | None = None,
+    fluid: str = "air-20c",
+    mu_pa_s: float | None = None,
+    rho_kg_m3: float | None = None,
+    flow_direction: list | None = None,
+    base_cell_mm: float | None = None,
+    surface_refine: list | None = None,
+    n_axial: int | None = None,
+    n_radial: int | None = None,
+    end_time: int | None = None,
+    turbulence: str = "laminar",
+) -> dict:
+    """Solve the same CFD case at 2-3 refined meshes and report the Grid Convergence
+    Index — asynchronous, one job for the whole ladder. Requires OpenFOAM; degrades to
+    {ok:false, reason, install} when it does not resolve.
+
+    Answers the question no single solve can: **is this number a property of the flow,
+    or of the mesh?** On geometry with no analytic twin that band is the only error bar
+    available, and it is what turns "a solver produced 0.31" into "0.31 ± 2 %".
+
+    Two families, dispatched like their single-solve twins:
+    - **the wind tunnel** — pass `model` (or `body`) + `velocity_m_s`, plus any
+      cfd_external_flow_submit knob. The ladder varies the background cell; the body is
+      tessellated ONCE and shared, so the study isolates mesh error instead of mixing in
+      a changing STL. Default `metric` 'cd'.
+    - **the straight pipe** — pass `diameter_mm`, `length_mm`, `velocity_m_s` (or
+      `flow_rate_lpm`). The ladder scales `n_axial`/`n_radial`. Default `metric`
+      'pressure_drop_pa'.
+
+    The COARSEST level is the mesh a plain submit would have built and the study refines
+    from there (the tunnel's default cell is already the coarsest that resolves the body
+    at all). Cost therefore grows as the cube of `refinement_ratio`: 3 levels at 1.5 puts
+    roughly 11x the cells in the finest mesh, so budget accordingly. `end_time` is the
+    cap for the COARSEST level and is scaled up for the finer ones — a fine mesh needs
+    proportionally more sweeps, and a study whose finest level quietly stopped at its cap
+    is worthless.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, family, metric, levels: [{label, value, cell_size_m, n_cells, converged,
+    returncode, case_dir}], grid_convergence: {observed_order, extrapolated_value,
+    gci_pct, monotonic, asymptotic_ratio, order_clamped, warnings, ...}, band_pct,
+    extrapolated_value, hagen_poiseuille_pa (pipe family), warnings}."""
+    params = {"levels": levels, "refinement_ratio": refinement_ratio,
+              "fluid": fluid, "turbulence": turbulence}
+    for k, v in (("model", model), ("body", body), ("velocity_m_s", velocity_m_s),
+                 ("diameter_mm", diameter_mm), ("length_mm", length_mm),
+                 ("flow_rate_lpm", flow_rate_lpm), ("metric", metric),
+                 ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3),
+                 ("flow_direction", flow_direction), ("base_cell_mm", base_cell_mm),
+                 ("surface_refine", surface_refine), ("n_axial", n_axial),
+                 ("n_radial", n_radial), ("end_time", end_time)):
+        if v is not None:
+            params[k] = v
+    return _call("cfd_mesh_independence_submit", **params)
+
+
+@mcp.tool()
 def cfd_body_drag(
     shape: str = "sphere",
     diameter_mm: float | None = None,
