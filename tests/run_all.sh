@@ -167,6 +167,10 @@ echo "== Geometry bridge (case gen always; ElmerGrid/snappyHexMesh gates when pr
 python3 tests/test_meshbridge.py
 
 echo
+echo "== Performance contracts (three-state verdict; live contract on a part) =="
+python3 tests/test_performance.py
+
+echo
 echo "== Solution verification (Richardson/GCI on constructed sequences; no solver) =="
 python3 tests/test_verification.py
 

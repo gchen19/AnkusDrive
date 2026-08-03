@@ -132,6 +132,7 @@ Test-Module 'Persistent config layer'                'test_config.py'
 Test-Module 'Planar-kinematics toys'                 'test_kinematics.py'
 Test-Module 'Internal-flow / Hagen-Poiseuille toys'  'test_cfd.py'
 Test-Module 'Solution verification (Richardson/GCI)'  'test_verification.py'
+Test-Module 'Performance contracts (declare/verify)'  'test_performance.py'
 Test-Module 'Optics toys (Snell/Fresnel oracle; rayoptics gate when present)' 'test_optics.py'
 
 # --- external-solver families: analytic-oracle / case-gen halves ----------------

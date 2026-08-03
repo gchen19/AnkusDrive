@@ -330,6 +330,19 @@ Each family lists: the agent question it answers · backend · new-dependency we
   order and limit (`tests/test_verification.py`), and live on the pipe, where the band
   computed with no reference must contain the analytic answer — measured order 2.01,
   extrapolation within 0.04 % of Hagen-Poiseuille, band 0.11 %.
+- **Performance contracts** (issue #226, [`analysis/performance.py`](../driftpin/analysis/performance.py)):
+  `declare_performance` persists a quantitative spec on the part the way `declare_intent`
+  persists a geometric one, and `verify_performance` re-proves it. The contract layer is a
+  thin orchestrator — a requirement names the DriftPin tool that measures its metric, so
+  Cd, Δp, first mode and ΔT are the same machinery. Three things make it more than a
+  comparison: the verdict has a third state (`indeterminate`) for a measurement whose
+  uncertainty band straddles the limit, evidence is laddered (`tier='auto'` screens first
+  and escalates only what the screen cannot decide or what declares
+  `fidelity_floor: 'solver'`), and the trust block above is enforced — a requirement
+  asking for `converged: true` or a `band_max_pct` cap can never be satisfied by a solve
+  that did not converge. Gates in `tests/test_performance.py`, including the epic's
+  headline workflow live: declare "Cd ≤ N" on a sphere, verify at solver tier, get a
+  verdict whose measurement came from a real solve with its trust block attached.
 - Long solves run async via [`jobs.py`](../driftpin/jobs.py) so a CFD run never blocks
   the MCP channel.
 

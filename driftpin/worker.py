@@ -4548,6 +4548,279 @@ def _h_declare_intent(p):
     return {"handle": handle, "contract": contract}
 
 
+_PERF_PROP = "DP_Performance"
+
+
+def _read_performance(obj):
+    """Declared performance contract for an object ({} if none)."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _PERF_PROP in base.PropertiesList:
+        try:
+            return _json.loads(getattr(base, _PERF_PROP) or "{}")
+        except Exception:
+            return {}
+    return {}
+
+
+def _subst_handle(value, handle):
+    """Replace the literal ``"$handle"`` anywhere in a conditions tree with the part's
+    own handle, so a contract is portable between parts instead of hard-coding one."""
+    if isinstance(value, str):
+        return handle if value == "$handle" else value
+    if isinstance(value, dict):
+        return {k: _subst_handle(v, handle) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_subst_handle(v, handle) for v in value]
+    return value
+
+
+def _measure(tool, conditions, handle):
+    """Run one measuring tool through the handler registry — the contract layer is a
+    thin orchestrator over the existing catalog, never a second implementation of a
+    metric. Returns the tool's payload; a submit-style tool returns its {job_id, …} or
+    its degradation dict, which the caller resolves."""
+    fn = HANDLERS.get(tool)
+    if fn is None:
+        raise ValueError(f"unknown measuring tool {tool!r}; a requirement must name a "
+                         "real DriftPin tool")
+    return fn(_subst_handle(dict(conditions or {}), handle))
+
+
+def _band_of(payload, explicit=None):
+    """The uncertainty band to apply to a measurement: the requirement's own override,
+    else the tool's honest self-report (``gci_pct`` from a mesh-independence study beats
+    ``band_pct`` from a correlation), else None for an exact result."""
+    if explicit is not None:
+        return float(explicit)
+    for key in ("gci_pct", "band_pct"):
+        v = payload.get(key) if isinstance(payload, dict) else None
+        if v is not None:
+            return float(v)
+    return None
+
+
+def _evaluate_measurement(req, payload, tier, metric=None, band=None):
+    """Turn one tool payload into a per-requirement verdict row."""
+    from driftpin.analysis import performance as _pf
+    metric = metric or req["metric"]
+    row = {"name": req["name"], "tier": tier, "metric": metric}
+    if isinstance(payload, dict) and payload.get("ok") is False and "reason" in payload:
+        row.update({"state": "indeterminate", "measured": None,
+                    "detail": f"{payload.get('solver', 'solver')} unavailable: "
+                              f"{payload['reason']}",
+                    "degraded": payload})
+        return row
+    value = _pf._get_path(payload, metric)
+    if value is None:
+        row.update({"state": "indeterminate", "measured": None,
+                    "detail": f"the tool produced no {metric!r} to measure"})
+        return row
+    reasons = _pf.check_trust(payload if isinstance(payload, dict) else {},
+                              req.get("trust"))
+    try:
+        verdict = _pf.evaluate_limit(value, req["limit"],
+                                     _band_of(payload, band))
+    except ValueError as e:
+        row.update({"state": "indeterminate", "measured": value, "detail": str(e)})
+        return row
+    row.update(verdict)
+    if reasons:                                  # trust failure can only remove a pass
+        row["state"] = "indeterminate"
+        row["trust_reasons"] = reasons
+        row["detail"] = row["detail"] + " — but " + "; ".join(reasons)
+    return row
+
+
+@handler("declare_performance")
+def _h_declare_performance(p):
+    """Record a quantitative PERFORMANCE spec on a part, so it can be re-proved after
+    every edit the way declare_intent's geometric invariants are (issue #226).
+
+    Persists in the .FCStd as a JSON property bag (DP_Performance); one contract per
+    part, re-declaring replaces. Each entry in `requirements` is metric-agnostic:
+
+        {"name": "drag_at_cruise",
+         "metric": "cd",                          # dotted path into the tool's result
+         "tool": "cfd_external_flow_submit",      # what measures it at solver tier
+         "conditions": {"model": "$handle", "velocity_m_s": 30, "fluid": "air-20c"},
+         "limit": {"max": 0.30},                  # max, min, or both (a window)
+         "screen": {"tool": "cfd_body_drag", "metric": "cd",
+                    "conditions": {"shape": "sphere", "diameter_mm": 50,
+                                   "velocity_m_s": 30}},
+         "fidelity_floor": "solver",              # what counts as proof
+         "trust": {"converged": true, "band_max_pct": 5}}
+
+    `"$handle"` anywhere in `conditions` is replaced with this part's handle at
+    verification time, so the contract is portable. The layer only orchestrates: the
+    metric is whatever the named tool already returns, so pressure drop, first mode,
+    peak stress and ΔT are the same machinery as Cd.
+
+    Returns {handle, contract: {requirements: [...]}, n_requirements}. Raises
+    ValueError on a malformed requirement, naming the offending one."""
+    import json as _json
+    from driftpin.analysis import performance as _pf
+    handle = p["handle"]
+    obj, _ = _shape_of(handle)
+    reqs = p.get("requirements")
+    if reqs is None and isinstance(p.get("contract"), dict):
+        reqs = p["contract"].get("requirements")
+    if not reqs:
+        raise ValueError("declare at least one requirement")
+    if isinstance(reqs, dict):
+        reqs = [reqs]
+    normalized = [_pf.validate_requirement(r) for r in reqs]
+    names = [r["name"] for r in normalized]
+    if len(set(names)) != len(names):
+        raise ValueError(f"requirement names must be unique, got {names}")
+    contract = {"requirements": normalized}
+    base = _shaped_top(obj)
+    if _PERF_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _PERF_PROP, "DriftPin",
+                         "declared performance contract (JSON)")
+    setattr(base, _PERF_PROP, _json.dumps(contract))
+    base.Document.recompute()
+    return {"handle": handle, "contract": contract,
+            "n_requirements": len(normalized)}
+
+
+@handler("verify_performance")
+def _h_verify_performance(p):
+    """Prove (or fail to prove) every requirement declared with declare_performance —
+    the performance twin of verify_intent, and the step that turns "a solver printed
+    0.29" into a claim with a band and a provenance (issue #226).
+
+    A verdict has THREE states, deliberately. `pass` and `fail` need the measurement's
+    whole uncertainty band on one side of the limit; a band that straddles it is
+    `indeterminate`, which means "escalate", not "probably fine". Collapsing that to a
+    pass is how a spec silently goes unmet.
+
+    `tier` picks the evidence:
+      * `'screen'` — run each requirement's cheap `screen` estimator only. Milliseconds,
+        no solver; expect indeterminates near the limit.
+      * `'solver'` — run the real solve for every requirement.
+      * `'auto'` (default) — screen first, escalate only what the screen could not decide
+        or what declares `fidelity_floor: 'solver'`. This is the ladder that keeps a
+        design loop cheap.
+
+    Trust is part of the measurement: a requirement asking for `converged: true` or a
+    `band_max_pct` cap can never be satisfied by a solve that did not converge or whose
+    grid-convergence band is wider — those come back `indeterminate` with the reason,
+    never `pass`.
+
+    Because solver-tier measurements are asynchronous, this returns EITHER the finished
+    verdict (screen-only, or everything already decided) or {job_id, status, pending,
+    results} — poll job_result for the completed verdict. Never raises on a failing
+    requirement; a failure is a row.
+
+    Returns {handle, tier, ok, n_requirements, passed, failed, indeterminate, escalate,
+    results: [{name, tier, metric, state, measured, limit, band_pct, worst_case,
+    best_case, margin, margin_pct, detail, trust_reasons?, screen?}]}."""
+    import time as _time
+
+    from driftpin import jobs
+    from driftpin.analysis import performance as _pf
+
+    handle = p["handle"]
+    obj, _ = _shape_of(handle)
+    contract = _read_performance(obj)
+    reqs = contract.get("requirements") or []
+    if not reqs:
+        raise ValueError(f"no performance contract on {handle!r} "
+                         "(use declare_performance first)")
+    tier = p.get("tier", "auto")
+    if tier not in ("auto", "screen", "solver"):
+        raise ValueError("tier must be 'auto', 'screen' or 'solver'")
+
+    rows, pending = [], []
+    for req in reqs:
+        name = req.get("name", "?")
+        screen = req.get("screen")
+        floor = req.get("fidelity_floor", "solver")
+        row = None
+        # --- screen leg ------------------------------------------------------
+        if tier in ("screen", "auto") and screen:
+            try:
+                payload = _measure(screen["tool"], screen.get("conditions"), handle)
+                row = _evaluate_measurement(
+                    req, payload, "screen", metric=screen.get("metric"),
+                    band=screen.get("band_pct"))
+            except Exception as e:                # noqa: BLE001 - a row, never a raise
+                row = {"name": name, "tier": "screen", "state": "indeterminate",
+                       "measured": None, "detail": f"{type(e).__name__}: {e}"}
+        elif tier == "screen":
+            row = {"name": name, "tier": "screen", "state": "indeterminate",
+                   "measured": None,
+                   "detail": "no 'screen' estimator declared for this requirement, so "
+                             "screen tier has nothing to run — use tier='solver'"}
+        if tier == "screen":
+            rows.append(row)
+            continue
+        # --- escalate? -------------------------------------------------------
+        needs_solve = (tier == "solver" or row is None or floor == "solver"
+                       or row.get("state") == "indeterminate")
+        if not needs_solve:
+            rows.append(row)
+            continue
+        screen_row = row
+        try:
+            payload = _measure(req["tool"], req.get("conditions"), handle)
+        except Exception as e:                    # noqa: BLE001
+            rows.append({"name": name, "tier": "solver", "state": "indeterminate",
+                         "measured": None, "detail": f"{type(e).__name__}: {e}",
+                         "screen": screen_row})
+            continue
+        if isinstance(payload, dict) and payload.get("job_id"):
+            pending.append({"req": req, "job_id": payload["job_id"],
+                            "screen": screen_row})
+            rows.append({"name": name, "tier": "solver", "state": "indeterminate",
+                         "measured": None, "job_id": payload["job_id"],
+                         "detail": "solve submitted; poll job_result for the verdict",
+                         "screen": screen_row})
+        else:
+            done = _evaluate_measurement(req, payload, "solver")
+            done["screen"] = screen_row
+            rows.append(done)
+
+    if not pending:
+        return {"handle": handle, "tier": tier, "results": rows,
+                **_pf.summarize(rows)}
+
+    # Solves are running. One collector job waits on all of them (they were submitted
+    # from the MAIN thread, so any FreeCAD work is already done and they run
+    # concurrently), then assembles the same verdict shape.
+    def _collect():
+        final = []
+        by_name = {r["name"]: r for r in rows}
+        for item in pending:
+            jid = item["job_id"]
+            while jobs.status(jid)["status"] not in ("done", "failed"):
+                _time.sleep(0.5)
+            st = jobs.status(jid)
+            if st["status"] == "failed":
+                by_name[item["req"]["name"]] = {
+                    "name": item["req"]["name"], "tier": "solver",
+                    "state": "indeterminate", "measured": None, "job_id": jid,
+                    "detail": f"the solve failed: {st.get('error')}",
+                    "screen": item["screen"]}
+                continue
+            payload = jobs.result(jid)["result"]
+            row = _evaluate_measurement(item["req"], payload, "solver")
+            row["job_id"] = jid
+            row["screen"] = item["screen"]
+            row["case_dir"] = payload.get("case_dir") if isinstance(payload, dict) else None
+            by_name[item["req"]["name"]] = row
+        final = [by_name[r["name"]] for r in rows]
+        return {"handle": handle, "tier": tier, "results": final,
+                **_pf.summarize(final)}
+
+    sub = jobs.submit("verify_performance", _collect,
+                      meta={"handle": handle, "tier": tier,
+                            "pending": [i["job_id"] for i in pending]})
+    return {"handle": handle, "tier": tier, "results": rows,
+            "pending": [i["job_id"] for i in pending], **sub}
+
+
 @handler("verify_intent")
 def _h_verify_intent(p):
     """Re-run every invariant declared with declare_intent — the regression gate
