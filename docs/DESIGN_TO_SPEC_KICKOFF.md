@@ -24,11 +24,10 @@ Read alongside:
 | #236 | `cfd_external_flow_submit` silently ignored `model` | **merged** with #223 |
 | #225 | CFD trust layer + Richardson/GCI | **merged** (PR #255) |
 | #226 | Performance contracts | **merged** (PR #256) |
-| #227 | `study_submit` — DOE / parameter sweep | PR #258 |
-| #228 | `optimize_submit` — optimize-to-spec | **open, not started** |
+| #227 | `study_submit` — DOE / parameter sweep | **merged** (PR #258) |
+| #228 | `optimize_submit` — optimize-to-spec | PR #259 |
 
-The target workflow from the epic now runs end to end for everything except the search
-loop:
+The target workflow from the epic now runs end to end:
 
 ```
 spec ──► declare_performance                                    ✅ #226
@@ -40,7 +39,7 @@ spec ──► declare_performance                                    ✅ #226
      study_submit (DOE over recipe params × solver)             ✅ #227
              │
              ▼
-     optimize_submit (vary params until the contract is met)    ⬜ #228
+     optimize_submit (vary params until the contract is met)    ✅ #228
              │
              ▼
      verify_performance (full-fidelity + trust gates)           ✅ #225 + #226
@@ -140,7 +139,11 @@ solved Δp rides D⁻⁴ at exponent −3.9986, r² = 0.99999999, `hp_ratio` 1.0
 
 ---
 
-## #228 — `optimize_submit`: vary params until the contract is met
+## #228 — `optimize_submit`: vary params until the contract is met — **built (PR #259)**
+
+Shipped as `driftpin/analysis/optimize.py` (pure bounded Nelder-Mead, no scipy) plus an
+`optimize_submit` handler. Gates in `tests/test_optimize.py` (15, fast lane). The
+predictions below all held; what they did not cover is recorded after the original text.
 
 **Its shape is much clearer post-#226 than the original issue sketch.** The objective is
 a **`verify_performance` verdict**, not a solver number, and that changes the loop:
@@ -177,6 +180,35 @@ dispatch. Two shapes it inherits for free:
 notes surrogate-assisted search (RBF/GP over study results) for when solve counts hurt;
 #227's recorded points are exactly the training set for that, so keep the study record
 in a shape a surrogate could consume.
+
+**What building it actually turned up.**
+
+- **A budget is three separate mistakes waiting to happen**, and the shipped code makes
+  all three explicit because each was live at some point during the build: cache hits
+  must not count (a simplex revisits coordinates constantly — charging for memo hits
+  moved the answer from 0.0022 mm to 0.026 mm off a known optimum), `max_evals` must be
+  a TOTAL ceiling rather than a per-leg allowance (an `auto` run was costing 1.6x what
+  was asked for), and the 60/40 screen/solver split must apply only when a solver leg
+  actually follows (a screen-only run was silently buying 60 % of its budget).
+- **Clamp trial points into the box; do not reject them.** The optimum of a real design
+  problem sits against the envelope, not in the interior, and a search that rejects
+  out-of-box trials stalls just short of the bound it should be riding.
+
+**The boundary this could not cross.** The search runs on a background thread — its
+budget is minutes, far past the client's 120 s per-call timeout — and the `jobs.py`
+threading contract forbids FreeCAD there. So optimizer responses must be
+parameter-driven, and one naming live geometry is refused at the door. **Shape
+optimization over a recipe therefore does not exist yet**: it needs a main-thread work
+queue the worker services between requests, which is an architectural change rather than
+a feature. `study_submit` is the workaround (it builds every point on the main thread up
+front, so it CAN sweep recipe geometry — just on a fixed grid, not adaptively). This is
+the most valuable remaining piece of the epic's ambition and is not tracked as an issue
+yet.
+
+Live result, `tier='auto'`, budget 24, 78 s wall on in-VM OpenFOAM: the screen leg spent
+14 correlation evaluations to reach D = 9.100 mm, the solver leg polished with 10 real
+solves to D = 9.1875 mm against a closed form of 9.2132 mm, `proven: true`, total spend
+exactly 24.
 
 ---
 
