@@ -6472,6 +6472,8 @@ def cost_estimate(
     machine_rate_usd_hr: float = 60.0,
     setup_min: float = 10.0,
     scrap_fraction: float = 0.0,
+    density_kg_m3: float | None = None,
+    price_usd_kg: float | None = None,
     tolerance_class: str | None = None,
     machine_time_hr: float | None = None,
     machine_time_band_pct: float | None = None,
@@ -6484,6 +6486,13 @@ def cost_estimate(
     between processes/quantities, not the absolute dollars; material_cost alone is
     exact given its inputs.
 
+    `material` may be any Materials-DB card name (material_list / material_get), or
+    anything at all if you price it yourself: `price_usd_kg` and `density_kg_m3`
+    override the DB lookup and are flagged in breakdown.price_basis /
+    density_basis as 'explicit' instead of 'material'. A generic word like
+    'aluminum' is a CATEGORY, not a card — it carries a density but no price, so it
+    needs `price_usd_kg` or a real card name (AL6061-T6, …); the error says which.
+
     Two optional inputs sharpen it. `tolerance_class` ('IT7', '9', …) scales the
     TABLE machine time by the tolerance-cost curve (see tolerance_cost_check):
     holding tighter than the process's natural capability roughly doubles cost every
@@ -6494,14 +6503,16 @@ def cost_estimate(
     Both default to None, reproducing the pre-existing behaviour exactly.
 
     Returns {material_cost, process_cost, tooling_amortized, unit_cost, mass_kg,
-    fidelity, band_pct, breakdown:{…, machine_time_hr, machine_time_basis,
-    base_machine_time_hr, tolerance_class, tolerance_factor, tolerance_applied,
-    tolerance_basis}}. Errors on an unknown material/process/tolerance class or a
-    non-positive volume/quantity/machine time."""
+    fidelity, band_pct, breakdown:{…, density_kg_m3, price_usd_kg, density_basis,
+    price_basis, machine_time_hr, machine_time_basis, base_machine_time_hr,
+    tolerance_class, tolerance_factor, tolerance_applied, tolerance_basis}}. Errors
+    on a material with no usable density/price and no override, an unknown
+    process/tolerance class, or a non-positive volume/quantity/machine time."""
     return _call("cost_estimate", volume_mm3=volume_mm3, material=material,
                  process=process, quantity=quantity, tooling_usd=tooling_usd,
                  machine_rate_usd_hr=machine_rate_usd_hr, setup_min=setup_min,
-                 scrap_fraction=scrap_fraction, tolerance_class=tolerance_class,
+                 scrap_fraction=scrap_fraction, density_kg_m3=density_kg_m3,
+                 price_usd_kg=price_usd_kg, tolerance_class=tolerance_class,
                  machine_time_hr=machine_time_hr,
                  machine_time_band_pct=machine_time_band_pct)
 

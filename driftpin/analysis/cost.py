@@ -29,6 +29,8 @@ mass kg, cost USD — matching the rest of ``analysis/``. See
 """
 from __future__ import annotations
 
+import difflib
+
 from . import materials, tolerance_cost
 
 
@@ -47,6 +49,67 @@ def _mat_value(material: str | None, accessor: str):
         return materials.numeric(card, accessor)
     except KeyError:
         return None
+
+
+# --- the missing-density/price error message (issue #238) ---------------------
+#
+# Both exits out of "I have no number for this material" must be named, because an
+# agent can only take the exit the message tells it about: pass the override, or
+# name a real card. The dead end #238 filed was a message that named one exit and
+# a wrapper that didn't expose it.
+
+_HINT_MAX = 4          # category members to name before trailing off
+
+
+def _norm(s) -> str:
+    """Loose identity key for fuzzy matching: lowercase, alphanumerics only."""
+    return "".join(ch for ch in str(s or "").lower() if ch.isalnum())
+
+
+def _category_members(material: str | None, accessor: str):
+    """Fuzzy-match what the caller typed against the Materials DB *categories* and
+    return (category, member names that actually carry `accessor`).
+
+    A generic word — 'aluminum', 'steel', 'polymer' — is a category in the corpus,
+    not a card, which is usually exactly why the lookup failed. Matching is exact,
+    then substring either way, then difflib-close ('aluminium' → 'aluminum').
+    Members missing the property in question are dropped, so the suggestion never
+    sends the caller into the same error twice. Returns (None, []) when nothing
+    matches, leaving the caller to degrade to a bare 'see material_list'."""
+    norm = _norm(material)
+    if not norm:
+        return None, []
+    cards = materials.list_materials()["materials"]
+    cats = sorted({c["category"] for c in cards if c.get("category")})
+    hit = next((c for c in cats if _norm(c) == norm), None)
+    if hit is None:
+        hit = next((c for c in cats if norm in _norm(c) or _norm(c) in norm), None)
+    if hit is None:
+        close = difflib.get_close_matches(norm, [_norm(c) for c in cats], n=1, cutoff=0.7)
+        hit = next((c for c in cats if _norm(c) == close[0]), None) if close else None
+    if hit is None:
+        return None, []
+    members = [c["name"] for c in cards
+               if c.get("category") == hit
+               and _mat_value(c["name"], accessor) is not None]
+    return hit, sorted(members)
+
+
+def _material_exit_hint(material: str | None, accessor: str) -> str:
+    """The '…or use a Materials-DB name' half of the missing-density/price error,
+    derived from the live corpus (never a hardcoded list). Degrades to a generic
+    'see material_list' when no category matches — and swallows any failure of its
+    own, because a hint must never mask the error it is decorating."""
+    try:
+        category, members = _category_members(material, accessor)
+    except Exception:
+        category, members = None, []
+    if not members:
+        return "or use a Materials-DB name (see material_list)"
+    shown = ", ".join(members[:_HINT_MAX])
+    if len(members) > _HINT_MAX:
+        shown += ", ..."
+    return f"or use a Materials-DB name (material_list; category {category!r} → {shown})"
 
 
 # --- per-process machine-time model -------------------------------------------
@@ -97,7 +160,9 @@ def cost_estimate(
     Density and price come from the Materials DB (``density_kg_m3`` / ``cost_usd_kg``
     accessors) unless overridden by the ``density_kg_m3`` / ``price_usd_kg`` params.
     A material that is unknown *or* lacks density/price, with no override, raises
-    ValueError — there is no silent default.
+    ValueError — there is no silent default. That error names BOTH exits (#238):
+    the override, and the real Materials-DB cards in the category the caller typed
+    ('aluminum' is a category, not a card → AL6061-T6, AL7075-T6, …).
 
     Process cost uses a per-process machine-time heuristic (``_PROCESS_HR_PER_CM3``,
     cnc slow → injection fast): machine_time_hr scales with part volume, and one-
@@ -159,7 +224,9 @@ def cost_estimate(
         density_basis = "material"
     if not density or density <= 0:
         raise ValueError(
-            f"no density for {material!r}; pass density_kg_m3"
+            f"no density for {material!r} — pass density_kg_m3 (with price_usd_kg "
+            f"if the material is also unknown), "
+            + _material_exit_hint(material, "density_kg_m3")
         )
 
     if price_usd_kg is not None:
@@ -169,7 +236,9 @@ def cost_estimate(
         price_basis = "material"
     if price is None or price < 0:
         raise ValueError(
-            f"no price for {material!r}; pass price_usd_kg"
+            f"no price for {material!r} — pass price_usd_kg (with density_kg_m3 "
+            f"if the material is also unknown), "
+            + _material_exit_hint(material, "cost_usd_kg")
         )
 
     # --- material cost (the exact anchor) ---

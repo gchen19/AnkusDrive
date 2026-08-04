@@ -6,6 +6,7 @@ tests/TOYS.md and docs/SIMULATION_EXAMPLES.md (family 9).
 
 Run:  python3 tests/test_cost.py
 """
+import ast
 import sys
 import time
 import traceback
@@ -13,7 +14,54 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import cost  # noqa: E402
+from driftpin.analysis import cost, materials  # noqa: E402
+
+
+# --- the MCP-visible signature (issue #238) -----------------------------------
+#
+# #238 was not a math error but a LAYER error: cost.cost_estimate accepted
+# price_usd_kg/density_kg_m3 and the worker handler forwarded **p, but the FastMCP
+# wrapper's signature omitted both — so an agent obeying the ValueError's own
+# instruction ("pass price_usd_kg") got a schema rejection instead of a price.
+# Calling the analysis function directly cannot see that gap. These helpers bind a
+# call against the wrapper's parameter list AND the names it forwards to the
+# worker, read straight out of driftpin/mcp_server.py by ast — so the check stays
+# pure-Python (no mcp import, no FreeCAD worker) while still failing if the two
+# layers drift apart again.
+
+_MCP = Path(__file__).resolve().parent.parent / "driftpin" / "mcp_server.py"
+
+
+def _mcp_cost_estimate_signature():
+    """(parameters the MCP cost_estimate tool accepts, parameters it forwards to
+    the worker handler), parsed statically out of mcp_server.py."""
+    tree = ast.parse(_MCP.read_text(encoding="utf-8"))
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "cost_estimate")
+    accepted = [a.arg for a in fn.args.args + fn.args.kwonlyargs]
+    forwarded = []
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call)
+                and getattr(node.func, "id", None) == "_call"
+                and node.args
+                and getattr(node.args[0], "value", None) == "cost_estimate"):
+            forwarded = [kw.arg for kw in node.keywords]
+    return accepted, forwarded
+
+
+def _mcp_cost_estimate(**kwargs):
+    """Roll up a cost the way an MCP client can: every kwarg must be a parameter
+    the tool exposes and a name it hands to the handler (which calls
+    cost.cost_estimate(**p)), else this raises the way the tool's schema would."""
+    accepted, forwarded = _mcp_cost_estimate_signature()
+    for key in kwargs:
+        if key not in accepted:
+            raise AssertionError(
+                f"MCP cost_estimate does not accept {key!r}; accepts {accepted}")
+        if key not in forwarded:
+            raise AssertionError(
+                f"MCP cost_estimate accepts {key!r} but never forwards it to the worker")
+    return cost.cost_estimate(**kwargs)
 
 
 def test_material_cost_closed_form():
@@ -119,6 +167,71 @@ def test_unknown_material_raises():
     r = cost.cost_estimate(volume_mm3=1e6, material="NoSuchAlloy",
                            density_kg_m3=2700.0, price_usd_kg=4.5)
     assert abs(r["material_cost"] - 12.15) < 1e-2, r["material_cost"]
+
+
+def test_mcp_signature_takes_the_price_override(): # issue #238, gate half 1
+    # 'aluminum' is a CATEGORY in the corpus, not a card: it carries a density but
+    # no price. The documented recovery — pass price_usd_kg — has to be reachable
+    # through the MCP tool's own signature, which is what #238 found it was not.
+    r = _mcp_cost_estimate(volume_mm3=30429, material="aluminum", price_usd_kg=4.5)
+    assert r["breakdown"]["price_basis"] == "explicit", r["breakdown"]
+    assert abs(r["breakdown"]["price_usd_kg"] - 4.5) < 1e-9, r["breakdown"]
+    # only the price was overridden: density still comes from the DB card
+    assert r["breakdown"]["density_basis"] == "material", r["breakdown"]
+    assert abs(r["mass_kg"] - 30429 * 1e-9 * 2700.0) < 1e-6, r["mass_kg"]
+    # the density override is exposed too, so an entirely unknown word also works
+    r2 = _mcp_cost_estimate(volume_mm3=30429, material="NoSuchAlloy",
+                            density_kg_m3=2700.0, price_usd_kg=4.5)
+    assert r2["breakdown"]["density_basis"] == "explicit", r2["breakdown"]
+    assert abs(r2["material_cost"] - r["material_cost"]) < 1e-6
+
+
+def test_missing_price_error_names_both_exits(): # issue #238, gate half 2
+    # No price and no override must still raise — but the message has to name the
+    # two ways out, or the agent that reads it is stuck: the override, and a real
+    # Materials-DB card (via material_list) from the category it typed.
+    try:
+        _mcp_cost_estimate(volume_mm3=30429, material="aluminum")
+    except ValueError as e:
+        msg = str(e)
+    else:
+        raise AssertionError("expected ValueError for a material with no price")
+    assert "price_usd_kg" in msg, msg          # exit 1: the override
+    assert "material_list" in msg, msg         # exit 2: name a real card
+    assert "AL6061-T6" in msg, msg             # ...suggested by category
+    # the category is matched fuzzily, so a plausible misspelling recovers too
+    try:
+        cost.cost_estimate(volume_mm3=30429, material="aluminium")
+    except ValueError as e:
+        assert "AL6061-T6" in str(e), str(e)
+    else:
+        raise AssertionError("expected ValueError for a material with no price")
+
+
+def test_error_suggestions_come_from_the_live_corpus():
+    # A suggestion that can't be acted on is worse than none: every card the price
+    # error names must actually carry a price, and the list must be derived from
+    # the corpus (not hardcoded), so an unmatched word suggests nothing at all.
+    try:
+        cost.cost_estimate(volume_mm3=1e6, material="aluminum")
+    except ValueError as e:
+        names = str(e).split("→", 1)[1].strip().rstrip(")").split(", ")
+    else:
+        raise AssertionError("expected ValueError for a material with no price")
+    named = [n for n in names if n != "..."]
+    assert named, names
+    for name in named:
+        card = materials.get(name)             # raises MaterialNotFound if invented
+        assert materials.numeric(card, "cost_usd_kg") is not None, name
+    # nothing in the corpus resembles this word -> degrade, don't invent
+    try:
+        cost.cost_estimate(volume_mm3=1e6, material="unobtanium")
+    except ValueError as e:
+        assert "density_kg_m3" in str(e), str(e)   # the density leg fails first
+        assert "material_list" in str(e), str(e)
+        assert "→" not in str(e), str(e)
+    else:
+        raise AssertionError("expected ValueError for an unknown material")
 
 
 def test_bad_volume_and_quantity_raise():
