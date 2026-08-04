@@ -9,9 +9,17 @@ Two tiers:
   * **live** (needs FreeCAD): declare a contract on a real part and verify it end to end
     through the worker, including the fidelity ladder and the trust gate.
 
+Plus the GATE half (issue #261): a contract nothing consults is documentation with a
+verifier attached, so `merge_assembly` now reads the verdict `verify_performance`
+recorded on each component. Every case is driven twice — once on constructed records
+(no solver, no timing luck, which is where the "unverified is not a pass" property
+actually lives) and once live through a real merge of real components.
+
 Run:  python3 tests/test_performance.py
 """
+import json
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -20,6 +28,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from driftpin.analysis import performance as pf  # noqa: E402
+from driftpin.gates import performance as pgate  # noqa: E402
 
 
 # --- the three-state verdict ----------------------------------------------------
@@ -139,6 +148,146 @@ def test_summary_treats_indeterminate_as_not_satisfied():
     assert failed["ok"] is False and failed["escalate"] == []   # nothing to escalate
     assert pf.summarize([])["ok"] is False                      # an empty contract
     #                                                             proves nothing
+
+
+# --- the gate half (#261): what a gate may conclude from a recorded verdict -------
+#
+# Driven on constructed contracts + records, no worker: the property under test is
+# "what does the ABSENCE of a measurement mean", and it must hold identically whether
+# nobody ever verified, a solve is still running, or an edit invalidated the answer.
+
+_SIG = "abc123"
+
+
+def _contract(*names_and_limits):
+    return {"requirements": [
+        {"name": n, "metric": "pressure_drop_pa", "tool": "cfd_pipe_flow",
+         "limit": lim} for n, lim in names_and_limits]}
+
+
+def _record(rows, signature=_SIG, **extra):
+    return {"schema": pgate.RECORD_SCHEMA, "signature": signature, "tier": "screen",
+            "verified_at": 1000.0, "results": list(rows), **extra}
+
+
+def test_a_part_with_no_contract_is_untouched_by_the_gate():
+    """The case that matters most: 99 % of parts declare nothing, and for them #261
+    must be invisible. No contract -> not_declared, no violations, no skips, and
+    roll_up returns None so merge_assembly emits no performance block at all."""
+    block = pgate.evaluate({}, None, signature=_SIG, component="plate")
+    assert block["outcome"] == pgate.NOT_DECLARED, block
+    assert block["declared"] is False and block["ok"] is True, block
+    assert block["requirements"] == [] and block["violations"] == [], block
+    assert block["skipped"] == [], block
+    # None/{} contract, and a stray verdict record with no contract, all behave alike
+    for contract in (None, {}, {"requirements": []}):
+        assert pgate.evaluate(contract, _record([]))["outcome"] == pgate.NOT_DECLARED
+    # and the assembly roll-up disappears entirely
+    assert pgate.roll_up({"plate": block}) is None
+    assert pgate.roll_up({}) is None
+
+
+def test_a_met_contract_passes_the_gate_and_an_unmet_one_blocks_it():
+    """The two verdicts. Both are statements about the part, so both decide."""
+    contract = _contract(("dp_at_rated", {"max": 50.0}))
+    met = pgate.evaluate(contract, _record(
+        [{"name": "dp_at_rated", "state": "pass", "measured": 34.0,
+          "detail": "34 vs max 50"}]), signature=_SIG, component="manifold")
+    assert met["outcome"] == pgate.MET and met["ok"] is True, met
+    assert pgate.has_verdict(met) is True
+    assert met["violations"] == [] and met["skipped"] == [], met
+    assert met["requirements"][0]["state"] == pgate.PASS
+
+    unmet = pgate.evaluate(contract, _record(
+        [{"name": "dp_at_rated", "state": "fail", "measured": 88.0,
+          "detail": "88 vs max 50"}]), signature=_SIG, component="manifold")
+    assert unmet["outcome"] == pgate.UNMET and unmet["ok"] is False, unmet
+    assert pgate.has_verdict(unmet) is True          # a failure IS a verdict
+    v = unmet["violations"]
+    assert len(v) == 1 and v[0]["requirement"] == "performance", v
+    assert v[0]["name"] == "dp_at_rated" and v[0]["component"] == "manifold", v
+    assert v[0]["measured"] == 88.0 and v[0]["limit"] == {"max": 50.0}, v
+    assert "dp_at_rated" in unmet["reason"], unmet["reason"]
+    # the roll-up carries the violation up to merge_assembly's `ok` predicate
+    up = pgate.roll_up({"manifold": unmet})
+    assert up["outcome"] == pgate.UNMET and up["ok"] is False and up["violations"] == v
+
+
+def test_an_undecided_contract_is_neither_passed_nor_failed():
+    """#261's whole point, and #248's discipline one level up. Four ways to have no
+    verdict — never verified, a row that could not decide, a solve still in flight,
+    and a verdict invalidated by an edit — and NONE of them may read as a pass or as
+    a failure. They ride in `skipped`, the vocabulary merge_assembly already has."""
+    contract = _contract(("dp_at_rated", {"max": 50.0}))
+    cases = {
+        # 1. nobody ever ran verify_performance
+        pgate.UNVERIFIED: pgate.evaluate(contract, None, signature=_SIG),
+        # 2. measured, but the band straddled the limit (#226's third state)
+        pgate.INDETERMINATE: pgate.evaluate(contract, _record(
+            [{"name": "dp_at_rated", "state": "indeterminate", "measured": 48.0,
+              "detail": "band ±10 % straddles the limit"}]), signature=_SIG),
+        # 3. the part changed after it was verified
+        pgate.STALE: pgate.evaluate(contract, _record(
+            [{"name": "dp_at_rated", "state": "pass", "measured": 34.0}]),
+            signature="edited-since"),
+    }
+    for want, block in cases.items():
+        assert block["outcome"] == pgate.UNPROVEN, (want, block)
+        assert block["ok"] is False, (want, block)          # never a pass
+        assert block["violations"] == [], (want, block)     # never a failure either
+        assert block["skipped"] == ["dp_at_rated"], (want, block)
+        assert pgate.has_verdict(block) is False, (want, block)
+        item = block["requirements"][0]
+        assert item["state"] == want, (want, item)
+        assert "NO verdict" in item["skipped_reason"], item
+
+    # 4. a solve still in flight names the job, so the caller knows what to wait for
+    flight = pgate.evaluate(contract, _record(
+        [{"name": "dp_at_rated", "state": "indeterminate", "job_id": "job_7",
+          "detail": "solve submitted; poll job_result for the verdict"}]),
+        signature=_SIG)
+    assert flight["outcome"] == pgate.UNPROVEN and flight["ok"] is False, flight
+    assert "job_7" in flight["requirements"][0]["skipped_reason"], flight
+
+    # a record with no signature at all cannot be dated -> stale, not trusted
+    undatable = pgate.evaluate(contract, _record(
+        [{"name": "dp_at_rated", "state": "pass"}], signature=None), signature=_SIG)
+    assert undatable["requirements"][0]["state"] == pgate.STALE, undatable
+    assert undatable["stale"] is True and undatable["ok"] is False, undatable
+
+    # a row with a garbled state is NOT read optimistically
+    garbled = pgate.evaluate(contract, _record(
+        [{"name": "dp_at_rated", "state": "probably fine"}]), signature=_SIG)
+    assert garbled["requirements"][0]["state"] == pgate.INDETERMINATE, garbled
+    assert garbled["ok"] is False, garbled
+
+
+def test_the_roll_up_never_lets_undecided_masquerade_as_met():
+    """One met component + one unproven one is not a met assembly, and one unmet
+    component beats everything. `skipped` never fails the merge (a non-verdict says
+    nothing about the part) but it can never make `ok` True either."""
+    c = _contract(("dp", {"max": 50.0}))
+    met = pgate.evaluate(c, _record([{"name": "dp", "state": "pass"}]),
+                         signature=_SIG, component="a")
+    unproven = pgate.evaluate(c, None, signature=_SIG, component="b")
+    unmet = pgate.evaluate(c, _record([{"name": "dp", "state": "fail"}]),
+                           signature=_SIG, component="c")
+    plain = pgate.evaluate({}, None, component="d")
+
+    only_met = pgate.roll_up({"a": met, "d": plain})
+    assert only_met["outcome"] == pgate.MET and only_met["ok"] is True, only_met
+    assert only_met["violations"] == [] and only_met["skipped"] == [], only_met
+    assert set(only_met["components"]) == {"a"}, only_met   # `d` declared nothing
+
+    mixed = pgate.roll_up({"a": met, "b": unproven})
+    assert mixed["outcome"] == pgate.UNPROVEN and mixed["ok"] is False, mixed
+    assert mixed["violations"] == [], mixed          # does NOT fail the merge
+    assert mixed["skipped"] == ["b:dp"], mixed       # but is loud, and named
+    assert "not decided" in mixed["reason"], mixed["reason"]
+
+    worst = pgate.roll_up({"a": met, "b": unproven, "c": unmet})
+    assert worst["outcome"] == pgate.UNMET and worst["ok"] is False, worst
+    assert [v["component"] for v in worst["violations"]] == ["c"], worst
 
 
 # --- live: the contract on a real part ------------------------------------------
@@ -297,6 +446,127 @@ def test_solver_tier_proves_an_aero_spec_end_to_end():
     assert res["passed"] == 1 and res["failed"] == 1 and res["indeterminate"] == 1
     print(f"    aero contract: Cd {by['cd_generous']['measured']:.4g} vs curve "
           f"{oracle['cd']:.4g}; pass/fail/indeterminate all proved through a real solve")
+
+
+# --- live: the merge gate consults the contract (#261) ---------------------------
+#
+# Real components, real merge, no solver: the requirement's metric comes from the
+# analytic pipe screen (cfd_pipe_flow), so the whole four-way gate runs in seconds.
+
+_PIPE = {"diameter_mm": 10, "length_mm": 1000, "flow_rate_lpm": 0.5,
+         "fluid": "water-20c"}          # laminar -> 34.0 Pa, exact, no band
+
+
+def _dp_requirement(limit_pa):
+    return {"name": "dp_at_rated", "metric": "pressure_drop_pa",
+            "tool": "cfd_pipe_flow", "conditions": _PIPE,
+            "limit": {"max": limit_pa}, "fidelity_floor": "screen",
+            "screen": {"tool": "cfd_pipe_flow", "metric": "pressure_drop_pa",
+                       "conditions": _PIPE}}
+
+
+def _pipe_component(worker, path, name, limit_pa=None, verify=True):
+    """One saved component. `limit_pa=None` declares no contract at all;
+    `verify=False` declares one and never proves it."""
+    worker.call("new_document", name=name)
+    h = worker.call("add_primitive", kind="cylinder", radius=5, height=1000,
+                    name=name)["handle"]
+    if limit_pa is not None:
+        worker.call("declare_performance", handle=h,
+                    requirements=[_dp_requirement(limit_pa)])
+        if verify:
+            worker.call("verify_performance", handle=h, tier="screen")
+    worker.call("save_document", path=str(path))
+    return h
+
+
+def _merge_one(worker, tmp, cfile, tag):
+    man = {"name": f"asm_{tag}", "root": str(tmp / f"asm_{tag}.FCStd"),
+           "components": {"pipe": {"file": str(cfile)}},
+           "instances": [{"component": "pipe", "name": "pipe",
+                          "placement": [0, 0, 0]}]}
+    mpath = tmp / f"m_{tag}.json"
+    mpath.write_text(json.dumps(man), encoding="utf-8")
+    return worker.call("merge_assembly", manifest=str(mpath))
+
+
+def test_merge_assembly_gates_on_a_declared_performance_contract():
+    """The merge gate, four-sided and live. A met contract merges; an unmet one is
+    BLOCKED with the requirement named; an unverified one is neither (it surfaces as
+    its own outcome and the merge is not failed for it); and a component that declares
+    nothing produces no performance block whatsoever — the pre-#261 report, exactly."""
+    from driftpin import Worker
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        # The builder session saves; a SEPARATE coordinator session merges — so this
+        # also proves the contract and its verdict survive the .FCStd round trip.
+        with Worker() as w:
+            _pipe_component(w, tmp / "met.FCStd", "met", limit_pa=100.0)
+            _pipe_component(w, tmp / "unmet.FCStd", "unmet", limit_pa=1.0)
+            _pipe_component(w, tmp / "unverified.FCStd", "unverified",
+                            limit_pa=100.0, verify=False)
+            _pipe_component(w, tmp / "plain.FCStd", "plain")
+        with Worker() as w:
+            met = _merge_one(w, tmp, tmp / "met.FCStd", "met")
+            unmet = _merge_one(w, tmp, tmp / "unmet.FCStd", "unmet")
+            unver = _merge_one(w, tmp, tmp / "unverified.FCStd", "unver")
+            plain = _merge_one(w, tmp, tmp / "plain.FCStd", "plain")
+
+    # 1. MET — merges, and the report says so with the measurement behind it
+    assert met["ok"] is True, met["gates"]
+    assert met["gates"]["performance"] == [], met["gates"]["performance"]
+    assert met["performance"]["outcome"] == pgate.MET, met["performance"]
+    row = met["performance"]["components"]["pipe"]["requirements"][0]
+    assert row["state"] == pgate.PASS and abs(row["measured"] - 34.0) < 1.0, row
+
+    # 2. UNMET — blocked, and the violation NAMES the requirement
+    assert unmet["ok"] is False, unmet
+    viol = unmet["gates"]["performance"]
+    assert len(viol) == 1 and viol[0]["name"] == "dp_at_rated", viol
+    assert viol[0]["component"] == "pipe" and viol[0]["requirement"] == "performance"
+    assert unmet["performance"]["outcome"] == pgate.UNMET, unmet["performance"]
+
+    # 3. UNVERIFIED — its own explicit outcome. Not a violation (nothing was measured,
+    #    so nothing about the PART failed) and emphatically not a pass.
+    assert unver["gates"]["performance"] == [], unver["gates"]["performance"]
+    assert unver["performance"]["outcome"] == pgate.UNPROVEN, unver["performance"]
+    assert unver["performance"]["ok"] is False, unver["performance"]
+    assert unver["performance"]["skipped"] == ["pipe:dp_at_rated"], unver["performance"]
+    assert pgate.has_verdict(unver["performance"]) is False
+
+    # 4. NO CONTRACT — the report is the one it always was. This is the regression
+    #    guard for the 99 % of parts that declare nothing.
+    assert plain["ok"] is True, plain
+    assert "performance" not in plain, sorted(plain)
+    assert "performance" not in plain["gates"], sorted(plain["gates"])
+
+
+def test_editing_a_verified_part_makes_the_gate_report_stale_not_met():
+    """A verdict is about the shape that was measured. Verify a part, then change it,
+    and the gate must stop honoring the old answer — the conservative half of "a gate
+    never treats absence of evidence as evidence"."""
+    from driftpin import Worker
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        with Worker() as w:
+            h = _pipe_component(w, tmp / "before.FCStd", "drift", limit_pa=100.0)
+            # same part, bigger bore, saved alongside: the recorded verdict now
+            # describes a shape that no longer exists
+            w.call("set_property", handle=h, name="Radius", value=25.0)
+            w.call("save_document", path=str(tmp / "after.FCStd"))
+        with Worker() as w:
+            fresh = _merge_one(w, tmp, tmp / "before.FCStd", "fresh")
+        with Worker() as w:
+            drifted = _merge_one(w, tmp, tmp / "after.FCStd", "drifted")
+
+    assert fresh["performance"]["outcome"] == pgate.MET, fresh["performance"]
+    assert drifted["performance"]["outcome"] == pgate.UNPROVEN, drifted["performance"]
+    comp = drifted["performance"]["components"]["pipe"]
+    assert comp["stale"] is True, comp
+    assert comp["requirements"][0]["state"] == pgate.STALE, comp
+    assert "re-run verify_performance" in comp["requirements"][0]["skipped_reason"]
+    assert drifted["ok"] is True, drifted     # a non-verdict does not fail a merge...
+    assert drifted["performance"]["ok"] is False, drifted   # ...nor pass one
 
 
 # --- runner -------------------------------------------------------------------

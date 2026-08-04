@@ -10,9 +10,16 @@ solve, so its BODY stays in the worker. What lives here is the part that must be
 shared verbatim between the worker and every consumer of the report — how a
 first-mode outcome is classified, and in particular the difference between "the
 part is too floppy" and "the solve never finished" (issue #248).
+
+``performance`` generalizes that discipline to #226's quantitative contracts: it
+is the single judgement ``merge_assembly``, ``substitutability_check`` and
+``component_contract_check`` all read a ``DP_Performance`` contract with, so
+"met", "not met" and "nobody has measured it yet" can never collapse into one
+another at any of the three gates (issue #261).
 """
 
 from . import modal  # noqa: F401
+from . import performance  # noqa: F401
 from . import substitutability  # noqa: F401
 
-__all__ = ["modal", "substitutability"]
+__all__ = ["modal", "performance", "substitutability"]

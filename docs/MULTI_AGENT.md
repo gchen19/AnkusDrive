@@ -888,6 +888,79 @@ companion — the recipe a host follows to fan out its own build.
 and the one worked binding of the roles for a host that has no agent-spawning of its
 own; #169 only converges it onto the shared brief schema, it does not replace it.
 
+### 11.12 Performance contracts at the gates *(shipped)*
+
+Issue #226 made a quantitative spec a first-class object: `declare_performance`
+persists it on the part (`DP_Performance`) and `verify_performance` re-proves it,
+with a three-state verdict where a measurement whose uncertainty band straddles the
+limit is `indeterminate`, never a pass. But **nothing consulted it**, so a component
+that was a perfect geometric fit and missed its Δp spec merged silently. Issue #261
+(shipped 2026-08-03) wires it into all three gates. All logic lives in the pure,
+FreeCAD-free `driftpin/gates/performance.py`, so the merge, the swap gate and the
+builder self-check share one judgement.
+
+**The async policy — the design decision.** Verification may be asynchronous: a
+solver-tier requirement submits a job and `verify_performance` returns a `job_id`. A
+gate has to answer now. The policy chosen is: **a gate consults the last RECORDED
+verdict and never measures.** `verify_performance` stamps its verdict onto the part
+(`DP_PerformanceVerdict`), and every gate reads that record. The alternatives were
+rejected deliberately — running a screen tier inline would silently substitute a
+weaker measurement than the contract declares (and cannot satisfy a requirement whose
+`fidelity_floor` is `solver` at all) while making a documented-deterministic
+`merge_assembly` do arbitrary solver work; refusing to gate outright would discard a
+verdict that is genuinely on record.
+
+**A gate never reads "not yet verified" as "fine"** — the #248 discipline, one level
+up. A requirement has five outcomes, of which only two are verdicts about the part:
+
+| outcome | meaning | effect on the gate |
+|---|---|---|
+| `pass` | recorded verdict met the limit, record current | passes |
+| `fail` | recorded verdict missed the limit | **violation** — fails the merge |
+| `indeterminate` | measured; band straddles the limit or a trust demand was unmet | `skipped` |
+| `unverified` | never verified, or a solve still in flight | `skipped` |
+| `stale` | verified, then the part was edited | `skipped` |
+
+The bottom three roll up to a contract outcome of `unproven`: it does **not** fail a
+merge (a non-verdict says nothing about the part) and it can **never** make the block
+`ok` — `report["performance"]["skipped"]` names every undecided requirement, and
+`gates.performance.has_verdict()` is the predicate a coordinator branches on.
+
+**Staleness.** `verify_intent` has no staleness concept because re-running its checks
+is free; a performance verification can cost a CFD solve, so it has to be *detected*.
+Mirroring §9's lockfile hashing, `verify_performance` stamps the verdict with a
+geometry signature of the shape it measured, and a gate compares it against the
+part's current signature. A mismatch — or a record with no signature, or a part whose
+signature cannot be computed — is `stale`: freshness that cannot be established is
+not freshness.
+
+**Where it shows up.**
+
+- **`merge_assembly`** — every linked component is consulted, with no manifest opt-in
+  (the contract rides on the component's file, so a coordinator cannot merge away a
+  part that misses its spec by forgetting to restate it). `gates.performance` holds
+  the violations; `report["performance"]` holds the per-component detail. **Both are
+  absent entirely when no component declares a contract**, so the report for the 99 %
+  of assemblies that declare nothing is unchanged.
+- **`substitutability_check`** — Form/Fit/**Function**. An unmet contract breaks the
+  named `performance` gate like any other. An *unproven* one produces a third answer:
+  `substitutable: null`, verdict `performance_unproven`, and a classification that
+  explicitly declines the part-number decision, because handing an unverified part an
+  existing part number is the silent pass #226 exists to prevent.
+- **`component_contract_check`** — the builder brief gains an optional `performance`
+  slice (`{requirements: [{name, limit}], required?}`). `performance_spec:<name>`
+  asks whether the part declared what it was briefed for *and no looser*;
+  `performance:<name>` asks whether the recorded verdict met it. An undecided
+  requirement rides in a new `skipped` list rather than in `checks`, so it moves
+  neither `ok` nor the reasons — for a self-check before fan-in, "you have not shown
+  this yet" is exactly the actionable state.
+
+Two-sided (four-sided, really) in `tests/test_performance.py` — the pure gate on
+constructed records plus a live merge of real components through met / unmet /
+unverified / no-contract, and an edit-invalidates-the-verdict staleness test — with
+the swap gate in `tests/test_substitutability.py` and the builder half in
+`tests/test_component_contract_check.py`.
+
 ---
 
 ## 12. Phased roadmap

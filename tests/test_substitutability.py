@@ -8,6 +8,11 @@ existing typed-interface fixtures:
   - swapping a deliberately OFF-interface variant FAILS, and the report NAMES the
     broken gate (interface break ⇒ a new part number).
 
+Plus Function (issue #261): a variant that is a perfect drop-in FIT but misses its
+declared PERFORMANCE contract is not substitutable, and one whose contract nobody has
+verified is neither — `substitutable` is tri-state, and None means "verify it first",
+never "close enough".
+
 Same M1 discipline as tests/test_typed_interfaces.py — never trust a gate you
 haven't shown both passes its reference AND catches a wrong answer. Both sides go
 through the single `substitutability_check` handler, which drives merge_assembly
@@ -25,6 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from driftpin import Worker  # noqa: E402
+from driftpin.gates import performance as pgate  # noqa: E402
 from driftpin.gates import substitutability as subst  # noqa: E402
 
 
@@ -228,6 +234,100 @@ def test_baseline_not_green_is_reported():
     print("  PASS baseline_not_green  premise violated -> reported, not compared")
 
 
+# --- Function, not just Form and Fit (issue #261) -----------------------------
+#
+# Driven on constructed merge reports through an injected `call`, not a live merge:
+# the property under test is what the SWAP VERDICT does with a performance block, and
+# that must hold identically whether the contract was screened in milliseconds or
+# solved overnight. (The live merge side is gated in tests/test_performance.py.)
+
+def _merge_report(ok=True, performance=None, gates=None):
+    """The slice of a merge_assembly report the substitutability gate reads."""
+    rep = {"ok": ok, "gates": {"interference": [], "envelope": [], **(gates or {})}}
+    if performance is not None:
+        rep["performance"] = performance
+        rep["gates"]["performance"] = performance.get("violations", [])
+    return rep
+
+
+def _perf(outcome, violations=(), skipped=()):
+    return {"schema": pgate.SCHEMA, "outcome": outcome,
+            "ok": outcome == pgate.MET, "components": {},
+            "violations": list(violations), "skipped": list(skipped)}
+
+
+def _swap(tmp, baseline, swapped):
+    """Run substitutability_report over a throwaway manifest with an injected merge
+    primitive that returns `baseline` then `swapped`."""
+    mpath = tmp / "manifest.json"
+    mpath.write_text(json.dumps(
+        {"name": "asm", "components": {"peg": {"file": "pegA.FCStd"}},
+         "instances": [{"component": "peg", "name": "peg"}]}), encoding="utf-8")
+    seq = [baseline, swapped]
+
+    def call(_method, **_kw):
+        return seq.pop(0)
+
+    return subst.substitutability_report(str(mpath), "peg",
+                                         {"file": "pegB.FCStd"}, call)
+
+
+def test_performance_is_part_of_the_swap_verdict():
+    """A drop-in FIT that misses its spec is not a drop-in. Four-sided:
+
+      met contract      -> substitutable, exactly as before;
+      unmet contract    -> NOT substitutable, and `performance` is the NAMED gate;
+      unverified        -> neither: substitutable is None, verdict
+                           'performance_unproven', and no part-number decision;
+      no contract       -> the report is byte-identical to the pre-#261 one."""
+    # the merge's own ok-predicate must know about the new gate, or a violation the
+    # merge failed on would be invisible to the swap diff
+    assert "performance" in subst.LIST_GATES
+    assert subst.failing_gates(
+        {"gates": {"performance": [{"name": "dp"}]}}) == {"performance": [{"name": "dp"}]}
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        green = _merge_report(ok=True, performance=_perf(pgate.MET))
+
+        # 1. met on both sides -> the ordinary substitutable verdict, unchanged
+        ok = _swap(tmp, green, _merge_report(ok=True, performance=_perf(pgate.MET)))
+        assert ok["substitutable"] is True and ok["verdict"] == "substitutable", ok
+        assert ok["classification"]["semver"] == "MINOR/PATCH", ok
+        assert ok["performance"]["outcome"] == pgate.MET, ok["performance"]
+
+        # 2. the variant fits but misses the spec -> broken, and NAMED
+        viol = [{"requirement": "performance", "component": "peg", "name": "dp",
+                 "reason": "88 Pa vs max 50"}]
+        bad = _swap(tmp, green,
+                    _merge_report(ok=False, performance=_perf(pgate.UNMET, viol)))
+        assert bad["substitutable"] is False, bad
+        assert bad["verdict"] == "not_substitutable", bad
+        assert bad["broken_gates"] == ["performance"], bad
+        assert bad["broken"]["performance"][0]["name"] == "dp", bad
+        assert bad["classification"]["decision"] == "new part number", bad
+
+        # 3. nobody measured it -> the THIRD answer. Not substitutable, not
+        #    un-substitutable, and explicitly no part-number decision.
+        unproven = _swap(tmp, green, _merge_report(
+            ok=True, performance=_perf(pgate.UNPROVEN, skipped=["peg:dp"])))
+        assert unproven["substitutable"] is None, unproven
+        assert unproven["verdict"] == "performance_unproven", unproven
+        assert unproven["broken_gates"] == [], unproven   # nothing BROKE
+        assert unproven["performance"]["undecided"] == ["peg:dp"], unproven
+        cls = unproven["classification"]
+        assert cls["compatibility"] == "undecided" and cls["semver"] is None, cls
+        assert "verify_performance" in cls["decision"], cls
+
+        # 4. no component declares a contract -> the pre-#261 report exactly
+        plain = _swap(tmp, _merge_report(ok=True), _merge_report(ok=True))
+        assert plain["substitutable"] is True, plain
+        assert plain["verdict"] == "substitutable", plain
+        assert "performance" not in plain, sorted(plain)
+    print("  PASS performance     met / unmet / unverified / none -> "
+          "substitutable / broken / undecided / unchanged")
+
+
 # --- assertions --------------------------------------------------------------
 
 def _assert_substitutable(slot, label, rep):
@@ -256,7 +356,8 @@ def _assert_broken(slot, label, rep, gate):
 
 
 def main():
-    tests = [test_pure_helpers, test_bore_fit_substitutability,
+    tests = [test_pure_helpers, test_performance_is_part_of_the_swap_verdict,
+             test_bore_fit_substitutability,
              test_gear_mesh_substitutability,
              test_off_interface_breaks_interference_gate,
              test_baseline_not_green_is_reported]

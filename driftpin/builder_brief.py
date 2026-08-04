@@ -28,7 +28,10 @@ A *builder brief* describes exactly one component:
       },
       "shared_parameters": {"bolt": "M4", "wall_mm": 3.0},   # global facts to honor
       "material": "AISI 1045",             # optional, for DFx / mass
-      "constraints": {"process": "cnc_milling", "min_wall_mm": 2.0}  # optional DFx
+      "constraints": {"process": "cnc_milling", "min_wall_mm": 2.0},  # optional DFx
+      "performance": {                     # optional quantitative spec (#226/#261)
+        "requirements": [{"name": "dp_at_rated", "limit": {"max": 50.0}}]
+      }
     }
 
 `component`, `task`, and `output` are required; everything else is optional but
@@ -50,6 +53,7 @@ SCHEMA = "driftpin.builder_brief/1"
 _KNOWN_KEYS = {
     "schema", "component", "assembly", "task", "output", "envelope",
     "interfaces", "shared_parameters", "material", "constraints", "owner",
+    "performance",
 }
 
 
@@ -91,6 +95,10 @@ def validate_builder_brief(brief):
                     v = spec.get(ax)
                     if v is not None and not _is_vec3(v):
                         problems.append(f"interface {name!r} {ax} must be [x,y,z]")
+    perf = brief.get("performance")
+    if perf is not None:
+        from driftpin.gates import performance as _pgate
+        problems += _pgate.brief_problems(perf)
     for k in brief:
         if k not in _KNOWN_KEYS:
             problems.append(f"unknown brief key {k!r}")
@@ -135,6 +143,16 @@ def builder_brief_text(brief):
         parts.append(f"Material: {brief['material']}.")
     if brief.get("constraints"):
         parts.append(f"Manufacturing / DFx constraints: {brief['constraints']}.")
+    perf = brief.get("performance")
+    if perf:
+        reqs = perf.get("requirements") or []
+        lines = [f"  - {r.get('name')}: {r.get('limit')}" for r in reqs]
+        parts.append(
+            "Quantitative PERFORMANCE requirements you must declare "
+            "(declare_performance) and PROVE (verify_performance) before fan-in — a "
+            "requirement you never verified is reported as unverified, which is not a "
+            "pass:\n" + ("\n".join(lines) if lines
+                         else "  - (see the assembly's performance contract)"))
     if brief.get("output"):
         parts.append(f"Save your finished component to: {brief['output']}")
     parts.append("Before saving, call component_contract_check(handle, brief) with "
@@ -159,6 +177,8 @@ def brief_from_slice(coordinator_brief, cid, *, output=None):
         out["envelope"] = spec["envelope"]
     if spec.get("interfaces"):
         out["interfaces"] = spec["interfaces"]
+    if spec.get("performance"):
+        out["performance"] = spec["performance"]
     shared = coordinator_brief.get("shared_parameters")
     if shared:
         out["shared_parameters"] = shared
@@ -187,7 +207,8 @@ def _angle_deg(a, b):
     return math.degrees(math.acos(max(-1.0, min(1.0, c))))
 
 
-def evaluate_contract(brief, *, watertight, bbox, published, eps=1e-6):
+def evaluate_contract(brief, *, watertight, bbox, published, eps=1e-6,
+                      performance=None, performance_contract=None):
     """Pure core of `component_contract_check` (issue #169, item 2). The builder-side
     half of the gate `merge_assembly` re-runs at merge time, evaluated locally on a
     component before it is saved:
@@ -196,14 +217,25 @@ def evaluate_contract(brief, *, watertight, bbox, published, eps=1e-6):
       * envelope     — the local bounding box fits inside the declared keep-out box.
       * interfaces   — every required frame is published with a sane frame, and (when
                        the brief pins an origin/axis) within tolerance of it.
+      * performance  — the quantitative contract (#226) the part declares, judged
+                       against its last recorded verdict (issue #261).
 
     Inputs are already-extracted primitives so this stays FreeCAD-free and testable:
       watertight : bool | None   check_shape's watertight_solid verdict (None=unknown)
       bbox       : {"min":[x,y,z], "max":[x,y,z]} | None   the part's local bbox
       published  : dict           frames published on the part (name -> frame dict)
+      performance: dict | None    a driftpin.gates.performance gate block for the part
+      performance_contract: dict | None   the part's raw DP_Performance bag, used to
+                       check the brief's `performance.requirements` were declared and
+                       not quietly loosened
 
-    Returns {ok, checks:[{check, passed, detail}], reasons:[str,...]} — same shape
-    family as verify_contract, and never raises."""
+    Returns {ok, checks:[{check, passed, detail}], reasons:[str,...],
+    skipped:[{check, reason}], performance?}. `skipped` is #248's vocabulary for
+    "no verdict": an undecided performance requirement neither passes nor fails the
+    gate, so `ok` is untouched by it and the builder still sees, loudly, that it has
+    not shown the thing yet. A part that declares no contract produces no performance
+    rows, no `performance` key, and an empty `skipped` — the geometric gate is exactly
+    what it was. Never raises."""
     checks = []
 
     def add(name, passed, detail):
@@ -262,6 +294,15 @@ def evaluate_contract(brief, *, watertight, bbox, published, eps=1e-6):
         add(f"interface:{name}", passed,
             detail if detail else f"{name} published with a sane frame")
 
+    # 4) the performance contract (#226) as a gate slice (#261)
+    from driftpin.gates import performance as _pgate
+    perf_checks, skipped = _pgate.brief_checks(
+        brief.get("performance"), performance_contract, performance)
+    checks += perf_checks
+
     ok = all(c["passed"] for c in checks) if checks else True
     reasons = [c["detail"] for c in checks if not c["passed"]]
-    return {"ok": ok, "checks": checks, "reasons": reasons}
+    out = {"ok": ok, "checks": checks, "reasons": reasons, "skipped": skipped}
+    if performance is not None and performance.get("declared"):
+        out["performance"] = performance
+    return out
