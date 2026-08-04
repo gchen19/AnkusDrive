@@ -519,4 +519,20 @@ def exit_hint(material, accessor: str) -> str:
         if len(near) > _HINT_MAX:
             shown += ", ..."
         return f"or use a Materials-DB name (material_list; did you mean {shown}?)"
+    # A card that EXISTS but lacks this property is a different situation, and
+    # "use a Materials-DB name" reads as nonsense to someone who just did. Say
+    # what is actually missing, and point at the cards in its own category that
+    # have it (which is where a substitute would come from).
+    try:
+        card = get(str(material))
+        siblings = [c["name"] for c in
+                    list_materials(card.get("category"))["materials"]
+                    if numeric(get(c["name"]), accessor) is not None]
+    except Exception:
+        card, siblings = None, []
+    if card is not None:
+        detail = (f" (cards in category {card.get('category')!r} that have it: "
+                  + ", ".join(siblings[:_HINT_MAX]) + ")") if siblings else ""
+        return (f"and note {card['name']!r} IS in the Materials DB but carries no "
+                f"{accessor}{detail}")
     return "or use a Materials-DB name (see material_list)"

@@ -3664,13 +3664,18 @@ def press_fit_stress(
     (2 rc ro^2); hub bore hoop=p(ro^2+rc^2)/(ro^2-rc^2); torque=2pi mu p rc^2 L.
     interference_mm is diametral.
 
-    E comes from `material`'s Materials-DB card; `youngs_modulus_mpa` overrides it
-    for a material the corpus doesn't carry. NOTE the fallback when neither
-    resolves is steel's 200 GPa, applied silently — pass the override explicitly
-    for any non-steel hub rather than trusting the default.
+    E comes from `material`'s Materials-DB card; `youngs_modulus_mpa` overrides it.
+    Every output is LINEAR in E, so a material the corpus has no modulus for is an
+    ERROR, not an assumption (#269) — the message names both exits.
+
+    `pass` is THREE-state: the hub yield check needs the card's yield_mpa, and a
+    card without one (Fused-Silica, Gold, Concrete, ...) leaves the check
+    unperformed. That returns pass=null with the reason in `warnings` — an
+    unperformed check is not a passed one. Test `pass is True`, not truthiness.
 
     Returns {contact_pressure_mpa, hub_hoop_stress_mpa, torque_capacity_nm,
-    axial_force_n, hub_yield_sf, pass}."""
+    axial_force_n, hub_yield_sf, youngs_modulus_mpa, youngs_basis, hub_yield_basis,
+    pass, warnings}."""
     return _call("press_fit_stress", shaft_dia_mm=shaft_dia_mm,
                  hub_outer_dia_mm=hub_outer_dia_mm, interference_mm=interference_mm,
                  engagement_length_mm=engagement_length_mm, material=material,
