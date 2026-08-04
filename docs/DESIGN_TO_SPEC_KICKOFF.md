@@ -6,9 +6,11 @@
 > adaptive **shape** optimization over a recipe (blocked on a main-thread work queue —
 > see the boundary note under #228), and
 > [#261](https://github.com/gchen19/DriftPin/issues/261) nothing consulting a
-> performance contract (#226's unbuilt integration section), and
-> [#262](https://github.com/gchen19/DriftPin/issues/262) no verified oracle for RANS
-> external flow. The remaining loose threads at the bottom are still untracked.
+> performance contract (#226's unbuilt integration section).
+> [#262](https://github.com/gchen19/DriftPin/issues/262) — no verified oracle for RANS
+> external flow — is now **closed**: see the loose-thread entry below for what the gate
+> covers and where it stops. The remaining loose threads at the bottom are still
+> untracked.
 
 Epic [#222](https://github.com/gchen19/DriftPin/issues/222) set a goal one step past "an
 agent can construct parts": **an agent designs to a quantitative performance spec and
@@ -271,10 +273,15 @@ any `add_*` tool.
 
 - ~~**#226's integration section is unbuilt.**~~ Now tracked as
   [#261](https://github.com/gchen19/DriftPin/issues/261).
-- ~~**The RANS wind-tunnel path ships `gated: false`.**~~ Now tracked as
-  [#262](https://github.com/gchen19/DriftPin/issues/262). Worth knowing regardless: a
-  requirement may demand `trust: {gated: true}`, which is therefore **unsatisfiable for
-  any turbulent external-flow spec** until that oracle exists.
+- ~~**The RANS wind-tunnel path ships `gated: false`.**~~ [#262](https://github.com/gchen19/DriftPin/issues/262),
+  **closed**: `gated` is now decided per (turbulence model, case family) by
+  `cfd.solve_gate`, and the turbulent body path is gated on a cube face-on vs the
+  bluff-body Cd table over Re = 1e4–2e5 (live 1.0017 / 1.0035). A turbulent aero spec
+  demanding `trust: {gated: true}` is satisfiable. The boundary is recorded rather than
+  papered over: on a *smooth* body the sphere reads 1.09× Clift–Gauvin, at the edge of
+  its own ±10 % band, and the cylinder in crossflow #262 proposed is not constructible
+  through the shipped knobs (one `lateral_factor` pads both non-flow axes, so no
+  spanwise-periodic span; a finite L/D = 4 cylinder measures 0.70× Sucker–Brauer).
 - **#237 items 2 and 3 are still open** (state-aware capabilities/hints; an SU2 case
   builder). Item 1 — wiring the built-in cases through Multipass — is effectively done.
 - **Mesh independence for non-CFD families.** `grid_convergence` is family-agnostic and

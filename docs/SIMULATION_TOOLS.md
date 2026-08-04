@@ -271,11 +271,38 @@ Each family lists: the agent question it answers · backend · new-dependency we
   background cell as coarse as the body makes snappyHexMesh mesh an **empty tunnel**
   and report ~1e-14 N with rc=0, so a too-coarse `base_cell_mm` is refused; and a
   steady laminar request past Re≈1000 is flagged in `warnings` rather than answered
-  quietly. `turbulence='kOmegaSST'` runs but has no verified oracle for arbitrary
-  bodies and returns `gated:false`. Gates: sphere vs the Clift–Gauvin drag curve at
+  quietly. Gates: sphere vs the Clift–Gauvin drag curve at
   Re=1 and Re=100 (live 0.8 % / 2.0 %, banded 10 %) and a same-body broadside-vs-edge-on
   ordering, in `tests/test_meshbridge.py`; end to end through the handler in
   `tests/test_wind_tunnel.py`.
+- **`gated` is per (turbulence model, case family)** (issue #262) — one registry,
+  `cfd.solve_gate`, decides it for every CFD payload; it used to be the single line
+  `turbulence == "laminar"`, so **every** turbulent external-flow solve shipped
+  `gated:false` and a requirement demanding `trust: {gated: true}`
+  (`performance.check_trust`) was unsatisfiable at a realistic Reynolds number: laminar
+  is gated but physically wrong above Re≈1000, RANS was right but unproven. The
+  turbulent body path is now gated on a **cube face-on vs the tabulated bluff-body Cd**
+  (1.05, ±20 %) over `Re = 1e4–2e5` — **live 1.0017 at Re=1e4 and 1.0035 at Re=1e5**
+  (`tests/test_wind_tunnel.py`), holding at 1.0136 on a finer surface refinement
+  (min level 3, 4× the cells). Outside that Reynolds envelope, or for any pair nobody has verified, the
+  payload comes back `gated:false` **with the reason in `warnings`** rather than
+  inheriting a neighbour's credibility. Trust evidence is still not validation:
+  the same Re=1e5 cube whose Cd is right is `trusted:false` because measured y+ 583
+  is past the wall-function band.
+  - **The boundary, measured:** a sharp-edged body is where steady RANS is credible —
+    separation is pinned to the edges by geometry. On a **smooth** body it is the
+    model's job to predict, and it does it badly: the sphere at Re=1e4 reads **1.091**
+    of Clift–Gauvin (1.097 at the next refinement level, so model error, not mesh
+    error) — inside that correlation's ±10 % band, but only just. Recorded live in
+    `tests/test_wind_tunnel.py`.
+  - **Why not the cylinder in crossflow**, which #262 proposed: Sucker–Brauer is the
+    INFINITE-cylinder value and the handler cannot build a spanwise-periodic case —
+    `external_domain_box` pads both non-flow axes with the single `lateral_factor`, so
+    asking for a near-2-D span crushes the cross-stream domain into the 5 % blockage
+    warning. A finite L/D = 4 cylinder solved live at Re=1e4 lands at Cd 0.769,
+    **ratio 0.70** vs Sucker–Brauer — end relief, exactly as
+    `cylinder_crossflow_drag`'s own `L/D < 10` warning predicts, and outside its ±15 %
+    band for a geometric reason with nothing to do with turbulence modelling.
 - **External-flow oracles** (`analysis/cfd.py`): **Stokes sphere** Cd = 24/Re,
   F = 6πμUR (exact at Re≪1); the **standard sphere drag curve** (Clift–Gauvin, ±10 %,
   collapsing to Stokes as Re→0 and stopping at the drag crisis); the **cylinder in
@@ -298,9 +325,12 @@ Each family lists: the agent question it answers · backend · new-dependency we
   (`colebrook_ratio`, ±10 % — live 0.93 at Re=10⁵), the plate gates the
   trailing-edge momentum-thickness Cf against the mixed-transition 1/7-power form
   (`cf_mixed_ratio`, ±15 % — live 1.02 at Re_L=2·10⁶, with the (ν+ν_t)-corrected
-  wall shear as cross-check). Builders/parsers in `analysis/openfoam.py`
-  (`*_rans_*`), oracles in `analysis/cfd.py` (`colebrook_friction_factor`,
-  `flat_plate_drag_turbulent`), gates in `tests/test_openfoam.py`.
+  wall shear as cross-check), and — since #262 — the arbitrary-body wind tunnel
+  against the bluff-body Cd table (live 1.0017 at Re=10⁴). Builders/parsers in
+  `analysis/openfoam.py` (`*_rans_*`), oracles in `analysis/cfd.py`
+  (`colebrook_friction_factor`, `flat_plate_drag_turbulent`, `bluff_body_drag`), the
+  per-pair verdict in `cfd.solve_gate`, gates in `tests/test_openfoam.py` and
+  `tests/test_wind_tunnel.py`.
 - **The trust layer** (issue #225): every steady CFD result now carries a `trust` block
   saying what the numerics actually did, because a solve that hit its iteration cap
   unconverged is otherwise indistinguishable in the payload from one that converged.

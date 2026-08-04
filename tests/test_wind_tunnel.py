@@ -120,6 +120,129 @@ def test_wind_tunnel_solves_the_handed_body_not_a_flat_plate():
           f"{oracle['cd']:.4g} (ratio {ratio:.3f}, Re {res['reynolds']:.4g})")
 
 
+def test_rans_wind_tunnel_is_gated_on_a_sharp_edged_bluff_body():
+    """#262: the turbulent external-flow oracle. Until this existed the wind tunnel set
+    `gated` from `turbulence == 'laminar'`, so every kOmegaSST solve shipped
+    gated:false and a spec demanding trust:{gated:true} was unsatisfiable at any
+    realistic Reynolds number — laminar is gated but physically wrong above Re≈1000,
+    RANS was right but unproven.
+
+    The case is a cube face-on at Re = 1e4 and 1e5, gated against the tabulated
+    bluff-body Cd (1.05, ±20 %). A sharp-edged body is where steady RANS is credible:
+    separation is pinned to the edges by geometry, so the answer does not hang on the
+    turbulence model guessing where the boundary layer lets go. The table is
+    Re-independent over 1e4–1e6, so the SAME Cd must come back two decades apart —
+    which is the part a lucky single point cannot fake.
+
+    (Why not the cylinder in crossflow #262 proposed: Sucker–Brauer is the INFINITE
+    -cylinder value and the handler cannot build a spanwise-periodic case —
+    external_domain_box pads both non-flow axes with the one `lateral_factor`, so a
+    near-2-D span cannot be asked for without crushing the cross-stream domain into
+    the blockage warning. A finite L/D = 4 cylinder solved live at Re = 1e4 lands at
+    Cd 0.77, ratio 0.70 — end relief, exactly as cylinder_crossflow_drag's own L/D < 10
+    warning predicts, and outside its ±15 % band for a geometric reason that has
+    nothing to do with turbulence modelling.)"""
+    if skip_heavy("OpenFOAM RANS wind tunnel (the #262 turbulent oracle)"):
+        return
+    if not solvers.is_available("openfoam"):
+        print("    SKIP — OpenFOAM not installed")
+        return
+    d_mm = 10.0
+    runs = []
+    with Worker() as w:
+        w.call("new_document", name="tunnel_rans")
+        cube = w.call("add_primitive", kind="box", w=d_mm, d=d_mm, h=d_mm)
+        for re_target, fluid in ((1e4, "air-20c"), (1e5, "water-20c")):
+            mu, rho = cfd._fluid_props(fluid, None, None)
+            velocity = re_target * (mu / rho) / (d_mm / 1000.0)
+            sub = w.call("cfd_external_flow_submit", model=cube["handle"],
+                         velocity_m_s=velocity, fluid=fluid, turbulence="kOmegaSST")
+            assert sub.get("job_id"), sub
+            res = _await_job(w, sub["job_id"])
+            oracle = cfd.bluff_body_drag("cube_face_on", frontal_area_mm2=d_mm * d_mm,
+                                         velocity_m_s=velocity, fluid=fluid)
+            runs.append((re_target, res, oracle))
+
+    for re_target, res, oracle in runs:
+        assert res["ok"] and res["mode"] == "body", res
+        assert res["turbulence"] == "kOmegaSST", res
+        # THE #262 assertion: the turbulent path now carries a verified oracle, so
+        # performance.check_trust can satisfy a requirement that demands one
+        assert res["gated"] is True, res
+        assert res["converged"] is True, res
+        assert not res["warnings"], res["warnings"]
+        assert abs(res["reynolds"] / re_target - 1.0) < 0.01, res
+        assert res["blockage_ratio"] < 0.05, res            # bluff bodies feel walls
+        assert abs(res["frontal_area_m2"] - 1e-4) < 1e-9, res
+
+        ratio = res["cd"] / oracle["cd"]
+        assert abs(ratio - 1.0) < oracle["band_pct"] / 100.0, (res["cd"], ratio)
+        # the live value is 1.0017 (Re=1e4) / 1.0035 (Re=1e5), and 1.0136 on a 4x finer
+        # surface refinement — a drift past 10 % is a regression even though the
+        # table's own band is 20 %
+        assert abs(ratio - 1.0) < 0.10, (res["cd"], oracle["cd"], ratio)
+        # the signature of edge-fixed separation: essentially all form drag, no lift
+        assert abs(res["drag_viscous_n"]) < 0.01 * res["drag_force_n"], res
+        assert abs(res["cl"]) < 0.01 * abs(res["cd"]), res
+        assert res["force_drift_pct"] < 0.1, res
+        yp = res["trust"]["y_plus"]
+        print(f"    cube face-on, kOmegaSST, Re {res['reynolds']:.4g}: Cd "
+              f"{res['cd']:.4g} vs table {oracle['cd']:.4g} (ratio {ratio:.4f}, band "
+              f"±{oracle['band_pct']:.0f} %), y+ max {yp['y_plus_max']:.3g}")
+
+    # two-sided on the trust layer, which is a DIFFERENT question from the gate: at
+    # Re=1e4 the first cell sits in the log layer and the solve is trusted outright;
+    # at Re=1e5 the same mesh puts y+ past 300, so trust refuses it even though the
+    # gated Cd is still right. Verified evidence is not validation, and vice versa.
+    lo, hi = runs[0][1]["trust"], runs[1][1]["trust"]
+    assert lo["trusted"] is True and lo["y_plus"]["in_band"] is True, lo
+    assert hi["y_plus"]["in_band"] is False and hi["trusted"] is False, hi
+    assert any("y+" in r for r in hi["reasons"]), hi["reasons"]
+
+
+def test_rans_on_a_smooth_body_sits_at_the_edge_of_its_oracle():
+    """The honest boundary of the #262 gate, measured rather than asserted away: on a
+    SMOOTH body the separation line is not pinned by geometry, so it is the turbulence
+    model's to predict — and steady kOmegaSST does it badly enough to matter.
+
+    A sphere at Re = 1e4 reads ~1.09× the Clift–Gauvin curve. That is inside the
+    correlation's own ±10 % band, but only just, and it is not a mesh artefact: it
+    holds to 1.10 at the next refinement level, so it is model error, not discretization
+    error. This test records that number. Should it ever cross the band, the honest fix
+    is to narrow the (kOmegaSST, external_body) entry in cfd._SOLVE_GATES to the
+    fixed-separation family it was verified on — not to widen the band."""
+    if skip_heavy("OpenFOAM RANS sphere (the #262 boundary)"):
+        return
+    if not solvers.is_available("openfoam"):
+        print("    SKIP — OpenFOAM not installed")
+        return
+    d_mm, fluid = 10.0, "air-20c"
+    mu, rho = cfd._fluid_props(fluid, None, None)
+    velocity = 1e4 * (mu / rho) / (d_mm / 1000.0)
+    with Worker() as w:
+        w.call("new_document", name="tunnel_rans_sphere")
+        sphere = w.call("add_primitive", kind="sphere", r=d_mm / 2)
+        res = _await_job(w, w.call(
+            "cfd_external_flow_submit", model=sphere["handle"],
+            velocity_m_s=velocity, fluid=fluid, turbulence="kOmegaSST")["job_id"])
+
+    assert res["ok"] and res["converged"] is True and res["gated"] is True, res
+    oracle = cfd.sphere_drag(d_mm, velocity, fluid=fluid)
+    ratio = res["cd"] / oracle["cd"]
+    # characterization, not a pass/fail band: RANS OVERPREDICTS here (delayed
+    # separation), by ~9 % — the assertion brackets the measured behaviour so a change
+    # in either direction shows up
+    assert 1.04 < ratio < 1.14, (res["cd"], oracle["cd"], ratio)
+    inside = abs(ratio - 1.0) < oracle["band_pct"] / 100.0
+    # unlike the cube, a smooth body carries real friction drag
+    assert res["drag_viscous_n"] > 0.02 * res["drag_force_n"], res
+    print(f"    sphere, kOmegaSST, Re {res['reynolds']:.4g}: Cd {res['cd']:.4g} vs "
+          f"Clift-Gauvin {oracle['cd']:.4g} (ratio {ratio:.4f}, band "
+          f"±{oracle['band_pct']:.0f} % -> {'inside' if inside else 'OUTSIDE'}); "
+          f"y+ max {res['trust']['y_plus']['y_plus_max']:.3g}, trusted "
+          f"{res['trust']['trusted']}")
+
+
 def test_trust_block_reports_convergence_mesh_and_yplus():
     """The #225 trust layer through the product surface, two-sided: the shipped
     defaults must come back `trusted` with a converged solve and a clean checkMesh —
