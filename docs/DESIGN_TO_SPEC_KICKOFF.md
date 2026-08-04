@@ -5,10 +5,10 @@
 > What did NOT get done is tracked: [#260](https://github.com/gchen19/DriftPin/issues/260)
 > adaptive **shape** optimization over a recipe (blocked on a main-thread work queue —
 > see the boundary note under #228), and
-> [#261](https://github.com/gchen19/DriftPin/issues/261) nothing consulting a
-> performance contract (#226's unbuilt integration section), and
 > [#262](https://github.com/gchen19/DriftPin/issues/262) no verified oracle for RANS
-> external flow. The remaining loose threads at the bottom are still untracked.
+> external flow. [#261](https://github.com/gchen19/DriftPin/issues/261) — nothing
+> consulting a performance contract — is **built** (see below). The remaining loose
+> threads at the bottom are still untracked.
 
 Epic [#222](https://github.com/gchen19/DriftPin/issues/222) set a goal one step past "an
 agent can construct parts": **an agent designs to a quantitative performance spec and
@@ -269,8 +269,15 @@ any `add_*` tool.
 
 ## Loose threads not tracked as issues
 
-- ~~**#226's integration section is unbuilt.**~~ Now tracked as
-  [#261](https://github.com/gchen19/DriftPin/issues/261).
+- ~~**#226's integration section is unbuilt.**~~ Tracked as
+  [#261](https://github.com/gchen19/DriftPin/issues/261) and **built 2026-08-03**:
+  `merge_assembly`, `substitutability_check` and `component_contract_check` all consult
+  the contract now, through the pure `driftpin/gates/performance.py`. The design
+  decision worth remembering is the **async policy** — a gate reads the verdict
+  `verify_performance` last *recorded* on the part and never measures, because
+  verification may return a job and a gate must answer synchronously. Its corollary is
+  that "no verdict" is its own outcome (`unverified` / `stale` / `indeterminate` →
+  `skipped`), never a pass. See MULTI_AGENT.md §11.12.
 - ~~**The RANS wind-tunnel path ships `gated: false`.**~~ Now tracked as
   [#262](https://github.com/gchen19/DriftPin/issues/262). Worth knowing regardless: a
   requirement may demand `trust: {gated: true}`, which is therefore **unsatisfiable for

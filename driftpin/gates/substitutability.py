@@ -26,8 +26,20 @@ Design (§10.1, parallel-safe):
     module stays host-agnostic and unit-testable.
 
 The pass/fail gates mirror ``merge_assembly``'s own ``ok`` predicate (worker.py):
-interference, envelope, interface_align, typed, children, requirements, mobility.
-``bom`` is informational (not part of ``ok``) and is never treated as a failure.
+interference, envelope, interface_align, typed, children, requirements, mobility,
+performance. ``bom`` is informational (not part of ``ok``) and is never treated as a
+failure.
+
+Form/Fit/**Function** (issue #261). Until #261 this gate compared geometry and
+interfaces only, so a variant that was a perfect drop-in FIT but missed its Δp spec
+came back "substitutable" — the F3 verdict was really F2. A performance contract
+(#226) declared on the swapped-in part is now part of the swap comparison, and it
+introduces a THIRD answer this gate did not have: a variant whose contract has no
+recorded verdict is not substitutable and not un-substitutable, because nobody has
+measured it. ``substitutable`` is therefore tri-state — True / False / **None** — and
+None means "come back when you have verified it", never "close enough". Collapsing it
+to True would let an unproven part inherit an existing part number, which is exactly
+the silent pass #226 exists to prevent.
 """
 
 import copy
@@ -35,11 +47,13 @@ import json
 import os
 import tempfile
 
+from . import performance as _perf
+
 # The gates whose violations decide merge_assembly's `ok` (worker.py
 # _h_merge_assembly). Kept in lockstep with that predicate; `bom` is excluded
 # because it is informational, not pass/fail.
 LIST_GATES = ("interference", "envelope", "interface_align", "typed",
-              "requirements", "mobility")
+              "requirements", "mobility", "performance")
 # A single source of truth: a component spec carries exactly one of these.
 COMPONENT_SOURCES = ("file", "manifest", "library")
 
@@ -110,7 +124,17 @@ def swap_manifest(manifest, slot, variant):
 def classify(substitutable):
     """The F3 / semver verdict for a swap outcome (§6: "Form/Fit/Function =
     backward compatibility"). Substitutable ⇒ a compatible change ⇒ revise;
-    not ⇒ an interface break ⇒ a new part number."""
+    not ⇒ an interface break ⇒ a new part number.
+
+    ``None`` is the third answer (#261): every geometric gate is green but the
+    variant's declared PERFORMANCE contract has no verdict, so there is no basis for
+    either decision yet. Reporting that as "compatible" would hand an unproven part an
+    existing part number on the strength of a measurement nobody took."""
+    if substitutable is None:
+        return {"compatibility": "undecided",
+                "semver": None,
+                "decision": "no part-number decision yet — verify_performance on the "
+                            "variant first (an unverified spec is not a passed spec)"}
     if substitutable:
         return {"compatibility": "compatible",
                 "semver": "MINOR/PATCH",
@@ -118,6 +142,17 @@ def classify(substitutable):
     return {"compatibility": "incompatible",
             "semver": "MAJOR",
             "decision": "new part number"}
+
+
+def performance_outcome(report):
+    """The performance block a merge report carries (``None`` when no component in it
+    declares a contract), reduced to (outcome, undecided) where ``outcome`` is one of
+    driftpin.gates.performance's contract outcomes and ``undecided`` names the
+    requirements with no verdict."""
+    perf = (report or {}).get("performance")
+    if not isinstance(perf, dict):
+        return None, []
+    return perf.get("outcome"), list(perf.get("skipped") or [])
 
 
 # --- the gate ----------------------------------------------------------------
@@ -141,18 +176,21 @@ def substitutability_report(base_manifest_path, slot, variant, call,
 
     Returns a deterministic report dict:
       {schema, slot, variant,
-       baseline_ok, swap_ok, substitutable,
-       verdict: 'substitutable' | 'not_substitutable' | 'baseline_not_green',
+       baseline_ok, swap_ok, substitutable,        # tri-state: True/False/None
+       verdict: 'substitutable' | 'not_substitutable' | 'baseline_not_green'
+                | 'performance_unproven',
        broken_gates: [gate names the swap broke],   # NAMES the broken gate(s)
        broken: {gate: violations},
        classification: {compatibility, semver, decision},
        baseline_failing: {...},   # only when the premise is violated
+       performance: {...},        # only when a component declares a contract (#261)
        reports: {baseline_ok, swap_ok}}
     """
     with open(base_manifest_path, encoding="utf-8") as f:
         base_man = json.load(f)
 
     base_failing = {}
+    base_rep = None
     baseline_ok = True
     if verify_baseline:
         base_rep = call("merge_assembly", manifest=base_manifest_path)
@@ -206,13 +244,31 @@ def substitutability_report(base_manifest_path, slot, variant, call,
     broken = {g: v for g, v in swap_failing.items() if g not in base_failing}
     substitutable = swap_ok and baseline_ok
 
-    return {
+    # #261: Function, not just Form and Fit. A performance contract that came back
+    # UNMET has already failed the `performance` gate above and shows up in `broken`.
+    # What the geometric machinery cannot express is a contract with NO verdict: the
+    # merge is green, nothing failed, and nothing was proved. That is neither answer.
+    perf_outcome, undecided = performance_outcome(swap_rep)
+    perf = None
+    if perf_outcome is not None:
+        perf = {"swap": swap_rep.get("performance"),
+                "baseline": (base_rep or {}).get("performance"),
+                "outcome": perf_outcome, "undecided": undecided}
+    verdict = "substitutable" if substitutable else "not_substitutable"
+    if substitutable and perf_outcome == _perf.UNPROVEN:
+        substitutable = None
+        verdict = "performance_unproven"
+
+    out = {
         "schema": SCHEMA, "slot": slot, "variant": variant,
         "baseline_ok": baseline_ok, "swap_ok": swap_ok,
         "substitutable": substitutable,
-        "verdict": "substitutable" if substitutable else "not_substitutable",
+        "verdict": verdict,
         "broken_gates": sorted(broken),
         "broken": broken,
         "classification": classify(substitutable),
         "reports": {"baseline_ok": baseline_ok, "swap_ok": swap_ok},
     }
+    if perf is not None:
+        out["performance"] = perf
+    return out

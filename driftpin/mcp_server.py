@@ -2304,19 +2304,32 @@ def component_contract_check(handle: str, brief: dict) -> dict:
     → gate-fail → rebuild) into a cheap local one. Never raises on a failing check.
 
     handle: the component's shaped object.
-    brief:  a builder brief. Only two of its keys drive checks (the rest guide the
+    brief:  a builder brief. Only three of its keys drive checks (the rest guide the
             build, not the gate):
       envelope   {min:[x,y,z], max:[x,y,z]}   the part's LOCAL bbox must fit inside.
       interfaces {name: {origin?:[x,y,z], z_axis?:[x,y,z], tol_mm?, angle_tol_deg?}}
                  each named frame must be PUBLISHED (publish_interface) with a sane
                  frame, and within tolerance of a pinned origin/axis if the brief
                  gives one.
+      performance {requirements?: [{name, limit}], required?: bool}   the quantitative
+                 spec (#226) the builder must DECLARE (declare_performance, no looser
+                 than briefed) and PROVE (verify_performance) before fan-in.
 
     Checks run: watertight (check_shape's one-clean-solid verdict), envelope (local
-    bbox inside the keep-out box), interface:<name> (published + sane + in tol).
+    bbox inside the keep-out box), interface:<name> (published + sane + in tol),
+    performance_spec:<name> (declared as briefed) and performance:<name> (the last
+    RECORDED verify_performance verdict says it is met).
 
-    Returns {handle, ok, checks:[{check, passed, detail}], reasons:[...]} — ok True
-    iff every check passed; reasons is the failing checks' details."""
+    A performance requirement the record says is NOT met fails the gate. One with no
+    verdict yet — never verified, a solve still in flight, or a verdict invalidated by a
+    later edit — is neither passed nor failed: it comes back in `skipped` with a reason,
+    because "unverified" is not "fine" and must not be actioned as either.
+
+    Returns {handle, ok, checks:[{check, passed, detail}], reasons:[...],
+    skipped:[{check, reason}], performance?} — ok True iff every check passed (skips
+    never move it); reasons is the failing checks' details. A part that declares no
+    performance contract gets no performance rows, empty `skipped` and no `performance`
+    key, so the geometric gate is unchanged."""
     return _call("component_contract_check", handle=handle, brief=brief)
 
 
@@ -2371,9 +2384,19 @@ def merge_assembly(manifest: str) -> dict:
                    "verify_align":{...}?}]? }
 
     Placement positions anchors; mate-by-frame positions everything else by
-    aligning published interface frames (see publish_interface). Returns
-    {assembly, doc, root, placed, gates:{interference, bom, envelope,
-    interface_align?}, ok}."""
+    aligning published interface frames (see publish_interface).
+
+    Any component carrying a PERFORMANCE contract (declare_performance, #226) is gated
+    on it too, with no manifest opt-in: the merge consults the verdict
+    verify_performance last RECORDED on that part and never measures, so it stays
+    synchronous and deterministic. A requirement measured as NOT met fails the merge; a
+    requirement with no verdict yet is neither passed nor failed and rides in
+    report["performance"]["skipped"] — "unverified" is never read as "fine".
+
+    Returns {assembly, doc, root, placed, gates:{interference, bom, envelope,
+    interface_align?, typed?, requirements?, mobility?, performance?}, ok,
+    requirements?, mobility?, performance?, children?, library?}. The `performance`
+    gate and report block are absent entirely when no component declares a contract."""
     return _call("merge_assembly", manifest=manifest)
 
 
@@ -5375,6 +5398,13 @@ def verify_performance(handle: str, tier: str = "auto") -> dict:
     results} — poll job_result for the completed verdict. Never raises on a failing
     requirement; a failure is a row.
 
+    Every verdict is also RECORDED on the part, stamped with a geometry signature of
+    the shape it measured (#261). That record is what merge_assembly,
+    substitutability_check and component_contract_check consult, since a gate has to
+    answer synchronously and this may not have: an in-flight solve records rows the
+    gates read as `unverified`, and editing the part invalidates the signature so they
+    read `stale` — never a pass on either path.
+
     Returns {handle, tier, ok, n_requirements, passed, failed, indeterminate, escalate,
     results: [{name, tier, metric, state, measured, limit, band_pct, worst_case,
     best_case, margin, margin_pct, detail, trust_reasons?, screen?, job_id?}]}."""
@@ -7162,10 +7192,18 @@ def substitutability_check(manifest: str, slot: str, variant: dict,
     verify_baseline: re-merge the base assembly first and require it green so the
       premise is honest (default True).
 
-    Returns {schema, slot, variant, baseline_ok, swap_ok, substitutable, verdict
-    ('substitutable' | 'not_substitutable' | 'baseline_not_green'), broken_gates
-    (the NAMED gate(s) the swap broke), broken (gate→violations), classification
-    (compatibility/semver/decision), reports}."""
+    Function, not just Form and Fit (#261): if the swapped-in variant declares a
+    PERFORMANCE contract (#226), it is part of the comparison. A contract measured as
+    NOT met breaks the `performance` gate like any other. A contract with NO recorded
+    verdict yields a THIRD answer — `substitutable: null`, verdict
+    'performance_unproven' — because an unverified spec is not a passed spec, and
+    handing an unproven part an existing part number is the silent pass #226 prevents.
+
+    Returns {schema, slot, variant, baseline_ok, swap_ok, substitutable (True | False |
+    null), verdict ('substitutable' | 'not_substitutable' | 'baseline_not_green' |
+    'performance_unproven'), broken_gates (the NAMED gate(s) the swap broke), broken
+    (gate→violations), classification (compatibility/semver/decision), performance?
+    (only when a component declares a contract), reports}."""
     return _call("substitutability_check", manifest=manifest, slot=slot,
                  variant=variant, verify_baseline=verify_baseline)
 # --- revision + lifecycle state machine + F3 predicate (issue #141, C2) --------

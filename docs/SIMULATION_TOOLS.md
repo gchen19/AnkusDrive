@@ -343,6 +343,21 @@ Each family lists: the agent question it answers · backend · new-dependency we
   that did not converge. Gates in `tests/test_performance.py`, including the epic's
   headline workflow live: declare "Cd ≤ N" on a sphere, verify at solver tier, get a
   verdict whose measurement came from a real solve with its trust block attached.
+
+  **The contract is consulted at the gates** (issue #261,
+  [`gates/performance.py`](../driftpin/gates/performance.py)). `merge_assembly`,
+  `substitutability_check` and `component_contract_check` all read the verdict
+  `verify_performance` last RECORDED on the part (`DP_PerformanceVerdict`) — they never
+  measure, because verification may be asynchronous and a gate has to answer now.
+  Running a screen tier inline would silently substitute a weaker measurement than the
+  contract declares; refusing to gate would throw away a verdict that exists. Reading
+  the record is synchronous, deterministic, and honest about what is and is not proven.
+  A requirement measured as NOT met fails the merge, named with its component. One with
+  no verdict — never verified, a solve still in flight, or a verdict invalidated by a
+  later edit (detected via a geometry signature stamped on the record) — is neither
+  passed nor failed: it comes back in `skipped`, the vocabulary #248 gave the modal
+  gate, so "unverified" can never be actioned as "fine". A part that declares no
+  contract produces no performance block at all. See MULTI_AGENT.md §11.12.
 - Long solves run async via [`jobs.py`](../driftpin/jobs.py) so a CFD run never blocks
   the MCP channel.
 

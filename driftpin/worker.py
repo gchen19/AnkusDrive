@@ -4549,6 +4549,12 @@ def _h_declare_intent(p):
 
 
 _PERF_PROP = "DP_Performance"
+# The last verdict verify_performance recorded for the contract above (issue #261).
+# Split from the contract on purpose: the contract is what the designer PROMISED, the
+# verdict is what was MEASURED, and a gate that conflates the two is the silent pass
+# #226 exists to prevent. See driftpin/gates/performance.py for the policy that makes
+# a synchronously-answering gate legitimate over an asynchronously-produced verdict.
+_PERF_VERDICT_PROP = "DP_PerformanceVerdict"
 
 
 def _read_performance(obj):
@@ -4561,6 +4567,113 @@ def _read_performance(obj):
         except Exception:
             return {}
     return {}
+
+
+def _read_performance_verdict(obj):
+    """Last recorded performance verdict for an object (None if never verified).
+    Flushes any verdict a background collector job finished first — see
+    :func:`_flush_performance_verdicts`."""
+    import json as _json
+    _flush_performance_verdicts()
+    base = _shaped_top(obj)
+    if _PERF_VERDICT_PROP in base.PropertiesList:
+        try:
+            rec = _json.loads(getattr(base, _PERF_VERDICT_PROP) or "null")
+        except Exception:
+            return None
+        return rec if isinstance(rec, dict) else None
+    return None
+
+
+def _write_performance_verdict(obj, record):
+    """Persist a performance verdict on the part, alongside its contract."""
+    import json as _json
+    base = _shaped_top(obj)
+    if _PERF_VERDICT_PROP not in base.PropertiesList:
+        base.addProperty("App::PropertyString", _PERF_VERDICT_PROP, "DriftPin",
+                         "last recorded performance verdict (JSON)")
+    setattr(base, _PERF_VERDICT_PROP, _json.dumps(record))
+    base.Document.recompute()
+    return record
+
+
+def _unsign_zero(v):
+    """Map -0.0 to 0.0 anywhere in a signature tree. OCC hands back signed zeros for
+    axis/centroid components, and which sign you get is not stable across a .FCStd
+    save/reload — the same untouched cylinder comes back with centroid [0,-0,0] where
+    it was built as [0,0,0]. json.dumps renders those differently, so an un-normalized
+    hash would call every reopened part "edited". A geometry signature has to survive
+    the round trip a component file makes between the builder and the merge."""
+    if isinstance(v, float):
+        return 0.0 if v == 0.0 else v
+    if isinstance(v, (list, tuple)):
+        return [_unsign_zero(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _unsign_zero(x) for k, x in v.items()}
+    return v
+
+
+def _geometry_signature(shape):
+    """A cheap, edit-stable fingerprint of a whole solid: the hashed set of its face
+    signatures plus its volume. Built from the SAME face-signature machinery the f_*
+    tags use, so it moves exactly when the geometry a measurement was taken on moves —
+    that is what makes a recorded verdict datable (issue #261). Returns None if it
+    cannot be computed, which the gate treats as "freshness unknown" = stale."""
+    try:
+        faces = sorted(_hash_sig(_unsign_zero(_face_signature(f)))
+                       for f in shape.Faces)
+        return _hash_sig({"faces": faces, "volume": _round(shape.Volume)})
+    except Exception:
+        return None
+
+
+# A collector job (see _h_verify_performance) finishes on a BACKGROUND thread and so
+# must not touch FreeCAD — jobs.py's threading contract is explicit that results are
+# read back on the main thread once the job is done. So the finished verdict is parked
+# here and written onto the part by the next MAIN-THREAD read, which is exactly when it
+# first matters. Until that happens the part still carries the synchronous record whose
+# rows say "solve in flight", so a gate reports `unverified` — never a stale pass.
+_PENDING_PERF_VERDICTS = {}
+
+
+def _park_performance_verdict(handle, record):
+    _PENDING_PERF_VERDICTS[handle] = record
+
+
+def _flush_performance_verdicts():
+    """Write any background-completed performance verdicts onto their parts. Runs on
+    the main thread (every caller is inside a handler). A handle that no longer
+    resolves is dropped: the document it lived in is gone, and there is nothing to
+    stamp."""
+    if not _PENDING_PERF_VERDICTS:
+        return
+    for handle, record in list(_PENDING_PERF_VERDICTS.items()):
+        _PENDING_PERF_VERDICTS.pop(handle, None)
+        try:
+            _write_performance_verdict(_resolve(handle), record)
+        except Exception:
+            pass
+
+
+def _performance_gate_block(obj, component=None):
+    """The performance-contract gate block for one part object (issue #261): its
+    declared contract, its last recorded verdict, and the part's current geometry
+    signature, judged by the pure driftpin.gates.performance. Never raises."""
+    from driftpin.gates import performance as _pgate
+    try:
+        contract = _read_performance(obj)
+    except Exception:
+        contract = {}
+    if not (contract or {}).get("requirements"):
+        return _pgate.evaluate({}, None, component=component)
+    try:
+        record = _read_performance_verdict(obj)
+    except Exception:
+        record = None
+    base = _shaped_top(obj)
+    shape = getattr(base, "Shape", None)
+    sig = _geometry_signature(shape) if shape is not None else None
+    return _pgate.evaluate(contract, record, signature=sig, component=component)
 
 
 def _subst_handle(value, handle):
@@ -4684,6 +4797,29 @@ def _h_declare_performance(p):
             "n_requirements": len(normalized)}
 
 
+def _perf_record(handle, tier, rows, signature, summary, pending=None):
+    """The verdict record persisted on the part (issue #261). Deliberately carries the
+    geometry SIGNATURE of the shape that was measured: without it a gate cannot tell a
+    current verdict from one taken three edits ago, and a verdict it cannot date is not
+    evidence about the current part. Rows are trimmed to what a gate reads (the full
+    measurement stays in verify_performance's return / the job result)."""
+    import time as _time
+    from driftpin.gates import performance as _pgate
+    keep = ("name", "state", "tier", "metric", "measured", "limit", "band_pct",
+            "margin_pct", "detail", "trust_reasons", "job_id")
+    return {
+        "schema": _pgate.RECORD_SCHEMA,
+        "handle": handle, "tier": tier,
+        "verified_at": _time.time(),
+        "signature": signature,
+        "pending": list(pending or []),
+        "summary": {k: summary.get(k) for k in
+                    ("ok", "n_requirements", "passed", "failed", "indeterminate",
+                     "escalate")},
+        "results": [{k: r[k] for k in keep if k in r} for r in rows],
+    }
+
+
 @handler("verify_performance")
 def _h_verify_performance(p):
     """Prove (or fail to prove) every requirement declared with declare_performance —
@@ -4713,6 +4849,14 @@ def _h_verify_performance(p):
     results} — poll job_result for the completed verdict. Never raises on a failing
     requirement; a failure is a row.
 
+    Every verdict is also RECORDED on the part (DP_PerformanceVerdict), stamped with a
+    geometry signature of the shape it measured (issue #261). That record is what
+    merge_assembly / substitutability_check / component_contract_check consult, because
+    a gate has to answer synchronously and this may not have: a solver-tier run records
+    rows that say "solve in flight" and the gates read them as `unverified`, never as a
+    pass. Editing the part invalidates the signature, so a gate reports `stale` instead
+    of trusting a measurement of a shape that no longer exists.
+
     Returns {handle, tier, ok, n_requirements, passed, failed, indeterminate, escalate,
     results: [{name, tier, metric, state, measured, limit, band_pct, worst_case,
     best_case, margin, margin_pct, detail, trust_reasons?, screen?}]}."""
@@ -4722,7 +4866,8 @@ def _h_verify_performance(p):
     from driftpin.analysis import performance as _pf
 
     handle = p["handle"]
-    obj, _ = _shape_of(handle)
+    obj, shape = _shape_of(handle)
+    signature = _geometry_signature(shape)
     contract = _read_performance(obj)
     reqs = contract.get("requirements") or []
     if not reqs:
@@ -4783,8 +4928,11 @@ def _h_verify_performance(p):
             rows.append(done)
 
     if not pending:
-        return {"handle": handle, "tier": tier, "results": rows,
-                **_pf.summarize(rows)}
+        verdict = {"handle": handle, "tier": tier, "results": rows,
+                   **_pf.summarize(rows)}
+        _write_performance_verdict(obj, _perf_record(handle, tier, rows, signature,
+                                                     verdict))
+        return verdict
 
     # Solves are running. One collector job waits on all of them (they were submitted
     # from the MAIN thread, so any FreeCAD work is already done and they run
@@ -4811,12 +4959,25 @@ def _h_verify_performance(p):
             row["case_dir"] = payload.get("case_dir") if isinstance(payload, dict) else None
             by_name[item["req"]["name"]] = row
         final = [by_name[r["name"]] for r in rows]
-        return {"handle": handle, "tier": tier, "results": final,
-                **_pf.summarize(final)}
+        out = {"handle": handle, "tier": tier, "results": final,
+               **_pf.summarize(final)}
+        # Park, don't write: this runs on a background thread and FreeCAD's document
+        # API is not thread-safe (jobs.py's threading contract). The next main-thread
+        # read stamps it onto the part.
+        _park_performance_verdict(
+            handle, _perf_record(handle, tier, final, signature, out))
+        return out
 
     sub = jobs.submit("verify_performance", _collect,
                       meta={"handle": handle, "tier": tier,
                             "pending": [i["job_id"] for i in pending]})
+    # Record what is known NOW, so a gate consulted before the solve lands reads the
+    # in-flight rows as `unverified` rather than finding nothing and reading the older
+    # (possibly passing) record.
+    _write_performance_verdict(
+        obj, _perf_record(handle, tier, rows, signature,
+                          {**_pf.summarize(rows)},
+                          pending=[i["job_id"] for i in pending]))
     return {"handle": handle, "tier": tier, "results": rows,
             "pending": [i["job_id"] for i in pending], **sub}
 
@@ -5594,17 +5755,24 @@ def _h_component_contract_check(p):
 
     handle: the component's shaped object.
     brief:  a driftpin.builder_brief/1 slice (see driftpin.builder_brief). Only
-            `envelope` and `interfaces` drive gate checks; other keys are ignored
-            here (the NL `task` etc. guide the build, not the gate).
+            `envelope`, `interfaces` and `performance` drive gate checks; other keys
+            are ignored here (the NL `task` etc. guide the build, not the gate).
 
     Checks (mirrors what merge_assembly verifies for this part at fan-in):
       watertight  — check_shape says one clean watertight solid.
       envelope    — the part's LOCAL bounding box fits inside brief.envelope.
       interface:* — every name in brief.interfaces is published, with a sane frame,
                     and within tol of the pinned origin/axis when the brief gives one.
+      performance_spec:* / performance:*  — the part's PERFORMANCE contract (#226),
+                    consulted whenever one is declared and additionally demanded by an
+                    optional brief `performance` slice (issue #261). A requirement the
+                    recorded verdict says is NOT met fails the gate; one with no verdict
+                    yet is neither passed nor failed — it rides in `skipped`.
 
-    Returns {handle, ok, checks:[{check, passed, detail}], reasons:[...]} and never
-    raises on a failing check."""
+    Returns {handle, ok, checks:[{check, passed, detail}], reasons:[...],
+    skipped:[{check, reason}], performance?} and never raises on a failing check.
+    `skipped` is empty and `performance` absent for a part that declares no
+    performance contract, so the geometric gate is byte-for-byte what it was."""
     from driftpin import builder_brief as _bb
     handle = p["handle"]
     brief = dict(p.get("brief") or {})
@@ -5628,8 +5796,17 @@ def _h_component_contract_check(p):
     # 3) published interface frames.
     published = _read_interfaces(obj)
 
+    # 4) the performance contract + its last recorded verdict (#261). Computed
+    #    unconditionally: a builder that declared a spec must self-check it before
+    #    fan-in whether or not the brief repeats it, and a part with no contract
+    #    yields a not_declared block that adds no rows at all.
+    perf_block = _performance_gate_block(obj, component=brief.get("component"))
+    perf_contract = _read_performance(obj)
+
     verdict = _bb.evaluate_contract(brief, watertight=watertight, bbox=bbox,
-                                    published=published)
+                                    published=published,
+                                    performance=perf_block,
+                                    performance_contract=perf_contract)
     return {"handle": handle, **verdict}
 
 
@@ -7627,6 +7804,48 @@ def _solve_fused_first_mode(fused, fix_faces, material, spec, assembly_handle):
             App.setActiveDocument(prev)
 
 
+def _performance_contract_gate(comp_of_inst, links_by_inst, by_name):
+    """Merge-time performance-contract gate (issue #261) — the half of #226 that was
+    never built.
+
+    Every linked component is consulted for a declared `DP_Performance` contract and
+    its last recorded `verify_performance` verdict. A component that declares nothing
+    contributes nothing, and if NO component declares anything this returns None so the
+    report is exactly the pre-#261 one — the 99 % of assemblies whose parts declare no
+    quantitative spec see no change whatsoever. A declared requirement the record says
+    is NOT met becomes a violation and fails the merge, named with its component.
+
+    The gate never MEASURES; it reads the record. See driftpin/gates/performance.py for
+    why that policy — rather than running a screen tier inline, or refusing to gate at
+    all — is the one that keeps merge_assembly synchronous, deterministic and honest
+    about an asynchronously-produced verdict.
+
+    A requirement with no verdict (never verified, a solve still in flight, or a verdict
+    invalidated by a later edit) is NOT a violation and NOT a pass: it rides in
+    `skipped`, the same vocabulary #248 gave the modal gate for a solve that produced
+    nothing. Keyed by COMPONENT id, since the contract rides on the component's file and
+    N instances of one part share one verdict. Returns the rolled-up block, or None."""
+    from driftpin.gates import performance as _pgate
+    blocks = {}
+    for inst_name in sorted(links_by_inst or {}):
+        cid = (comp_of_inst or {}).get(inst_name, inst_name)
+        if cid in blocks:
+            continue
+        link = by_name.get(links_by_inst[inst_name])
+        if link is None:
+            continue
+        try:
+            blocks[cid] = _performance_gate_block(link, component=cid)
+        except Exception as e:                       # never raise out of a gate
+            blocks[cid] = {
+                "schema": _pgate.SCHEMA, "component": cid, "declared": True,
+                "n_requirements": 0, "outcome": _pgate.UNPROVEN, "ok": False,
+                "requirements": [], "violations": [], "stale": True,
+                "skipped": [f"<contract unreadable: {type(e).__name__}>"],
+                "reason": f"could not read {cid}'s performance contract: {e}"}
+    return _pgate.roll_up(blocks)
+
+
 def _mobility_gate(man):
     """Motion gate (RFC §11.9): does the declared mechanism actually MOVE?
 
@@ -7674,9 +7893,19 @@ def _h_merge_assembly(p):
     PART generated on the fly from {tool, spec} (§11.5) — no builder, no owner —
     reported under `library`. An optional top-level `requirements` block
     {density_kg_mm3?, max_mass_g?, cg_window?} (§11.6) gates mass / CG over the
-    merged tree; the measured numbers ride in report["requirements"]. Runs the gates
-    (interference, recursive BOM, envelope, typed, requirements) and returns a
-    report. Deterministic and idempotent."""
+    merged tree; the measured numbers ride in report["requirements"].
+
+    Any component that carries a PERFORMANCE contract (declare_performance, #226) is
+    gated on it too, with no manifest opt-in (#261): the merge consults the verdict
+    verify_performance last RECORDED on that part — it never measures, so the merge
+    stays synchronous and deterministic. A requirement measured as NOT met is a
+    violation and fails the merge; one with no verdict yet (never verified, a solve
+    still in flight, or a verdict invalidated by a later edit) is neither — it rides in
+    report["performance"]["skipped"], the #248 vocabulary for "the gate has no verdict".
+    The whole block is absent when no component declares a contract.
+
+    Runs the gates (interference, recursive BOM, envelope, typed, requirements,
+    performance) and returns a report. Deterministic and idempotent."""
     import json as _json
     import os as _os
     manifest_path = p["manifest"]
@@ -7815,11 +8044,21 @@ def _h_merge_assembly(p):
     if man.get("mechanism"):
         mobility = _mobility_gate(man)
         gates["mobility"] = mobility["violations"]
+    # #261: the PERFORMANCE contracts the components themselves declare (#226). Unlike
+    # the manifest's own `requirements`, this is opt-in from BELOW — a component carries
+    # its spec, so a coordinator cannot merge away a part that misses it by forgetting
+    # to restate it here. Absent entirely when nothing declares a contract.
+    perf = _performance_contract_gate(
+        {inst.get("name", inst["component"]): inst["component"]
+         for inst in man.get("instances", [])},
+        links_by_inst, by_name)
+    if perf is not None:
+        gates["performance"] = perf["violations"]
     HANDLERS["save_document"]({"path": root_path})
     ok = (not gates["interference"]) and (not gates["envelope"]) \
         and (not gates.get("interface_align")) and (not gates.get("typed")) \
         and (not child_fail) and (not gates.get("requirements")) \
-        and (not gates.get("mobility"))
+        and (not gates.get("mobility")) and (not gates.get("performance"))
     report = {"assembly": asm_h, "doc": name, "root": root_path,
               "placed": placed, "gates": gates, "ok": ok}
     if req_result is not None:
@@ -7827,6 +8066,8 @@ def _h_merge_assembly(p):
                                   "skipped": req_result["skipped"]}
     if mobility is not None:
         report["mobility"] = mobility
+    if perf is not None:
+        report["performance"] = perf
     if children:
         report["children"] = children
     if library:
@@ -18430,8 +18671,16 @@ def _h_substitutability_check(p):
     fails ⇒ the swap broke Form/Fit/Function ⇒ a new part number. Deterministic, no
     API. params: manifest (base, gates green), slot (component id to swap), variant
     (replacement component spec: one of file/manifest/library), verify_baseline?
-    (default True). Returns {schema, slot, substitutable, verdict, broken_gates
-    (NAMES the broken gate), broken, classification, baseline_ok, swap_ok, ...}."""
+    (default True).
+
+    Function too, not just Form and Fit (#261): a PERFORMANCE contract (#226) on the
+    swapped-in variant is part of the comparison. Unmet ⇒ the `performance` gate breaks
+    like any other. NO recorded verdict ⇒ a third answer — substitutable is None and
+    verdict is 'performance_unproven' — because an unverified spec is not a passed one.
+
+    Returns {schema, slot, substitutable (True|False|None), verdict, broken_gates
+    (NAMES the broken gate), broken, classification, baseline_ok, swap_ok,
+    performance?, ...}."""
     from driftpin.gates import substitutability as _subst
 
     def _call(_method, **kw):
