@@ -413,3 +413,110 @@ def _score(card: dict, rank_by: str):
         e, d = numeric(card, "youngs_gpa"), numeric(card, "density_g_cc")
         return None if (e is None or not d) else e / d
     return numeric(card, expr)
+
+
+# --- the "I have no number for this material" exit hint (issues #238, #264) ----
+#
+# An analysis function that needs a property the corpus does not carry for the
+# material it was handed has exactly two exits, and an agent can only take the one
+# the error message tells it about: pass the explicit override, or name a real
+# card. The dead end #238 filed — repeated verbatim by slice_estimate in #264 —
+# was a message that named one exit and a wrapper that did not even expose it.
+# This lives here, next to the corpus it reads, so a third caller gets it free.
+
+_HINT_MAX = 4          # category members to name before trailing off
+
+
+def _category_members(material, accessor: str):
+    """Fuzzy-match what the caller typed against the corpus *categories* and return
+    (category, member names that actually carry `accessor`).
+
+    A generic word — 'aluminum', 'steel', 'PLA' — is usually a category rather than
+    a card, which is exactly why the lookup failed. Matching is exact, then
+    substring either way, then difflib-close ('aluminium' -> 'aluminum'). Members
+    missing the property in question are dropped, so a suggestion never sends the
+    caller into the same error twice. Returns (None, []) when nothing matches."""
+    import difflib
+    norm = _norm(str(material or ""))
+    if not norm:
+        return None, []
+    cards = list_materials()["materials"]
+    cats = sorted({c["category"] for c in cards if c.get("category")})
+    hit = next((c for c in cats if _norm(c) == norm), None)
+    if hit is None:
+        hit = next((c for c in cats if norm in _norm(c) or _norm(c) in norm), None)
+    if hit is None:
+        close = difflib.get_close_matches(norm, [_norm(c) for c in cats], n=1, cutoff=0.7)
+        hit = next((c for c in cats if _norm(c) == close[0]), None) if close else None
+    if hit is None:
+        return None, []
+    members = []
+    for c in cards:
+        if c.get("category") != hit:
+            continue
+        try:
+            if numeric(get(c["name"]), accessor) is not None:
+                members.append(c["name"])
+        except (KeyError, MaterialNotFound):
+            continue
+    return hit, sorted(members)
+
+
+def _near_cards(material, accessor: str):
+    """Card names that resemble what the caller typed and carry `accessor`.
+
+    The fallback for a word that is neither a card nor a category — 'nylon' is
+    neither, but it is one hop from 'Nylon-6/6', and :func:`get` already knows that
+    (its MaterialNotFound carries the same did_you_mean). Substring either way,
+    then difflib-close."""
+    import difflib
+    norm = _norm(str(material or ""))
+    if not norm:
+        return []
+    names = [c["name"] for c in list_materials()["materials"]]
+    hits = [n for n in names if norm in _norm(n) or _norm(n) in norm]
+    if not hits:
+        close = difflib.get_close_matches(norm, [_norm(n) for n in names], n=3, cutoff=0.7)
+        hits = [n for n in names if _norm(n) in close]
+    out = []
+    for n in hits:
+        try:
+            if numeric(get(n), accessor) is not None:
+                out.append(n)
+        except (KeyError, MaterialNotFound):
+            continue
+    return sorted(out)
+
+
+def exit_hint(material, accessor: str) -> str:
+    """The '...or use a Materials-DB name' half of a missing-property error, derived
+    from the LIVE corpus (never a hardcoded list, which would rot the way
+    package-data did in #249).
+
+    `accessor` is the canonical numeric the caller needed ('cost_usd_kg',
+    'density_g_cc', ...); only cards that actually carry it are suggested, so a
+    suggestion can never walk the caller into the same error twice. Tries the
+    caller's word as a CATEGORY first ('aluminum' -> AL6061-T6, ...), then as a
+    near-miss CARD name ('nylon' -> Nylon-6/6), then degrades to a generic 'see
+    material_list'. Swallows any failure of its own — a hint must never mask the
+    error it is decorating."""
+    try:
+        category, members = _category_members(material, accessor)
+    except Exception:
+        category, members = None, []
+    if members:
+        shown = ", ".join(members[:_HINT_MAX])
+        if len(members) > _HINT_MAX:
+            shown += ", ..."
+        return ("or use a Materials-DB name "
+                f"(material_list; category {category!r} → {shown})")
+    try:
+        near = _near_cards(material, accessor)
+    except Exception:
+        near = []
+    if near:
+        shown = ", ".join(near[:_HINT_MAX])
+        if len(near) > _HINT_MAX:
+            shown += ", ..."
+        return f"or use a Materials-DB name (material_list; did you mean {shown}?)"
+    return "or use a Materials-DB name (see material_list)"

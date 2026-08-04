@@ -113,8 +113,13 @@ def slice_estimate(
 
     rho = density_g_cc if density_g_cc is not None else _mat_value(material, "density_g_cc")
     if not rho:
+        # Both exits, or the instruction is unfollowable (#264, the sibling of #238):
+        # the override, AND a real card — 'polymer' is a CATEGORY and 'nylon' is one
+        # hop from a card, and neither is something the caller can guess from
+        # "pass density_g_cc".
         raise ValueError(
-            f"no density for {material!r}; pass density_g_cc"
+            f"no density for {material!r} — pass density_g_cc, "
+            + materials.exit_hint(material, "density_g_cc")
         )
 
     # solid (100%-fill) mass: density * volume.
