@@ -14,6 +14,7 @@ one of them is built on.
 
 Run:  python3 tests/test_solve_degradation.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -395,6 +396,260 @@ def test_truly_absent_solver_still_reports_absent_with_install_hint():
         os.environ.pop("DRIFTPIN_REPO_ROOT", None)
         restore()
         os.rmdir(empty)
+
+
+# --- honest capabilities: drivability + the three Multipass states (issue #237) ---
+
+class _only_available:
+    """Force exactly ``names`` to resolve as binaries and nothing else, with the
+    installed-but-unwired probe neutralized — so a family roll-up can be asserted
+    independently of what the test box has installed."""
+
+    def __init__(self, *names):
+        self.names = set(names)
+
+    def __enter__(self):
+        self._mod, self._bin, self._unwired = (
+            solvers._module_available, solvers._binary_path, solvers._unwired_found)
+        solvers._module_available = lambda m: False
+        solvers._unwired_found = lambda name, spec: None
+        solvers._binary_path = (
+            lambda name, spec: ("/fake/bin/" + name) if name in self.names else None)
+        return self
+
+    def __exit__(self, *exc):
+        solvers._module_available = self._mod
+        solvers._binary_path = self._bin
+        solvers._unwired_found = self._unwired
+        return False
+
+
+def test_prepared_case_only_solver_does_not_make_its_family_available():
+    """#237(a): SU2 resolves natively on macOS, but NO DriftPin tool builds an SU2
+    case — every built-in mode of cfd_*_flow_submit (pipe, RANS pipe, snappy body,
+    flat plate) emits an OpenFOAM dictionary tree, so SU2 is reachable only through a
+    hand-prepared case_dir. Counting it toward the cfd family's `any_available` told
+    an agent to escalate per cfd_pipe_flow's escalate_to hint, and it dead-ended.
+
+    The general invariant: a solver counts toward a family only if some tool can
+    actually DRIVE it. SU2 must still be listed as resolved (it is), and
+    require_solver must still say ok (the prepared-case path is legitimate)."""
+    with _only_available("su2"):
+        caps = solvers.capabilities()
+        cfd = caps["families"]["cfd"]
+        # honest both ways: the binary resolved, and the family is still not drivable
+        assert cfd["available"] == ["su2"], cfd
+        assert cfd["prepared_case_only"] == ["su2"], cfd
+        assert cfd["any_available"] is False, cfd
+        assert "su2" in caps["available"], caps["available"]
+        assert caps["prepared_case_only"] == ["su2"], caps["prepared_case_only"]
+        # the qualifier is a reason string the caller can show, not a bare flag
+        info = solvers.find_solver("su2")
+        assert isinstance(info.get("prepared_case_only"), str), info
+        assert "case_dir" in info["prepared_case_only"], info
+        # a prepared case_dir still runs: require_solver is deliberately unaffected
+        assert solvers.require_solver("su2")["ok"] is True, solvers.require_solver("su2")
+
+    # ... and a solver that DOES have a case builder restores the family
+    with _only_available("su2", "openfoam"):
+        cfd = solvers.capabilities()["families"]["cfd"]
+        assert cfd["any_available"] is True, cfd
+        assert cfd["prepared_case_only"] == ["su2"], cfd
+
+
+def test_any_available_means_some_tool_can_drive_the_family():
+    """#237(a), stated as the general invariant rather than an SU2 special case:
+    across EVERY family, `any_available` is true exactly when some resolved solver
+    is one DriftPin can build a case for. Guards a future registry entry that adds
+    `prepared_case_only` without the roll-up honoring it."""
+    for forced in (True, False):
+        with _force(available=forced):
+            caps = solvers.capabilities()
+            for fam, fi in caps["families"].items():
+                drivable = [s for s in fi["available"]
+                            if not caps["solvers"][s].get("prepared_case_only")]
+                assert fi["any_available"] is bool(drivable), (fam, fi)
+                assert sorted(fi["available"]) == sorted(
+                    drivable + fi["prepared_case_only"]), (fam, fi)
+
+
+def test_doctor_names_a_prepared_case_only_solver_it_did_not_count():
+    """A family reported unwired next to an SU2_CFD the user just installed is
+    baffling unless the doctor says why it doesn't count. #237(a) consumer check."""
+    from driftpin import doctor
+
+    with _only_available("su2"):
+        caps = solvers.capabilities()
+        lines = doctor._fmt_solvers(caps)
+        idx = next(i for i, ln in enumerate(lines) if ln.split()[1:2] == ["cfd"])
+        assert doctor._MARK["ok"] not in lines[idx], lines[idx]
+        note = "\n".join(lines[idx:idx + 4])
+        assert "su2 resolves" in note, note
+        assert "hand-prepared case_dir" in note, note
+
+    # and when the family IS ready, the "ready via" line names only what made it so —
+    # "ready via su2, openfoam" would point back at the solver that cannot be driven
+    with _only_available("su2", "openfoam"):
+        lines = doctor._fmt_solvers(solvers.capabilities())
+        line = next(ln for ln in lines if ln.split()[1:2] == ["cfd"])
+        assert doctor._MARK["ok"] in line, line
+        assert "openfoam" in line and "su2" not in line, line
+
+
+# Captured verbatim from a real `multipass info openfoam --format json` on this
+# Apple-Silicon box (Ubuntu 24.04 VM), trimmed to the keys the probe reads. Only
+# `state` differs between the fixtures — the shape is the contract being parsed.
+def _fake_vm_info(instance: str, state: str) -> str:
+    return json.dumps({
+        "errors": [],
+        "info": {instance: {
+            "cpu_count": "8", "image_release": "24.04 LTS",
+            "ipv4": ["192.168.252.2"], "release": "Ubuntu 24.04.4 LTS",
+            "snapshot_count": "0", "state": state,
+        }},
+    })
+
+
+class _fake_multipass:
+    """Patch the injectable `multipass info` seam (and the bashrc glob that would
+    otherwise short-circuit the macOS branch) so all three VM states can be exercised
+    on any platform — including Linux CI, where multipass does not exist. Reads a
+    fixture string; never launches, starts or stops a VM.
+
+    ``state=None`` fakes the read failing (no such instance / timeout / hung daemon),
+    which must degrade to the absent hint."""
+
+    def __init__(self, state: str | None):
+        self.state = state
+
+    def __enter__(self):
+        self._avail = solvers.multipass_available
+        self._info = solvers._multipass_info
+        self._bashrc = solvers._standard_bashrc
+        solvers.multipass_available = lambda: True
+        solvers._standard_bashrc = lambda cfg: None
+        solvers._multipass_info = (
+            (lambda inst: None) if self.state is None
+            else (lambda inst: _fake_vm_info(inst, self.state)))
+        return self
+
+    def __exit__(self, *exc):
+        solvers.multipass_available = self._avail
+        solvers._multipass_info = self._info
+        solvers._standard_bashrc = self._bashrc
+        return False
+
+
+def test_multipass_vm_state_reads_three_states_and_degrades():
+    """#237(b): the read-only state probe distinguishes running / stopped / absent
+    from the same `multipass info` payload, and degrades to `absent` — the
+    conservative provision hint — on anything it cannot parse."""
+    with _fake_multipass("Running"):
+        assert solvers.multipass_vm_state() == "running"
+    for stopped in ("Stopped", "Suspended", "Starting"):
+        with _fake_multipass(stopped):
+            assert solvers.multipass_vm_state() == "stopped", stopped
+    for gone in (None, "Deleted", "Unknown", ""):
+        with _fake_multipass(gone):
+            assert solvers.multipass_vm_state() == "absent", gone
+    # garbage payload -> absent, never an exception
+    saved_avail, saved_info = solvers.multipass_available, solvers._multipass_info
+    try:
+        solvers.multipass_available = lambda: True
+        solvers._multipass_info = lambda inst: "not json at all {{"
+        assert solvers.multipass_vm_state() == "absent"
+        solvers._multipass_info = lambda inst: json.dumps(["not", "a", "dict"])
+        assert solvers.multipass_vm_state() == "absent"
+    finally:
+        solvers.multipass_available, solvers._multipass_info = saved_avail, saved_info
+    # no multipass CLI at all (every non-macOS box) -> absent, with no subprocess
+    saved_avail = solvers.multipass_available
+    try:
+        solvers.multipass_available = lambda: False
+        assert solvers.multipass_vm_state() == "absent"
+    finally:
+        solvers.multipass_available = saved_avail
+
+
+def test_multipass_info_read_degrades_instead_of_raising():
+    """The subprocess seam itself: a missing multipass (Linux), a nonexistent
+    instance (rc 2) and a read that outruns its timeout all return None rather than
+    raising or blocking discovery. Read-only — `multipass info` on a name that does
+    not exist touches nothing."""
+    assert solvers._multipass_info_exec("driftpin-no-such-vm-237", 10.0) is None
+    # a timeout that no real read can beat must also come back None, not raise
+    assert solvers._multipass_info_exec("driftpin-no-such-vm-237", 0.001) is None
+
+
+def test_openfoam_unwired_hint_tracks_multipass_vm_state():
+    """#237(b), the issue's acceptance gate: VM absent vs stopped vs running produce
+    three DISTINGUISHABLE, correctly-hinted states. Before this, all three said
+    "provision the VM" — the one instruction that is wrong for the most common
+    post-setup state, a provisioned VM that is up with an unwired shell."""
+    restore = _clear_env("DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_BASHRC",
+                         "DRIFTPIN_OPENFOAM_DIRS")
+    hints, founds = {}, {}
+    try:
+        for label, state in (("absent", None), ("stopped", "Stopped"),
+                             ("running", "Running")):
+            with _absent_binaries_and_wheels(), _fake_multipass(state):
+                info = solvers.find_solver("openfoam")
+                assert info["status"] == "unwired", (label, info)
+                hints[label] = info["wire_hint"]
+                founds[label] = info["found_at"]
+                assert solvers.require_solver("openfoam")["install"] == hints[label]
+    finally:
+        restore()
+
+    # three states, three messages, three evidence strings — nothing collapses
+    assert len(set(hints.values())) == 3, hints
+    assert len(set(founds.values())) == 3, founds
+
+    # absent: provision it (the original message, now scoped to the state it fits)
+    assert hints["absent"].startswith("provision OpenFOAM in the Multipass VM"), hints
+    assert founds["absent"] == "multipass", founds
+
+    # stopped: start it — NOT provision it again
+    assert "multipass start openfoam" in hints["stopped"], hints["stopped"]
+    assert not hints["stopped"].startswith("provision"), hints["stopped"]
+    assert "(stopped)" in founds["stopped"], founds
+
+    # running: the env-wiring exports from docs/MACOS.md, and no provisioning lead
+    run = hints["running"]
+    assert not run.startswith("provision"), run
+    assert "multipass start" not in run, run
+    for export in ("DRIFTPIN_OPENFOAM_BASHRC", "DRIFTPIN_OPENFOAM_PATH", "TMPDIR"):
+        assert export in run, (export, run)
+    assert "docs/MACOS.md" in run, run
+    assert "(running)" in founds["running"], founds
+
+
+def test_multipass_running_state_live_on_macos():
+    """The running state verified against the REAL machine, not a fixture — the half
+    of the #237 gate a fake cannot prove. Strictly read-only: `multipass info` only,
+    never `multipass start`/`stop` (a live solve may be running in that VM)."""
+    if sys.platform != "darwin":
+        print("    SKIP — the Multipass substrate is macOS-only")
+        return
+    if not solvers.multipass_available():
+        print("    SKIP — no multipass CLI on PATH")
+        return
+    state = solvers.multipass_vm_state()
+    assert state in ("absent", "stopped", "running"), state
+    if state != "running":
+        print(f"    NOTE — VM is {state!r} here; live running-state check skipped")
+        return
+    restore = _clear_env("DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_BASHRC",
+                         "DRIFTPIN_OPENFOAM_DIRS")
+    try:
+        with _absent_binaries_and_wheels():
+            info = solvers.find_solver("openfoam")
+            assert info["status"] == "unwired", info
+            assert "(running)" in info["found_at"], info
+            assert not info["wire_hint"].startswith("provision"), info["wire_hint"]
+            assert "DRIFTPIN_OPENFOAM_BASHRC" in info["wire_hint"], info["wire_hint"]
+    finally:
+        restore()
 
 
 # --- runner -------------------------------------------------------------------
