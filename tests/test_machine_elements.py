@@ -7,6 +7,7 @@ tests/TOYS.md and docs/SIMULATION_EXAMPLES.md (family 10).
 
 Run:  python3 tests/test_machine_elements.py
 """
+import ast
 import sys
 import time
 import traceback
@@ -14,7 +15,37 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import machine_elements as me  # noqa: E402
+from driftpin.analysis import durability, machine_elements as me  # noqa: E402
+
+
+# --- the MCP-visible signature (issue #271) -----------------------------------
+#
+# These overrides existed on the analysis functions and were forwarded by the
+# handlers, but the MCP tools never OFFERED them — the #238/#264 shape, in the
+# `**params` wrapper form that #268's contract test originally skipped. Same
+# binding trick as tests/test_cost.py and tests/test_slicing.py: parse the tool's
+# parameter list out of mcp_server.py so the check crosses the layer the bug lives
+# in, while staying pure-Python.
+
+_MCP = Path(__file__).resolve().parent.parent / "driftpin" / "mcp_server.py"
+
+
+def _mcp_params(tool_name):
+    """Parameter names the named MCP tool accepts, parsed from mcp_server.py."""
+    tree = ast.parse(_MCP.read_text(encoding="utf-8"))
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == tool_name)
+    return [a.arg for a in fn.args.args + fn.args.kwonlyargs]
+
+
+def _via_mcp(tool_name, fn, **kwargs):
+    """Call `fn` only with kwargs the MCP tool would actually accept."""
+    accepted = _mcp_params(tool_name)
+    for key in kwargs:
+        if key not in accepted:
+            raise AssertionError(
+                f"MCP {tool_name} does not accept {key!r}; accepts {accepted}")
+    return fn(**kwargs)
 
 
 def test_tensile_stress_area_M10():
@@ -172,6 +203,34 @@ def test_press_fit_lame():
     assert r["youngs_basis"] == "material", r["youngs_basis"]
     assert r["hub_yield_basis"] == "material", r["hub_yield_basis"]
     assert r["pass"] is True and r["warnings"] == [], r
+
+
+def test_hidden_overrides_are_reachable_over_mcp(): # issue #271
+    # Each of these changes the VERDICT, not just a reported number, and none was
+    # reachable through the MCP tool before #271 — the wrapper's `**params` splat
+    # forwards only what its own signature accepted.
+    base = dict(wire_dia_mm=2, coil_mean_dia_mm=16, active_coils=8,
+                deflection_mm=10, material="Fused-Silica")
+    # no UTS on that card, so the allowable silently falls back to 700 MPa
+    loose = _via_mcp("spring_check", me.spring_check, **base)
+    assert loose["allowable_shear_mpa"] == 700.0, loose["allowable_shear_mpa"]
+    assert loose["pass"] is True, loose
+    tight = _via_mcp("spring_check", me.spring_check, allowable_shear_mpa=200.0,
+                     **base)
+    assert tight["allowable_shear_mpa"] == 200.0, tight["allowable_shear_mpa"]
+    assert tight["pass"] is False, tight      # the override FLIPS the verdict
+    # G is the other half of the same wrapper's blind spot
+    stiff = _via_mcp("spring_check", me.spring_check, shear_modulus_mpa=100000.0,
+                     **base)
+    assert stiff["rate_n_mm"] > loose["rate_n_mm"], (stiff["rate_n_mm"],
+                                                     loose["rate_n_mm"])
+    # aluminium has no endurance knee at 1e6; the S-N line's far end must be settable
+    al = dict(stress_range_mpa=200, material="AL6061-T6")
+    steel_knee = _via_mcp("fatigue_check", durability.fatigue_check, **al)
+    al_knee = _via_mcp("fatigue_check", durability.fatigue_check,
+                       endurance_cycles=5e8, **al)
+    assert al_knee["life_cycles"] > 100 * steel_knee["life_cycles"], (
+        al_knee["life_cycles"], steel_knee["life_cycles"])
 
 
 def test_unknown_modulus_raises_instead_of_assuming_steel(): # issue #269

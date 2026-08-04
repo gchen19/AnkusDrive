@@ -361,6 +361,12 @@ def test_molding_screen_docstring_names_its_escalation():
 
 _WRAPPER_DRIFT_OK = {
     # tool: (analysis params deliberately not exposed, why)
+    "cnc_time_estimate": (
+        ("machined_area_mm2",),
+        "the handler MEASURES it off the live solid (excluding stock-envelope "
+        "faces) and passes it explicitly alongside **p, so exposing it would "
+        "collide as a duplicate keyword argument. Measuring it is the whole point "
+        "of the tool taking a `model` handle rather than raw numbers"),
 }
 
 
@@ -404,9 +410,17 @@ def _handler_splat_targets():
             hname = getattr(dec.args[0], "value", None)
             aliases = dict(module_aliases)
             aliases.update(_local_module_aliases(node))
+            # The handler's own request-params argument — the only `**` that means
+            # "forward whatever the caller sent". A handler that splats a LITERAL
+            # dict (`**{'density_g_cc': d}` in _h_slice_gcode_submit) is passing its
+            # own computed values, not the request, and is not this test's business.
+            pname = node.args.args[0].arg if node.args.args else None
             for sub in ast.walk(node):
                 if (isinstance(sub, ast.Call)
-                        and any(k.arg is None for k in sub.keywords)
+                        and any(k.arg is None
+                                and isinstance(k.value, ast.Name)
+                                and k.value.id == pname
+                                for k in sub.keywords)
                         and isinstance(sub.func, ast.Attribute)
                         and getattr(sub.func.value, "id", None)):
                     local = sub.func.value.id
@@ -471,8 +485,12 @@ def test_no_mcp_tool_hides_an_optional_parameter_of_its_analysis_function():
         if target not in splat:
             continue
         forwarded = _forwarded_kwargs(node)
-        if forwarded is None:            # **params — forwards everything, no drift
-            continue
+        # A `**params` wrapper forwards whatever IT accepted, so it cannot drop a
+        # parameter it took — but it can still fail to OFFER one (#271, which is the
+        # half that filed #238 and #264). Both shapes get the not-exposed check;
+        # only named-kwarg forwarding can be checked for dropping.
+        splat_wrapper = forwarded is None
+        forwarded = [] if splat_wrapper else forwarded
         mod_name, fn_name = splat[target]
         optional = _analysis_optional_params(mod_name, fn_name)
         if optional is None:             # target isn't a plain analysis function
@@ -488,17 +506,20 @@ def test_no_mcp_tool_hides_an_optional_parameter_of_its_analysis_function():
                          f"not exposed {missing}")
         # Accepted but never forwarded is the OTHER half, and it fails worse: the
         # call succeeds, the schema validates, and the value is silently dropped —
-        # add_primitive's ignored `name=` (#246/#247) all over again.
-        dropped = sorted(p for p in accepted
-                         if p not in forwarded and p not in allowed)
-        if dropped:
-            drift.append(f"{node.name} -> {mod_name}.{fn_name}: "
-                         f"accepted but never forwarded {dropped}")
-    # Coverage floor. The sweep only applies to tools that forward NAMED kwargs into
-    # a `**p` handler — most tools splat `**params`, where drift is impossible — so
-    # the population is small (7 at the time of writing). The floor exists because a
-    # sweep that silently resolves nothing reads exactly like a clean sweep.
-    assert checked >= 7, (
+        # add_primitive's ignored `name=` (#246/#247) all over again. Only askable
+        # of a wrapper that names what it forwards.
+        if not splat_wrapper:
+            dropped = sorted(p for p in accepted
+                             if p not in forwarded and p not in allowed)
+            if dropped:
+                drift.append(f"{node.name} -> {mod_name}.{fn_name}: "
+                             f"accepted but never forwarded {dropped}")
+    # Coverage floor. The sweep applies to every tool dispatching to a handler that
+    # forwards the REQUEST params (`**p`) into one analysis function — 48 of them at
+    # the time of writing. The floor exists because a sweep that silently resolves
+    # nothing reads exactly like a clean sweep; that is how the first version of this
+    # test passed vacuously across all 276 tools.
+    assert checked >= 40, (
         f"the wrapper-drift sweep only resolved {checked} tool/analysis pairs — it has "
         "stopped checking anything meaningful (an alias or import shape it can no "
         "longer follow?), which would hide the very class of bug it exists to catch"
