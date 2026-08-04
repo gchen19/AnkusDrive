@@ -3531,6 +3531,7 @@ def bolted_joint_check(
     joint_stiffness_ratio: float = 0.3,
     material: str = "Steel-4140-QT",
     proof_strength_mpa: float | None = None,
+    preload_target_pct: float = 0.75,
     bolt_size: str | None = None,
     property_class: str | None = None,
 ) -> dict:
@@ -3540,9 +3541,12 @@ def bolted_joint_check(
     property_class ("8.8") when given. Preload from torque via T=K*F*d (pass
     torque_nm OR preload_n). Returns {preload_n, tensile_stress_area_mm2,
     bolt_stress_mpa, preload_pct_proof, bolt_stress_with_load_mpa,
-    separation_load_n, separation_margin, pass, governing}."""
+    separation_load_n, separation_margin, pass, governing}. `preload_target_pct` is
+    the fraction of proof strength the preload is judged against (0.75 default;
+    0.65 for a reused bolt, 0.90 for a critical permanent joint)."""
     params = {"k_factor": k_factor, "external_load_n": external_load_n,
-              "joint_stiffness_ratio": joint_stiffness_ratio, "material": material}
+              "joint_stiffness_ratio": joint_stiffness_ratio, "material": material,
+              "preload_target_pct": preload_target_pct}
     for k, v in (("bolt_dia_mm", bolt_dia_mm), ("pitch_mm", pitch_mm),
                  ("torque_nm", torque_nm), ("preload_n", preload_n),
                  ("proof_strength_mpa", proof_strength_mpa),
@@ -3585,15 +3589,24 @@ def spring_check(
     deflection_mm: float | None = None,
     material: str = "Steel-1045",
     free_length_mm: float | None = None,
+    shear_modulus_mpa: float | None = None,
+    allowable_shear_mpa: float | None = None,
 ) -> dict:
     """Rate a helical compression spring (Wahl). rate k=G d^4/(8 D^3 Na); corrected
     shear tau=Kw 8FD/(pi d^3). Pass force_n OR deflection_mm. Returns
     {spring_index, wahl_factor, rate_n_mm, force_n, deflection_mm, shear_stress_mpa,
-    slenderness, buckling_flag, shear_sf, pass}."""
+    slenderness, buckling_flag, allowable_shear_mpa, shear_sf, pass}.
+
+    G and the allowable come from `material` unless overridden. `shear_modulus_mpa`
+    sets G directly; `allowable_shear_mpa` replaces the 0.45·UTS estimate, which
+    falls back to 700 MPa (spring steel) for a material carrying no UTS — pass it
+    explicitly for anything else, since shear_sf and `pass` scale with it."""
     params = {"wire_dia_mm": wire_dia_mm, "coil_mean_dia_mm": coil_mean_dia_mm,
               "active_coils": active_coils, "material": material}
     for k, v in (("force_n", force_n), ("deflection_mm", deflection_mm),
-                 ("free_length_mm", free_length_mm)):
+                 ("free_length_mm", free_length_mm),
+                 ("shear_modulus_mpa", shear_modulus_mpa),
+                 ("allowable_shear_mpa", allowable_shear_mpa)):
         if v is not None:
             params[k] = v
     return _call("spring_check", **params)
@@ -3609,16 +3622,20 @@ def gear_rating(
     pinion_speed_rpm: float | None = None,
     material: str = "Steel-4140-QT",
     lewis_form_factor: float | None = None,
+    allowable_bending_mpa: float | None = None,
 ) -> dict:
     """Rate spur-gear tooth bending (Lewis): sigma=Ft/(b*m*Y). Pass
     tangential_force_n, or power_w + pinion_speed_rpm. Returns {tangential_force_n,
     pitch_dia_mm, pitch_line_velocity_m_s, lewis_form_factor, bending_stress_mpa,
-    allowable_bending_mpa, bending_sf, pass}. First-order screen, not full AGMA."""
+    allowable_bending_mpa, bending_sf, pass}. First-order screen, not full AGMA.
+    The allowable defaults to the material's fatigue endurance (else 0.3·UTS);
+    `allowable_bending_mpa` overrides it with an AGMA/spec number."""
     params = {"module_mm": module_mm, "teeth": teeth,
               "face_width_mm": face_width_mm, "material": material}
     for k, v in (("tangential_force_n", tangential_force_n), ("power_w", power_w),
                  ("pinion_speed_rpm", pinion_speed_rpm),
-                 ("lewis_form_factor", lewis_form_factor)):
+                 ("lewis_form_factor", lewis_form_factor),
+                 ("allowable_bending_mpa", allowable_bending_mpa)):
         if v is not None:
             params[k] = v
     return _call("gear_rating", **params)
@@ -3709,6 +3726,7 @@ def chain_drive(
     chain_number: str | None = None,
     strands: int = 1,
     power_w: float | None = None,
+    k_r: float | None = None,
 ) -> dict:
     """Rate an ANSI roller-chain drive (ASME B29.1). Rated at the lower of the
     link-plate-fatigue (HP1=0.004*N1^1.08*n1^0.9*P^(3-0.07P), low speed) and
@@ -3716,10 +3734,12 @@ def chain_drive(
     inches. Give chain_pitch_mm (matching add_sprocket) OR a chain_number
     ("40","60",...) for pitch+Kr; strands scale by the B29.1 factor. Powers in W.
     Returns {rated_power_w, type1_power_w, type2_power_w, governing, strands,
-    strand_factor, ..., power_sf?, pass}."""
+    strand_factor, ..., power_sf?, pass}. `k_r` overrides the roller-impact
+    constant the chain_number lookup supplies (29 for the 25-240 series, 17 for
+    the lightweight #41) — needed for a chain outside the ANSI table."""
     params = {"teeth_small": teeth_small, "speed_rpm": speed_rpm, "strands": strands}
     for k, v in (("chain_pitch_mm", chain_pitch_mm), ("chain_number", chain_number),
-                 ("power_w", power_w)):
+                 ("power_w", power_w), ("k_r", k_r)):
         if v is not None:
             params[k] = v
     return _call("chain_drive", **params)
@@ -3732,6 +3752,7 @@ def weld_group(
     load_point_mm: list,
     leg_mm: float | None = None,
     allowable_shear_mpa: float = 96.0,
+    weld_type: str = "fillet",
 ) -> dict:
     """Rate a planar fillet-weld group by Blodgett's treat-weld-as-a-line method.
     segments=[((x1,y1),(x2,y2)),...] (mm); an in-plane force_n=[Fx,Fy] at
@@ -3740,9 +3761,10 @@ def weld_group(
     required_leg = f_r/(0.707*allowable); given leg_mm, throat stress f_r/(0.707*leg)
     is checked vs allowable. Returns {weld_length_mm, centroid_mm, Ix_mm3, Iy_mm3,
     J_mm3, direct_shear_n_per_mm, max_shear_n_per_mm, worst_point_mm,
-    required_leg_mm, throat_stress_mpa?, shear_sf?, pass}."""
+    required_leg_mm, throat_stress_mpa?, shear_sf?, pass}. `weld_type` ('fillet'
+    default) labels the group and selects the throat convention."""
     params = {"segments": segments, "force_n": force_n, "load_point_mm": load_point_mm,
-              "allowable_shear_mpa": allowable_shear_mpa}
+              "allowable_shear_mpa": allowable_shear_mpa, "weld_type": weld_type}
     if leg_mm is not None:
         params["leg_mm"] = leg_mm
     return _call("weld_group", **params)
@@ -3759,6 +3781,7 @@ def tolerance_stackup(
     axis: str = "+z",
     default_tol: float | None = None,
     general: str = "m",
+    seed: int | None = 12345,
 ) -> dict:
     """Stack a dimension chain. Each chain entry is {name, nominal, plus, minus}
     with plus/minus the signed upper/lower deviations (plus>=minus; symmetric
@@ -3774,8 +3797,12 @@ def tolerance_stackup(
     stack a height gauge reads off a stepped part). Per-link tolerance:
     `default_tol` (± mm), else the ISO 2768-1 `general` class ('f'|'m'|'c'|'v',
     default 'm' — the drawing-note default for untoleranced dimensions). The
-    result then echoes the derived chain (+ axis, n_step_faces)."""
-    params = {"method": method, "samples": samples}
+    result then echoes the derived chain (+ axis, n_step_faces).
+
+    `seed` fixes the montecarlo draw (12345 default) so the same chain returns the
+    same cpk/pct_in_spec run to run — that determinism is a contract, so change it
+    only to check a result is not an artefact of one draw."""
+    params = {"method": method, "samples": samples, "seed": seed}
     if chain is not None:
         params["chain"] = chain
     if handle is not None:
@@ -3842,6 +3869,8 @@ def fatigue_check(
     material: str = "Steel-1045",
     endurance_mpa: float | None = None,
     uts_mpa: float | None = None,
+    s1000_fraction: float = 0.9,
+    endurance_cycles: float = 1_000_000.0,
 ) -> dict:
     """Rate fatigue life (S-N Basquin + Goodman mean-stress correction). σ_a =
     stress_range/2; infinite-life SF = 1/(σ_a/σ_e + σ_m/σ_uts); finite life from
@@ -3850,9 +3879,15 @@ def fatigue_check(
     infinite life); a tensile mean ≥ σ_uts fails outright. Returns
     {stress_amplitude_mpa, mean_stress_mpa, endurance_mpa, uts_mpa,
     equiv_reversed_mpa, safety_factor, life_cycles, required_cycles, pass,
-    governing_mode, endurance_basis}."""
+    governing_mode, endurance_basis}.
+
+    The S-N line runs from (1e3, `s1000_fraction`·UTS) to (`endurance_cycles`, σ_e).
+    Both default to the steel convention (0.9 and 1e6); aluminium and other
+    non-ferrous alloys have no true endurance knee, so set `endurance_cycles` to the
+    life the quoted σ_e was measured at (commonly 5e8)."""
     params = {"stress_range_mpa": stress_range_mpa, "mean_stress_mpa": mean_stress_mpa,
-              "cycles": cycles, "material": material}
+              "cycles": cycles, "material": material,
+              "s1000_fraction": s1000_fraction, "endurance_cycles": endurance_cycles}
     if endurance_mpa is not None:
         params["endurance_mpa"] = endurance_mpa
     if uts_mpa is not None:
