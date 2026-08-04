@@ -11343,10 +11343,16 @@ def _h_solve_capabilities(p):
     solver side-effect-free (DRIFTPIN_<SOLVER>_PATH env -> PATH -> per-OS install
     dirs for binaries; importability for pip-wheel solvers) and executes nothing.
 
-    Returns {platform, available (sorted ready solver names), solvers: {name:
-    {available, kind, family, extra, and either path/module or install_hint}},
-    families: {family: {solvers, available, any_available}}, extras: {extra:
-    [solver names]}} (see driftpin/solvers.capabilities)."""
+    A family's ``any_available`` means DriftPin can DRIVE it here, not merely that a
+    binary resolved: a solver no DriftPin tool can build a case for (SU2 — every
+    built-in CFD case mode emits OpenFOAM dictionaries) is reported under
+    ``prepared_case_only`` instead (issue #237).
+
+    Returns {platform, available (sorted ready solver names), unwired,
+    prepared_case_only, solvers: {name: {available, kind, family, extra, and either
+    path/module or install_hint}}, families: {family: {solvers, available, unwired,
+    prepared_case_only, any_available}}, extras: {extra: [solver names]}} (see
+    driftpin/solvers.capabilities)."""
     from driftpin import solvers
     return solvers.capabilities()
 

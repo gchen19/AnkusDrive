@@ -3009,11 +3009,19 @@ def solve_capabilities() -> dict:
     DRIFTPIN_<SOLVER>_PATH env -> PATH -> per-OS install dirs; a pip-wheel solver by
     importability. It executes nothing and installs nothing.
 
-    Returns {platform, available (sorted ready solver names), solvers: {name:
-    {available, kind ('binary'|'wheel'), family, extra, and either path/module (when
-    available) or install_hint}}, families: {family: {solvers, available,
-    any_available}}, extras: {extra: [solver names]} for `pip install
-    driftpin[<extra>]`}."""
+    `families[*].any_available` is the gate to trust: it means DriftPin can actually
+    DRIVE that family here, not just that a binary resolved. A solver that resolves
+    but that no DriftPin tool can build a case for is listed under the family's
+    `prepared_case_only` (with the reason on the solver entry) and does NOT set
+    `any_available` — today that is SU2, which only ever runs a `case_dir` you
+    prepared yourself (*.cfg + *.su2); every built-in CFD case mode is OpenFOAM-only.
+
+    Returns {platform, available (sorted ready solver names), unwired,
+    prepared_case_only, solvers: {name: {available, kind ('binary'|'wheel'), family,
+    extra, and either path/module (when available) or install_hint, plus
+    prepared_case_only when nothing can build it a case}}, families: {family:
+    {solvers, available, unwired, prepared_case_only, any_available}}, extras:
+    {extra: [solver names]} for `pip install driftpin[<extra>]`}."""
     return _call("solve_capabilities")
 
 
@@ -3030,10 +3038,13 @@ def setup_status(verify_freecad_boot: bool = False) -> dict:
     user doubts the install actually runs).
 
     Returns {platform: {system, machine}, freecad: {available, path, source,
-    version?, fix?}, solvers: {available, unwired, solvers: {name: {..., install_hint
-    | wire_hint}}, families: {family: {solvers, available, unwired, any_available}},
-    extras}} — `families[*].any_available` is what gates each *_submit family, and
-    every unavailable item carries its own fix string."""
+    version?, fix?}, solvers: {available, unwired, prepared_case_only, solvers:
+    {name: {..., install_hint | wire_hint}}, families: {family: {solvers, available,
+    unwired, prepared_case_only, any_available}}, extras}} —
+    `families[*].any_available` is what gates each *_submit family, and every
+    unavailable item carries its own fix string. A solver under
+    `prepared_case_only` resolves but no DriftPin tool can build it a case, so it
+    does not make its family available (SU2/cfd — issue #237)."""
     from driftpin import doctor
     return doctor.build_report(probe_version=verify_freecad_boot)
 
@@ -5266,7 +5277,10 @@ def cfd_internal_flow_submit(
 ) -> dict:
     """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, asynchronous. Requires an
     OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
-    reason, install} rather than raising. `turbulence='kOmegaSST'` upgrades the pipe
+    reason, install} rather than raising. The two case-BUILDING modes below need
+    OpenFOAM specifically — they emit OpenFOAM dictionaries; SU2 only ever runs a
+    `case_dir` you prepared yourself, which is why solve_capabilities does not count
+    it toward the cfd family's any_available (issue #237). `turbulence='kOmegaSST'` upgrades the pipe
     validation case to RANS (SIMULATION_NEXT B3): wall-function k/ω/ν_t with first-cell
     y+ targeted at ~30–100, developed dp/dx fitted over the second half of a ≥40·D pipe,
     gated BANDED against Colebrook (`colebrook_ratio` ≈ 1 ± 10 % — the Moody correlation
@@ -5705,7 +5719,10 @@ def cfd_external_flow_submit(
 ) -> dict:
     """External-flow CFD (drag/lift) via OpenFOAM or SU2, asynchronous. Requires an
     OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
-    reason, install} rather than raising. Three modes:
+    reason, install} rather than raising. The two case-BUILDING modes below need
+    OpenFOAM specifically — they emit OpenFOAM dictionaries; SU2 only ever runs a
+    `case_dir` you prepared yourself, which is why solve_capabilities does not count
+    it toward the cfd family's any_available (issue #237). Three modes:
 
     - **Put a real solid in the virtual wind tunnel** (issue #223): pass a `model` (or
       `body`) handle + `velocity_m_s`. The solid's faces tessellate into an STL, a

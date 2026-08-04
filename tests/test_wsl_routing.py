@@ -295,11 +295,16 @@ def test_macos_openfoam_unwired_when_multipass_present():
     """macOS has no host-visible OpenFOAM bashrc (it's inside the VM), so the honest
     signal is the `multipass` CLI on PATH: openfoam reports `unwired` with the
     provisioning hint — never ready (the VM's contents can't be probed without
-    executing it). With multipass absent it stays plain absent."""
+    executing it). With multipass absent it stays plain absent.
+
+    The `multipass info` seam is pinned to "no such instance" so this stays the
+    no-VM case on a box that actually has one; which of the three hints each VM
+    state earns is gated in tests/test_solve_degradation.py (issue #237)."""
     with _patch() as p:
         p.set(solvers, "platform", _fake_platform("Darwin"))
         p.set(solvers, "_binary_path", lambda name, spec: None)   # no host binary
         p.set(solvers, "_standard_bashrc", lambda cfg: None)      # no host bashrc
+        p.set(solvers, "_multipass_info", lambda inst: None)      # no such instance
         p.set(solvers.shutil, "which",
               lambda n: "/opt/homebrew/bin/multipass" if n == "multipass" else None)
         info = solvers.find_solver("openfoam")
