@@ -169,12 +169,17 @@ def _fmt_solvers(caps: dict) -> list[str]:
             # when topopt itself is absent). Report the package that actually
             # resolved, not the entry name — "ready via topopt" while topopt is not
             # installed is exactly the stale hint this doctor exists to avoid.
-            ready = ", ".join(
-                _resolved_label(solver_states[s]) for s in sorted(info["available"]))
+            # Only the solvers that made it ready get named: one DriftPin cannot
+            # build a case for (SU2, issue #237) resolves without contributing, and
+            # "ready via su2" would send the reader back to a solver that can only
+            # run a case_dir they wrote themselves.
+            drivable = [s for s in sorted(info["available"])
+                        if not solver_states[s].get("prepared_case_only")]
+            ready = ", ".join(_resolved_label(solver_states[s]) for s in drivable)
             # in-substrate resolutions (issue #193) don't run natively: they launch
             # through `wsl -e bash` (Windows) or `multipass exec` (macOS), so say so
             # — "ready" on a box with no local OpenFOAM is otherwise baffling.
-            via = {solver_states[s].get("via") for s in info["available"]}
+            via = {solver_states[s].get("via") for s in drivable}
             substrate = (" (in WSL)" if "wsl" in via else
                          " (in Multipass VM)" if "multipass" in via else "")
             lines.append(f"{_MARK['ok']} {fam:<16} ready via {ready}{substrate}")
@@ -192,6 +197,15 @@ def _fmt_solvers(caps: dict) -> list[str]:
             st = solver_states[name]
             lines.append(f"{_MARK['absent']} {fam:<16} absent")
             lines.append(f"        fix:   {st.get('install_hint')}")
+        # A solver can RESOLVE and still not make the family usable: nothing in
+        # DriftPin builds a case for it, so only a hand-prepared case_dir reaches it
+        # (SU2, issue #237). It is deliberately not counted as ready above, but
+        # saying nothing would make "cfd unwired" baffling next to an SU2_CFD the
+        # user just installed — so name it and say what it can still do.
+        for name in info.get("prepared_case_only", ()):
+            st = solver_states[name]
+            lines.append(f"        note:  {name} resolves ({st.get('path') or st.get('module')})")
+            lines.append(f"               but {st['prepared_case_only']}")
     return lines
 
 

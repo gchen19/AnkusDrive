@@ -559,3 +559,116 @@ def flat_plate_drag_turbulent(
         "warnings": warnings,
         "escalate_to": "cfd_external_flow_submit",
     }
+
+
+# --- which (turbulence model, case family) pairs have a VERIFIED oracle -------
+#
+# `gated` on a CFD payload means exactly one thing: this solve path has been run
+# against a known answer and landed inside that answer's band. It is NOT the trust
+# block (#225) — converged / clean mesh / y+ in band say the solve was performed
+# competently, not that it is right. Only a gate closes that gap, which is why
+# performance.check_trust refuses a measurement when a requirement demands
+# `trust: {gated: true}`.
+#
+# The verdict is a property of the PAIR, not of the turbulence model alone (#262):
+# the same kOmegaSST that is gated on the pipe against Colebrook was, until the cube
+# gate below, unverified on an arbitrary body. Each entry names the oracle and the
+# LIVE ratio its gate measured, so every claim here is traceable to a solve.
+_SOLVE_GATES = {
+    ("laminar", "external_body"): {
+        "gated": True,
+        "oracle": "sphere drag curve (Clift-Gauvin, +/-10%) — live 0.8% at Re=1 and "
+                  "2.0% at Re=100 (tests/test_meshbridge.py, tests/test_wind_tunnel.py)",
+        "reynolds_range": None,
+    },
+    ("kOmegaSST", "external_body"): {
+        "gated": True,
+        # #262. Verified on the shape family where steady RANS is credible: a bluff
+        # body whose separation line is FIXED by geometry (sharp edges), so the answer
+        # does not hang on the turbulence model predicting where the boundary layer
+        # lets go. The smooth sphere — where it does — is the honest boundary:
+        # mesh-converged kOmegaSST reads 1.09-1.10x Clift-Gauvin, i.e. sitting ON the
+        # edge of that correlation's own +/-10% band rather than comfortably inside it.
+        "oracle": "bluff-body Cd table (+/-20%) — cube face-on live 1.002 at Re=1e4 "
+                  "and 1.004 at Re=1e5 (tests/test_wind_tunnel.py); corroborated on "
+                  "the sphere drag curve at 1.09, which is the EDGE of its +/-10% band",
+        "reynolds_range": (1e4, 2e5),
+    },
+    ("laminar", "external_flat_plate"): {
+        "gated": True,
+        "oracle": "Blasius Cf = 1.328/sqrt(Re_L) — live ~9% high inside a 15% band "
+                  "(tests/test_openfoam.py)",
+        "reynolds_range": None,
+    },
+    ("kOmegaSST", "external_flat_plate"): {
+        "gated": True,
+        "oracle": "mixed-transition 1/7-power Cf (+/-15%) — live cf_mixed_ratio 1.02 "
+                  "at Re_L = 2e6 (tests/test_openfoam.py)",
+        "reynolds_range": None,
+    },
+    ("laminar", "internal_pipe"): {
+        "gated": True,
+        "oracle": "Hagen-Poiseuille dp = 128*mu*L*Q/(pi*D^4), EXACT "
+                  "(tests/test_openfoam.py)",
+        "reynolds_range": None,
+    },
+    ("kOmegaSST", "internal_pipe"): {
+        "gated": True,
+        "oracle": "Colebrook friction factor (+/-10%) — live colebrook_ratio 0.93 at "
+                  "Re = 1e5 (tests/test_openfoam.py)",
+        "reynolds_range": None,
+    },
+}
+
+_TURBULENCE_ALIASES = {"komegasst": "kOmegaSST", "k-omega-sst": "kOmegaSST",
+                       "rans": "kOmegaSST", "turbulent": "kOmegaSST",
+                       "laminar": "laminar"}
+
+
+def solve_gate(turbulence: str, family: str, reynolds: float | None = None) -> dict:
+    """Does THIS (turbulence model, case family) pair have a verified oracle behind
+    it — the single source of truth for the ``gated`` flag on a CFD payload (#262).
+
+    Before this existed the wind tunnel set ``gated`` from ``turbulence == 'laminar'``,
+    so EVERY turbulent external-flow solve shipped ``gated: false`` and any requirement
+    demanding ``trust: {gated: true}`` was unsatisfiable at a realistic Reynolds number
+    (laminar is gated but physically wrong above Re ~ 1000; RANS was right but
+    unproven). The verdict is now per-pair, and each entry names the oracle and the
+    live ratio its gate measured.
+
+    ``family`` is the CASE being solved, not the geometry: 'external_body' (the virtual
+    wind tunnel on an arbitrary solid), 'external_flat_plate', 'internal_pipe'.
+    ``turbulence`` takes the same aliases the handlers do ('kOmegaSST', 'rans',
+    'turbulent', 'laminar'). An unknown pair is ``gated: False`` with the reason — a
+    path nobody has verified must say so rather than inherit a neighbour's credibility.
+
+    ``reynolds``, when the entry carries a ``reynolds_range``, is checked against it:
+    the RANS body gate was measured over Re = 1e4-1e5 and is claimed out to the
+    correlations' own ceiling (Re = 2e5, the drag crisis), so a kOmegaSST body solve at
+    Re = 500 comes back UNGATED — the oracle does not reach there and neither does the
+    model. Passing no ``reynolds`` skips the envelope check.
+
+    Returns {gated, turbulence, family, oracle (None when ungated), reynolds_range,
+    reason (None when gated)}. Never raises."""
+    turb = _TURBULENCE_ALIASES.get(str(turbulence).strip().lower(), str(turbulence))
+    entry = _SOLVE_GATES.get((turb, str(family)))
+    out = {"gated": False, "turbulence": turb, "family": str(family),
+           "oracle": None, "reynolds_range": None, "reason": None}
+    if entry is None:
+        known = sorted(f"{t}/{f}" for t, f in _SOLVE_GATES)
+        out["reason"] = (
+            f"no verified oracle for turbulence={turb!r} on the {family!r} case "
+            f"family — the gated pairs are {known}")
+        return out
+    out["reynolds_range"] = entry["reynolds_range"]
+    span = entry["reynolds_range"]
+    if span is not None and reynolds is not None and not (
+            span[0] <= float(reynolds) <= span[1]):
+        out["reason"] = (
+            f"Re = {float(reynolds):.3g} is outside the {span[0]:.3g}-{span[1]:.3g} "
+            f"envelope the {turb} {family} gate was verified over ({entry['oracle']}) "
+            "— the solve still runs, but nothing has checked it out there")
+        return out
+    out["gated"] = bool(entry["gated"])
+    out["oracle"] = entry["oracle"]
+    return out

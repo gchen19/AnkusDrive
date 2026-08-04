@@ -110,7 +110,8 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ dri
 | Optics (non-seq) | KrakenOS (GPL) | ✅ `pip install 'driftpin[optics_gpl]'`, run out-of-process |
 | Fluids properties | CoolProp | ✅ pip wheel (arm64) |
 | Slicing | PrusaSlicer | ✅ `brew install --cask prusaslicer` (or `install-solvers.sh prusaslicer`) — auto-discovered, live slice verified |
-| CFD (steady) | SU2 | ✅ `install-solvers.sh su2` — official x86_64 binary under **Rosetta 2**, auto-discovered from the provisioner dir |
+| CFD (pipe / plate / bridge / wind tunnel) | OpenFOAM | ✅ **Multipass**, same routing as FSI — needs the two in-VM exports below. All built-in CFD case builders are OpenFOAM-only; live-verified on Apple Silicon ([#223](https://github.com/gchen19/DriftPin/issues/223)) |
+| CFD (prepared case only) | SU2 | ⚠️ `install-solvers.sh su2` installs it (official x86_64 binary under **Rosetta 2**, auto-discovered from the provisioner dir) and it runs a hand-written `case_dir` — but **no DriftPin tool builds an SU2 case**, so it does not make the cfd family available ([#237](https://github.com/gchen19/DriftPin/issues/237)) |
 | Transient/radiation thermal | Elmer | ⚠️ **no prebuilt macOS binaries exist** — no Homebrew formula, no conda-forge package (older hints claiming one were wrong). Source build (CMake + gfortran) from https://www.elmerfem.org/, then `DRIFTPIN_ELMER_PATH` |
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD (`pocl` on Apple Silicon); dedicated venv (`DRIFTPIN_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ source build with brew deps; the `em_gpl` recipe is Linux-only today |
@@ -129,9 +130,18 @@ ships it inside a **Canonical Multipass** VM (arm64-native on Apple Silicon — 
 emulation). DriftPin routes the OpenFOAM apps through that VM: on macOS
 `solvers.bash_argv` launches `multipass exec <instance> -- bash -c "cd <case> && …"`
 (issue [#193](https://github.com/gchen19/DriftPin/issues/193)), so the same case the
-host builds is meshed/solved inside the VM. **CFD alone needs none of this** — it
-degrades to SU2 (native, under Rosetta). Multipass is only for the OpenFOAM-*exclusive*
-families: injection-molding fill and the preCICE **FSI** coupling.
+host builds is meshed/solved inside the VM. That includes **plain CFD**: every built-in
+case mode of `cfd_internal_flow_submit` / `cfd_external_flow_submit` — pipe, RANS pipe,
+snappyHexMesh geometry bridge, flat plate, wind tunnel — emits an OpenFOAM dictionary
+tree, so CFD needs this VM exactly as much as molding and FSI do.
+
+> **CFD does not "degrade to SU2" here.** SU2 resolves natively (Rosetta) and can run a
+> `case_dir` you prepared yourself (`*.cfg` + `*.su2` mesh), but no DriftPin tool
+> *builds* one — so SU2 alone leaves you with no way to ask a CFD question. Because of
+> that, `solve_capabilities` deliberately does **not** count SU2 toward the cfd family's
+> `any_available`: it lists it under `prepared_case_only` with the reason, and the family
+> reads unwired until OpenFOAM is wired up ([#237](https://github.com/gchen19/DriftPin/issues/237)).
+> An SU2 case builder would change this and is tracked as item 3 of that issue.
 
 **1. Install Multipass and launch the VM** (the instance name must be `openfoam`, or set
 `DRIFTPIN_OPENFOAM_INSTANCE`):
@@ -193,6 +203,16 @@ export TMPDIR=$HOME/fsi-run                            # case dirs land in the m
 export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
 export DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
 ```
+
+Until those are set, `driftpin doctor` / `solve_capabilities` report OpenFOAM `unwired`
+with the fix for **the state your VM is actually in** — discovery reads (never starts)
+`multipass info`, time-boxed, and picks one of three hints ([#237](https://github.com/gchen19/DriftPin/issues/237)):
+
+| `found_at` | VM state | `wire_hint` says |
+|---|---|---|
+| `multipass` | no multipass CLI, no such instance, or the read failed/timed out | provision it — `multipass shell openfoam` + `install-solvers.sh cfd`, then the exports |
+| `multipass VM 'openfoam' (stopped)` | instance exists, not running | start it — `multipass start openfoam` |
+| `multipass VM 'openfoam' (running)` | VM up, this shell unwired | the three exports above — **not** "provision" |
 
 **Verified live on Apple Silicon** (issue #223), whole suites, no skips:
 

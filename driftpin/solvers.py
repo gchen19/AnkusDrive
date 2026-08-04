@@ -142,6 +142,12 @@ _SOLVERS: dict = {
             # side-effect-free signal that the substrate exists; the solver inside the
             # VM can't be confirmed without executing it, so this is reported as
             # unwired (substrate present, provisioning unverified), never as ready.
+            # Three of them (issue #237): "unwired" is one word for three different
+            # machine states, and only one of them is fixed by provisioning. A
+            # `multipass info` READ (side-effect-free, timeout-bounded — see
+            # multipass_vm_state) tells them apart, so the hint names the step that
+            # is actually missing instead of telling someone with a running,
+            # provisioned VM to go build one.
             "darwin_multipass": (
                 "provision OpenFOAM in the Multipass VM — "
                 "`multipass shell {inst}` then `bash scripts/install-solvers.sh cfd`; "
@@ -151,6 +157,23 @@ _SOLVERS: dict = {
                 "<that prefix>/platforms/linuxARM64GccDPInt32Opt/bin/interFoam. "
                 "Set DRIFTPIN_OPENFOAM_INSTANCE={inst} if the instance is named "
                 "otherwise. See docs/MACOS.md"),
+            "darwin_multipass_stopped": (
+                "the Multipass VM '{inst}' exists but is not running — start it: "
+                "`multipass start {inst}` (then re-check; if OpenFOAM was never "
+                "provisioned inside it, `multipass shell {inst}` and "
+                "`bash scripts/install-solvers.sh cfd`). See docs/MACOS.md"),
+            "darwin_multipass_running": (
+                "the Multipass VM '{inst}' is running — only this shell's env is "
+                "missing. Export the IN-VM paths, which macOS trusts unstat'd (the "
+                "VM filesystem is opaque from the host): "
+                "export TMPDIR=$HOME/fsi-run (the host side of `multipass mount`, so "
+                "case dirs land at a path that resolves in the VM too), "
+                "export DRIFTPIN_OPENFOAM_BASHRC="
+                "/usr/lib/openfoam/openfoam<ver>/etc/bashrc, "
+                "export DRIFTPIN_OPENFOAM_PATH="
+                "<that prefix>/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam. "
+                "If OpenFOAM is not installed in the VM yet, `multipass shell {inst}` "
+                "then `bash scripts/install-solvers.sh cfd` first. See docs/MACOS.md"),
         },
     },
     "su2": {
@@ -166,6 +189,17 @@ _SOLVERS: dict = {
         "install_hint": "download SU2 from https://su2code.github.io/download.html "
                         "(provides SU2_CFD) and put it on PATH, or set "
                         "DRIFTPIN_SU2_PATH",
+        # No DriftPin tool BUILDS an SU2 case (issue #237). Every built-in case mode
+        # of cfd_internal_flow_submit / cfd_external_flow_submit — the straight pipe
+        # (laminar and RANS), the snappyHexMesh geometry bridge, the flat plate and
+        # the wind tunnel — emits an OpenFOAM dictionary tree; SU2 is reachable only
+        # through a `case_dir` the caller hand-prepared. So SU2 resolving must not
+        # make the cfd family read "available" to an agent hunting for a solver to
+        # escalate into: it would follow cfd_pipe_flow's escalate_to hint and
+        # dead-end. See prepared_case_only below.
+        "prepared_case_only": "no DriftPin tool builds an SU2 case — SU2 runs only a "
+                              "hand-prepared case_dir (*.cfg + *.su2 mesh) passed to "
+                              "cfd_internal_flow_submit / cfd_external_flow_submit",
     },
     # --- optics: pip wheels (the `optics` extra) -----------------------------
     # Two lanes (see memory optics-library-selection). SEQUENTIAL imaging/lens
@@ -577,6 +611,89 @@ def foam_instance() -> str:
     return _config.get("DRIFTPIN_OPENFOAM_INSTANCE") or "openfoam"
 
 
+# --- Multipass VM state (issue #237) -------------------------------------------
+# `multipass` on PATH proves the substrate exists but says nothing about the VM, so
+# discovery used to collapse "no VM", "VM stopped" and "VM running but this shell is
+# unwired" into one hint that told all three to provision. `multipass info` is a
+# READ — it starts nothing, mutates nothing — so discovery may run it and stay
+# side-effect-free. It is still a subprocess against a daemon that can hang, so it is
+# timeout-bounded, cached for a few seconds (capabilities() probes every solver in a
+# row), and degrades to the absent state on any failure.
+
+_VM_INFO_TTL_S = 5.0
+_vm_info_cache: dict = {}          # instance -> (monotonic_deadline, payload|None)
+
+
+def _multipass_info_exec(instance: str, timeout_s: float):
+    """Run ``multipass info <instance> --format json`` and return its stdout, or None
+    when multipass is missing, errors (no such instance), hangs past ``timeout_s``, or
+    is otherwise unreadable. Read-only: ``info`` neither starts nor changes a VM."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["multipass", "info", instance, "--format", "json"],
+            capture_output=True, text=True, timeout=timeout_s,
+            stdin=subprocess.DEVNULL)      # never steal the caller's stdin (#237/#223)
+    except (OSError, subprocess.SubprocessError):
+        return None                        # not installed, or hung past the timeout
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _multipass_info(instance: str):
+    """Cached ``multipass info`` payload for ``instance`` (raw JSON text, or None).
+
+    THE INJECTABLE SEAM: tests fake a VM state by replacing this function, which also
+    bypasses the cache. ``DRIFTPIN_MULTIPASS_TIMEOUT_S`` bounds the read (default 5 s)
+    and ``DRIFTPIN_MULTIPASS_CACHE_S`` the reuse window (default 5 s) — long enough to
+    cover one capabilities() sweep, short enough that starting the VM shows up right
+    after."""
+    import time as _time
+    ttl = float(_config.get("DRIFTPIN_MULTIPASS_CACHE_S") or _VM_INFO_TTL_S)
+    now = _time.monotonic()
+    hit = _vm_info_cache.get(instance)
+    if hit and hit[0] > now:
+        return hit[1]
+    timeout_s = float(_config.get("DRIFTPIN_MULTIPASS_TIMEOUT_S") or 5.0)
+    payload = _multipass_info_exec(instance, timeout_s)
+    _vm_info_cache[instance] = (now + ttl, payload)
+    return payload
+
+
+def multipass_vm_state(instance: str | None = None) -> str:
+    """Which of the three substrate states the OpenFOAM VM is in, read-only:
+
+      * ``"absent"``  — not macOS, no ``multipass`` CLI, no such instance, or the
+        read failed/timed out (degrade to the provision hint, never to a wrong one).
+      * ``"stopped"`` — the instance exists but is not running (Stopped, Suspended,
+        Starting, …): the fix is ``multipass start``, not another provisioning pass.
+      * ``"running"`` — the VM is up, so anything still unresolved is this shell's
+        environment.
+
+    Never starts, stops or otherwise touches the VM."""
+    if not multipass_available():
+        return "absent"
+    inst = instance or foam_instance()
+    payload = _multipass_info(inst)
+    if not payload:
+        return "absent"
+    import json as _json
+    try:
+        data = _json.loads(payload)
+    except (ValueError, TypeError):
+        return "absent"
+    if not isinstance(data, dict):
+        return "absent"
+    entry = (data.get("info") or {}).get(inst) or {}
+    state = str(entry.get("state") or "")
+    if state == "Running":
+        return "running"
+    # "Deleted" (purge pending) and an unparseable/empty state are provisioning
+    # problems, not start-the-VM problems.
+    if not state or state in ("Deleted", "Unknown"):
+        return "absent"
+    return "stopped"
+
+
 def bash_argv(script: str, case_dir: str | None = None) -> list:
     """The argv that runs ``script`` under bash in the caller's ``cwd`` (the case
     dir). One per-OS substrate, the same bash script inside (issue #193):
@@ -796,9 +913,17 @@ def _unwired_found(name: str, spec: dict):
                                                        distro=wsl_distro())
         # macOS: no host-visible bashrc — OpenFOAM lives in the Multipass VM (#193).
         # `multipass` on PATH is the read-only signal the substrate is present (the
-        # solver inside the VM can't be confirmed without executing it).
+        # solver inside the VM can't be confirmed without executing it). WHICH hint
+        # is right depends on the VM, so read its state (issue #237): telling someone
+        # whose VM is provisioned and running to go provision one is the single most
+        # common way this hint used to be wrong.
         if cfg.get("darwin_multipass") and multipass_available():
-            return "multipass", cfg["darwin_multipass"].format(inst=foam_instance())
+            inst = foam_instance()
+            state = multipass_vm_state(inst)
+            tmpl = cfg.get(f"darwin_multipass_{state}") or cfg["darwin_multipass"]
+            found_at = ("multipass" if state == "absent"
+                        else f"multipass VM {inst!r} ({state})")
+            return found_at, tmpl.format(inst=inst)
     elif probe == "fsi_adapter":
         found = openfoam_adapter_lib_dir() or precice_lib_dir()
         if found:
@@ -834,6 +959,12 @@ def find_solver(name: str) -> dict:
       * ``absent`` — no evidence it is installed anywhere; ``install_hint`` is the
         install path.
 
+    A solver DriftPin cannot build a case for additionally carries
+    ``prepared_case_only`` (issue #237) — the reason string, always present when the
+    registry declares it, resolved or not. It still runs (``require_solver`` is
+    unaffected: a hand-prepared ``case_dir`` is a legitimate way to use it), but it
+    cannot satisfy its family on its own — see :func:`capabilities`.
+
     Raises ValueError for an unknown name."""
     spec = _spec(name)
     info = {
@@ -843,6 +974,8 @@ def find_solver(name: str) -> dict:
         "extra": spec["extra"],
         "available": False,
     }
+    if spec.get("prepared_case_only"):
+        info["prepared_case_only"] = spec["prepared_case_only"]
     if spec["kind"] == "wheel":
         resolved = next((m for m in spec["modules"] if _module_available(m)), None)
         if resolved is not None:
@@ -1212,23 +1345,37 @@ def capabilities() -> dict:
     ``render_capabilities``. Resolves every solver side-effect-free (no execution,
     no env mutation).
 
+    ``any_available`` is the family gate, and it answers "can DriftPin actually
+    DRIVE this family here?", not merely "did some binary resolve?" (issue #237). A
+    solver the registry marks ``prepared_case_only`` — it resolves, but nothing in
+    DriftPin can BUILD a case for it, so only a hand-prepared ``case_dir`` reaches it
+    — is listed in the family's ``available`` and ``prepared_case_only`` but does NOT
+    set ``any_available``. Without that, macOS reported the cfd family available on a
+    bare SU2 install, and an agent following ``cfd_pipe_flow``'s ``escalate_to`` hint
+    dead-ended: every built-in CFD case mode emits OpenFOAM dictionaries.
+
     Returns ``{platform, available (sorted ready solver names), unwired (sorted
-    installed-but-unwired names, issue #177), solvers: {name: {available, status,
-    kind, family, extra, and either path/module or install_hint (+found_at/wire_hint
-    when unwired)}}, families: {family: {solvers, available, unwired, any_available}},
-    extras: {extra: [solver names]}}``."""
+    installed-but-unwired names, issue #177), prepared_case_only (sorted resolved-but-
+    undrivable names, issue #237), solvers: {name: {available, status, kind, family,
+    extra, and either path/module or install_hint (+found_at/wire_hint when unwired,
+    +prepared_case_only when undrivable)}}, families: {family: {solvers, available,
+    unwired, prepared_case_only, any_available}}, extras: {extra: [solver names]}}``."""
     solvers = {name: find_solver(name) for name in _SOLVERS}
 
     families: dict = {}
     for name, info in solvers.items():
         fam = families.setdefault(
             info["family"],
-            {"solvers": [], "available": [], "unwired": [], "any_available": False},
+            {"solvers": [], "available": [], "unwired": [],
+             "prepared_case_only": [], "any_available": False},
         )
         fam["solvers"].append(name)
         if info["available"]:
             fam["available"].append(name)
-            fam["any_available"] = True
+            if info.get("prepared_case_only"):
+                fam["prepared_case_only"].append(name)
+            else:
+                fam["any_available"] = True
         elif info.get("status") == "unwired":
             fam["unwired"].append(name)
 
@@ -1242,6 +1389,9 @@ def capabilities() -> dict:
         "available": sorted(n for n, i in solvers.items() if i["available"]),
         "unwired": sorted(
             n for n, i in solvers.items() if i.get("status") == "unwired"),
+        "prepared_case_only": sorted(
+            n for n, i in solvers.items()
+            if i["available"] and i.get("prepared_case_only")),
         "solvers": solvers,
         "families": families,
         "extras": {k: sorted(v) for k, v in extras.items()},

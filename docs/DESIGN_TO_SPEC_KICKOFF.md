@@ -5,10 +5,13 @@
 > What did NOT get done is tracked: [#260](https://github.com/gchen19/DriftPin/issues/260)
 > adaptive **shape** optimization over a recipe (blocked on a main-thread work queue —
 > see the boundary note under #228), and
-> [#262](https://github.com/gchen19/DriftPin/issues/262) no verified oracle for RANS
-> external flow. [#261](https://github.com/gchen19/DriftPin/issues/261) — nothing
-> consulting a performance contract — is **built** (see below). The remaining loose
-> threads at the bottom are still untracked.
+> the loose threads at the bottom, which are still untracked. Two gaps this doc once
+> listed as open are now **built**:
+> [#261](https://github.com/gchen19/DriftPin/issues/261) — nothing consulting a
+> performance contract (#226's unbuilt integration section) — see below, and
+> [#262](https://github.com/gchen19/DriftPin/issues/262) — no verified oracle for RANS
+> external flow — see the loose-thread entry below for what that gate covers and where
+> it stops.
 
 Epic [#222](https://github.com/gchen19/DriftPin/issues/222) set a goal one step past "an
 agent can construct parts": **an agent designs to a quantitative performance spec and
@@ -278,12 +281,20 @@ any `add_*` tool.
   verification may return a job and a gate must answer synchronously. Its corollary is
   that "no verdict" is its own outcome (`unverified` / `stale` / `indeterminate` →
   `skipped`), never a pass. See MULTI_AGENT.md §11.12.
-- ~~**The RANS wind-tunnel path ships `gated: false`.**~~ Now tracked as
-  [#262](https://github.com/gchen19/DriftPin/issues/262). Worth knowing regardless: a
-  requirement may demand `trust: {gated: true}`, which is therefore **unsatisfiable for
-  any turbulent external-flow spec** until that oracle exists.
-- **#237 items 2 and 3 are still open** (state-aware capabilities/hints; an SU2 case
-  builder). Item 1 — wiring the built-in cases through Multipass — is effectively done.
+- ~~**The RANS wind-tunnel path ships `gated: false`.**~~ [#262](https://github.com/gchen19/DriftPin/issues/262),
+  **closed**: `gated` is now decided per (turbulence model, case family) by
+  `cfd.solve_gate`, and the turbulent body path is gated on a cube face-on vs the
+  bluff-body Cd table over Re = 1e4–2e5 (live 1.0017 / 1.0035). A turbulent aero spec
+  demanding `trust: {gated: true}` is satisfiable. The boundary is recorded rather than
+  papered over: on a *smooth* body the sphere reads 1.09× Clift–Gauvin, at the edge of
+  its own ±10 % band, and the cylinder in crossflow #262 proposed is not constructible
+  through the shipped knobs (one `lateral_factor` pads both non-flow axes, so no
+  spanwise-periodic span; a finite L/D = 4 cylinder measures 0.70× Sucker–Brauer).
+- **#237 item 3 is still open** (an SU2 case builder). Item 1 — wiring the built-in
+  cases through Multipass — is done, and item 2 shipped 2026-08-03: `any_available`
+  now means "some tool can drive this family", so a `prepared_case_only` solver like
+  SU2 no longer makes the cfd family read available, and the macOS unwired hint is
+  state-aware (VM absent / stopped / running).
 - **Mesh independence for non-CFD families.** `grid_convergence` is family-agnostic and
   works today on three FEM stresses or three modal frequencies, but only the CFD
   *driver* exists. An FEM ladder would need its own refinement machinery.

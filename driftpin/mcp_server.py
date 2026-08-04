@@ -3032,11 +3032,19 @@ def solve_capabilities() -> dict:
     DRIFTPIN_<SOLVER>_PATH env -> PATH -> per-OS install dirs; a pip-wheel solver by
     importability. It executes nothing and installs nothing.
 
-    Returns {platform, available (sorted ready solver names), solvers: {name:
-    {available, kind ('binary'|'wheel'), family, extra, and either path/module (when
-    available) or install_hint}}, families: {family: {solvers, available,
-    any_available}}, extras: {extra: [solver names]} for `pip install
-    driftpin[<extra>]`}."""
+    `families[*].any_available` is the gate to trust: it means DriftPin can actually
+    DRIVE that family here, not just that a binary resolved. A solver that resolves
+    but that no DriftPin tool can build a case for is listed under the family's
+    `prepared_case_only` (with the reason on the solver entry) and does NOT set
+    `any_available` — today that is SU2, which only ever runs a `case_dir` you
+    prepared yourself (*.cfg + *.su2); every built-in CFD case mode is OpenFOAM-only.
+
+    Returns {platform, available (sorted ready solver names), unwired,
+    prepared_case_only, solvers: {name: {available, kind ('binary'|'wheel'), family,
+    extra, and either path/module (when available) or install_hint, plus
+    prepared_case_only when nothing can build it a case}}, families: {family:
+    {solvers, available, unwired, prepared_case_only, any_available}}, extras:
+    {extra: [solver names]} for `pip install driftpin[<extra>]`}."""
     return _call("solve_capabilities")
 
 
@@ -3053,10 +3061,13 @@ def setup_status(verify_freecad_boot: bool = False) -> dict:
     user doubts the install actually runs).
 
     Returns {platform: {system, machine}, freecad: {available, path, source,
-    version?, fix?}, solvers: {available, unwired, solvers: {name: {..., install_hint
-    | wire_hint}}, families: {family: {solvers, available, unwired, any_available}},
-    extras}} — `families[*].any_available` is what gates each *_submit family, and
-    every unavailable item carries its own fix string."""
+    version?, fix?}, solvers: {available, unwired, prepared_case_only, solvers:
+    {name: {..., install_hint | wire_hint}}, families: {family: {solvers, available,
+    unwired, prepared_case_only, any_available}}, extras}} —
+    `families[*].any_available` is what gates each *_submit family, and every
+    unavailable item carries its own fix string. A solver under
+    `prepared_case_only` resolves but no DriftPin tool can build it a case, so it
+    does not make its family available (SU2/cfd — issue #237)."""
     from driftpin import doctor
     return doctor.build_report(probe_version=verify_freecad_boot)
 
@@ -5289,7 +5300,10 @@ def cfd_internal_flow_submit(
 ) -> dict:
     """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, asynchronous. Requires an
     OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
-    reason, install} rather than raising. `turbulence='kOmegaSST'` upgrades the pipe
+    reason, install} rather than raising. The two case-BUILDING modes below need
+    OpenFOAM specifically — they emit OpenFOAM dictionaries; SU2 only ever runs a
+    `case_dir` you prepared yourself, which is why solve_capabilities does not count
+    it toward the cfd family's any_available (issue #237). `turbulence='kOmegaSST'` upgrades the pipe
     validation case to RANS (SIMULATION_NEXT B3): wall-function k/ω/ν_t with first-cell
     y+ targeted at ~30–100, developed dp/dx fitted over the second half of a ≥40·D pipe,
     gated BANDED against Colebrook (`colebrook_ratio` ≈ 1 ± 10 % — the Moody correlation
@@ -5735,7 +5749,10 @@ def cfd_external_flow_submit(
 ) -> dict:
     """External-flow CFD (drag/lift) via OpenFOAM or SU2, asynchronous. Requires an
     OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
-    reason, install} rather than raising. Three modes:
+    reason, install} rather than raising. The two case-BUILDING modes below need
+    OpenFOAM specifically — they emit OpenFOAM dictionaries; SU2 only ever runs a
+    `case_dir` you prepared yourself, which is why solve_capabilities does not count
+    it toward the cfd family's any_available (issue #237). Three modes:
 
     - **Put a real solid in the virtual wind tunnel** (issue #223): pass a `model` (or
       `body`) handle + `velocity_m_s`. The solid's faces tessellate into an STL, a
@@ -6502,6 +6519,8 @@ def cost_estimate(
     machine_rate_usd_hr: float = 60.0,
     setup_min: float = 10.0,
     scrap_fraction: float = 0.0,
+    density_kg_m3: float | None = None,
+    price_usd_kg: float | None = None,
     tolerance_class: str | None = None,
     machine_time_hr: float | None = None,
     machine_time_band_pct: float | None = None,
@@ -6514,6 +6533,13 @@ def cost_estimate(
     between processes/quantities, not the absolute dollars; material_cost alone is
     exact given its inputs.
 
+    `material` may be any Materials-DB card name (material_list / material_get), or
+    anything at all if you price it yourself: `price_usd_kg` and `density_kg_m3`
+    override the DB lookup and are flagged in breakdown.price_basis /
+    density_basis as 'explicit' instead of 'material'. A generic word like
+    'aluminum' is a CATEGORY, not a card — it carries a density but no price, so it
+    needs `price_usd_kg` or a real card name (AL6061-T6, …); the error says which.
+
     Two optional inputs sharpen it. `tolerance_class` ('IT7', '9', …) scales the
     TABLE machine time by the tolerance-cost curve (see tolerance_cost_check):
     holding tighter than the process's natural capability roughly doubles cost every
@@ -6524,14 +6550,16 @@ def cost_estimate(
     Both default to None, reproducing the pre-existing behaviour exactly.
 
     Returns {material_cost, process_cost, tooling_amortized, unit_cost, mass_kg,
-    fidelity, band_pct, breakdown:{…, machine_time_hr, machine_time_basis,
-    base_machine_time_hr, tolerance_class, tolerance_factor, tolerance_applied,
-    tolerance_basis}}. Errors on an unknown material/process/tolerance class or a
-    non-positive volume/quantity/machine time."""
+    fidelity, band_pct, breakdown:{…, density_kg_m3, price_usd_kg, density_basis,
+    price_basis, machine_time_hr, machine_time_basis, base_machine_time_hr,
+    tolerance_class, tolerance_factor, tolerance_applied, tolerance_basis}}. Errors
+    on a material with no usable density/price and no override, an unknown
+    process/tolerance class, or a non-positive volume/quantity/machine time."""
     return _call("cost_estimate", volume_mm3=volume_mm3, material=material,
                  process=process, quantity=quantity, tooling_usd=tooling_usd,
                  machine_rate_usd_hr=machine_rate_usd_hr, setup_min=setup_min,
-                 scrap_fraction=scrap_fraction, tolerance_class=tolerance_class,
+                 scrap_fraction=scrap_fraction, density_kg_m3=density_kg_m3,
+                 price_usd_kg=price_usd_kg, tolerance_class=tolerance_class,
                  machine_time_hr=machine_time_hr,
                  machine_time_band_pct=machine_time_band_pct)
 
