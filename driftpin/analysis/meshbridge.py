@@ -807,10 +807,13 @@ def snappy_external_case_files(
     moment dominated by drag × lever arm, which says nothing about the body.
 
     ``turbulence='kOmegaSST'`` overlays the RANS fields (the same
-    ``openfoam._rans_overlay`` the pipe/plate cases use). **That path is UNGATED**: the
-    laminar body case is verified live against the sphere drag curve at Re = 1 and
-    Re = 100, the RANS one has no verified oracle yet — treat its numbers as indicative
-    and say so downstream.
+    ``openfoam._rans_overlay`` the pipe/plate cases use). Both paths are gated, but
+    against different oracles and over different envelopes (``cfd.solve_gate``): the
+    laminar body case against the sphere drag curve at Re = 1 and Re = 100, the RANS one
+    against the bluff-body Cd table over Re = 1e4-2e5 — a cube face-on, whose separation
+    is fixed by its edges. On a SMOOTH body, where the model has to predict where the
+    boundary layer separates, mesh-converged kOmegaSST reads 1.09-1.10x the sphere
+    curve: inside its +/-10% band, but only just.
 
     The caller writes ``constant/triSurface/<stl_filename>`` (one ``walls`` region, e.g.
     :func:`ascii_stl_regions`). Run with :func:`snappy_mesh_cmds`; read the result with

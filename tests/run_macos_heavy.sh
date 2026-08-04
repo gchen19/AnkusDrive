@@ -23,7 +23,10 @@
 #     tests/test_meshbridge.py    the LIVE snappyHexMesh bridge + the virtual wind
 #                                 tunnel gated on the sphere drag curve (#223/#224)
 #     tests/test_wind_tunnel.py   the same tunnel end to end, through the real
-#                                 cfd_external_flow_submit handler and job registry
+#                                 cfd_external_flow_submit handler and job registry —
+#                                 including the TURBULENT oracle (#262): a cube face-on
+#                                 at Re=1e4/1e5 vs the bluff-body Cd table, which is
+#                                 what makes kOmegaSST report gated:true
 #
 #   Add more files as arguments once their in-VM provisioning is validated (the
 #   OpenFOAM-backed molding gates are the next candidate):

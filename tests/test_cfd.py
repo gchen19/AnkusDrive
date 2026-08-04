@@ -271,6 +271,45 @@ def test_bluff_body_table_orders_and_overrides():
             raise AssertionError("bluff_body_drag should have raised")
 
 
+def test_solve_gate_is_per_turbulence_model_and_case_family():
+    """#262: `gated` used to be `turbulence == 'laminar'`, so every turbulent
+    external-flow solve shipped gated:false and a requirement demanding
+    trust:{gated:true} was unsatisfiable at a realistic Reynolds number. The verdict is
+    now a property of the PAIR — and an unverified pair still has to say so."""
+    # the verdicts that predate #262 are unchanged
+    for turb, family in (("laminar", "external_body"),
+                         ("laminar", "external_flat_plate"),
+                         ("kOmegaSST", "external_flat_plate"),
+                         ("laminar", "internal_pipe"),
+                         ("kOmegaSST", "internal_pipe")):
+        g = cfd.solve_gate(turb, family)
+        assert g["gated"] is True and g["oracle"] and g["reason"] is None, g
+
+    # the #262 gate itself: RANS on an arbitrary body, inside the envelope it was
+    # verified over (cube face-on vs the Cd table, live at Re = 1e4 and 1e5)
+    rans = cfd.solve_gate("kOmegaSST", "external_body", reynolds=1e4)
+    assert rans["gated"] is True and "cube face-on" in rans["oracle"], rans
+    assert rans["reynolds_range"] == (1e4, 2e5), rans
+    # ... and the same call with no Reynolds skips the envelope check rather than
+    # guessing (a caller who cannot say where they are gets the pair's verdict)
+    assert cfd.solve_gate("rans", "external_body")["gated"] is True
+
+    # outside that envelope nothing has checked it: below, steady RANS is the wrong
+    # model; above Re = 2e5 the drag crisis is past every correlation in the module
+    for re_out in (500.0, 1e6):
+        out = cfd.solve_gate("kOmegaSST", "external_body", reynolds=re_out)
+        assert out["gated"] is False and "envelope" in out["reason"], out
+    # the aliases the handlers accept resolve to the same verdict
+    assert all(cfd.solve_gate(a, "external_body", reynolds=5e4)["gated"] is True
+               for a in ("kOmegaSST", "k-omega-sst", "RANS", "turbulent"))
+
+    # an unverified pair inherits nobody's credibility
+    unknown = cfd.solve_gate("spalartAllmaras", "external_body", reynolds=1e4)
+    assert unknown["gated"] is False and unknown["oracle"] is None, unknown
+    assert "no verified oracle" in unknown["reason"], unknown
+    assert cfd.solve_gate("laminar", "external_body_but_typoed")["gated"] is False
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

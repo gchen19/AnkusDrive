@@ -17345,8 +17345,8 @@ def _tunnel_inputs(p):
             f"Re = {reynolds:.3g} (on the {ref_len * 1000:.4g} mm reference length) is "
             "past the steady-laminar envelope: the real wake is unsteady/turbulent and "
             "this laminar steady solve will not represent it — pass "
-            "turbulence='kOmegaSST' (itself UNGATED for arbitrary bodies) or treat the "
-            "result as indicative only")
+            "turbulence='kOmegaSST' (gated on the bluff-body Cd table over "
+            "Re = 1e4-2e5, see cfd.solve_gate) or treat the result as indicative only")
 
     return {
         "p": p, "obj": obj, "tris": tris,
@@ -17404,6 +17404,13 @@ def _cfd_external_body_submit(p):
     ref_len, reynolds, turbulence = inp["ref_len"], inp["reynolds"], inp["turbulence"]
     warnings = list(inp["warnings"])
 
+    # #262: `gated` is a property of the (turbulence model, case family) pair, not of
+    # `turbulence == "laminar"`. The registry lives with the oracles it cites.
+    from driftpin.analysis import cfd as _cfd_gate
+    gate = _cfd_gate.solve_gate(turbulence, "external_body", reynolds=reynolds)
+    if not gate["gated"] and gate["reason"]:
+        warnings.append(gate["reason"])
+
     case_dir = tempfile.mkdtemp(prefix="foam_tunnel_")
     built = _tunnel_write(inp, case_dir)
     dom = built["domain"]
@@ -17447,7 +17454,7 @@ def _cfd_external_body_submit(p):
             "blockage_ratio": round(dom["blockage_ratio"], 6),
             "base_cell_m": dom["base_cell_m"],
             "converged": _of.solve_converged(tail),
-            "gated": turbulence == "laminar",
+            "gated": gate["gated"],
             "warnings": list(warnings),
             "stdout_tail": tail,
         }
@@ -17730,8 +17737,11 @@ def _h_cfd_external_flow_submit(p):
         tessellate into an STL, a farfield box is auto-sized around it, snappyHexMesh
         carves the body out and the `forces` function object integrates pressure +
         viscous traction over it. Returns the force vector and Cd/Cl/Cm on the measured
-        frontal area. Laminar is gated live against the sphere drag curve at Re=1 and
-        Re=100; `turbulence='kOmegaSST'` runs but is UNGATED (`gated:false`).
+        frontal area. `gated` is per (turbulence model, case family) — see
+        `cfd.solve_gate`: laminar is gated live against the sphere drag curve at Re=1
+        and Re=100, and `turbulence='kOmegaSST'` is gated over Re = 1e4–2e5 against the
+        bluff-body Cd table (cube face-on, live 1.002 at Re=1e4 / 1.004 at Re=1e5),
+        with the reason for any ungated combination landing in `warnings`.
       * **Build the flat-plate validation case** — pass `velocity_m_s` (and optionally
         `plate_length_mm`, a `fluid` name or `mu_pa_s`+`rho_kg_m3`, mesh knobs). The
         handler builds a 2-D laminar flat plate (clean leading edge: slip→plate→slip),
