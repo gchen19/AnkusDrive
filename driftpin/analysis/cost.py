@@ -29,8 +29,6 @@ mass kg, cost USD — matching the rest of ``analysis/``. See
 """
 from __future__ import annotations
 
-import difflib
-
 from . import materials, tolerance_cost
 
 
@@ -57,59 +55,13 @@ def _mat_value(material: str | None, accessor: str):
 # agent can only take the exit the message tells it about: pass the override, or
 # name a real card. The dead end #238 filed was a message that named one exit and
 # a wrapper that didn't expose it.
+#
+# The corpus-derived half now lives in materials.exit_hint — #264 found
+# slice_estimate raising the identical unfollowable error, so the hint belongs next
+# to the corpus it reads rather than in whichever analysis module happened to need
+# it first.
 
-_HINT_MAX = 4          # category members to name before trailing off
-
-
-def _norm(s) -> str:
-    """Loose identity key for fuzzy matching: lowercase, alphanumerics only."""
-    return "".join(ch for ch in str(s or "").lower() if ch.isalnum())
-
-
-def _category_members(material: str | None, accessor: str):
-    """Fuzzy-match what the caller typed against the Materials DB *categories* and
-    return (category, member names that actually carry `accessor`).
-
-    A generic word — 'aluminum', 'steel', 'polymer' — is a category in the corpus,
-    not a card, which is usually exactly why the lookup failed. Matching is exact,
-    then substring either way, then difflib-close ('aluminium' → 'aluminum').
-    Members missing the property in question are dropped, so the suggestion never
-    sends the caller into the same error twice. Returns (None, []) when nothing
-    matches, leaving the caller to degrade to a bare 'see material_list'."""
-    norm = _norm(material)
-    if not norm:
-        return None, []
-    cards = materials.list_materials()["materials"]
-    cats = sorted({c["category"] for c in cards if c.get("category")})
-    hit = next((c for c in cats if _norm(c) == norm), None)
-    if hit is None:
-        hit = next((c for c in cats if norm in _norm(c) or _norm(c) in norm), None)
-    if hit is None:
-        close = difflib.get_close_matches(norm, [_norm(c) for c in cats], n=1, cutoff=0.7)
-        hit = next((c for c in cats if _norm(c) == close[0]), None) if close else None
-    if hit is None:
-        return None, []
-    members = [c["name"] for c in cards
-               if c.get("category") == hit
-               and _mat_value(c["name"], accessor) is not None]
-    return hit, sorted(members)
-
-
-def _material_exit_hint(material: str | None, accessor: str) -> str:
-    """The '…or use a Materials-DB name' half of the missing-density/price error,
-    derived from the live corpus (never a hardcoded list). Degrades to a generic
-    'see material_list' when no category matches — and swallows any failure of its
-    own, because a hint must never mask the error it is decorating."""
-    try:
-        category, members = _category_members(material, accessor)
-    except Exception:
-        category, members = None, []
-    if not members:
-        return "or use a Materials-DB name (see material_list)"
-    shown = ", ".join(members[:_HINT_MAX])
-    if len(members) > _HINT_MAX:
-        shown += ", ..."
-    return f"or use a Materials-DB name (material_list; category {category!r} → {shown})"
+_material_exit_hint = materials.exit_hint
 
 
 # --- per-process machine-time model -------------------------------------------

@@ -345,6 +345,182 @@ def test_molding_screen_docstring_names_its_escalation():
     )
 
 
+# --- wrapper/analysis signature drift (issues #238, #264) ---------------------
+#
+# TWICE now an MCP tool has advertised a narrower signature than the analysis
+# function behind it, in the worst possible place: the function's own ValueError
+# said "pass price_usd_kg" (#238) / "pass density_g_cc" (#264) while the tool's
+# schema rejected that very parameter. Both were invisible to every existing test,
+# because a test that calls the analysis function directly never crosses the layer
+# where the drift lives. This closes the CLASS rather than the two instances.
+#
+# Scope, deliberately narrow so the test stays quiet and honest: only tools whose
+# `_call` forwards named kwargs (not `**params`) into a handler that splats `**p`
+# into a single analysis function. For those, every optional parameter of the
+# analysis function is reachable from MCP or it is unreachable, full stop.
+
+_WRAPPER_DRIFT_OK = {
+    # tool: (analysis params deliberately not exposed, why)
+}
+
+
+def _local_module_aliases(func):
+    """{local name: real module} for `from driftpin.analysis import x as y` /
+    `import driftpin.analysis.x as y` inside a handler body. Handlers almost always
+    alias (`me`, `_em`, `_slicing`), so without this the sweep silently covers a
+    handful of tools instead of most of them."""
+    aliases = {}
+    for sub in ast.walk(func):
+        if isinstance(sub, ast.ImportFrom) and (sub.module or "").endswith("analysis"):
+            for a in sub.names:
+                aliases[a.asname or a.name] = a.name
+        elif isinstance(sub, ast.Import):
+            for a in sub.names:
+                if a.name.startswith("driftpin.analysis."):
+                    aliases[a.asname or a.name.split(".")[-1]] = a.name.split(".")[-1]
+    return aliases
+
+
+def _handler_splat_targets():
+    """{handler name: (module, function)} for worker handlers whose body splats
+    `**p` into one analysis call — the shape where a wrapper's parameter list is
+    the ONLY thing standing between an agent and the function's real signature.
+    Module-level analysis imports are the fallback when a handler doesn't alias."""
+    src = WORKER.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    module_aliases = {}
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            module_aliases.update(_local_module_aliases(ast.Module(body=[node],
+                                                                  type_ignores=[])))
+    out = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for dec in node.decorator_list:
+            if not (isinstance(dec, ast.Call)
+                    and getattr(dec.func, "id", None) == "handler" and dec.args):
+                continue
+            hname = getattr(dec.args[0], "value", None)
+            aliases = dict(module_aliases)
+            aliases.update(_local_module_aliases(node))
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Call)
+                        and any(k.arg is None for k in sub.keywords)
+                        and isinstance(sub.func, ast.Attribute)
+                        and getattr(sub.func.value, "id", None)):
+                    local = sub.func.value.id
+                    out[hname] = (aliases.get(local, local), sub.func.attr)
+                    break
+    return out
+
+
+def _forwarded_kwargs(func):
+    """Named kwargs the tool hands to `_call`, or None when it splats `**params`
+    (which forwards whatever it was given, so no drift is possible)."""
+    for sub in ast.walk(func):
+        if isinstance(sub, ast.Call) and getattr(sub.func, "id", None) == "_call":
+            if any(k.arg is None for k in sub.keywords):
+                return None
+            return [k.arg for k in sub.keywords if k.arg]
+    return []
+
+
+def _analysis_optional_params(mod_name, fn_name):
+    """Optional (defaulted) parameter names of driftpin.analysis.<mod>.<fn>, read by
+    AST from the source — this file deliberately imports none of its targets, and an
+    import here would silently no-op the whole check when the repo root is off
+    sys.path (which is exactly how the runner invokes it)."""
+    for cand in (ANALYSIS_DIR / f"{mod_name}.py",
+                 ANALYSIS_DIR / mod_name / "__init__.py"):
+        if not cand.exists():
+            continue
+        tree = ast.parse(cand.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == fn_name:
+                args = node.args
+                n_pos_default = len(args.defaults)
+                positional = args.posonlyargs + args.args
+                optional = [a.arg for a in positional[len(positional) - n_pos_default:]]
+                optional += [a.arg for a, d in zip(args.kwonlyargs, args.kw_defaults)
+                             if d is not None]
+                return optional
+        return None                      # module found, function isn't in it
+    return None                          # not a plain analysis module (e.g. a subpkg)
+
+
+def test_no_mcp_tool_hides_an_optional_parameter_of_its_analysis_function():
+    """An optional parameter of an analysis function reached through a `**p`-splatting
+    handler must be exposed by its MCP tool — or an agent cannot pass it, no matter
+    what the error message tells it to do (#238 cost_estimate, #264 slice_estimate).
+
+    A deliberate narrowing goes in _WRAPPER_DRIFT_OK with a reason; anything else is
+    drift, and the fix is to add the parameter to the tool and forward it.
+
+    Fully static: no imports, so this cannot degrade into a vacuous pass. It also
+    asserts it actually CHECKED something, because a silently-empty sweep is the
+    failure mode a contract test exists to prevent."""
+    splat = _handler_splat_targets()
+    tree = ast.parse(MCP.read_text(encoding="utf-8"))
+    drift, checked = [], 0
+    for node in tree.body:
+        if not (isinstance(node, ast.FunctionDef)
+                and any(_is_tool_decorator(d) for d in node.decorator_list)):
+            continue
+        target = _call_target(node)
+        if target not in splat:
+            continue
+        forwarded = _forwarded_kwargs(node)
+        if forwarded is None:            # **params — forwards everything, no drift
+            continue
+        mod_name, fn_name = splat[target]
+        optional = _analysis_optional_params(mod_name, fn_name)
+        if optional is None:             # target isn't a plain analysis function
+            continue
+        checked += 1
+        accepted = {a.arg for a in node.args.args + node.args.kwonlyargs}
+        allowed = set(_WRAPPER_DRIFT_OK.get(node.name, ((), ""))[0])
+        missing = sorted(p for p in optional
+                         if p not in accepted and p not in forwarded
+                         and p not in allowed)
+        if missing:
+            drift.append(f"{node.name} -> {mod_name}.{fn_name}: "
+                         f"not exposed {missing}")
+        # Accepted but never forwarded is the OTHER half, and it fails worse: the
+        # call succeeds, the schema validates, and the value is silently dropped —
+        # add_primitive's ignored `name=` (#246/#247) all over again.
+        dropped = sorted(p for p in accepted
+                         if p not in forwarded and p not in allowed)
+        if dropped:
+            drift.append(f"{node.name} -> {mod_name}.{fn_name}: "
+                         f"accepted but never forwarded {dropped}")
+    # Coverage floor. The sweep only applies to tools that forward NAMED kwargs into
+    # a `**p` handler — most tools splat `**params`, where drift is impossible — so
+    # the population is small (7 at the time of writing). The floor exists because a
+    # sweep that silently resolves nothing reads exactly like a clean sweep.
+    assert checked >= 7, (
+        f"the wrapper-drift sweep only resolved {checked} tool/analysis pairs — it has "
+        "stopped checking anything meaningful (an alias or import shape it can no "
+        "longer follow?), which would hide the very class of bug it exists to catch"
+    )
+    assert not drift, (
+        "MCP tools narrower than the analysis function they dispatch to — an agent "
+        "cannot pass these even when the error tells it to (see #238, #264):\n  "
+        + "\n  ".join(drift)
+    )
+
+
+def test_wrapper_drift_allowlist_is_honest():
+    """Every entry in _WRAPPER_DRIFT_OK names a real tool and carries a reason, so a
+    deliberate narrowing can't rot into a forgotten one."""
+    stale = sorted(set(_WRAPPER_DRIFT_OK) - _TOOL_NAMES)
+    assert not stale, "_WRAPPER_DRIFT_OK names that are not MCP tools:\n  " + \
+        "\n  ".join(stale)
+    unreasoned = sorted(t for t, (_, why) in _WRAPPER_DRIFT_OK.items() if not why)
+    assert not unreasoned, "_WRAPPER_DRIFT_OK entries with no reason:\n  " + \
+        "\n  ".join(unreasoned)
+
+
 # --- determinism-class registry (issue #123) ----------------------------------
 
 def test_every_tool_has_a_determinism_class():

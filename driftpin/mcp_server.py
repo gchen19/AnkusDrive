@@ -3658,15 +3658,24 @@ def press_fit_stress(
     engagement_length_mm: float,
     material: str = "Steel-A36",
     friction_coef: float = 0.15,
+    youngs_modulus_mpa: float | None = None,
 ) -> dict:
     """Rate an interference (press/shrink) fit via Lamé. p=delta_r E (ro^2-rc^2)/
     (2 rc ro^2); hub bore hoop=p(ro^2+rc^2)/(ro^2-rc^2); torque=2pi mu p rc^2 L.
-    interference_mm is diametral. Returns {contact_pressure_mpa, hub_hoop_stress_mpa,
-    torque_capacity_nm, axial_force_n, hub_yield_sf, pass}."""
+    interference_mm is diametral.
+
+    E comes from `material`'s Materials-DB card; `youngs_modulus_mpa` overrides it
+    for a material the corpus doesn't carry. NOTE the fallback when neither
+    resolves is steel's 200 GPa, applied silently — pass the override explicitly
+    for any non-steel hub rather than trusting the default.
+
+    Returns {contact_pressure_mpa, hub_hoop_stress_mpa, torque_capacity_nm,
+    axial_force_n, hub_yield_sf, pass}."""
     return _call("press_fit_stress", shaft_dia_mm=shaft_dia_mm,
                  hub_outer_dia_mm=hub_outer_dia_mm, interference_mm=interference_mm,
                  engagement_length_mm=engagement_length_mm, material=material,
-                 friction_coef=friction_coef)
+                 friction_coef=friction_coef,
+                 youngs_modulus_mpa=youngs_modulus_mpa)
 
 
 @mcp.tool()
@@ -6766,18 +6775,30 @@ def slice_estimate(
     wall_fraction: float = 0.35,
     print_speed_mm_s: float = 50.0,
     nozzle_mm: float = 0.4,
+    filament_dia_mm: float = 1.75,
+    density_g_cc: float | None = None,
 ) -> dict:
     """First-order FDM slice estimate (analytic, NO slicer needed; see
     slice_gcode_submit for the real PrusaSlicer CLI). mass_g = volume·density
     (Materials DB); deposited = volume·(wall_fraction + infill·(1−wall_fraction))
     so at 100% infill filament_g == mass_g; layer_count = ceil(bbox
-    height/layer_height); print_time from nozzle volumetric flow. Returns {mass_g,
-    filament_g, deposited_volume_mm3, layer_count, print_time_min,
-    infill_fraction}."""
+    height/layer_height); print_time from nozzle volumetric flow.
+
+    `material` may be any Materials-DB card name (material_list / material_get), or
+    anything at all if you supply `density_g_cc` yourself — it overrides the DB
+    lookup. A generic word like 'polymer' is a CATEGORY, not a card, and 'nylon' is
+    a near-miss for one, so neither carries a density; the error names both exits.
+    `filament_dia_mm` (1.75 default, 2.85 for the older standard) sets the spool
+    stock the filament length is computed against.
+
+    Returns {mass_g, filament_g, deposited_volume_mm3, layer_count, print_time_min,
+    infill_fraction}. Errors on a material with no density and no override, a
+    negative volume, a bbox shorter than [x,y,z], or a non-positive layer height."""
     return _call("slice_estimate", volume_mm3=volume_mm3, bbox_mm=bbox_mm,
                  material=material, infill_fraction=infill_fraction,
                  layer_height_mm=layer_height_mm, wall_fraction=wall_fraction,
-                 print_speed_mm_s=print_speed_mm_s, nozzle_mm=nozzle_mm)
+                 print_speed_mm_s=print_speed_mm_s, nozzle_mm=nozzle_mm,
+                 filament_dia_mm=filament_dia_mm, density_g_cc=density_g_cc)
 
 
 @mcp.tool()

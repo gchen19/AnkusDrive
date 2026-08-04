@@ -6,6 +6,7 @@ tests/TOYS.md and docs/SIMULATION_EXAMPLES.md (family 9, slicing).
 
 Run:  python3 tests/test_slicing.py
 """
+import ast
 import math
 import sys
 import time
@@ -14,9 +15,52 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import slicing as sl  # noqa: E402
+from driftpin.analysis import materials, slicing as sl  # noqa: E402
 
 PLA_RHO = 1.24  # g/cc, from the Materials DB (asserted below)
+
+
+# --- the MCP-visible signature (issue #264) -----------------------------------
+#
+# Same shape as tests/test_cost.py's helper for #238: parse the tool's parameter
+# list AND its _call forwarding out of mcp_server.py, so this stays pure-Python
+# (no mcp import, no FreeCAD worker) while still failing if the two layers drift
+# apart again. A test that calls slicing.slice_estimate directly cannot catch a
+# wrapper that never exposed the parameter.
+
+_MCP = Path(__file__).resolve().parent.parent / "driftpin" / "mcp_server.py"
+
+
+def _mcp_slice_estimate_signature():
+    """(parameters the MCP slice_estimate tool accepts, parameters it forwards to
+    the worker handler), parsed statically out of mcp_server.py."""
+    tree = ast.parse(_MCP.read_text(encoding="utf-8"))
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "slice_estimate")
+    accepted = [a.arg for a in fn.args.args + fn.args.kwonlyargs]
+    forwarded = []
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call)
+                and getattr(node.func, "id", None) == "_call"
+                and node.args
+                and getattr(node.args[0], "value", None) == "slice_estimate"):
+            forwarded = [kw.arg for kw in node.keywords]
+    return accepted, forwarded
+
+
+def _mcp_slice_estimate(**kwargs):
+    """Estimate the way an MCP client can: every kwarg must be a parameter the tool
+    exposes and a name it hands to the handler (which calls
+    slicing.slice_estimate(**p)), else this raises the way the schema would."""
+    accepted, forwarded = _mcp_slice_estimate_signature()
+    for key in kwargs:
+        if key not in accepted:
+            raise AssertionError(
+                f"MCP slice_estimate does not accept {key!r}; accepts {accepted}")
+        if key not in forwarded:
+            raise AssertionError(
+                f"MCP slice_estimate accepts {key!r} but never forwards it to the worker")
+    return sl.slice_estimate(**kwargs)
 
 
 def test_solid_filament_equals_mass_at_full_infill():
@@ -102,6 +146,68 @@ def test_unknown_material_raises():
     r = sl.slice_estimate(1000.0, bbox_mm=[10, 10, 10], material="Unobtainium-7",
                           density_g_cc=7.85)
     assert abs(r["mass_g"] - 1000.0 * 1e-3 * 7.85) < 1e-3, r["mass_g"]
+
+
+def test_mcp_signature_takes_the_density_override(): # issue #264, gate half 1
+    # #264 (the sibling of #238) was a LAYER error, not a math one: slice_estimate
+    # accepted density_g_cc/filament_dia_mm and the worker handler forwarded **p,
+    # but the MCP wrapper's signature exposed neither — so an agent obeying the
+    # error's own "pass density_g_cc" got a schema rejection. Calling the analysis
+    # function directly cannot see that gap, so bind through the wrapper's real
+    # parameter list AND the names it forwards to the handler.
+    r = _mcp_slice_estimate(volume_mm3=1000.0, bbox_mm=[10, 10, 10],
+                            material="polymer", density_g_cc=1.24)
+    assert abs(r["mass_g"] - 1000.0 * 1e-3 * 1.24) < 1e-6, r["mass_g"]
+    # the sibling override is reachable too (2.85 mm is the older spool standard)
+    _mcp_slice_estimate(volume_mm3=1000.0, bbox_mm=[10, 10, 10],
+                        material="PLA", filament_dia_mm=2.85)
+
+
+def test_missing_density_error_names_both_exits(): # issue #264, gate half 2
+    # 'polymer' is a CATEGORY in the corpus, not a card, so it carries no density.
+    # The message must name the override AND a real card, or the agent is stuck.
+    try:
+        _mcp_slice_estimate(volume_mm3=1000.0, bbox_mm=[10, 10, 10],
+                            material="polymer")
+    except ValueError as e:
+        msg = str(e)
+    else:
+        raise AssertionError("expected ValueError for a material with no density")
+    assert "density_g_cc" in msg, msg        # exit 1: the override
+    assert "material_list" in msg, msg       # exit 2: name a real card
+    assert "PLA" in msg or "ABS" in msg, msg # ...suggested from the live corpus
+    # a near-miss CARD name recovers too, not just a category
+    try:
+        sl.slice_estimate(1000.0, bbox_mm=[10, 10, 10], material="nylon")
+    except ValueError as e:
+        assert "Nylon-6/6" in str(e), str(e)
+    else:
+        raise AssertionError("expected ValueError for a material with no density")
+    # nothing in the corpus resembles this -> degrade, never invent a suggestion
+    try:
+        sl.slice_estimate(1000.0, bbox_mm=[10, 10, 10], material="Unobtainium-7")
+    except ValueError as e:
+        assert "material_list" in str(e), str(e)
+        assert "→" not in str(e) and "did you mean" not in str(e), str(e)
+    else:
+        raise AssertionError("expected ValueError for an unknown material")
+
+
+def test_error_suggestions_carry_the_property_that_was_missing():
+    # A suggestion that can't be acted on is worse than none: every card the error
+    # names must actually have a density, or it walks the caller into the same
+    # error a second time.
+    try:
+        sl.slice_estimate(1000.0, bbox_mm=[10, 10, 10], material="polymer")
+    except ValueError as e:
+        names = str(e).split("→", 1)[1].strip().rstrip(")").split(", ")
+    else:
+        raise AssertionError("expected ValueError for a material with no density")
+    named = [n for n in names if n != "..."]
+    assert named, names
+    for name in named:
+        card = materials.get(name)           # raises MaterialNotFound if invented
+        assert materials.numeric(card, "density_g_cc") is not None, name
 
 
 # --- external-CLI upgrade (Sprint 4 follow-on) ----------------------------------
