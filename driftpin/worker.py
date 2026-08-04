@@ -7040,7 +7040,18 @@ def _gate_press_fit(by_name, links_by_inst, chk):
     except ValueError as e:
         return [{**chk, "error": f"press_fit_stress: {e}"}]
     out = []
-    if not worst_stress["pass"]:
+    # press_fit_stress' `pass` is three-state (#269). None means the hub yield check
+    # could not be RUN — the material carries no yield strength — which is neither a
+    # pass nor a yield. Reporting it as a violation would claim the hub yields on no
+    # evidence; reporting nothing would be the silent pass this gate exists to stop.
+    # It goes out through the same `error` channel the ValueError path above uses.
+    if worst_stress["pass"] is None:
+        out.append({**chk, "hub_hoop_stress_mpa": worst_stress["hub_hoop_stress_mpa"],
+                    "error": f"hub yield unchecked: {mat!r} carries no yield "
+                             f"strength, so the {worst_stress['hub_hoop_stress_mpa']} "
+                             "MPa hoop stress at max interference was compared "
+                             "against nothing — this is NOT a pass"})
+    elif worst_stress["pass"] is False:
         out.append({**chk, "interference_band_mm": [band["min_mm"], band["max_mm"]],
                     "hub_hoop_stress_mpa": worst_stress["hub_hoop_stress_mpa"],
                     "hub_yield_sf": worst_stress["hub_yield_sf"],

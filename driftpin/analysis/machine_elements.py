@@ -393,30 +393,70 @@ def press_fit_stress(
       sigma_theta_hub = p*(ro^2+rc^2)/(ro^2-rc^2)      hub bore hoop stress (max)
       torque = 2*pi*mu*p*rc^2*L ; axial_force = mu*p*2*pi*rc*L
 
-    interference_mm is diametral. Returns {contact_pressure_mpa,
-    hub_hoop_stress_mpa, torque_capacity_nm, axial_force_n, hub_yield_sf, pass}."""
+    interference_mm is diametral. Every output is LINEAR in E, so E must come from
+    the part's own material or from `youngs_modulus_mpa` — never from an assumption
+    (#269). A material the corpus has no `youngs_mpa` for raises, naming both exits.
+
+    `pass` is THREE-state. The hub yield check needs `yield_mpa`; a corpus card that
+    lacks it (Fused-Silica, Gold, Concrete, ...) leaves the check unperformed, and an
+    unperformed check is not a passed one — `pass` is then None with the reason in
+    `warnings`, never True. Callers that need a decision must test `is True` /
+    `is False` rather than truthiness.
+
+    Returns {contact_pressure_mpa, hub_hoop_stress_mpa, torque_capacity_nm,
+    axial_force_n, hub_yield_sf, youngs_modulus_mpa, youngs_basis
+    ('explicit'|'material'), hub_yield_basis ('material'|'unavailable'), pass
+    (True|False|None), warnings}."""
     rc = shaft_dia_mm / 2.0
     ro = hub_outer_dia_mm / 2.0
     if ro <= rc:
         raise ValueError("hub_outer_dia_mm must exceed shaft_dia_mm")
     delta_r = interference_mm / 2.0
-    e = youngs_modulus_mpa or _mat_value(material, "youngs_mpa") or 200000.0
+
+    # E: explicit override, else the card, else REFUSE. The old code ended this
+    # chain with `or 200000.0` — steel — so an aluminium or glass hub was rated
+    # with steel's modulus and nothing in the result said so, overstating contact
+    # pressure, torque and axial force ~2.9x in the unsafe direction (#269).
+    if youngs_modulus_mpa is not None:
+        e, youngs_basis = float(youngs_modulus_mpa), "explicit"
+    else:
+        e, youngs_basis = _mat_value(material, "youngs_mpa"), "material"
+    if not e or e <= 0:
+        raise ValueError(
+            f"no Young's modulus for {material!r} — pass youngs_modulus_mpa, "
+            + materials.exit_hint(material, "youngs_mpa")
+        )
 
     p = delta_r * e * (ro**2 - rc**2) / (2.0 * rc * ro**2)
     hoop = p * (ro**2 + rc**2) / (ro**2 - rc**2)
     torque_nmm = 2.0 * math.pi * friction_coef * p * rc**2 * engagement_length_mm
     axial = friction_coef * p * 2.0 * math.pi * rc * engagement_length_mm
 
+    warnings = []
     y = _mat_value(material, "yield_mpa")
     hub_sf = (y / hoop) if y else None
-    ok = (hub_sf is None) or (hub_sf >= 1.0)
+    if hub_sf is None:
+        # The check could not be RUN. Reporting that as pass:True is the silent
+        # pass #248 and #261 were fixed for, one layer down.
+        ok = None
+        warnings.append(
+            f"no yield strength for {material!r}, so the hub yield check was not "
+            "performed — `pass` is null (NOT a pass); pass a material the corpus "
+            "carries yield_mpa for, or check the hub stress against your own limit"
+        )
+    else:
+        ok = hub_sf >= 1.0
     return {
         "contact_pressure_mpa": round(p, 2),
         "hub_hoop_stress_mpa": round(hoop, 1),
         "torque_capacity_nm": round(torque_nmm / 1000.0, 1),
         "axial_force_n": round(axial, 1),
         "hub_yield_sf": (round(hub_sf, 2) if hub_sf is not None else None),
+        "youngs_modulus_mpa": round(e, 1),
+        "youngs_basis": youngs_basis,
+        "hub_yield_basis": ("material" if hub_sf is not None else "unavailable"),
         "pass": ok,
+        "warnings": warnings,
     }
 
 

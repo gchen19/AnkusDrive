@@ -167,6 +167,61 @@ def test_press_fit_lame():
         pass
     else:
         raise AssertionError("expected ValueError when hub <= shaft")
+    # a resolved E says where it came from, and a full yield check decides `pass`
+    assert r["youngs_modulus_mpa"] == 200000.0, r["youngs_modulus_mpa"]
+    assert r["youngs_basis"] == "material", r["youngs_basis"]
+    assert r["hub_yield_basis"] == "material", r["hub_yield_basis"]
+    assert r["pass"] is True and r["warnings"] == [], r
+
+
+def test_unknown_modulus_raises_instead_of_assuming_steel(): # issue #269
+    # Every output is linear in E, so the old `or 200000.0` tail rated an aluminium
+    # or glass hub with STEEL's modulus and said nothing — ~2.9x unsafe. It must
+    # refuse, and the message must name both exits.
+    try:
+        me.press_fit_stress(20, 40, 0.05, 30, material="Fused-Silica")
+    except ValueError as e:
+        msg = str(e)
+    else:
+        raise AssertionError("expected ValueError for a material with no modulus")
+    assert "youngs_modulus_mpa" in msg, msg      # exit 1: the override
+    assert "Fused-Silica" in msg, msg            # ...and that the card DOES exist
+    assert "youngs_mpa" in msg, msg              # ...but lacks this property
+    # an entirely unknown material refuses too, rather than silently steel
+    try:
+        me.press_fit_stress(20, 40, 0.05, 30, material="Unobtainium-7")
+    except ValueError as e:
+        assert "material_list" in str(e), str(e)
+    else:
+        raise AssertionError("expected ValueError for an unknown material")
+    # the override is the documented way through, and it is reported as explicit
+    r = me.press_fit_stress(20, 40, 0.05, 30, material="Fused-Silica",
+                            youngs_modulus_mpa=73000.0)
+    assert r["youngs_basis"] == "explicit", r["youngs_basis"]
+    assert abs(r["youngs_modulus_mpa"] - 73000.0) < 1e-6, r["youngs_modulus_mpa"]
+    # steel's E would have been 2.74x this one — the size of the old silent error
+    steel = me.press_fit_stress(20, 40, 0.05, 30, youngs_modulus_mpa=200000.0)
+    ratio = steel["contact_pressure_mpa"] / r["contact_pressure_mpa"]
+    assert abs(ratio - 200000.0 / 73000.0) < 0.01, ratio
+
+
+def test_unperformed_yield_check_is_not_a_pass(): # issue #269
+    # A card with no yield_mpa leaves the hub check UNRUN. The old code returned
+    # pass:True for that — the silent pass #248/#261 exist to prevent. It must be
+    # neither True nor False, and it must say why.
+    r = me.press_fit_stress(20, 40, 0.05, 30, material="Fused-Silica",
+                            youngs_modulus_mpa=73000.0)
+    assert r["pass"] is None, r["pass"]
+    assert r["hub_yield_sf"] is None, r["hub_yield_sf"]
+    assert r["hub_yield_basis"] == "unavailable", r["hub_yield_basis"]
+    assert any("not performed" in w for w in r["warnings"]), r["warnings"]
+    # and it must not be mistaken for a pass by a truthiness test either
+    assert not (r["pass"] is True), r["pass"]
+    # a material that CAN be checked still decides normally, both ways
+    ok = me.press_fit_stress(50, 100, 0.05, 40, material="Steel-A36")
+    assert ok["pass"] is True and ok["warnings"] == [], ok
+    bad = me.press_fit_stress(50, 100, 0.30, 40, material="Steel-A36")
+    assert bad["pass"] is False, bad["hub_yield_sf"]
 
 
 def test_seal_check_squeeze_and_fill():
