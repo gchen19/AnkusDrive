@@ -2,11 +2,11 @@
 
 > **Status 2026-08-03: epic #222 is closed — all six children merged, and the target
 > workflow below runs end to end.** This doc is now a record rather than a handoff.
-> What did NOT get done is tracked: [#260](https://github.com/gchen19/DriftPin/issues/260)
-> adaptive **shape** optimization over a recipe (blocked on a main-thread work queue —
-> see the boundary note under #228), and
-> the loose threads at the bottom, which are still untracked. Two gaps this doc once
-> listed as open are now **built**:
+> What did NOT get done is now only the loose threads at the bottom, which are still
+> untracked. Three gaps this doc once listed as open are now **built**:
+> [#260](https://github.com/gchen19/DriftPin/issues/260) — adaptive **shape**
+> optimization over a recipe, which needed the main-thread work queue described in the
+> boundary note under #228,
 > [#261](https://github.com/gchen19/DriftPin/issues/261) — nothing consulting a
 > performance contract (#226's unbuilt integration section) — see below, and
 > [#262](https://github.com/gchen19/DriftPin/issues/262) — no verified oracle for RANS
@@ -207,16 +207,27 @@ in a shape a surrogate could consume.
   problem sits against the envelope, not in the interior, and a search that rejects
   out-of-box trials stalls just short of the bound it should be riding.
 
-**The boundary this could not cross.** The search runs on a background thread — its
-budget is minutes, far past the client's 120 s per-call timeout — and the `jobs.py`
-threading contract forbids FreeCAD there. So optimizer responses must be
-parameter-driven, and one naming live geometry is refused at the door. **Shape
-optimization over a recipe therefore does not exist yet**: it needs a main-thread work
-queue the worker services between requests, which is an architectural change rather than
-a feature. `study_submit` is the workaround (it builds every point on the main thread up
-front, so it CAN sweep recipe geometry — just on a fixed grid, not adaptively). This is
-the most valuable remaining piece of the epic's ambition and is not tracked as an issue
-yet.
+**The boundary this could not cross — since crossed by [#260](https://github.com/gchen19/DriftPin/issues/260).**
+The search runs on a background thread (its budget is minutes, far past the client's
+per-call timeout) and the `jobs.py` threading contract forbids FreeCAD there, so
+optimizer responses had to be parameter-driven and one naming live geometry was refused
+at the door. Shape optimization over a recipe now exists: `optimize_submit` takes a
+`recipe` and rebuilds it per candidate, through the main-thread work queue in
+`driftpin/mainthread.py`.
+
+The part worth remembering is **why that queue needed no rewrite of the worker's request
+loop.** The loop is `for line in sys.stdin`, which blocks — so a queue serviced "when
+idle" would have meant making the one path every request takes non-blocking. It doesn't
+need one, because *the client is already polling*: an async tool returns a `job_id` and
+the caller polls `job_status` until it is done, and every one of those polls is a request
+that drains the queue first. The poll the client must do anyway IS the main thread's
+turn. The cost is one honest constraint, stated rather than hidden — a shape search
+advances only while someone is polling — and `job_list` reports the queue's counters so
+"slow work" and "nobody is polling" are distinguishable rather than both looking like a
+hang.
+
+`study_submit` remains the right tool for a FIXED grid over recipe geometry: it builds
+every point on the main thread up front and needs no queue at all.
 
 Live result, `tier='auto'`, budget 24, 78 s wall on in-VM OpenFOAM: the screen leg spent
 14 correlation evaluations to reach D = 9.100 mm, the solver leg polished with 10 real

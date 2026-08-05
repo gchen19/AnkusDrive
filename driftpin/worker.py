@@ -5246,23 +5246,31 @@ def _h_study_submit(p):
 _GEOMETRY_KEYS = ("handle", "model", "body", "part", "shape")
 
 
-def _refuse_live_geometry(where, conditions):
-    """The optimizer's search loop runs on a background thread (its budget is minutes,
-    far past the client's per-call timeout), and the jobs.py threading contract forbids
-    FreeCAD there. A measurement that reads a live document therefore cannot be an
-    optimizer response — refuse it at the door with the alternative, rather than
-    crashing a solve deep inside the search."""
-    hits = [k for k in _GEOMETRY_KEYS if k in (conditions or {})]
+def _reads_live_geometry(conditions) -> bool:
+    """Does this block's conditions touch a live document — a geometry key, or the
+    ``$handle`` token? Such a call must be dispatched on the MAIN thread (#260)."""
+    conds = conditions or {}
+    return bool([k for k in _GEOMETRY_KEYS if k in conds]
+                or [v for v in conds.values() if v == "$handle"])
+
+
+def _refuse_unbuildable_handle(where, conditions, has_geometry):
+    """``$handle`` names the part THIS candidate materialized, so it needs something to
+    materialize: a ``recipe`` the optimizer rebuilds per candidate, or a fixed
+    ``handle``. Refuse at the door rather than substituting nothing deep in the search.
+
+    Live geometry itself is no longer refused. Until #260 it was, because the search
+    runs on a background thread and FreeCAD is main-thread only; the main-thread work
+    queue (driftpin/mainthread.py) is what lifted that, by giving a job thread a way to
+    ask the request loop to run its build."""
+    if has_geometry:
+        return
     tokens = [v for v in (conditions or {}).values() if v == "$handle"]
-    if hits or tokens:
+    if tokens:
         raise ValueError(
-            f"{where} measures live geometry ({', '.join(hits) or '$handle'}), which an "
-            "optimizer cannot do: its search runs on a background thread and FreeCAD's "
-            "document API is main-thread only (see the jobs.py threading contract). "
-            "Optimize over parameter-driven tools (cfd_pipe_flow, "
-            "cfd_internal_flow_submit's pipe family, the correlation screens), or use "
-            "study_submit for a grid over recipe geometry — it builds every point on "
-            "the main thread up front, which is why it can")
+            f"{where} references \"$handle\" but this optimization builds no geometry — "
+            "pass a 'recipe' (rebuilt for every candidate, which is what makes this a "
+            "SHAPE optimization) or a fixed 'handle' to measure against")
 
 
 @handler("optimize_submit")
@@ -5298,9 +5306,16 @@ def _h_optimize_submit(p):
     performance-requirement mapping ({tool, metric, conditions, limit, screen}), with
     `"$<variable>"` in `conditions` carrying the candidate's value.
 
-    Because the search runs off the request thread, responses must be PARAMETER-driven:
-    a tool reading live geometry is refused at the door (FreeCAD is main-thread only).
-    Use study_submit for a grid over recipe geometry.
+    SHAPE optimization (#260): pass a `recipe` (+ `fixed_inputs`) and it is rebuilt for
+    every candidate, so the search varies GEOMETRY, not just numbers — `"$handle"` in a
+    response's conditions is that candidate's part. Without a recipe, `handle` measures
+    a fixed part instead, and with neither the search is purely parametric (unchanged).
+    The builds, and any response reading the part they produce, run on the MAIN thread
+    through the work queue in driftpin/mainthread.py, because FreeCAD's document API is
+    not thread-safe and this search is a background job. That queue is drained once per
+    incoming request, so **an adaptive shape search only advances while the client is
+    polling** job_status/job_result — the poll you must do anyway is what gives it its
+    turn. A candidate whose recipe fails to build is a scored-out point, not a raise.
 
     Returns {job_id, status}; poll job_result for {ok, proven, stop_reason,
     best_params, best_value, objective, constraints: [{name, state, measured, limit,
@@ -5309,7 +5324,8 @@ def _h_optimize_submit(p):
     n_evals, n_cached, budget, warnings}."""
     import time as _time
 
-    from driftpin import jobs
+    from driftpin import jobs, mainthread
+    from driftpin import recipes as _rc
     from driftpin.analysis import optimize as _opt
     from driftpin.analysis import performance as _pf
 
@@ -5327,7 +5343,30 @@ def _h_optimize_submit(p):
     for con in constraints:
         norm_cons.append(_pf.validate_requirement(con))
 
-    # door checks: every named tool must exist, and none may read live geometry
+    # Shape optimization (#260): a `recipe` is rebuilt for every candidate, so the
+    # search varies GEOMETRY rather than only numbers. The builds — and any response
+    # that reads the part they produce — run on the main thread through the work
+    # queue; see driftpin/mainthread.py for why the client's own polling is what
+    # gives them their turn.
+    recipe = p.get("recipe")
+    fixed_inputs = dict(p.get("fixed_inputs") or {})
+    fixed_handle = p.get("handle")
+    has_geometry = bool(recipe or fixed_handle)
+    # Door check on the REQUEST thread, where the answer is cheap and the caller is
+    # still listening. A recipe needs somewhere to build; discovering that inside the
+    # search would fail every candidate identically and report it as "nothing could be
+    # measured", which names the symptom and hides the cause.
+    if recipe:
+        if recipe not in (_rc.list_recipes()["recipes"] if hasattr(_rc, "list_recipes")
+                          else {recipe: 1}):
+            raise ValueError(f"unknown recipe {recipe!r}")
+        if App.ActiveDocument is None:
+            raise ValueError(
+                f"optimizing the shape of recipe {recipe!r} needs a document to build "
+                "into — call new_document first (the candidates are built in it, one "
+                "per evaluation)")
+
+    # door checks: every named tool must exist, and $handle must have something to bind
     for label, block in ([("the objective", objective)]
                          + [(f"constraint {c['name']!r}", c) for c in norm_cons]):
         for sub in (block, block.get("screen")):
@@ -5335,7 +5374,8 @@ def _h_optimize_submit(p):
                 continue
             if sub.get("tool") not in HANDLERS:
                 raise ValueError(f"{label} names unknown tool {sub.get('tool')!r}")
-            _refuse_live_geometry(label, sub.get("conditions") or sub.get("args"))
+            _refuse_unbuildable_handle(label, sub.get("conditions") or sub.get("args"),
+                                       has_geometry)
 
     names = [v["name"] for v in variables]
     lower = [v["min"] for v in variables]
@@ -5345,13 +5385,32 @@ def _h_optimize_submit(p):
     memo, history, warnings = {}, [], []
     counters = {"evals": 0, "cached": 0}
 
-    def _measure_block(block, params, use_screen):
+    def _build_candidate(params):
+        """Materialize this candidate's geometry and return its handle, or None when
+        the optimization has no recipe. The build runs on the MAIN thread (#260):
+        FreeCAD's document API is not thread-safe and this is a job thread."""
+        if not recipe:
+            return fixed_handle
+        built = mainthread.call(
+            lambda: HANDLERS["recipe"]({"recipe": recipe,
+                                        "inputs": {**fixed_inputs, **params}}))
+        return built.get("handle")
+
+    def _measure_block(block, params, use_screen, handle):
         """One measurement of one block at one tier: run the tool, wait out an async
         solve, and return (value, band_pct, payload)."""
         src = block.get("screen") if (use_screen and block.get("screen")) else block
         conds = _subst_params(dict(src.get("conditions") or src.get("args") or {}),
-                              params)
-        payload = HANDLERS[src["tool"]](conds)
+                              params, handle)
+        # A response that reads the live part must be DISPATCHED on the main thread
+        # too, not just built there — a case writer walks the document. It typically
+        # returns a job_id straight away (case written on the main thread, solve
+        # backgrounded), which is the same split study_submit relies on, so the wait
+        # below still happens on this thread and does not hold the queue.
+        if _reads_live_geometry(conds):
+            payload = mainthread.call(lambda: HANDLERS[src["tool"]](conds))
+        else:
+            payload = HANDLERS[src["tool"]](conds)
         if isinstance(payload, dict) and payload.get("job_id"):
             jid = payload["job_id"]
             jobs.pin(jid)
@@ -5383,10 +5442,29 @@ def _h_optimize_submit(p):
             row = dict(memo[key])
             row["cached"] = True
             return row
-        obj_value, obj_band, _ = _measure_block(objective, params, use_screen)
+        # One build per candidate, shared by the objective and every constraint — the
+        # whole point of rebuilding is that they all measure the SAME part.
+        try:
+            handle = _build_candidate(params)
+        except Exception as e:                       # noqa: BLE001 - a point, not a raise
+            detail = (f"the recipe did not build at these parameters: "
+                      f"{type(e).__name__}: {e}")
+            # Surface the CAUSE, not just the symptom. A search where every build
+            # fails otherwise reports only "no point could be measured", which is
+            # true and useless. Deduped: one bad reason repeated 40 times is one
+            # finding, and the parameters that produced it are in the history.
+            if detail not in warnings:
+                warnings.append(detail)
+            row = {"params": dict(params), "value": None, "band_pct": None,
+                   "constraints": [], "feasible": False, "score": None,
+                   "cached": False, "detail": detail}
+            memo[key] = row
+            counters["evals"] += 1
+            return row
+        obj_value, obj_band, _ = _measure_block(objective, params, use_screen, handle)
         cons_rows, violations = [], []
         for con in norm_cons:
-            value, band, payload = _measure_block(con, params, use_screen)
+            value, band, payload = _measure_block(con, params, use_screen, handle)
             if value is None:
                 cons_rows.append({"name": con["name"], "state": "indeterminate",
                                   "measured": None,
@@ -5410,6 +5488,8 @@ def _h_optimize_submit(p):
                "score": (_opt.score(obj_value, objective["sense"], violations)
                          if obj_value is not None else None),
                "cached": False}
+        if handle is not None:
+            row["handle"] = handle
         memo[key] = row
         counters["evals"] += 1
         return row
@@ -18423,8 +18503,18 @@ def _h_job_result(p):
 
 @handler("job_list")
 def _h_job_list(p):
-    from driftpin import jobs
-    return jobs.list_jobs()
+    """Every job this worker knows about, plus the main-thread work queue's counters.
+
+    `main_thread_queue` is the diagnostic for a job that looks stuck (#260). An
+    adaptive shape search advances only when the queue is drained, which happens once
+    per incoming request — so `pending` high with `drains` climbing means the work is
+    simply slow, while `drains` flat means nobody is polling and the job is waiting
+    for a turn that will never come. Returns {jobs: [...], main_thread_queue:
+    {queued, ran, failed, drains, pending}}."""
+    from driftpin import jobs, mainthread
+    out = jobs.list_jobs()
+    out["main_thread_queue"] = mainthread.stats()
+    return out
 
 
 # --- part recipes (issue #136, append-only registration) ----------------------
@@ -19946,11 +20036,30 @@ def _h_sheet_check(p):
 
 
 def _main():
+    from driftpin import mainthread
+    # This thread is the one FreeCAD's document API may be touched from, and so the
+    # one that services the main-thread work queue (#260). Binding it lets
+    # mainthread.call() tell "I am a background job, enqueue and wait" from "I am
+    # already the main thread, just run it".
+    mainthread.bind()
     _respond({"ready": True, "freecad": list(App.Version())[:3]})
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
+        # Give any background job waiting on geometry its main-thread turn BEFORE
+        # answering this request. The client polling job_status is what advances an
+        # adaptive shape search — the poll it must do anyway is the turn. Draining
+        # first (not after) means the poll we are about to answer reports the state
+        # the drain just produced, instead of one turn stale.
+        #
+        # Bounded so a queue of builds cannot starve the request riding on it: at
+        # most 32 items or ~10 s per request, whichever comes first. The remainder
+        # waits for the next poll, which is moments away by construction.
+        try:
+            mainthread.drain(max_items=32, max_s=10.0)
+        except Exception:                            # noqa: BLE001 - never kill the loop
+            pass
         mid = None
         try:
             req = json.loads(line)
