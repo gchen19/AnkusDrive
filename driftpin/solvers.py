@@ -189,17 +189,18 @@ _SOLVERS: dict = {
         "install_hint": "download SU2 from https://su2code.github.io/download.html "
                         "(provides SU2_CFD) and put it on PATH, or set "
                         "DRIFTPIN_SU2_PATH",
-        # No DriftPin tool BUILDS an SU2 case (issue #237). Every built-in case mode
-        # of cfd_internal_flow_submit / cfd_external_flow_submit — the straight pipe
-        # (laminar and RANS), the snappyHexMesh geometry bridge, the flat plate and
-        # the wind tunnel — emits an OpenFOAM dictionary tree; SU2 is reachable only
-        # through a `case_dir` the caller hand-prepared. So SU2 resolving must not
-        # make the cfd family read "available" to an agent hunting for a solver to
-        # escalate into: it would follow cfd_pipe_flow's escalate_to hint and
-        # dead-end. See prepared_case_only below.
-        "prepared_case_only": "no DriftPin tool builds an SU2 case — SU2 runs only a "
-                              "hand-prepared case_dir (*.cfg + *.su2 mesh) passed to "
-                              "cfd_internal_flow_submit / cfd_external_flow_submit",
+        # `prepared_case_only` was set here from #237 item 2 until item 3 landed: no
+        # DriftPin tool could BUILD an SU2 case, so SU2 resolving must not make the
+        # cfd family read "available" to an agent hunting for a solver to escalate
+        # into. That is now false — analysis/su2_case.py writes the plane-Poiseuille
+        # validation case (cfd_internal_flow_submit's `channel_height_mm` mode), it
+        # runs natively with no VM, and it is gated live against the closed form. So
+        # SU2 counts toward the cfd family again, which is what makes docs/MACOS.md's
+        # "CFD degrades to SU2" true on Apple Silicon rather than aspirational.
+        #
+        # The OpenFOAM-only modes (the straight pipe, the snappyHexMesh geometry
+        # bridge, the flat plate, the wind tunnel) are still OpenFOAM-only; the
+        # family being available means SOME built-in case can run, not every one.
     },
     # --- optics: pip wheels (the `optics` extra) -----------------------------
     # Two lanes (see memory optics-library-selection). SEQUENTIAL imaging/lens

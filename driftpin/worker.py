@@ -17416,7 +17416,14 @@ def _h_cfd_internal_flow_submit(p):
     """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, OFF the MCP channel.
     Degrades to {ok:false, reason, install} when no CFD solver resolves (never raises).
 
-    Three ways to drive it:
+    Four ways to drive it:
+      * **Build the native SU2 plane-channel case** — pass `channel_height_mm` (plus
+        optional `channel_length_mm`, `velocity_m_s`, `fluid`/`mu_pa_s`+`rho_kg_m3`,
+        `nx`/`ny`, `max_iterations`). The ONLY built-in case DriftPin builds for SU2,
+        and the reason the cfd family can report itself available with no OpenFOAM —
+        on Apple Silicon, no Multipass VM (#237 item 3). 2-D structured mesh, no
+        FreeCAD in the loop; gated live against the exact plane-Poiseuille closed
+        form dp = 12·mu·U·L/h² (`poiseuille_ratio` ~ 1).
       * **Build the straight-pipe validation case** — pass `diameter_mm`, `length_mm`,
         and `velocity_m_s` (or `flow_rate_lpm`), plus a `fluid` name or `mu_pa_s`+
         `rho_kg_m3`. The handler builds the axisymmetric laminar pipe, runs
@@ -17440,12 +17447,109 @@ def _h_cfd_internal_flow_submit(p):
         return _cfd_body_submit(p)
     if p.get("case_dir"):
         return _openfoam_submit(p, "internal")
+    if p.get("channel_height_mm") is not None:       # --- SU2, native (#237) ---
+        return _cfd_channel_su2_submit(p)
     if p.get("diameter_mm") is not None:
         return _cfd_pipe_submit(p)
     raise ValueError(
-        "provide a `body` handle (geometry bridge), a prepared `case_dir`, or the "
+        "provide a `body` handle (geometry bridge), a prepared `case_dir`, "
+        "`channel_height_mm` for the native SU2 plane-channel case, or the "
         "straight-pipe params (diameter_mm, length_mm, velocity_m_s or "
         "flow_rate_lpm) to build the Hagen–Poiseuille validation case")
+
+
+def _cfd_channel_su2_submit(p):
+    """Plane-Poiseuille validation case on SU2, natively (#237 item 3).
+
+    The only built-in CFD case DriftPin can build for SU2, and the reason the cfd
+    family can report itself available on a box with no OpenFOAM — which on Apple
+    Silicon means no Multipass VM. Geometry is a 2-D structured channel, so there is
+    no FreeCAD in the loop at all; the oracle is dp = 12*mu*U*L/h^2, exact for
+    developed laminar flow, and the case is fed a parabolic inlet so it IS developed
+    from x = 0 (see driftpin/analysis/su2_case.py for why that matters).
+
+    Returns the standard degradation dict when SU2 does not resolve, else
+    {job_id, status}; poll job_result for {ok, pressure_drop_pa, analytic_dp_pa,
+    poiseuille_ratio, iterations, converged, reynolds, n_cells, case_dir, gated}."""
+    info = _require_solver("su2")
+    if not info["ok"]:
+        return info
+
+    import tempfile
+
+    from driftpin import jobs, solvers
+    from driftpin.analysis import cfd as _cfd
+    from driftpin.analysis import su2_case as _su2
+
+    height_mm = float(p["channel_height_mm"])
+    length_mm = float(p.get("channel_length_mm", 10.0 * height_mm))
+    if (p.get("fluid") or p.get("mu_pa_s") is not None
+            or p.get("rho_kg_m3") is not None):
+        mu, rho = _cfd._fluid_props(p.get("fluid", "water-20c"),
+                                    p.get("mu_pa_s"), p.get("rho_kg_m3"))
+    else:
+        # The validated default point is a light OIL, not water, and deliberately:
+        # holding Re low with water means a velocity of millimetres per second,
+        # where SU2's incompressible pseudo-time is badly scaled and crawls (it
+        # reached 87 % of the answer in 4000 iterations). At the same Reynolds
+        # number an oil puts the velocity at O(0.1 m/s) and converges in ~750.
+        # Plane Poiseuille is exact for any Newtonian fluid, so nothing is lost.
+        mu, rho = 0.1, 900.0
+    velocity = p.get("velocity_m_s")
+    if velocity is None:
+        # default to the gate's Re = 50, which converges in a few hundred iterations
+        velocity = 50.0 * mu / (rho * 2.0 * height_mm / 1000.0)
+    velocity = float(velocity)
+
+    case_dir = p.get("write_to") or tempfile.mkdtemp(prefix="su2_channel_")
+    built = _su2.write_channel_case(
+        case_dir, height_mm=height_mm, length_mm=length_mm, velocity_m_s=velocity,
+        rho_kg_m3=rho, mu_pa_s=mu,
+        nx=int(p.get("nx", 40)), ny=int(p.get("ny", 40)),
+        max_iter=int(p.get("max_iterations", 3000)))
+    key = jobs.content_key("cfd_channel_su2", {k: built[k] for k in (
+        "height_mm", "length_mm", "velocity_m_s", "rho_kg_m3", "mu_pa_s",
+        "n_cells")})
+
+    def _work():
+        rc, tail = solvers.run_argvs(case_dir, [[info["path"], "flow.cfg"]])
+        hist = _su2.read_history(case_dir)
+        out = {
+            "ok": bool(rc == 0 and hist.get("ok")),
+            "returncode": rc,
+            "solver": "su2",
+            "case_dir": case_dir,
+            "n_cells": built["n_cells"],
+            "reynolds": round(built["reynolds"], 3),
+            "analytic_dp_pa": built["analytic_dp_pa"],
+            "laminar": built["laminar"],
+            "stdout_tail": tail,
+            # laminar plane Poiseuille is a closed form with no empirical constant,
+            # so this path carries a real oracle — see cfd.solve_gate (#262)
+            "gated": bool(built["laminar"]),
+        }
+        if not hist.get("ok"):
+            out["reason"] = hist.get("reason")
+            return out
+        dp = hist["pressure_drop_pa"]
+        out.update({
+            "pressure_drop_pa": dp,
+            "poiseuille_ratio": dp / built["analytic_dp_pa"],
+            "iterations": hist["iterations"],
+            "rms_p": hist["rms_p"],
+            # the Cauchy window is on the pressure drop itself, so "stopped early"
+            # means the ANSWER stopped moving — not that a residual bottomed out
+            "converged": hist["iterations"] < int(p.get("max_iterations", 3000)),
+        })
+        if not out["laminar"]:
+            out.setdefault("warnings", []).append(
+                f"Re = {built['reynolds']:.0f} is past the ~1400 plane-channel "
+                "transition, so the laminar closed form is not the right oracle here")
+        return out
+
+    return jobs.submit("cfd_channel_su2", _work, key=key,
+                       meta={"case_dir": case_dir, "kind": "internal",
+                             "solver": "su2", "n_cells": built["n_cells"]})
 
 
 def _cfd_flat_plate_rans_submit(p):

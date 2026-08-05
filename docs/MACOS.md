@@ -111,7 +111,7 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ dri
 | Fluids properties | CoolProp | ✅ pip wheel (arm64) |
 | Slicing | PrusaSlicer | ✅ `brew install --cask prusaslicer` (or `install-solvers.sh prusaslicer`) — auto-discovered, live slice verified |
 | CFD (pipe / plate / bridge / wind tunnel) | OpenFOAM | ✅ **Multipass**, same routing as FSI — needs the two in-VM exports below. All built-in CFD case builders are OpenFOAM-only; live-verified on Apple Silicon ([#223](https://github.com/gchen19/DriftPin/issues/223)) |
-| CFD (prepared case only) | SU2 | ⚠️ `install-solvers.sh su2` installs it (official x86_64 binary under **Rosetta 2**, auto-discovered from the provisioner dir) and it runs a hand-written `case_dir` — but **no DriftPin tool builds an SU2 case**, so it does not make the cfd family available ([#237](https://github.com/gchen19/DriftPin/issues/237)) |
+| CFD (native, plane channel) | SU2 | ✅ `install-solvers.sh su2` installs it (official x86_64 binary under **Rosetta 2**, auto-discovered from the provisioner dir). Since [#237](https://github.com/gchen19/DriftPin/issues/237) item 3 DriftPin **builds** the plane-Poiseuille case for it (`channel_height_mm`), gated exactly, so SU2 alone makes the cfd family available. Geometry-bearing CFD still needs OpenFOAM in the VM |
 | Transient/radiation thermal | Elmer | ⚠️ **no prebuilt macOS binaries exist** — no Homebrew formula, no conda-forge package (older hints claiming one were wrong). Source build (CMake + gfortran) from https://www.elmerfem.org/, then `DRIFTPIN_ELMER_PATH` |
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD (`pocl` on Apple Silicon); dedicated venv (`DRIFTPIN_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ source build with brew deps; the `em_gpl` recipe is Linux-only today |
@@ -135,13 +135,20 @@ case mode of `cfd_internal_flow_submit` / `cfd_external_flow_submit` — pipe, R
 snappyHexMesh geometry bridge, flat plate, wind tunnel — emits an OpenFOAM dictionary
 tree, so CFD needs this VM exactly as much as molding and FSI do.
 
-> **CFD does not "degrade to SU2" here.** SU2 resolves natively (Rosetta) and can run a
-> `case_dir` you prepared yourself (`*.cfg` + `*.su2` mesh), but no DriftPin tool
-> *builds* one — so SU2 alone leaves you with no way to ask a CFD question. Because of
-> that, `solve_capabilities` deliberately does **not** count SU2 toward the cfd family's
-> `any_available`: it lists it under `prepared_case_only` with the reason, and the family
-> reads unwired until OpenFOAM is wired up ([#237](https://github.com/gchen19/DriftPin/issues/237)).
-> An SU2 case builder would change this and is tracked as item 3 of that issue.
+> **CFD does degrade to SU2 — for one case.** Since
+> [#237](https://github.com/gchen19/DriftPin/issues/237) item 3, DriftPin builds a
+> native SU2 case: `cfd_internal_flow_submit(channel_height_mm=...)` writes its own
+> `.su2` mesh, config and inlet profile and solves plane Poiseuille against the exact
+> closed form Δp = 12·μ·U·L/h² (live ratio **1.000000**, mesh-independent over 400 and
+> 3600 cells). No OpenFOAM, no VM, no FreeCAD in the loop. So `solve_capabilities` now
+> counts SU2 toward the cfd family's `any_available`, and SU2 alone is enough to ask a
+> CFD question and get a *gated* answer.
+>
+> What that does **not** mean: the OpenFOAM-only modes are still OpenFOAM-only — the
+> straight pipe, the snappyHexMesh geometry bridge, the flat plate and the wind tunnel
+> all emit OpenFOAM dictionaries. A family reading available means SOME built-in case
+> can run, not every one. For anything with real geometry in it, you still want the VM
+> below.
 
 **1. Install Multipass and launch the VM** (the instance name must be `openfoam`, or set
 `DRIFTPIN_OPENFOAM_INSTANCE`):

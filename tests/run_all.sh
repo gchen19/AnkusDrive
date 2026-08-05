@@ -113,6 +113,14 @@ echo "== Async job-registry toys (pure-Python; no FreeCAD) =="
 python3 tests/test_jobs.py
 
 echo
+echo "== SU2 plane-channel case (#237 item 3; live gate when SU2 resolves) =="
+# The NATIVE CFD path: builds its own .su2 mesh + config and solves plane Poiseuille
+# against the exact closed form. Needs no OpenFOAM and, on Apple Silicon, no Multipass
+# VM — which is what makes docs/MACOS.md's "CFD degrades to SU2" true. SKIPs the live
+# leg when the SU2 binary is absent; the construction tests always run.
+python3 tests/test_su2_case.py
+
+echo
 echo "== Main-thread work queue (#260; pure-Python; no FreeCAD) =="
 # The primitive under adaptive SHAPE search: a background job asking the request loop
 # to run FreeCAD work. The load-bearing test is the failure mode the design accepts —
