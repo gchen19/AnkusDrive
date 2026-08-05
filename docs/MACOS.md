@@ -117,7 +117,7 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ dri
 | Full-wave EM | openEMS | ⚠️ source build with brew deps; the `em_gpl` recipe is Linux-only today |
 | DEM (granular) | YADE (GPL) | ⚠️ no macOS build path in this repo — Linux box or container |
 | FSI (preCICE) | OpenFOAM + CalculiX | ✅ **Multipass** (arm64-native Ubuntu VM) — DriftPin runs the apps via `multipass exec`; live coupled solve verified ([#193](https://github.com/gchen19/DriftPin/issues/193), see below). Needs the in-VM `DRIFTPIN_*` exports |
-| Injection-molding fill | openInjMoldSim / interFoam | ✅ **Multipass**, same routing — needs the in-VM exports below. Code path verified by unit test; **no live macOS solve yet** (Windows/WSL and Linux are live-verified) |
+| Injection-molding fill | openInjMoldSim / interFoam | ✅ **Multipass**, same routing — needs the in-VM exports below. The `interFoam` cavity-fill gates are **live-verified on Apple Silicon** (2026-08-05, in `run_macos_heavy.sh`); `openInjMoldSim` itself is not built here (multi-hour arm64 OF7-org source build) and its tests SKIP |
 
 Every absent solver **degrades cleanly** — the family returns `{ok: false, reason, install}`
 rather than crashing — so an incomplete solver set never breaks the server; those tools
@@ -264,12 +264,19 @@ sides — `multipass exec` starts in the VM home, so the launcher `cd`s into the
 host path. `driftpin doctor` then reports the family as **ready … (in Multipass VM)**,
 which is how you tell an in-VM resolution from a native one.
 
-Status: this routing is exercised by `tests/test_wsl_routing.py` (macOS branches, no VM
-needed), and the identical path is live-verified on Windows/WSL; the heavy macOS molding
-solve (`RUN_HEAVY_SOLVES=1 python3 tests/test_molding_fill.py`) has not been run on Apple
-Silicon yet. The OF7-org source build in particular is unproven on arm64 (it is a 2019
-tree and needed a gcc-11 pin even on x86_64 — see docs/WINDOWS.md); if it won't build,
-skip the second pair of exports and the family runs the `interFoam` fallback.
+Status: **live-verified on Apple Silicon 2026-08-05** for the `interFoam` path — both
+heavy gates solve in the VM (`test_fillable_cavity_reaches_far_end`, a fillable cavity
+reaching the far end, and `test_short_shot_cavity_stalls`, a short shot that does not),
+29/29 in `tests/test_molding_fill.py` with `DRIFTPIN_OPENFOAM_PATH` pointed at
+`interFoam`. Control check: with the exports unset those two are exactly the tests that
+report `SKIP — OpenFOAM not installed`, so they really did solve. The file is now in the
+default `tests/run_macos_heavy.sh` set.
+
+**openInjMoldSim itself is still unverified here.** Its three tests SKIP with
+`openInjMoldSim (OF7-org) not built` — that solver needs a multi-hour parallel
+OpenFOAM-7 `.org` source build, and the 2019 tree is unproven on arm64 (it needed a
+gcc-11 pin even on x86_64 — see docs/WINDOWS.md). The `interFoam` fallback is what runs
+without it, and it is the path gated above.
 
 ### The renderer scripts
 
@@ -299,15 +306,13 @@ Linux lane cannot see:
 | `tests/test_wsl_routing.py` | the Darwin routing contracts — `bash_argv` → `multipass exec`, `runs_in_substrate`, `_fsi_override`'s in-VM path trust, FSI participant routing (pure Python, seconds) |
 | `tests/test_su2_native.py` | the **live** SU2 channel solve — official x86_64 binary under Rosetta 2, through `solvers.run_argvs` |
 | `tests/test_fsi.py` | the **live** preCICE OpenFOAM↔CalculiX coupled solve, executed inside the VM |
+| `tests/test_su2_case.py` | the **live** NATIVE SU2 plane-Poiseuille gate (#237 item 3) — no VM at all, so it is the one CFD path that still works when Multipass is down |
+| `tests/test_molding_fill.py` | the **live** `interFoam` cavity-fill gates in the VM (#193's last checkbox) — fillable cavity reaches the far end, short shot stalls |
 
-The whole lane is ~10 s of solve on the reference box (FSI 8.9 s for four preCICE
-windows, SU2 0.2 s) — verified end-to-end, 29/29 asserts, tip 0 → 3.4696 mm. Add files as
-arguments once their in-VM provisioning is validated — the molding gate is next, and is
-*not* in the default set because the macOS `openInjMoldSim` / `interFoam` solve has never
-been run live (see the section above):
+Add files as arguments once their in-VM provisioning is validated:
 
 ```bash
-bash tests/run_macos_heavy.sh tests/test_molding_fill.py
+bash tests/run_macos_heavy.sh tests/test_some_new_gate.py
 ```
 
 ### One-time runner setup

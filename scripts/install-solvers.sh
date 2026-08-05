@@ -57,6 +57,8 @@
 #   scripts/install-solvers.sh em_gpl           # opt-in GPL-3.0 full-wave FDTD (openEMS, source-built)
 #   scripts/install-solvers.sh --optics-gallery # bootstrap: install BOTH optics lanes + render every gallery figure
 #   scripts/install-solvers.sh cfd              # print OpenFOAM/SU2 install guidance (no auto-install)
+#   scripts/install-solvers.sh multipass        # macOS: the OpenFOAM families via a Multipass VM
+#                                               # (the twin of install-solvers.ps1's `wsl` target, #193)
 #   scripts/install-solvers.sh su2              # macOS: download the official SU2 binary into the
 #                                               #   provisioner dir (auto-discovered); Linux: guidance
 #   scripts/install-solvers.sh prusaslicer      # macOS: brew cask (auto-discovered); Linux: guidance
@@ -445,6 +447,45 @@ for fam, fi in sorted(caps["families"].items()):
 PYEOF
 }
 
+provision_multipass() {
+  # The macOS twin of install-solvers.ps1's `wsl` target (issue #193). OpenFOAM has
+  # no native macOS build, so the CFD/FSI/molding families run INSIDE a Multipass VM
+  # and DriftPin launches into it with `multipass exec`; discovery trusts an absolute
+  # in-VM path when `multipass` is present, because the VM filesystem is opaque from
+  # the host. Same shape as WSL: provision in the substrate, run the server natively.
+  echo "== OpenFOAM families (CFD / FSI / injection molding) via Multipass (issue #193) =="
+  [ "$OS" = "Darwin" ] || die "the multipass target is macOS-only (Linux installs natively; Windows uses install-solvers.ps1 wsl)"
+  command -v multipass >/dev/null 2>&1 || die "Multipass not installed: 'brew install --cask multipass', then re-run this target"
+  local inst="${DRIFTPIN_OPENFOAM_INSTANCE:-openfoam}"
+  local state
+  state="$(multipass info "$inst" --format csv 2>/dev/null | awk -F, 'NR==2{print $2}')"
+  if [ -z "$state" ]; then
+    warn "no '$inst' instance yet — create one with (8G/4cpu/40G is comfortable for the validation cases):"
+    warn "  multipass launch 24.04 --name $inst --cpus 4 --memory 8G --disk 40G"
+    warn "  multipass mount \$HOME/fsi-run $inst:\$HOME/fsi-run   # the shared case dir"
+    return 0
+  fi
+  [ "$state" = "Running" ] || warn "instance '$inst' is $state — 'multipass start $inst' first"
+
+  # The repo is NOT visible in the VM by default (unlike WSL's /mnt/c), so the Linux
+  # provisioning recipes are printed for in-VM use rather than piped through.
+  echo
+  warn "Inside the VM ('multipass shell $inst'), run the Linux recipes verbatim:"
+  warn "  sudo apt update && sudo apt install -y openfoam2512-default   # CFD"
+  warn "  bash scripts/install-solvers.sh fsi                           # preCICE adapters"
+  warn "  bash tools/build_openinjmoldsim.sh --build                    # molding (multi-hour OF7-org build)"
+  echo
+  warn "Then export the IN-VM paths on the HOST (macOS trusts them unstat'd — the VM"
+  warn "filesystem is opaque from here), and point TMPDIR at the mount so case dirs"
+  warn "resolve at the same absolute path on both sides:"
+  warn "  export TMPDIR=\$HOME/fsi-run"
+  warn "  export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc"
+  warn "  export DRIFTPIN_OPENFOAM_PATH=<that prefix>/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam"
+  warn "See docs/MACOS.md for the per-family variable table, and note that plain CFD"
+  warn "also has a NATIVE path now: 'scripts/install-solvers.sh su2' needs no VM at all."
+}
+
+
 # --- main ----------------------------------------------------------------------
 main() {
   local extras=() systems=() do_all=1
@@ -464,6 +505,7 @@ main() {
       su2)               if [ "$OS" = "Darwin" ]; then install_su2_darwin; exit 0
                          else systems+=("cfd"); do_all=0; fi ;;
       prusaslicer|prusa) install_prusa_darwin; exit 0 ;;
+      multipass|vm)      provision_multipass; exit 0 ;;
       *) die "unknown argument: $1 (try --list or --help)" ;;
     esac
     shift
