@@ -28,10 +28,18 @@
 #                                 at Re=1e4/1e5 vs the bluff-body Cd table, which is
 #                                 what makes kOmegaSST report gated:true
 #
-#   Add more files as arguments once their in-VM provisioning is validated (the
-#   OpenFOAM-backed molding gates are the next candidate):
+#     tests/test_su2_case.py      the NATIVE SU2 plane-Poiseuille gate (#237 item 3) —
+#                                 no VM at all, so it is the one CFD path that still
+#                                 works if Multipass is down
+#     tests/test_molding_fill.py  the LIVE interFoam cavity-fill gates in the VM
+#                                 (#193's last checkbox): a fillable cavity reaches the
+#                                 far end, a short shot stalls. The openInjMoldSim
+#                                 (OF7-org) tests inside it still SKIP — that solver is
+#                                 a multi-hour arm64 source build and is not provisioned
 #
-#     bash tests/run_macos_heavy.sh tests/test_molding_fill.py
+#   Add more files as arguments once their in-VM provisioning is validated:
+#
+#     bash tests/run_macos_heavy.sh tests/test_some_new_gate.py
 #
 # Every file runs even if an earlier one fails (unlike run_all.sh's `set -e`), so one
 # flaky coupled solve does not hide an SU2 regression; the exit code is non-zero if any
@@ -63,8 +71,9 @@ fi
 if [ "$#" -gt 0 ]; then
   FILES=("$@")
 else
-  FILES=(tests/test_wsl_routing.py tests/test_su2_native.py tests/test_fsi.py
-         tests/test_openfoam.py tests/test_meshbridge.py tests/test_wind_tunnel.py)
+  FILES=(tests/test_wsl_routing.py tests/test_su2_native.py tests/test_su2_case.py
+         tests/test_fsi.py tests/test_openfoam.py tests/test_meshbridge.py
+         tests/test_wind_tunnel.py tests/test_molding_fill.py)
 fi
 
 FAILED=""
