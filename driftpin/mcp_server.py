@@ -5345,19 +5345,31 @@ def cfd_internal_flow_submit(
     location_in_mesh_mm: list | None = None,
     stl_tolerance_mm: float = 0.2,
     end_time: int | None = None,
+    channel_height_mm: float | None = None,
+    channel_length_mm: float | None = None,
+    max_iterations: int | None = None,
     turbulence: str = "laminar",
 ) -> dict:
     """Internal-flow CFD (pressure drop) via OpenFOAM or SU2, asynchronous. Requires an
     OpenFOAM (apt/conda) or SU2 binary; when none resolves this returns {ok:false,
-    reason, install} rather than raising. The two case-BUILDING modes below need
-    OpenFOAM specifically — they emit OpenFOAM dictionaries; SU2 only ever runs a
-    `case_dir` you prepared yourself, which is why solve_capabilities does not count
-    it toward the cfd family's any_available (issue #237). `turbulence='kOmegaSST'` upgrades the pipe
+    reason, install} rather than raising. The pipe and geometry-bridge modes need
+    OpenFOAM specifically — they emit OpenFOAM dictionaries — but `channel_height_mm`
+    builds a NATIVE SU2 case, which is why solve_capabilities counts SU2 toward the
+    cfd family (issue #237). On Apple Silicon that is the difference between needing
+    a Multipass VM and not. `turbulence='kOmegaSST'` upgrades the pipe
     validation case to RANS (SIMULATION_NEXT B3): wall-function k/ω/ν_t with first-cell
     y+ targeted at ~30–100, developed dp/dx fitted over the second half of a ≥40·D pipe,
     gated BANDED against Colebrook (`colebrook_ratio` ≈ 1 ± 10 % — the Moody correlation
-    is itself a band, never an exact gate). Three modes:
+    is itself a band, never an exact gate). Four modes:
 
+    - **Build the native SU2 plane-channel case** (no OpenFOAM, no VM): pass
+      `channel_height_mm`, optionally `channel_length_mm` (default 10× the height),
+      `velocity_m_s` (default Re 50), a `fluid` or `mu_pa_s`+`rho_kg_m3` (default a
+      light oil — holding Re low with water means millimetres per second, where SU2's
+      incompressible pseudo-time is badly scaled), `nx`/`ny`, `max_iterations`. Gated
+      against the EXACT plane-Poiseuille closed form Δp = 12·μ·U·L/h², returning
+      `poiseuille_ratio` ≈ 1. The inlet is the fully developed parabolic profile, so
+      there is no entrance-length error to drown out with a long domain.
     - **Build the straight-pipe validation case** (no case prep): pass `diameter_mm`,
       `length_mm`, and `velocity_m_s` (or `flow_rate_lpm`), with a `fluid` name or
       explicit `mu_pa_s`+`rho_kg_m3` (mesh density via `n_axial`/`n_radial`, iterations
@@ -5394,7 +5406,10 @@ def cfd_internal_flow_submit(
                  ("velocity_m_s", velocity_m_s), ("flow_rate_lpm", flow_rate_lpm),
                  ("mu_pa_s", mu_pa_s), ("rho_kg_m3", rho_kg_m3),
                  ("n_axial", n_axial), ("n_radial", n_radial),
-                 ("end_time", end_time)):
+                 ("end_time", end_time),
+                 ("channel_height_mm", channel_height_mm),
+                 ("channel_length_mm", channel_length_mm),
+                 ("max_iterations", max_iterations)):
         if v is not None:
             params[k] = v
     return _call("cfd_internal_flow_submit", **params)

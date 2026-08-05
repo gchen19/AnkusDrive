@@ -424,17 +424,37 @@ class _only_available:
         return False
 
 
-def test_prepared_case_only_solver_does_not_make_its_family_available():
-    """#237(a): SU2 resolves natively on macOS, but NO DriftPin tool builds an SU2
-    case — every built-in mode of cfd_*_flow_submit (pipe, RANS pipe, snappy body,
-    flat plate) emits an OpenFOAM dictionary tree, so SU2 is reachable only through a
-    hand-prepared case_dir. Counting it toward the cfd family's `any_available` told
-    an agent to escalate per cfd_pipe_flow's escalate_to hint, and it dead-ended.
+class _declares_prepared_case_only:
+    """Temporarily mark a registry entry ``prepared_case_only``.
 
-    The general invariant: a solver counts toward a family only if some tool can
-    actually DRIVE it. SU2 must still be listed as resolved (it is), and
-    require_solver must still say ok (the prepared-case path is legitimate)."""
-    with _only_available("su2"):
+    Since #237 item 3 (analysis/su2_case.py builds the plane-Poiseuille case, so SU2
+    is drivable and counts again) NO shipped solver declares this. The MECHANISM still
+    has to hold — it is the general invariant "a solver counts toward a family only if
+    some tool can actually drive it", and the next undrivable solver must not quietly
+    make its family read available. So the tests inject the flag rather than leaning on
+    a particular solver being the example."""
+
+    def __init__(self, name, reason="no DriftPin tool builds a case for it"):
+        self.name, self.reason = name, reason
+
+    def __enter__(self):
+        self._spec = solvers._SOLVERS[self.name]
+        solvers._SOLVERS[self.name] = {**self._spec, "prepared_case_only": self.reason}
+        return self
+
+    def __exit__(self, *exc):
+        solvers._SOLVERS[self.name] = self._spec
+        return False
+
+
+def test_prepared_case_only_solver_does_not_make_its_family_available():
+    """The general invariant from #237 item 2: a solver counts toward a family only if
+    some tool can actually DRIVE it. Counting a resolved-but-undrivable binary told an
+    agent to escalate per cfd_pipe_flow's escalate_to hint, and it dead-ended.
+
+    The solver must still be listed as resolved, and require_solver must still say ok
+    — a hand-prepared case_dir remains a legitimate way to run it."""
+    with _only_available("su2"), _declares_prepared_case_only("su2"):
         caps = solvers.capabilities()
         cfd = caps["families"]["cfd"]
         # honest both ways: the binary resolved, and the family is still not drivable
@@ -446,50 +466,49 @@ def test_prepared_case_only_solver_does_not_make_its_family_available():
         # the qualifier is a reason string the caller can show, not a bare flag
         info = solvers.find_solver("su2")
         assert isinstance(info.get("prepared_case_only"), str), info
-        assert "case_dir" in info["prepared_case_only"], info
         # a prepared case_dir still runs: require_solver is deliberately unaffected
         assert solvers.require_solver("su2")["ok"] is True, solvers.require_solver("su2")
 
     # ... and a solver that DOES have a case builder restores the family
-    with _only_available("su2", "openfoam"):
+    with _only_available("su2", "openfoam"), _declares_prepared_case_only("su2"):
         cfd = solvers.capabilities()["families"]["cfd"]
         assert cfd["any_available"] is True, cfd
         assert cfd["prepared_case_only"] == ["su2"], cfd
 
 
-def test_any_available_means_some_tool_can_drive_the_family():
-    """#237(a), stated as the general invariant rather than an SU2 special case:
-    across EVERY family, `any_available` is true exactly when some resolved solver
-    is one DriftPin can build a case for. Guards a future registry entry that adds
-    `prepared_case_only` without the roll-up honoring it."""
-    for forced in (True, False):
-        with _force(available=forced):
-            caps = solvers.capabilities()
-            for fam, fi in caps["families"].items():
-                drivable = [s for s in fi["available"]
-                            if not caps["solvers"][s].get("prepared_case_only")]
-                assert fi["any_available"] is bool(drivable), (fam, fi)
-                assert sorted(fi["available"]) == sorted(
-                    drivable + fi["prepared_case_only"]), (fam, fi)
+def test_su2_alone_now_makes_the_cfd_family_available():
+    """#237 item 3, the other side of the invariant: SU2 has a case builder now
+    (analysis/su2_case.py writes the plane-Poiseuille case, run by
+    cfd_internal_flow_submit's `channel_height_mm` mode), so it must NOT be marked
+    prepared_case_only and the cfd family must read available on SU2 alone. That is
+    what makes docs/MACOS.md's "CFD degrades to SU2" true rather than aspirational —
+    on Apple Silicon it is the difference between needing a Multipass VM and not."""
+    assert "prepared_case_only" not in solvers._SOLVERS["su2"], \
+        "su2 has a case builder since #237 item 3; it must count toward its family"
+    with _only_available("su2"):
+        cfd = solvers.capabilities()["families"]["cfd"]
+        assert cfd["available"] == ["su2"], cfd
+        assert cfd["prepared_case_only"] == [], cfd
+        assert cfd["any_available"] is True, cfd
 
 
 def test_doctor_names_a_prepared_case_only_solver_it_did_not_count():
-    """A family reported unwired next to an SU2_CFD the user just installed is
-    baffling unless the doctor says why it doesn't count. #237(a) consumer check."""
+    """A family reported unwired next to a solver the user just installed is baffling
+    unless the doctor says why it doesn't count. #237 item 2 consumer check."""
     from driftpin import doctor
 
-    with _only_available("su2"):
+    with _only_available("su2"), _declares_prepared_case_only("su2"):
         caps = solvers.capabilities()
         lines = doctor._fmt_solvers(caps)
         idx = next(i for i, ln in enumerate(lines) if ln.split()[1:2] == ["cfd"])
         assert doctor._MARK["ok"] not in lines[idx], lines[idx]
         note = "\n".join(lines[idx:idx + 4])
         assert "su2 resolves" in note, note
-        assert "hand-prepared case_dir" in note, note
+        assert "no DriftPin tool builds a case for it" in note, note
 
     # and when the family IS ready, the "ready via" line names only what made it so —
     # "ready via su2, openfoam" would point back at the solver that cannot be driven
-    with _only_available("su2", "openfoam"):
+    with _only_available("su2", "openfoam"), _declares_prepared_case_only("su2"):
         lines = doctor._fmt_solvers(solvers.capabilities())
         line = next(ln for ln in lines if ln.split()[1:2] == ["cfd"])
         assert doctor._MARK["ok"] in line, line

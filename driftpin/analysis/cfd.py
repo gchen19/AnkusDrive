@@ -606,6 +606,15 @@ _SOLVE_GATES = {
                   "at Re_L = 2e6 (tests/test_openfoam.py)",
         "reynolds_range": None,
     },
+    ("laminar", "internal_channel"): {
+        "gated": True,
+        # #237 item 3, the SU2 native path. Plane Poiseuille has no empirical
+        # constant in it, and the case is fed a parabolic inlet so it is developed
+        # from x=0 rather than accumulating an entrance-length error.
+        "oracle": "plane Poiseuille dp = 12*mu*U*L/h^2, EXACT — live ratio 1.0000 at "
+                  "Re = 50 on SU2 (tests/test_su2_case.py)",
+        "reynolds_range": (0.0, 1400.0),   # plane-channel transition
+    },
     ("laminar", "internal_pipe"): {
         "gated": True,
         "oracle": "Hagen-Poiseuille dp = 128*mu*L*Q/(pi*D^4), EXACT "
