@@ -339,27 +339,39 @@ def test_the_budget_is_a_ceiling_and_cache_hits_do_not_count():
         assert got["stop_reason"] in ("max_evals", "converged"), got["stop_reason"]
 
 
-def test_live_geometry_is_refused_at_the_door():
-    """The search runs on a background thread and FreeCAD is main-thread only, so a
-    response reading a live document cannot be an optimizer objective. Refuse it with
-    the alternative rather than crashing a solve deep inside the search."""
+def test_an_unbindable_handle_is_refused_at_the_door():
+    """Live geometry is no longer refused (#260 gave the search a main-thread queue),
+    but `"$handle"` still needs something to bind to. A response referencing the part
+    THIS candidate built, in an optimization that builds nothing, must be refused at
+    the door — substituting nothing deep inside the search is how a sweep ends up
+    measuring a literal string at every point."""
     from driftpin import Worker
     from driftpin.client import WorkerError
 
     with Worker() as w:
-        for conds in ({"model": "$handle", "velocity_m_s": 30},
-                      {"handle": "Box", "velocity_m_s": 30},
-                      {"body": "Box", "velocity_m_s": 30}):
-            try:
-                w.call("optimize_submit",
-                       variables=[{"name": "v", "min": 1.0, "max": 2.0}],
-                       objective={"tool": "cfd_body_drag", "metric": "cd",
-                                  "conditions": conds},
-                       budget={"max_evals": 4})
-            except WorkerError as e:
-                assert "study_submit" in str(e), e   # names the alternative
-            else:
-                raise AssertionError(f"optimize_submit({conds!r}) should have raised")
+        try:
+            w.call("optimize_submit",
+                   variables=[{"name": "v", "min": 1.0, "max": 2.0}],
+                   objective={"tool": "cfd_body_drag", "metric": "cd",
+                              "conditions": {"model": "$handle", "velocity_m_s": 30}},
+                   budget={"max_evals": 4})
+        except WorkerError as e:
+            assert "recipe" in str(e), e             # names what would fix it
+        else:
+            raise AssertionError("$handle with nothing to build should have raised")
+
+        # a recipe with nowhere to build is refused on the REQUEST thread, where the
+        # caller is still listening — not once per candidate inside the search
+        try:
+            w.call("optimize_submit",
+                   variables=[{"name": "width_mm", "min": 4.0, "max": 20.0}],
+                   objective={"tool": "mass_properties", "metric": "volume_mm3",
+                              "sense": "min", "conditions": {"handle": "$handle"}},
+                   recipe="spur_gear", budget={"max_evals": 4})
+        except WorkerError as e:
+            assert "new_document" in str(e), e
+        else:
+            raise AssertionError("a recipe with no active document should have raised")
 
         # an unknown tool is refused too, before anything is searched
         try:
@@ -371,6 +383,104 @@ def test_live_geometry_is_refused_at_the_door():
             pass
         else:
             raise AssertionError("an unknown objective tool should have raised")
+
+
+def test_shape_optimization_rides_the_constraint_to_a_known_optimum():
+    """THE gate for #260: a search that varies GEOMETRY, not just numbers.
+
+    Minimize a spur gear's volume — which wants the face as NARROW as possible —
+    subject to a Lewis bending safety factor of 1, which wants it WIDE. The recipe is
+    rebuilt for every candidate and the objective is measured off the resulting SOLID
+    (`mass_properties` on `"$handle"`), so this exercises the whole main-thread queue:
+    a background search asking the request loop to build, once per evaluation.
+
+    Both legs are linear in face width, so the optimum is exactly where the constraint
+    binds — width = w0/SF(w0) — the same closed-form oracle shape the parametric gate
+    uses, which is what makes "it found it" mean something."""
+    from driftpin import Worker
+
+    power_w, module_mm, teeth, rpm = 10_000.0, 2.0, 24, 1200
+    gear = {"module_mm": module_mm, "teeth": teeth,
+            "face_width_mm": "$width_mm", "power_w": power_w,
+            "pinion_speed_rpm": rpm}
+    # bending_sf is a closed-form ratio, not a correlation — it declares band 0
+    block = {"tool": "gear_rating", "metric": "bending_sf",
+             "conditions": gear, "band_pct": 0}
+
+    with Worker() as w:
+        w.call("new_document", name="shapeopt")
+        # SF is linear in face width, so one probe fixes the exact answer
+        probe = w.call("gear_rating", module_mm=module_mm, teeth=teeth,
+                       face_width_mm=14.0, power_w=power_w, pinion_speed_rpm=rpm)
+        exact_mm = 14.0 / probe["bending_sf"]
+        assert 5.0 < exact_mm < 19.0, exact_mm   # the bounds must BRACKET it, or the
+        #                                          search rides a bound and proves nothing
+
+        sub = w.call(
+            "optimize_submit",
+            variables=[{"name": "width_mm", "min": 4.0, "max": 20.0, "start": 16.0}],
+            objective={"name": "vol", "tool": "mass_properties",
+                       "metric": "volume_mm3", "sense": "min",
+                       "conditions": {"handle": "$handle"}},
+            constraints=[{"name": "bending", "limit": {"min": 1.0},
+                          "fidelity_floor": "screen",
+                          "screen": dict(block), **block}],
+            recipe="spur_gear",
+            fixed_inputs={"module_mm": module_mm, "teeth": teeth},
+            budget={"max_evals": 30}, tier="screen")
+        assert sub.get("job_id"), sub
+        got = _await(w, sub["job_id"], timeout_s=600)
+
+        assert got["ok"] is True, got
+        found = got["best_params"]["width_mm"]
+        assert abs(found - exact_mm) < 0.1, (found, exact_mm, got["history"][-3:])
+        # the constraint BINDS: it is met, and met with nothing to spare
+        con = got["constraints"][0]
+        assert con["state"] == "pass", con
+        assert 0 <= con["margin_pct"] < 1.0, con
+        assert got["proven"] is True, got["warnings"]
+        # the objective really was read off rebuilt geometry: volume must track the
+        # gear's own footprint at that width, not some parametric stand-in
+        built = w.call("recipe", recipe="spur_gear",
+                       inputs={"module_mm": module_mm, "teeth": teeth,
+                               "width_mm": found})
+        direct = w.call("mass_properties", handle=built["handle"])["volume_mm3"]
+        assert abs(got["best_value"] - direct) / direct < 0.01, (got["best_value"],
+                                                                 direct)
+        # every candidate was built, so the history carries what it searched over
+        assert len(got["history"]) >= 5, got["history"]
+        assert got["n_cached"] >= 1, got            # a shrinking simplex revisits
+
+
+def test_a_shape_search_that_cannot_build_says_why():
+    """A search where every candidate fails to build must name the CAUSE. Reporting
+    only "no point could be measured" is true and useless — it is the symptom, and the
+    same silent-absence trap the modal gate (#248) and the performance gates (#261)
+    were fixed for. The build error rides out in `warnings`, deduped."""
+    from driftpin import Worker
+
+    with Worker() as w:
+        w.call("new_document", name="badshape")
+        sub = w.call(
+            "optimize_submit",
+            # the recipe refuses a module below 0.2 mm, so EVERY candidate fails to
+            # build — standing in for any parameter range the recipe cannot take
+            variables=[{"name": "width_mm", "min": 4.0, "max": 20.0, "start": 10.0}],
+            objective={"name": "vol", "tool": "mass_properties",
+                       "metric": "volume_mm3", "sense": "min",
+                       "conditions": {"handle": "$handle"}},
+            recipe="spur_gear", fixed_inputs={"module_mm": 0.05, "teeth": 24},
+            budget={"max_evals": 6}, tier="screen")
+        got = _await(w, sub["job_id"], timeout_s=300)
+
+        assert got["ok"] is False, got
+        assert got["best_params"] is None, got
+        joined = " ".join(got["warnings"])
+        assert "did not build" in joined, got["warnings"]
+        assert "module_mm" in joined, got["warnings"]  # the CAUSE, not the symptom
+        # deduped: one repeated reason is one finding, not one per evaluation
+        assert len([x for x in got["warnings"] if "did not build" in x]) == 1, \
+            got["warnings"]
 
 
 def test_an_optimization_with_no_constraints_says_it_proved_nothing():

@@ -5555,6 +5555,9 @@ def optimize_submit(
     constraints: list | None = None,
     budget: dict | None = None,
     tier: str = "auto",
+    recipe: str | None = None,
+    fixed_inputs: dict | None = None,
+    handle: str | None = None,
 ) -> dict:
     """Vary parameters until the spec is met, then say whether it was PROVEN — the step
     that closes the design-to-spec loop.
@@ -5591,10 +5594,21 @@ def optimize_submit(
     (`{max_evals, max_wall_s}`, default 40 evaluations) is the ceiling; revisited points
     are served from cache and do NOT count against it.
 
-    Because the search runs off the request thread, responses must be PARAMETER-driven:
-    a tool reading live geometry (`handle`, `model`, `body`, `"$handle"`) is refused at
-    the door, since FreeCAD's document API is main-thread only. Use `study_submit` for a
-    grid over recipe geometry — it builds every point on the main thread up front.
+    **Shape optimization.** Pass a `recipe` (+ `fixed_inputs`) and it is rebuilt for
+    every candidate, so the search varies GEOMETRY rather than only numbers —
+    `"$handle"` in a response's conditions is that candidate's part, and the returned
+    history carries the handle each point built. Pass `handle` instead to optimize
+    parameters against one fixed part; pass neither and the search is purely parametric.
+
+    Geometry-driven candidates are built on the MAIN thread through the worker's
+    work queue, because FreeCAD's document API is not thread-safe and this search runs
+    as a background job. That queue is drained once per incoming request, so **a shape
+    search only advances while you are polling** `job_status`/`job_result` — the poll
+    you must do anyway is what gives it its turn. Poll at your normal cadence and it
+    simply works; stop polling and it stalls rather than finishing in the background.
+    A candidate whose recipe fails to build is scored out as an infeasible point, not
+    an error. `study_submit` remains the right tool for a FIXED grid over recipe
+    geometry, which needs no queue at all.
 
     Returns {job_id, status}; poll job_result for {ok, proven, stop_reason, best_params,
     best_value, objective: {name, metric, sense, value, band_pct}, constraints: [{name,
@@ -5603,7 +5617,9 @@ def optimize_submit(
     [{i, tier, params, value, score, feasible, cached}], n_evals, n_cached, budget,
     variables, warnings}."""
     params = {"variables": variables, "objective": objective, "tier": tier}
-    for k, v in (("constraints", constraints), ("budget", budget)):
+    for k, v in (("constraints", constraints), ("budget", budget),
+                 ("recipe", recipe), ("fixed_inputs", fixed_inputs),
+                 ("handle", handle)):
         if v is not None:
             params[k] = v
     return _call("optimize_submit", **params)
@@ -7069,7 +7085,11 @@ def job_result(job_id: str, discard: bool = False) -> dict:
 @mcp.tool()
 def job_list() -> dict:
     """List every async job this worker session. Returns {count, jobs:[{job_id,
-    kind, status, elapsed_s}]} in submit order."""
+    kind, status, elapsed_s}]} in submit order, plus main_thread_queue:{queued, ran,
+    failed, drains, pending} — the diagnostic for a shape optimization that looks
+    stuck. Those builds run on the worker's main thread, and that queue is drained
+    once per request: `pending` high with `drains` climbing means the work is slow;
+    `drains` flat means nothing is polling, so nothing is advancing."""
     return _call("job_list")
 
 

@@ -113,6 +113,13 @@ echo "== Async job-registry toys (pure-Python; no FreeCAD) =="
 python3 tests/test_jobs.py
 
 echo
+echo "== Main-thread work queue (#260; pure-Python; no FreeCAD) =="
+# The primitive under adaptive SHAPE search: a background job asking the request loop
+# to run FreeCAD work. The load-bearing test is the failure mode the design accepts —
+# nobody drains the queue -> a loud, correctly-diagnosed timeout, never a silent hang.
+python3 tests/test_mainthread.py
+
+echo
 echo "== Random-vibration toys (Miles; pure-Python; no FreeCAD) =="
 python3 tests/test_vibration.py
 
