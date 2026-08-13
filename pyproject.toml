@@ -40,10 +40,17 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 # Host-side runtime deps. Floors are the OLDEST versions verified to work:
-#   mcp>=1.2   — driftpin/mcp_server.py imports `mcp.server.fastmcp.FastMCP`,
+#   mcp>=1.2,<2 — driftpin/mcp_server.py imports `mcp.server.fastmcp.FastMCP`,
 #                which was first shipped in mcp 1.2.0; 1.0/1.1 lack that module
 #                (empirically confirmed) so an older pin would install and then
-#                fail to boot the MCP server.
+#                fail to boot the MCP server. The <2 CEILING is just as load-
+#                bearing: mcp 2.0.0 restructured the server package and dropped
+#                `mcp.server.fastmcp`, so an unconstrained resolve installs
+#                fine and then `driftpin mcp` dies with ImportError while
+#                ping/doctor still pass (field-reported, issue #277). Raising
+#                the ceiling requires porting mcp_server.py to the 2.x server
+#                API and re-verifying the anyio thread-pool concurrency
+#                contract documented there (issue #167).
 #   Pillow>=10 — render path uses only Image.{fromarray,new,open,convert}
 #                (driftpin/render.py), stable since Pillow 9; 10.0 is a safe
 #                conservative floor with wheels for py3.10–3.13.
@@ -51,7 +58,7 @@ classifiers = [
 #                bound (pip still selects a py3.13-compatible newer numpy where
 #                needed). 1.24 is the conservative floor.
 dependencies = [
-    "mcp>=1.2",
+    "mcp>=1.2,<2",
     "Pillow>=10.0",
     "numpy>=1.24",
 ]
