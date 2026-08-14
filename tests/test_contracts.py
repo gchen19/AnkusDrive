@@ -696,6 +696,39 @@ def test_no_encodingless_text_opens():
     )
 
 
+def test_mcp_dependency_is_ceiling_pinned():
+    """pyproject's mcp dependency must carry a <2 upper bound (issue #277).
+
+    mcp 2.0.0 restructured the server package and dropped `mcp.server.fastmcp`
+    — the exact symbol mcp_server.py imports — so an unconstrained resolve
+    installs cleanly and then `driftpin mcp` dies with ImportError while
+    ping/doctor still pass. The break came from OUTSIDE the repo, so only a
+    declared ceiling (plus this guard that it never regresses) protects a
+    fresh install. Loosen this test only alongside an actual port of
+    mcp_server.py to the 2.x server API.
+    """
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r'^dependencies\s*=\s*\[(.*?)\]', pyproject, re.S | re.M)
+    assert m, "could not locate [project] dependencies list in pyproject.toml"
+    deps = re.findall(r'"([^"]+)"', m.group(1))
+    mcp_deps = [d for d in deps if re.match(r"mcp\s*[<>=~\[]", d) or d == "mcp"]
+    assert len(mcp_deps) == 1, f"expected exactly one mcp dependency, got {mcp_deps}"
+    spec = mcp_deps[0]
+    assert re.search(r"<\s*2", spec), (
+        f'mcp dependency {spec!r} has no "<2" ceiling — mcp 2.x drops '
+        "mcp.server.fastmcp and silently breaks `driftpin mcp` on fresh "
+        "installs (issue #277)"
+    )
+    # The ceiling exists to protect this exact import — if the import ever
+    # changes (2.x port), this line fails and forces the pin to be revisited.
+    mcp_src = MCP.read_text(encoding="utf-8")
+    assert "from mcp.server.fastmcp import FastMCP" in mcp_src, (
+        "mcp_server.py no longer imports mcp.server.fastmcp.FastMCP — "
+        "re-evaluate the <2 ceiling in pyproject.toml (issue #277) and update "
+        "this test"
+    )
+
+
 # --- runner (mirrors tests/test_worker.py) ------------------------------------
 
 def _discover():
