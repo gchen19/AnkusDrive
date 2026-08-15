@@ -34,8 +34,10 @@
 #     tests/test_molding_fill.py  the LIVE interFoam cavity-fill gates in the VM
 #                                 (#193's last checkbox): a fillable cavity reaches the
 #                                 far end, a short shot stalls. The openInjMoldSim
-#                                 (OF7-org) tests inside it still SKIP — that solver is
-#                                 a multi-hour arm64 source build and is not provisioned
+#                                 (OF7-org) tests inside it run too where the VM has the
+#                                 arm64 source build (#276, tools/build_openinjmoldsim.sh
+#                                 + the DRIFTPIN_OPENINJMOLDSIM exports) and SKIP where
+#                                 it doesn't
 #
 #   Add more files as arguments once their in-VM provisioning is validated:
 #
