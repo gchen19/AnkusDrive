@@ -117,7 +117,7 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ dri
 | Full-wave EM | openEMS | ⚠️ source build with brew deps; the `em_gpl` recipe is Linux-only today |
 | DEM (granular) | YADE (GPL) | ⚠️ no macOS build path in this repo — Linux box or container |
 | FSI (preCICE) | OpenFOAM + CalculiX | ✅ **Multipass** (arm64-native Ubuntu VM) — DriftPin runs the apps via `multipass exec`; live coupled solve verified ([#193](https://github.com/gchen19/DriftPin/issues/193), see below). Needs the in-VM `DRIFTPIN_*` exports |
-| Injection-molding fill | openInjMoldSim / interFoam | ✅ **Multipass**, same routing — needs the in-VM exports below. The `interFoam` cavity-fill gates are **live-verified on Apple Silicon** (2026-08-05, in `run_macos_heavy.sh`); `openInjMoldSim` itself is not built here (multi-hour arm64 OF7-org source build) and its tests SKIP |
+| Injection-molding fill | openInjMoldSim / interFoam | ✅ **Multipass**, same routing — needs the in-VM exports below. Both paths **live-verified on Apple Silicon**: the `interFoam` cavity-fill gates (2026-08-05) and `openInjMoldSim` fill/pack/cool itself (2026-08-15, [#276](https://github.com/gchen19/DriftPin/issues/276) — arm64 OF7-org source build via `tools/build_openinjmoldsim.sh`, gcc-11 pin) |
 
 Every absent solver **degrades cleanly** — the family returns `{ok: false, reason, install}`
 rather than crashing — so an incomplete solver set never breaks the server; those tools
@@ -255,7 +255,8 @@ export DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM6
 
 # openInjMoldSim path — build OpenFOAM-7 (.org) + the solver in the VM first:
 #   multipass shell openfoam   →   bash tools/build_openinjmoldsim.sh --build
-export DRIFTPIN_OPENINJMOLDSIM=/home/ubuntu/OpenFOAM/ubuntu-7/platforms/linuxARM64GccDPInt32Opt/bin/openInjMoldSim
+# (.org spells the arm64 platform linuxArm64…, unlike ESI's linuxARM64…)
+export DRIFTPIN_OPENINJMOLDSIM=/home/ubuntu/OpenFOAM/ubuntu-7/platforms/linuxArm64GccDPInt32Opt/bin/openInjMoldSim
 export DRIFTPIN_OPENINJMOLDSIM_BASHRC=/home/ubuntu/OpenFOAM/OpenFOAM-7/etc/bashrc
 ```
 
@@ -272,11 +273,20 @@ reaching the far end, and `test_short_shot_cavity_stalls`, a short shot that doe
 report `SKIP — OpenFOAM not installed`, so they really did solve. The file is now in the
 default `tests/run_macos_heavy.sh` set.
 
-**openInjMoldSim itself is still unverified here.** Its three tests SKIP with
-`openInjMoldSim (OF7-org) not built` — that solver needs a multi-hour parallel
-OpenFOAM-7 `.org` source build, and the 2019 tree is unproven on arm64 (it needed a
-gcc-11 pin even on x86_64 — see docs/WINDOWS.md). The `interFoam` fallback is what runs
-without it, and it is the path gated above.
+**openInjMoldSim is live-verified on Apple Silicon too (2026-08-15,
+[#276](https://github.com/gchen19/DriftPin/issues/276)).** The full OF7-org parallel
+stack built in the VM — `tools/build_openinjmoldsim.sh --build` completes there — and
+all three solver-backed tests run and pass with the two exports above:
+`test_openinjmoldsim_generated_case_fills`,
+`test_openinjmoldsim_fill_pack_cools_and_densifies`, and
+`test_openinjmoldsim_asymmetric_cooling_warps` (30/30 in the file). What arm64 needed,
+now encoded in the build script's `arm64_enable_of7` step: OpenFOAM-7 (2019) predates
+AArch64, so the script synthesizes `linuxArm64Gcc` wmake rules from the tree's own
+`linux64Gcc` (drop `-m64`, add `-mcpu=native` — the exact diff OpenFOAM-8 shipped),
+adds the missing `aarch64` case to `etc/config.sh/settings`, and pins the compiler to
+**gcc-11** (`apt install gcc-11 g++-11`; the 2019 sources are untested against noble's
+gcc-13). With that, the whole tree compiled with zero errors — no source patches — in
+a few hours at `WM_NCOMPPROCS=6` on the 8-core VM.
 
 ### The renderer scripts
 

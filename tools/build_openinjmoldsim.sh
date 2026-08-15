@@ -59,6 +59,52 @@ DRY_RUN=1
 
 say()  { printf '\033[1;36m[oims]\033[0m %s\n' "$*"; }
 plan() { printf '   $ %s\n' "$*"; }
+is_arm64() { case "$(uname -m)" in aarch64|arm64) return 0 ;; *) return 1 ;; esac; }
+
+# --- arm64 (issue #276) ------------------------------------------------------
+# OpenFOAM-7 (2019) predates AArch64: no linuxArm64 wmake rules, and no aarch64
+# case in etc/config.sh/settings — `uname -m` falls through to "Unknown
+# processor" and WM_OPTIONS never forms. OpenFOAM-8 added both. Its
+# linuxArm64Gcc rules are OF-7's own linux64Gcc with exactly two changes
+# (full-diff-verified live, #276): -m64 dropped, -mcpu=native added to c++Opt —
+# so we synthesize them from the local tree instead of fetching OF-8. The
+# compiler is pinned to gcc-11: the 2019 sources are unproven against gcc-13
+# (the noble default), and gcc-11 is what built this tree on x86_64/WSL (#193)
+# and on the Multipass VM (#276).
+arm64_enable_of7() {
+  is_arm64 || return 0
+  local rules="${OF7_DIR}/wmake/rules"
+  if [[ ! -d "${rules}/linuxArm64Gcc" ]]; then
+    say "arm64: synthesizing wmake/rules/linuxArm64Gcc from linux64Gcc (gcc-11 pin)"
+    cp -r "${rules}/linux64Gcc" "${rules}/linuxArm64Gcc"
+    sed -i 's/ -m64//g' "${rules}/linuxArm64Gcc/c" "${rules}/linuxArm64Gcc/c++"
+    sed -i 's/^cc          = gcc$/cc          = gcc-11/' "${rules}/linuxArm64Gcc/c"
+    sed -i 's/^CC          = g++ /CC          = g++-11 /' "${rules}/linuxArm64Gcc/c++"
+    sed -i 's/^c++OPT      = -O3$/c++OPT      = -O3 -mcpu=native/' \
+      "${rules}/linuxArm64Gcc/c++Opt"
+  fi
+  local settings="${OF7_DIR}/etc/config.sh/settings"
+  if ! grep -q 'aarch64' "${settings}"; then
+    say "arm64: adding the aarch64 case to etc/config.sh/settings"
+    # insert before the unknown-processor catch-all (the first 4-space `*)`)
+    awk '
+      /^    \*\)$/ && !done {
+        print "    aarch64)"
+        print "        WM_ARCH=linuxArm64"
+        print "        export WM_COMPILER_LIB_ARCH=64"
+        print "        export WM_CC=gcc-11"
+        print "        export WM_CXX=g++-11"
+        print "        export WM_CFLAGS=-fPIC"
+        print "        export WM_CXXFLAGS='\''-fPIC -std=c++0x'\''"
+        print "        export WM_LDFLAGS="
+        print "        ;;"
+        print ""
+        done = 1
+      }
+      { print }
+    ' "${settings}" > "${settings}.new" && mv "${settings}.new" "${settings}"
+  fi
+}
 
 cat <<EOF
 ============================================================================
@@ -77,6 +123,11 @@ need cmake  "OpenFOAM-7 / ThirdParty build"
 need g++    "C++ compiler"
 need gfortran "scotch / metis"
 need make   "build driver"
+if is_arm64; then
+  # the arm64 path pins the compiler — see arm64_enable_of7 above
+  need gcc-11 "OF-7 arm64 compiler pin (apt: gcc-11 g++-11)"
+  need g++-11 "OF-7 arm64 compiler pin (apt: gcc-11 g++-11)"
+fi
 command -v ccache >/dev/null 2>&1 || echo "   RECOMMENDED: ccache (faster rebuilds)"
 [[ $MISSING == 0 ]] && echo "   ok — core toolchain present" || \
   echo "   install the MISSING tools before --build (apt: build-essential cmake git gfortran)"
@@ -89,6 +140,9 @@ cat <<'PLANEOF'
 PLANEOF
 plan "git clone -b version-${OF7_VERSION} https://github.com/OpenFOAM/OpenFOAM-${OF7_VERSION}.git ${OF7_DIR}"
 plan "git clone -b version-${OF7_VERSION} https://github.com/OpenFOAM/ThirdParty-${OF7_VERSION}.git $HOME/OpenFOAM/ThirdParty-${OF7_VERSION}"
+if is_arm64; then
+  plan "arm64_enable_of7   # synthesize linuxArm64Gcc wmake rules + aarch64 settings case, gcc-11 pin (#276)"
+fi
 plan "source ${OF7_DIR}/etc/bashrc"
 plan "( cd \$WM_THIRD_PARTY_DIR && ./Allwmake -j${JOBS} > log.tp 2>&1 )"
 plan "( cd ${OF7_DIR} && export WM_NCOMPPROCS=${JOBS} && ./Allwmake -j${JOBS} > log.of 2>&1 )"
@@ -139,6 +193,7 @@ if [[ ! -f "${OF7_DIR}/etc/bashrc" ]]; then
   git clone -b "version-${OF7_VERSION}" \
     "https://github.com/OpenFOAM/ThirdParty-${OF7_VERSION}.git" \
     "$HOME/OpenFOAM/ThirdParty-${OF7_VERSION}"
+  arm64_enable_of7
   # OF-7's etc/bashrc reads unguarded vars ($ZSH_NAME) — dies under our set -u —
   # and exits non-zero, which set -e would turn fatal (verified live, #193)
   set +u
@@ -149,6 +204,7 @@ if [[ ! -f "${OF7_DIR}/etc/bashrc" ]]; then
   ( cd "${OF7_DIR}" && ./Allwmake -j"${JOBS}" )
 else
   say "OpenFOAM-${OF7_VERSION} already present at ${OF7_DIR} — reusing"
+  arm64_enable_of7
   set +u
   # shellcheck disable=SC1091
   source "${OF7_DIR}/etc/bashrc" || true
