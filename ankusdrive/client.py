@@ -36,7 +36,19 @@ _DEFAULT_FREECADCMD_CANDIDATES = {
         "/usr/bin/freecadcmd",
         "/usr/local/bin/freecadcmd",
         "/snap/bin/freecad.cmd",
-        # AppImage extractions / manual installs commonly land here.
+        # Extracted AppImage (issue #280). Ubuntu 24.04 dropped FreeCAD from universe
+        # and neither snap nor flatpak works in a container (no snapd, no FUSE), so
+        # `--appimage-extract` is THE install path there — see
+        # scripts/install-freecad-appimage.sh, which unpacks into exactly these
+        # prefixes. Probing the extracted tree directly makes that script's symlink
+        # step optional (and rescues a hand-extracted AppImage nobody symlinked).
+        # The glob also covers version-suffixed prefixes (freecad-1.1.3), newest last.
+        "/opt/freecad/squashfs-root/usr/bin/freecadcmd",
+        "/opt/freecad*/squashfs-root/usr/bin/freecadcmd",
+        os.path.expanduser("~/.local/opt/freecad*/squashfs-root/usr/bin/freecadcmd"),
+        # AppImage extractions / manual installs commonly land here. Stays LAST (=
+        # highest preference, the list is probed in reverse) so adding the prefixes
+        # above cannot demote an install a user already resolved through ~/.local/bin.
         os.path.expanduser("~/.local/bin/freecadcmd"),
     ),
     "Windows": (

@@ -50,6 +50,9 @@
 #
 # USAGE
 #   scripts/install-solvers.sh                  # pip-install permissive wheel extras + print system guidance
+#   scripts/install-solvers.sh freecad          # Linux: FreeCAD ITSELF from the official AppImage
+#                                               # (Ubuntu 24.04 dropped the package — issue #280);
+#                                               # delegates to scripts/install-freecad-appimage.sh
 #   scripts/install-solvers.sh mbd              # just the MBD wheels (PyBullet)
 #   scripts/install-solvers.sh topology optics  # several extras
 #   scripts/install-solvers.sh optics_gpl       # opt-in GPL-3.0 non-sequential engine (KrakenOS)
@@ -415,6 +418,22 @@ build_dem_gpl() {
   ok "YADE installed to $prefix — verify: $prefix/bin/yade --version  (or set ANKUSDRIVE_YADE)"
 }
 
+# --- freecad: the CORE dependency, not a solver (issue #280) -------------------
+# Every other target here provisions an OPTIONAL solver; this one provisions FreeCAD
+# itself, because on Ubuntu 24.04+ there is no package to install (dropped from
+# universe) and snap/flatpak are unusable in a container. The real work — pinned
+# download, checksum, --appimage-extract, symlinks, live verify — lives in its own
+# script so it can also be run standalone before AnkusDrive is even pip-installed.
+install_freecad() {
+  local script="$REPO_ROOT/scripts/install-freecad-appimage.sh"
+  [ -f "$script" ] || die "missing $script (run from a AnkusDrive checkout)"
+  case "$OS" in
+    Linux)  PY="$PY" bash "$script" ;;
+    Darwin) die "on macOS install the FreeCAD .app from https://www.freecad.org/ (drag to /Applications — auto-discovered)" ;;
+    *)      die "on Windows run the FreeCAD installer (C:\\Program Files\\FreeCAD 1.1 is auto-discovered) — see docs/WINDOWS.md" ;;
+  esac
+}
+
 # --- list / status (delegates to ankusdrive.solvers — same probe as the tool) ----
 do_list() {
   printf 'P2 solver discovery (what resolves in %s right now):\n\n' "$PY"
@@ -506,6 +525,7 @@ main() {
                          else systems+=("cfd"); do_all=0; fi ;;
       prusaslicer|prusa) install_prusa_darwin; exit 0 ;;
       multipass|vm)      provision_multipass; exit 0 ;;
+      freecad|core|appimage) install_freecad; exit 0 ;;   # FreeCAD itself (#280)
       *) die "unknown argument: $1 (try --list or --help)" ;;
     esac
     shift
