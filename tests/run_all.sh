@@ -58,6 +58,19 @@ echo "== Packaging: the BUILT wheel/sdist carries every runtime corpus (no FreeC
 python3 tests/test_package_data.py
 
 echo
+echo "== Cross-platform FreeCAD discovery + doctor + the Windows core installer (no FreeCAD) =="
+# Fakes each OS's discovery branch, so the Windows/macOS paths are covered from Linux —
+# including the static contract on scripts/install-core.ps1 and pyproject's Python
+# range (#279), which must fail HERE rather than on a user's first run.
+python3 tests/test_windows_support.py
+
+echo
+echo "== MCP server boots over stdio with FreeCAD unresolved (#279) =="
+# Needs the venv (the `mcp` client SDK); the system python3 has no deps, and the test
+# SKIPs cleanly there rather than failing.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_mcp_boot.py; else python3 tests/test_mcp_boot.py; fi
+
+echo
 echo "== Typed units / quantity layer (pure-Python; no FreeCAD) =="
 python3 tests/test_units.py
 

@@ -46,16 +46,62 @@ ankusdrive ping        # → ping=pong freecad=1.1.1
 ankusdrive doctor      # per-item FreeCAD + solver checklist with the exact fix each
 ```
 
-> **Windows (PowerShell):** the clone path is `py -m venv .venv` then
-> `.venv\Scripts\pip install -e .`, and the resulting entry point is
-> `.venv\Scripts\ankusdrive.exe`. FreeCAD's own `freecadcmd.exe` needs nothing on
-> PATH — AnkusDrive globs `C:\Program Files\FreeCAD *\bin\` automatically. Everything
-> in step 3 works from a stock FreeCAD 1.1 install (verified: core CAD + a
-> CalculiX cantilever solve via the bundled `ccx.exe`).
+> **On Windows, don't follow the block above by hand** — there is one scripted path
+> that does all of it including the MCP registration:
+> [Windows quickstart (PowerShell)](#windows-quickstart-powershell).
 
 The `pipx install ankusdrive` path lights up with the first PyPI release
 (v0.4.0), tracked in [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md); until
 then use the `git+https://…` or clone paths above.
+
+### Windows quickstart (PowerShell)
+
+Windows is a first-class target (core CAD + CalculiX FEM run natively against a stock
+FreeCAD 1.1 install), and the whole core install is one script — venv, pinned
+dependencies, `doctor`, and the MCP registration line with **resolved absolute paths**:
+
+```powershell
+# 1. Install FreeCAD 1.1.x from https://www.freecad.org/ (default C:\Program Files\FreeCAD 1.1).
+#    Nothing needs to go on PATH — AnkusDrive globs the versioned install dir itself.
+
+# 2. Clone and run the core installer. Windows PowerShell 5.1 is enough; no admin needed.
+git clone https://github.com/gchen19/AnkusDrive.git
+cd AnkusDrive
+powershell -ExecutionPolicy Bypass -File scripts\install-core.ps1
+```
+
+That creates `.venv`, installs AnkusDrive with the pins that matter (notably `mcp<2` —
+`mcp` 2.x installs cleanly and then breaks `ankusdrive mcp`), verifies the resolved
+`mcp`/`numpy`/`Pillow`, runs `ankusdrive doctor` + `ankusdrive ping`, completes a real MCP
+stdio handshake, and finally prints your registration block. Useful switches:
+`-Python 'C:\Program Files\Python313\python.exe'` to pick an interpreter,
+`-Extras mbd,fluids` for the pip-wheel solver families, `-Persist` to write the FreeCAD
+path into `%APPDATA%\ankusdrive\config.toml` (MCP hosts launch with a minimal
+environment, so a `$env:` set in your terminal will **not** reach them).
+
+**3. Register it with your MCP host.** The script prints these with your real paths
+filled in — a GUI host doesn't inherit your shell `PATH`, so the absolute path matters:
+
+```powershell
+# Claude Code
+claude mcp add ankusdrive -- C:\Users\you\AnkusDrive\.venv\Scripts\ankusdrive.exe mcp
+
+# Claude Desktop: %APPDATA%\Claude\claude_desktop_config.json
+#   { "mcpServers": { "ankusdrive": {
+#       "command": "C:\\Users\\you\\AnkusDrive\\.venv\\Scripts\\ankusdrive.exe",
+#       "args": ["mcp"] } } }
+```
+
+Then restart the host; you should see the `ankusdrive__*` tools appear.
+
+Supported Python: **3.10 – 3.14** (3.14 verified end-to-end on Windows 11 —
+`pip install`, MCP stdio handshake, and `ankusdrive ping` → `freecad=1.1.1`). The script
+checks your interpreter *before* pip runs, so a too-new CPython says so instead of
+failing inside the resolver.
+
+Optional solvers (SU2, Elmer, PrusaSlicer, WSL-backed OpenFOAM) come afterwards via
+`scripts\install-solvers.ps1`. Full per-solver reality, the test suite, and the WSL2
+route: [`docs/WINDOWS.md`](docs/WINDOWS.md).
 
 ### Telling AnkusDrive where FreeCAD lives
 

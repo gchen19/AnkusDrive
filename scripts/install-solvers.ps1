@@ -37,8 +37,13 @@
   `ankusdrive mcp`, and a downloaded binary must be on PATH or named by its env var. Verify
   with `ankusdrive doctor` (or this script's `list`).
 
+  CORE INSTALL FIRST: this script provisions the OPTIONAL solvers and assumes the venv
+  that runs `ankusdrive mcp` already exists. The venv + pip + doctor + MCP-registration
+  step is scripts\install-core.ps1 (issue #279); the 'core' target below just forwards
+  to it so a user who found only this script isn't stranded.
+
 .PARAMETER Targets
-  Any of: pip su2 prusaslicer elmer wsl all list. Default (no args) = pip + guidance.
+  Any of: core pip su2 prusaslicer elmer wsl all list. Default (no args) = pip + guidance.
 
 .PARAMETER Dir
   Where portable binaries are extracted. Default: %LOCALAPPDATA%\AnkusDrive\solvers.
@@ -48,6 +53,7 @@
   launches (else they are only set for THIS shell and the script prints the setx lines).
 
 .EXAMPLE
+  pwsh scripts\install-solvers.ps1 core                  # -> scripts\install-core.ps1
   pwsh scripts\install-solvers.ps1                       # pip extras + guidance
   pwsh scripts\install-solvers.ps1 su2 prusaslicer -Persist
   pwsh scripts\install-solvers.ps1 list                 # ankusdrive doctor
@@ -76,7 +82,14 @@ $ELMER_URL = 'https://www.nic.funet.fi/pub/sci/physics/elmer/bin/windows/ElmerFE
 
 $venvPy = Join-Path $repo '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPy)) {
-    Write-Warning "No .venv at $venvPy - run 'pwsh tests\setup_local.ps1' first (pip targets need it)."
+    Write-Warning "No .venv at $venvPy - run 'scripts\install-core.ps1' first (pip targets need it)."
+}
+
+function Install-Core {
+    # The core install has its own script (#279) - venv, pinned pip install, doctor, and
+    # the MCP registration block with resolved absolute paths. Forwarded, not duplicated.
+    Write-Host '== core install (venv + pip + doctor + MCP registration) =='
+    & (Join-Path $PSScriptRoot 'install-core.ps1')
 }
 
 function Set-SolverEnv([string]$name, [string]$value) {
@@ -179,6 +192,7 @@ function Show-List {
 $did = $false
 foreach ($t in $Targets) {
     switch ($t.ToLower()) {
+        'core'        { Install-Core; $did = $true }
         'pip'         { Install-Pip; $did = $true }
         'su2'         { Install-SU2; $did = $true }
         'prusaslicer' { Install-Prusa; $did = $true }
@@ -187,7 +201,7 @@ foreach ($t in $Targets) {
         'wsl'         { Install-WslSolvers; $did = $true }
         'all'         { Install-Pip; Install-SU2; Install-Prusa; Install-Elmer; $did = $true }
         'list'        { Show-List; $did = $true }
-        default       { Write-Warning "unknown target '$t' (use: pip su2 prusaslicer elmer wsl all list)" }
+        default       { Write-Warning "unknown target '$t' (use: core pip su2 prusaslicer elmer wsl all list)" }
     }
 }
 if (-not $did) { Install-Pip }
