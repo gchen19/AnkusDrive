@@ -2563,8 +2563,71 @@ def _h_fillet_edges(p):
     return {"handle": h, "volume": fillet.Shape.Volume, "edges": edges}
 
 
+# --- degenerate-subtraction detection (issue #282) ----------------------------
+#
+# A subtraction that returns {handle, volume} and nothing else makes two broken
+# outcomes look exactly like a healthy one: the tool swallowed the base (result
+# volume ~ 0) and the tool never touched the base (result volume == base volume).
+# The design report that filed #282 lost a build to the first: a mis-sized trim
+# cutter "ate the whole part", every later feature operated on nothing, and the
+# agent only found out several stages downstream.
+#
+# Both thresholds are FRACTIONS OF THE BASE VOLUME, deliberately not absolute
+# mm3. AnkusDrive parts run from watch pinions to weldments — four-plus orders of
+# magnitude in mm3 — so any fixed mm3 floor is at once too coarse at the small
+# end (0.001 mm3 is a real feature on a pinion) and finer than OCCT's own
+# volume-integration noise at the large end.
+_CUT_ANNIHILATED_FRAC = 1e-6   # a residual this small is nothing, not a sliver
+_CUT_MISS_FRAC = 1e-9          # re-integrating an untouched solid moves the
+                               # volume by ~1e-12 relative; 1e-9 leaves three
+                               # decades of headroom and still calls a cut that
+                               # took a millionth of the part "nothing"
+
+
+def _degenerate_cut_warnings(base_volume, result_volume, what="cut", warn_on_miss=True):
+    """Warnings for the two degenerate subtraction outcomes (#282), or [].
+    An empty base is not judged: there is no scale to measure the result
+    against. warn_on_miss=False for a caller that ASKED for a no-op cut."""
+    if base_volume <= 0.0:
+        return []
+    if result_volume <= _CUT_ANNIHILATED_FRAC * base_volume:
+        return [
+            f"{what} removed the entire base solid "
+            f"({base_volume:.6g} mm3 -> {result_volume:.6g} mm3): the tool "
+            f"fully contains the base, so every later feature operates on "
+            f"nothing. Check the tool's size and placement."
+        ]
+    if warn_on_miss and abs(base_volume - result_volume) <= _CUT_MISS_FRAC * base_volume:
+        return [
+            f"tool does not intersect base; {what} removed nothing "
+            f"(volume unchanged at {result_volume:.6g} mm3). Check the tool's "
+            f"placement — the result is a copy of the base."
+        ]
+    return []
+
+
 @handler("boolean_op")
 def _h_boolean_op(p):
+    """Boolean of two shaped objects. op: 'cut' (base minus tool) | 'fuse' |
+    'common'. base, tool: handles.
+
+    Returns {handle, volume, removed_volume, volume_ratio}, plus `warnings` —
+    a list of strings — ONLY when the result looks degenerate. The key is
+    absent on a clean op, so `"warnings" in result` is the test.
+      removed_volume: base_volume - result_volume, mm3. Positive means material
+        went away (always so for cut/common); NEGATIVE on a fuse, where it is
+        the volume the tool added.
+      volume_ratio: result_volume / base_volume, or None when the base was empty.
+    Warnings are cut-only, and each means the cut did not do what was asked:
+      annihilation - result ~ 0: the tool fully contains the base, so every
+        subsequent feature would operate on an empty shape.
+      miss - result == base: the tool never intersected the base, so the cut
+        removed nothing at all.
+    Default is warn, not fail: cutting everything away is legitimate in some
+    workflows (interference subtraction checks). strict=True (default False)
+    upgrades both cases to a RuntimeError for scripted/recipe use — the boolean
+    object is still created, so the document keeps the degenerate result for
+    inspection."""
     doc = App.ActiveDocument
     op = p["op"]
     type_map = {"cut": "Part::Cut", "fuse": "Part::Fuse", "common": "Part::Common"}
@@ -2572,6 +2635,10 @@ def _h_boolean_op(p):
         raise ValueError(f"unknown boolean op: {op!r}")
     base = _resolve(p["base"])
     tool = _resolve(p["tool"])
+    # Read the base volume BEFORE the boolean consumes it as Cut.Base (#282):
+    # the operand keeps a valid Shape either way, but measuring first makes the
+    # comparison independent of how FreeCAD reparents the operands.
+    base_volume = _body_volume(base)
     obj = doc.addObject(type_map[op], op.capitalize())
     obj.Base = base
     obj.Tool = tool
@@ -2586,7 +2653,25 @@ def _h_boolean_op(p):
     # time, so there is nothing to record here.
     if op == "cut" and p["base"] in _sheet_models:
         _sheet_models[h] = _sheet_models[p["base"]]
-    return {"handle": h, "volume": obj.Shape.Volume}
+    # An annihilated cut leaves a null/empty shape whose .Volume is not safe to
+    # read directly — _body_volume reports 0.0 for it (#282).
+    volume = _body_volume(obj)
+    out = {
+        "handle": h,
+        "volume": volume,
+        # Reported for all three ops, so the sanity number an agent needs is
+        # already in the reply rather than a second round-trip away (#282).
+        "removed_volume": base_volume - volume,
+        "volume_ratio": (volume / base_volume) if base_volume > 0 else None,
+    }
+    # Only `cut` can annihilate or miss: a fuse never shrinks the base, and an
+    # empty `common` is the expected answer for the clearance checks that use it.
+    warnings = _degenerate_cut_warnings(base_volume, volume) if op == "cut" else []
+    if warnings:
+        if p.get("strict"):
+            raise RuntimeError("; ".join(warnings) + " [strict=True]")
+        out["warnings"] = warnings
+    return out
 
 
 def _content_bbox(doc):
@@ -3313,6 +3398,26 @@ def _h_pad(p):
     return {"handle": h, "name": pad.Name, "volume": pad.Shape.Volume}
 
 
+def _annotate_subtractive(out, base_volume, direction, what):
+    """Add removed_volume / volume_ratio (and `warnings` when degenerate) to a
+    PartDesign subtractive feature's payload — the same interpretation
+    boolean_op's cut branch gained in #282, for the same reason: `volume` alone
+    cannot distinguish a healthy cut from one that removed everything or
+    nothing.
+
+    `direction='away_from_body'` is an explicit request for a feature that
+    removes no material, so the miss warning would be noise there, not news."""
+    volume = out["volume"]
+    out["removed_volume"] = base_volume - volume
+    out["volume_ratio"] = (volume / base_volume) if base_volume > 0 else None
+    warnings = _degenerate_cut_warnings(
+        base_volume, volume, what, warn_on_miss=(direction != "away_from_body"),
+    )
+    if warnings:
+        out["warnings"] = warnings
+    return out
+
+
 @handler("pocket")
 def _h_pocket(p):
     """Pocket (subtract) a sketch from the body. through_all=True ignores length.
@@ -3326,9 +3431,22 @@ def _h_pocket(p):
     first exit boundary so the cut emerges cleanly through one wall (correct
     for both solids and shelled bodies — on a solid, wall = full thickness).
     'body' is the legacy ThroughAll behavior, which on a shelled body destroys
-    the cavity by cutting through every wall. Implies direction='into_body'."""
+    the cavity by cutting through every wall. Implies direction='into_body'.
+
+    Returns {handle, name, volume, removed_volume, volume_ratio} (+ through,
+    wall_depth_mm when `through` was used), where volume is the WHOLE body
+    after the pocket, removed_volume is body-volume-before minus that, and
+    volume_ratio is after/before. `warnings` (list of strings) appears only
+    when the pocket removed the entire body or removed nothing at all — the
+    key is absent otherwise, and it is never raised (see boolean_op for the
+    same pair of degenerate outcomes, #282). A pocket asked for with
+    direction='away_from_body' is meant to remove nothing, so it is not
+    warned about."""
     doc = _active_doc()
     sketch = _resolve_sketch(p["sketch"])
+    # Measure the body BEFORE the feature joins it (#282), so "removed nothing"
+    # and "removed everything" are answerable from the payload.
+    body_volume = _body_volume(_body_of(sketch))
     pocket = doc.addObject("PartDesign::Pocket", p.get("name", "Pocket"))
     pocket.Profile = sketch
     body = _add_to_body_of_sketch(sketch, pocket)
@@ -3343,10 +3461,10 @@ def _h_pocket(p):
         wall_depth = _apply_through(pocket, body, sketch, through)
         _orient_subtractive(pocket, body, "into_body")
         h = _register("pocket", pocket)
-        return {
-            "handle": h, "name": pocket.Name, "volume": pocket.Shape.Volume,
+        return _annotate_subtractive({
+            "handle": h, "name": pocket.Name, "volume": _body_volume(pocket),
             "through": through, "wall_depth_mm": wall_depth,
-        }
+        }, body_volume, "into_body", "pocket")
 
     if p.get("through_all"):
         pocket.Type = 1  # ThroughAll
@@ -3359,7 +3477,10 @@ def _h_pocket(p):
         pocket.Reversed = bool(p.get("reversed", False))
         doc.recompute()
     h = _register("pocket", pocket)
-    return {"handle": h, "name": pocket.Name, "volume": pocket.Shape.Volume}
+    return _annotate_subtractive(
+        {"handle": h, "name": pocket.Name, "volume": _body_volume(pocket)},
+        body_volume, direction, "pocket",
+    )
 
 
 @handler("revolve")
@@ -3593,10 +3714,21 @@ def _h_hole(p):
     depth_type/depth. 'wall' ray-casts to the first exit boundary so the hole
     emerges through exactly one wall — essential on shelled bodies where
     'body' (ThroughAll) would punch through every wall and destroy the cavity.
-    Implies direction='into_body'."""
+    Implies direction='into_body'.
+
+    Returns {handle, name, volume, removed_volume, volume_ratio} (+ through,
+    wall_depth_mm when `through` was used), where volume is the WHOLE body
+    after the hole, removed_volume is body-volume-before minus that, and
+    volume_ratio is after/before. `warnings` (list of strings) appears only
+    when the hole consumed the entire body or removed nothing at all — the key
+    is absent otherwise, and it is never raised (same degenerate pair as
+    boolean_op's cut, #282). A hole asked for with direction='away_from_body'
+    is meant to remove nothing, so it is not warned about."""
     doc = _active_doc()
     sketch = _resolve_sketch(p["sketch"])
     body = _body_of(sketch)
+    # Measure the body BEFORE the feature joins it (#282).
+    body_volume = _body_volume(body)
 
     intended_for = p.get("intended_for")
     if intended_for is not None and intended_for not in _INTENDED_FOR:
@@ -3657,10 +3789,10 @@ def _h_hole(p):
         wall_depth = _apply_through(hole, body, sketch, through)
         _orient_subtractive(hole, body, "into_body")
         h = _register("hole", hole)
-        return {
-            "handle": h, "name": hole.Name, "volume": hole.Shape.Volume,
+        return _annotate_subtractive({
+            "handle": h, "name": hole.Name, "volume": _body_volume(hole),
             "through": through, "wall_depth_mm": wall_depth,
-        }
+        }, body_volume, "into_body", "hole")
 
     direction = p.get("direction")
     if direction is not None:
@@ -3669,7 +3801,10 @@ def _h_hole(p):
         hole.Reversed = bool(p.get("reversed", False))
         doc.recompute()
     h = _register("hole", hole)
-    return {"handle": h, "name": hole.Name, "volume": hole.Shape.Volume}
+    return _annotate_subtractive(
+        {"handle": h, "name": hole.Name, "volume": _body_volume(hole)},
+        body_volume, direction, "hole",
+    )
 
 
 @handler("linear_pattern")

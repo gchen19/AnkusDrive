@@ -1820,14 +1820,28 @@ def fillet_edges(handle: str, edges: list, radius: float = 1.0) -> dict:
 
 
 @mcp.tool()
-def boolean_op(op: str, base: str, tool: str) -> dict:
+def boolean_op(op: str, base: str, tool: str, strict: bool = False) -> dict:
     """Boolean operation on two existing objects, referenced by their handles.
 
     op: 'cut' (base minus tool), 'fuse' (union), or 'common' (intersection).
     base, tool: handles returned from add_primitive (e.g. 'box_1', 'cylinder_1').
-    Returns {handle, volume}.
+    strict: raise instead of warning on a degenerate cut (see below).
+
+    Returns {handle, volume, removed_volume, volume_ratio}, plus `warnings` —
+    a list of strings — ONLY when the cut looks degenerate; the key is absent
+    on a clean op, so `"warnings" in result` is the test.
+      removed_volume: base_volume - result_volume, mm3. Positive means material
+        went away (always so for cut/common); NEGATIVE on a fuse, where it is
+        the volume the tool added.
+      volume_ratio: result_volume / base_volume, or None when the base was empty.
+    The two warned cases are cut-only, and each means the cut did not do what
+    was asked: annihilation (result ~ 0 — the tool swallowed the base, so every
+    later feature operates on nothing) and miss (result == base — the tool never
+    intersected the base, so nothing was removed). Warn-don't-fail is the
+    default because cutting everything away is legitimate in some workflows;
+    pass strict=True in a scripted recipe to turn both into an error instead.
     """
-    return _call("boolean_op", op=op, base=base, tool=tool)
+    return _call("boolean_op", op=op, base=base, tool=tool, strict=strict)
 
 
 @mcp.tool()
