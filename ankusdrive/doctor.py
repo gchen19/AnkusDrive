@@ -10,13 +10,21 @@ reuses ``client._resolve_freecadcmd()``. A FreeCAD *boot* is attempted only to r
 back the version, is time-boxed, and degrades to "resolved but unverified" — so
 ``doctor`` still produces a report on a box where FreeCAD is installed but broken.
 
+The MCP half (issue #278) is the same discipline applied to the thing this install
+exists for: it imports the server module for real and, on request, spawns
+``ankusdrive mcp`` over stdio for one initialize+ping round-trip.
+
 Consumed by the CLI (``cmd_doctor``); returns plain dicts so it can also back an
 agent-guided setup surface (issue #196) and ``--json`` for CI preflight.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import platform
+import sys
+import tempfile
+import time
 
 from . import solvers
 from .client import (
@@ -28,14 +36,14 @@ from .client import (
 
 def _freecad_fix_hint() -> str:
     """OS-specific guidance when FreeCAD does not resolve."""
-    sys = platform.system()
-    if sys == "Windows":
+    system = platform.system()
+    if system == "Windows":
         return (
             "install FreeCAD 1.1.x from https://www.freecad.org/ (default lands in "
             r"'C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe'); if installed to a "
             "non-standard location set ANKUSDRIVE_FREECADCMD to the freecadcmd.exe path."
         )
-    if sys == "Darwin":
+    if system == "Darwin":
         return (
             "install FreeCAD 1.1.x from https://www.freecad.org/ (drag to "
             "/Applications); for a non-standard location set ANKUSDRIVE_FREECADCMD to the "
@@ -122,14 +130,233 @@ def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> di
     return report
 
 
-def build_report(probe_version: bool = True) -> dict:
-    """Full doctor payload: platform, FreeCAD, and the solver capabilities dict."""
+def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
+    """Full doctor payload: platform, FreeCAD, config, MCP, and solver capabilities.
+
+    ``mcp_serve`` opts into the deeper MCP probe (spawn the server over stdio). It
+    defaults OFF because the MCP server's own ``setup_status`` tool calls this
+    function — a default-on probe would have the server spawn a copy of itself on
+    every status call (issue #278). The CLI passes it explicitly."""
     return {
         "platform": {"system": platform.system(), "machine": platform.machine()},
         "freecad": freecad_report(probe_version=probe_version),
         "config": config_report(),
+        "mcp": mcp_report(serve=mcp_serve),
         "solvers": solvers.capabilities(),
     }
+
+
+# --- MCP server preflight (issue #278) -----------------------------------------
+#
+# A field install had `ankusdrive ping` and `ankusdrive doctor` both passing while
+# `ankusdrive mcp` was dead on arrival: mcp 2.0.0 dropped `mcp.server.fastmcp`
+# (issue #277) and nothing on the CLI path ever imports the `mcp` package, so
+# doctor certified an install whose entire reason for existing — serving the tools
+# to an LLM client — did not work. These probes report that absence instead of
+# filling it in by omission.
+
+# Printed verbatim as the remediation. It is the pyproject pin: the floor is where
+# `mcp.server.fastmcp` first shipped, the ceiling is where it was removed.
+MCP_PIN_FIX = 'pip install "mcp>=1.2,<2"'
+
+# The interpreter window AnkusDrive's dependency set is verified on: the floor is
+# pyproject's requires-python, the ceiling is its newest Programming Language
+# classifier. requires-python carries NO ceiling, so pip happily installs on a
+# newer interpreter and then a dependency with no wheels for it breaks — which is
+# how the field reporter (Python 3.14) got a doctor pass and a dead MCP server.
+_PY_MIN = (3, 10)
+_PY_MAX_TESTED = (3, 13)
+
+
+def python_report(version_info=None, version_text: str | None = None) -> dict:
+    """The interpreter doctor is running under, and whether the dependency set has
+    wheels for it.
+
+    Returns ``{version, version_short, supported, warning?, fix?}``. Both arguments
+    exist so the out-of-window branches are testable without a second interpreter;
+    they default to this process's ``sys``. Reads ``sys`` only, never ``platform``
+    — the doctor tests patch ``doctor.platform`` with a two-method stub."""
+    info = tuple(version_info if version_info is not None else sys.version_info)[:3]
+    text = version_text if version_text is not None else sys.version
+    short = ".".join(str(p) for p in info)
+    window = f"{'.'.join(map(str, _PY_MIN))}-{'.'.join(map(str, _PY_MAX_TESTED))}"
+    rep = {
+        "version": " ".join(text.split()),
+        "version_short": short,
+        "supported": _PY_MIN <= info[:2] <= _PY_MAX_TESTED,
+    }
+    if info[:2] < _PY_MIN:
+        rep["warning"] = (f"Python {short} is below AnkusDrive's floor ({window}): "
+                          "the host package will not install here")
+        rep["fix"] = f"run AnkusDrive under a Python {window} interpreter"
+    elif info[:2] > _PY_MAX_TESTED:
+        rep["warning"] = (
+            f"Python {short} is newer than anything AnkusDrive is verified on "
+            f"({window}), and requires-python has no ceiling to stop the install: "
+            "mcp/Pillow/numpy may have no wheels for it, so the resolve succeeds "
+            "and the MCP server still fails to import")
+        rep["fix"] = (f"run AnkusDrive under a Python {window} interpreter "
+                      "(e.g. `py -3.13 -m venv .venv` on Windows)")
+    return rep
+
+
+def _installed_mcp_version() -> str | None:
+    """Version of the installed ``mcp`` distribution, or None when it isn't
+    installed. Read from the distribution metadata rather than the module, so the
+    version is still reported when importing the package's server half fails."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        return version("mcp")
+    except PackageNotFoundError:
+        return None
+    except Exception:  # noqa: BLE001 — doctor must never crash on metadata oddities
+        return None
+
+
+def mcp_import_report() -> dict:
+    """Import ``ankusdrive.mcp_server`` in this process, exactly as ``ankusdrive mcp``
+    does.
+
+    Returns ``{available, package_version, error?, fix?}``. ``available`` is True
+    only when the server module (and therefore ``mcp.server.fastmcp``) imported;
+    otherwise ``error`` carries the exception text and ``fix`` the pin."""
+    rep: dict = {"available": False, "package_version": _installed_mcp_version()}
+    try:
+        importlib.import_module("ankusdrive.mcp_server")
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as e:  # noqa: BLE001 — a broken dep is reported, never raised
+        rep["error"] = f"{type(e).__name__}: {e}"
+        rep["fix"] = (
+            MCP_PIN_FIX if rep["package_version"]
+            else f"{MCP_PIN_FIX}   (no mcp distribution found in this interpreter)"
+        )
+        return rep
+    rep["available"] = True
+    return rep
+
+
+def _exc_text(e: BaseException) -> str:
+    """One line naming what actually failed. anyio surfaces a dead stdio server as an
+    ExceptionGroup whose own message names no cause ("unhandled errors in a
+    TaskGroup"), so groups are flattened to their leaves."""
+    subs = getattr(e, "exceptions", None)
+    if subs:
+        return "; ".join(_exc_text(sub) for sub in subs) or f"{type(e).__name__}: {e}"
+    return f"{type(e).__name__}: {e}"
+
+
+def _tail(fh, lines: int = 6) -> str:
+    """Last few lines a spawned server wrote to stderr — the child's own account of
+    why it died. Best-effort: an unreadable capture file must not break the report."""
+    try:
+        fh.seek(0)
+        text = fh.read()
+    except Exception:  # noqa: BLE001 — doctor must never crash on a capture file
+        return ""
+    kept = [ln for ln in text.splitlines() if ln.strip()][-lines:]
+    return "\n".join(kept)
+
+
+def mcp_serve_report(timeout: float = 60.0, argv: list[str] | None = None) -> dict:
+    """Spawn ``ankusdrive mcp`` over stdio and drive one initialize + ping round-trip.
+
+    Same harness as tests/test_mcp.py (stdio_client + ClientSession), cut down to the
+    calls that prove the server serves. Returns
+    ``{checked, ok, boot_s?, ping_s?, tools?, server?, error?, fix?}``; every failure
+    mode — no mcp SDK, a server that dies on boot, a hang — degrades to a reported
+    state inside ``timeout`` rather than raising.
+
+    ``argv`` overrides the launched command (default: this interpreter running
+    ``-m ankusdrive mcp``). It exists so the dead-server path can be exercised against
+    a stub instead of by breaking a real install."""
+    rep: dict = {"checked": True, "ok": False}
+    # The server logs to stderr and, when it dies, prints the reason there — so the
+    # child's stderr goes to a file rather than the user's terminal: silent on
+    # success, quoted back as the diagnosis on failure.
+    errlog = tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace")
+    cmd = argv or [sys.executable, "-m", "ankusdrive", "mcp"]
+    try:
+        import asyncio
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        # Launch the way an MCP host does: this interpreter, `-m ankusdrive mcp`. cwd is
+        # the package's parent so a source checkout resolves the module too, and env is
+        # left to the SDK's minimal default — the same stripped environment a host
+        # hands the server, which is what the config layer (issue #199) exists to
+        # survive.
+        params = StdioServerParameters(
+            command=cmd[0],
+            args=cmd[1:],
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        )
+
+        # errlog has been in the SDK's signature for a long time, but a pinned floor
+        # of mcp 1.2 is not a guarantee — falling back keeps an old SDK reporting the
+        # round-trip instead of a bogus TypeError.
+        try:
+            transport = stdio_client(params, errlog=errlog)
+        except TypeError:
+            transport = stdio_client(params)
+
+        async def _probe() -> dict:
+            t0 = time.monotonic()
+            async with transport as (read, write):
+                async with ClientSession(read, write) as session:
+                    init = await session.initialize()
+                    out = {"boot_s": round(time.monotonic() - t0, 2)}
+                    # Protocol ping, NOT the `ping` TOOL: the tool boots freecadcmd,
+                    # which the FreeCAD section already reports. This line answers one
+                    # question — is the server serving — and nothing else. Guarded
+                    # because send_ping is not in every supported SDK version.
+                    send_ping = getattr(session, "send_ping", None)
+                    if send_ping is not None:
+                        t1 = time.monotonic()
+                        await send_ping()
+                        out["ping_s"] = round(time.monotonic() - t1, 2)
+                    out["tools"] = len((await session.list_tools()).tools)
+                    out["server"] = getattr(init.serverInfo, "name", None)
+                    return out
+
+        async def _timeboxed() -> dict:
+            return await asyncio.wait_for(_probe(), timeout)
+
+        rep.update(asyncio.run(_timeboxed()))
+        rep["ok"] = True
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as e:  # noqa: BLE001 — anyio surfaces cancellation as groups
+        rep["error"] = _exc_text(e)
+        stderr = _tail(errlog)
+        if stderr:
+            rep["stderr"] = stderr
+        # Collapse whitespace: the command is echoed for the user to paste back.
+        shown = " ".join(" ".join(cmd).split())
+        rep["fix"] = (f"reproduce with `{shown}`; if the server dies on an mcp "
+                      f"import: {MCP_PIN_FIX}")
+    finally:
+        errlog.close()
+    return rep
+
+
+def mcp_report(serve: bool = False, timeout: float = 60.0) -> dict:
+    """The MCP half of the report: interpreter, server import, and — when ``serve``
+    — a live initialize+ping round-trip.
+
+    Returns ``{python, import, serve}``. The serve probe is skipped, with the reason
+    recorded, when not requested or when the import already failed: spawning a server
+    that cannot import only reproduces the same traceback more slowly."""
+    imp = mcp_import_report()
+    if not serve:
+        srv = {"checked": False, "ok": False, "reason": "not requested"}
+    elif not imp["available"]:
+        srv = {"checked": False, "ok": False,
+               "reason": "skipped — the MCP server module does not import"}
+    else:
+        srv = mcp_serve_report(timeout=timeout)
+    return {"python": python_report(), "import": imp, "serve": srv}
 
 
 # --- human-readable rendering --------------------------------------------------
@@ -216,6 +443,48 @@ def _fmt_solvers(caps: dict) -> list[str]:
     return lines
 
 
+def _fmt_mcp(mcp: dict) -> list[str]:
+    """The MCP section: interpreter, server import, served ping. The interpreter line
+    lives here because that is what it decides — the field failure was an interpreter
+    (3.14) with no wheels for the dependency set, reported as a doctor pass."""
+    lines = []
+    py = mcp["python"]
+    # sys.version already leads with the number, so it is not repeated here.
+    if py["supported"]:
+        lines.append(f"{_MARK['ok']} python {py['version']}")
+    else:
+        lines.append(f"{_MARK['unwired']} python {py['version']}")
+        lines.append(f"        {py['warning']}")
+        lines.append(f"        fix:   {py['fix']}")
+
+    imp = mcp["import"]
+    ver = imp.get("package_version")
+    if imp["available"]:
+        lines.append(f"{_MARK['ok']} mcp {ver or '(version unknown)'}  "
+                     "ankusdrive.mcp_server imports")
+    else:
+        installed = f"mcp {ver} installed" if ver else "mcp not installed"
+        lines.append(f"{_MARK['missing']} MCP server will not start ({installed})")
+        lines.append(f"        {imp['error']}")
+        lines.append(f"        fix:   {imp['fix']}")
+
+    srv = mcp["serve"]
+    if srv["ok"]:
+        ping = f", ping {srv['ping_s']:.2f}s" if srv.get("ping_s") is not None else ""
+        lines.append(f"{_MARK['ok']} served    initialize {srv['boot_s']:.2f}s{ping}, "
+                     f"{srv['tools']} tools over stdio")
+    elif srv["checked"]:
+        lines.append(f"{_MARK['missing']} `ankusdrive mcp` did not serve")
+        lines.append(f"        {srv['error']}")
+        # The child's own last words beat any guess we could print here.
+        for ln in srv.get("stderr", "").splitlines():
+            lines.append(f"        stderr: {ln}")
+        lines.append(f"        fix:   {srv['fix']}")
+    else:
+        lines.append(f"{_MARK['absent']} served    not checked ({srv['reason']})")
+    return lines
+
+
 def render(report: dict) -> str:
     """Render the report dict as a human-readable checklist."""
     plat = report["platform"]
@@ -236,6 +505,11 @@ def render(report: dict) -> str:
                        "to ANKUSDRIVE_*; removed in 0.6." %
                        (len(cfg["legacy_env"]), ", ".join(cfg["legacy_env"])))
     out.append("")
+    mcp = report.get("mcp")
+    if mcp:
+        out.append("MCP server:")
+        out += _fmt_mcp(mcp)
+        out.append("")
     out.append("Solver families:")
     out += _fmt_solvers(caps)
     out.append("")
