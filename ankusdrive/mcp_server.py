@@ -641,7 +641,8 @@ def oring_groove(
 
 @mcp.tool()
 def chamfer_edges(
-    handle: str, edges: list, size: float = 1.0, name: str = "Chamfer"
+    handle: str, edges: list, size: float = 1.0, name: str = "Chamfer",
+    per_edge: bool = False, allow_partial: bool = False,
 ) -> dict:
     """Chamfer (bevel) specific edges of a shaped Part object — the direct-shape
     counterpart to fillet_edges.
@@ -653,13 +654,23 @@ def chamfer_edges(
     size: symmetric chamfer leg distance in mm (applied equally to both faces
         meeting at the edge, i.e. dist1 = dist2 = size). Must be > 0. Default 1.0.
     name: label for the resulting feature object. Default 'Chamfer'.
+    per_edge: add the edges one at a time, validating after each, instead of in
+        a single apply. Slower; for geometry known to be blend-hostile.
+    allow_partial: accept a partial result instead of aborting. Off by default.
 
-    The base object is hidden (consumed into the chamfer feature). Returns
-    {handle, name, volume, edges} where volume is the resulting Shape volume in
-    mm^3 and edges is the list of resolved 1-based edge indices that were
-    chamfered.
+    The base object is hidden (consumed into the chamfer feature). Validated
+    exactly like fillet_edges (issue #283) — Shape.isValid(), unchanged solid
+    count, no growth of the tight bounding box — before a handle is issued.
+
+    Returns {handle, name, volume (mm^3), edges (resolved 1-based indices
+    actually chamfered), checks {valid, solids, envelope_ok,
+    envelope_growth_mm, envelope_tol_mm}, mode ('batch' | 'per_edge'), partial};
+    when partial is True, also skipped_edges and a warnings entry. On a failed
+    check the feature is removed from the document and BlendCheckFailed is
+    raised naming the offending edges — never a handle to corrupt geometry.
     """
-    params = {"handle": handle, "edges": edges, "size": size, "name": name}
+    params = {"handle": handle, "edges": edges, "size": size, "name": name,
+              "per_edge": per_edge, "allow_partial": allow_partial}
     return _call("chamfer_edges", **params)
 
 
@@ -1405,23 +1416,52 @@ def revolve(
 @mcp.tool()
 def partdesign_fillet(
     feature: str, edges: list, radius: float = 1.0, name: str = "PdFillet",
+    per_edge: bool = False, allow_partial: bool = False,
 ) -> dict:
-    """PartDesign Fillet on edges of a feature in a Body. edges accepts tags
-    or 'EdgeN' index strings."""
+    """PartDesign Fillet on edges of a feature in a Body. `edges` accepts e_*
+    tags or 'EdgeN' index strings; `radius` in mm (> 0).
+
+    Validated before a handle is issued, like fillet_edges (issue #283):
+    Shape.isValid(), unchanged solid count, and no growth of the tight bounding
+    box. PartDesign needs it as badly as the Part workbench — r=0.6 on a
+    40x40x1 pad returns an 'Up-to-date' single solid 15% LARGER than the pad.
+
+    per_edge: add the edges one at a time, validating after each.
+    allow_partial: accept a partial result instead of aborting. Off by default.
+
+    Returns {handle, name, volume (mm^3), edges (the 'EdgeN' names actually
+    filleted), checks {valid, solids, envelope_ok, envelope_growth_mm,
+    envelope_tol_mm}, mode ('batch' | 'per_edge'), partial}; when partial is
+    True, also skipped_edges and a warnings entry. On a failed check the feature
+    is removed, the Body's Tip is restored, and BlendCheckFailed is raised
+    naming the offending edges and the subset that does fillet cleanly.
+    """
     return _call(
         "partdesign_fillet", feature=feature, edges=edges,
-        radius=radius, name=name,
+        radius=radius, name=name, per_edge=per_edge, allow_partial=allow_partial,
     )
 
 
 @mcp.tool()
 def partdesign_chamfer(
     feature: str, edges: list, size: float = 1.0, name: str = "PdChamfer",
+    per_edge: bool = False, allow_partial: bool = False,
 ) -> dict:
-    """PartDesign Chamfer on edges of a feature in a Body."""
+    """PartDesign Chamfer on edges of a feature in a Body. `edges` accepts e_*
+    tags or 'EdgeN' index strings; `size` is the chamfer leg in mm (> 0).
+
+    Validated and rolled back on failure exactly like partdesign_fillet (issue
+    #283), with the same per_edge / allow_partial opt-ins.
+
+    Returns {handle, name, volume (mm^3), edges (the 'EdgeN' names actually
+    chamfered), checks {valid, solids, envelope_ok, envelope_growth_mm,
+    envelope_tol_mm}, mode, partial}; when partial is True, also skipped_edges
+    and a warnings entry. On a failed check the feature is removed, the Body's
+    Tip is restored, and BlendCheckFailed is raised naming the offending edges.
+    """
     return _call(
         "partdesign_chamfer", feature=feature, edges=edges,
-        size=size, name=name,
+        size=size, name=name, per_edge=per_edge, allow_partial=allow_partial,
     )
 
 
@@ -1811,12 +1851,40 @@ def set_visibility(handle: str, visible: bool) -> dict:
 
 
 @mcp.tool()
-def fillet_edges(handle: str, edges: list, radius: float = 1.0) -> dict:
-    """Fillet edges of a shaped object. `edges` accepts tags (e_...) or 'EdgeN' strings.
+def fillet_edges(
+    handle: str, edges: list, radius: float = 1.0,
+    per_edge: bool = False, allow_partial: bool = False,
+) -> dict:
+    """Fillet edges of a shaped Part object. `edges` accepts tags (e_... from
+    list_edges, preferred), 'EdgeN' strings, or bare 1-based ints. `radius` is
+    the blend radius in mm (> 0).
 
-    Returns {handle, volume, edges} for the new fillet feature.
+    Every result is validated before a handle comes back (issue #283): this OCC
+    build's fillet is edge- and order-sensitive enough to produce corrupt
+    geometry with no exception at all — a 20 mm cube filleted on all 12 edges at
+    r=11 returns one solid with a LARGER volume and a 13 mm larger bounding box.
+    The checks are Shape.isValid(), an unchanged solid count, and no growth of
+    the tight bounding box (a fillet only removes or holds the envelope).
+
+    per_edge: skip the single-shot apply and add the edges one at a time,
+        validating after each. Slower (one recompute per edge); for geometry
+        already known to be blend-hostile.
+    allow_partial: accept a partial result instead of aborting. Off by default.
+
+    Returns {handle, name, volume (mm^3), edges (the 1-based indices actually
+    filleted), checks {valid, solids, envelope_ok, envelope_growth_mm,
+    envelope_tol_mm}, mode ('batch' | 'per_edge'), partial}. When partial is
+    True the reply also carries skipped_edges and a warnings entry saying the
+    solid is NOT the part that was asked for.
+
+    On failure the handler retries per edge to find the culprits, removes the
+    failed feature from the document and raises BlendCheckFailed naming the
+    offending edges and the subset that does fillet cleanly. It never returns a
+    handle to corrupt geometry, and never quietly drops a fillet unless
+    allow_partial was asked for.
     """
-    return _call("fillet_edges", handle=handle, edges=edges, radius=radius)
+    return _call("fillet_edges", handle=handle, edges=edges, radius=radius,
+                 per_edge=per_edge, allow_partial=allow_partial)
 
 
 @mcp.tool()
