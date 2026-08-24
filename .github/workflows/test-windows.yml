@@ -133,8 +133,14 @@ jobs:
       - name: Entry point + doctor --json are well-formed without FreeCAD
         run: |
           $venv = "$env:RUNNER_TEMP\core-venv"
-          & "$venv\Scripts\ankusdrive.exe" --help | Select-Object -First 3
+          # Collect the output FIRST, then test $LASTEXITCODE. Piping a native
+          # command straight into `Select-Object -First N` makes PowerShell tear the
+          # pipeline down as soon as N lines arrive, and the half-read process comes
+          # back with a nonzero exit code -- so the pretty one-liner reports a broken
+          # entry point on a `--help` that printed its usage perfectly well.
+          $help = & "$venv\Scripts\ankusdrive.exe" --help 2>&1
           if ($LASTEXITCODE -ne 0) { throw 'the ankusdrive.exe entry point does not run' }
+          $help | Select-Object -First 3 | Write-Host
           # doctor exits nonzero here BY DESIGN (FreeCAD is unresolved on a hosted
           # runner), so gate on the report's shape, not the exit code.
           $json = & "$venv\Scripts\python.exe" -m ankusdrive doctor --json 2>$null | Out-String
