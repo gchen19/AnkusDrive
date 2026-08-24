@@ -277,6 +277,28 @@ def test_install_core_python_range_matches_pyproject():
     assert classifiers == [(3, m) for m in range(floor[1], classifiers[-1][1] + 1)], classifiers
 
 
+def test_doctor_python_window_matches_pyproject():
+    """`ankusdrive doctor` warns above its own verified ceiling (#278) and the installer
+    gates on the same range (#279) — two hardcoded copies of one fact. They drifted
+    the moment 3.14 was verified, so pin all three to pyproject: floor =
+    requires-python, ceiling = the newest Programming Language classifier."""
+    from ankusdrive import doctor
+
+    req = re.search(r'requires-python\s*=\s*">=(\d+\.\d+)"', _pyproject_text())
+    assert req, "pyproject requires-python must be a simple '>=X.Y' floor"
+    floor = tuple(int(p) for p in req.group(1).split("."))
+    assert doctor._PY_MIN == floor, (
+        f"doctor._PY_MIN {doctor._PY_MIN} != pyproject requires-python >={req.group(1)}"
+    )
+
+    newest = _classifier_pythons()[-1]
+    assert doctor._PY_MAX_TESTED == newest, (
+        f"doctor._PY_MAX_TESTED {doctor._PY_MAX_TESTED} != newest classifier {newest} "
+        "— bump doctor, install-core.ps1 and pyproject together, and only after "
+        "actually installing on that interpreter"
+    )
+
+
 def test_pyproject_declares_windows_and_no_python_ceiling():
     """Honest metadata (#279): Windows is a supported OS — it has a docs page, an
     install script and a CI lane — and `requires-python` deliberately carries NO upper

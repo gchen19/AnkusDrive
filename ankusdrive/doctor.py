@@ -161,11 +161,15 @@ MCP_PIN_FIX = 'pip install "mcp>=1.2,<2"'
 
 # The interpreter window AnkusDrive's dependency set is verified on: the floor is
 # pyproject's requires-python, the ceiling is its newest Programming Language
-# classifier. requires-python carries NO ceiling, so pip happily installs on a
-# newer interpreter and then a dependency with no wheels for it breaks — which is
-# how the field reporter (Python 3.14) got a doctor pass and a dead MCP server.
+# classifier. requires-python deliberately carries NO ceiling (#279: refusing the
+# next CPython sight-unseen is worse than warning on it), so pip installs happily
+# on a newer interpreter and a dependency with no wheels for it breaks at import —
+# which is the shape of the field report that opened #278. 3.14 is inside the
+# window because #279 ran the whole install on it, not because nothing stopped it.
+# tests/test_windows_support.py keeps this pair, install-core.ps1 and pyproject in
+# sync — bump all three together, and only after installing on that interpreter.
 _PY_MIN = (3, 10)
-_PY_MAX_TESTED = (3, 13)
+_PY_MAX_TESTED = (3, 14)
 
 
 def python_report(version_info=None, version_text: str | None = None) -> dict:
@@ -195,8 +199,9 @@ def python_report(version_info=None, version_text: str | None = None) -> dict:
             f"({window}), and requires-python has no ceiling to stop the install: "
             "mcp/Pillow/numpy may have no wheels for it, so the resolve succeeds "
             "and the MCP server still fails to import")
+        newest = ".".join(map(str, _PY_MAX_TESTED))
         rep["fix"] = (f"run AnkusDrive under a Python {window} interpreter "
-                      "(e.g. `py -3.13 -m venv .venv` on Windows)")
+                      f"(e.g. `py -{newest} -m venv .venv` on Windows)")
     return rep
 
 
