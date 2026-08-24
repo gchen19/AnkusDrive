@@ -22,8 +22,10 @@ entries that outlived their reason.
 
 Pure stdlib, no FreeCAD. Run:  python3 tests/test_compat_rename.py
 """
+import contextlib
 import os
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -37,6 +39,31 @@ from ankusdrive import config, props   # noqa: E402
 class _Stub:
     """Stands in for a FreeCAD DocumentObject — attribute get/set is all the
     property helpers use, so a plain object exercises them faithfully."""
+
+
+# The config directory is rooted at a DIFFERENT env var per platform
+# (config._config_base): %APPDATA% on Windows, $XDG_CONFIG_HOME elsewhere.
+# Pinning only the POSIX one silently does nothing on Windows, and the test then
+# reads the runner's REAL config dir — which is how this suite first failed CI.
+_CONFIG_ROOT_ENV = "APPDATA" if os.name == "nt" else "XDG_CONFIG_HOME"
+
+
+@contextlib.contextmanager
+def _config_root():
+    """Point the config layer at a throwaway root, on every platform."""
+    saved = {k: os.environ.get(k) for k in (_CONFIG_ROOT_ENV, "ANKUSDRIVE_CONFIG")}
+    with tempfile.TemporaryDirectory() as root:
+        try:
+            os.environ.pop("ANKUSDRIVE_CONFIG", None)
+            os.environ[_CONFIG_ROOT_ENV] = root
+            config._cache.clear()
+            yield Path(root)
+        finally:
+            config._cache.clear()
+            for k, v in saved.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
 
 
 # --- environment ------------------------------------------------------------
@@ -73,67 +100,39 @@ def test_unrelated_env_is_untouched():
 
 # --- config file ------------------------------------------------------------
 
-def test_config_path_prefers_the_new_location(tmp=None):
+def test_config_path_prefers_the_new_location():
     """With neither file present, the new path is what we report and write."""
-    saved = {k: os.environ.get(k) for k in ("ANKUSDRIVE_CONFIG", "XDG_CONFIG_HOME")}
-    try:
-        os.environ.pop("ANKUSDRIVE_CONFIG", None)
-        os.environ["XDG_CONFIG_HOME"] = str(REPO / "tests" / "_no_such_config_root")
-        assert config.config_path().endswith(os.path.join("ankusdrive", "config.toml"))
-        assert config._current_config_path() == config.config_path()
-    finally:
-        for k, v in saved.items():
-            os.environ[k] = v if v is not None else ""
-            if v is None:
-                os.environ.pop(k, None)
+    with _config_root() as root:
+        expected = str(root / "ankusdrive" / "config.toml")
+        assert config.config_path() == expected, config.config_path()
+        assert config._current_config_path() == expected
 
 
 def test_config_path_falls_back_to_the_pre_rename_file():
     """An unmigrated user's settings must still be found — but writes migrate
     forward, so `ankusdrive setup` moves them without a manual step."""
-    import tempfile
-    saved = {k: os.environ.get(k) for k in ("ANKUSDRIVE_CONFIG", "XDG_CONFIG_HOME")}
-    with tempfile.TemporaryDirectory() as root:
-        try:
-            os.environ.pop("ANKUSDRIVE_CONFIG", None)
-            os.environ["XDG_CONFIG_HOME"] = root
-            legacy = Path(root) / "driftpin" / "config.toml"
-            legacy.parent.mkdir(parents=True)
-            legacy.write_text('freecadcmd = "/legacy/freecadcmd"\n', encoding="utf-8")
-            assert config.config_path() == str(legacy), config.config_path()
-            assert config._current_config_path() != str(legacy), "write would rewrite it"
-            assert config._current_config_path().endswith(
-                os.path.join("ankusdrive", "config.toml"))
-            # and the contents actually resolve through the normal reader
-            config._cache.clear()
-            assert config.load().get("freecadcmd") == "/legacy/freecadcmd"
-        finally:
-            config._cache.clear()
-            for k, v in saved.items():
-                os.environ.pop(k, None)
-                if v is not None:
-                    os.environ[k] = v
+    with _config_root() as root:
+        legacy = root / "driftpin" / "config.toml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text('freecadcmd = "/legacy/freecadcmd"\n', encoding="utf-8")
+        assert config.config_path() == str(legacy), config.config_path()
+        assert config._current_config_path() != str(legacy), "write would rewrite it"
+        assert config._current_config_path() == str(root / "ankusdrive" / "config.toml")
+        # and the contents actually resolve through the normal reader
+        config._cache.clear()
+        assert config.load().get("freecadcmd") == "/legacy/freecadcmd"
 
 
 def test_new_config_file_wins_over_the_legacy_one():
-    import tempfile
-    saved = {k: os.environ.get(k) for k in ("ANKUSDRIVE_CONFIG", "XDG_CONFIG_HOME")}
-    with tempfile.TemporaryDirectory() as root:
-        try:
-            os.environ.pop("ANKUSDRIVE_CONFIG", None)
-            os.environ["XDG_CONFIG_HOME"] = root
-            for name in ("driftpin", "ankusdrive"):
-                p = Path(root) / name / "config.toml"
-                p.parent.mkdir(parents=True)
-                p.write_text(f'freecadcmd = "/{name}/freecadcmd"\n', encoding="utf-8")
-            assert config.config_path().endswith(
-                os.path.join("ankusdrive", "config.toml")), config.config_path()
-        finally:
-            config._cache.clear()
-            for k, v in saved.items():
-                os.environ.pop(k, None)
-                if v is not None:
-                    os.environ[k] = v
+    with _config_root() as root:
+        for name in ("driftpin", "ankusdrive"):
+            f = root / name / "config.toml"
+            f.parent.mkdir(parents=True)
+            f.write_text(f'freecadcmd = "/{name}/freecadcmd"\n', encoding="utf-8")
+        assert config.config_path() == str(root / "ankusdrive" / "config.toml"), \
+            config.config_path()
+        config._cache.clear()
+        assert config.load().get("freecadcmd") == "/ankusdrive/freecadcmd"
 
 
 # --- stamped .FCStd properties ---------------------------------------------
