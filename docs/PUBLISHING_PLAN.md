@@ -38,7 +38,7 @@ shippable — stop after any phase if the next one isn't worth the cost.
 - `pipx install -e .` from the repo root produces a working `ankusdrive`
   binary on `$PATH`.
 - An MCP host pointed at that binary (`command: "ankusdrive"`,
-  `args: ["mcp"]`) sees all ~72 tools.
+  `args: ["mcp"]`) sees the full tool list (280+ as of 0.5).
 - No edits to repo files required for non-default FreeCAD installs —
   setting `ANKUSDRIVE_FREECADCMD` is enough.
 
@@ -104,27 +104,64 @@ cloning.
 **Scope:** show up in the most-trafficked third-party MCP marketplace,
 with a one-click install button.
 
+> **⚠ Format check needed before submitting.** This phase was written against
+> Smithery's repo-scanned `smithery.yaml` format. As of 2026-08 their build
+> docs (`smithery.ai/docs/llms.txt` → `build/publish`) describe exactly two
+> publish routes, and **neither one reads a repo's `smithery.yaml`**:
+>
+> | Route | What Smithery distributes | Fits AnkusDrive? |
+> |---|---|---|
+> | **URL** | Nothing — *you* host a public streamable-HTTP endpoint and the Smithery Gateway proxies to it. Session config is supplied at publish time: `smithery mcp publish <url> --config-schema '<json>'`. | Not today. Needs epic #296 — HTTP transport, an image, per-session isolation, auth. |
+> | **Local (MCPB)** | A prebuilt `.mcpb` bundle that clients download and run on their own machine. | Yes — this is the local stdio server AnkusDrive already is. |
+>
+> The `startCommand: {type: stdio, commandFunction: …}` schema in
+> `smithery.yaml` — plus its top-level `build:` / `homepage:` / `license:`
+> keys — is the older format, and the URL that file used to cite
+> (`smithery.ai/docs/config`) now 404s. Until the current format is confirmed
+> at smithery.ai/new, treat `smithery.yaml` as the **declarative record of
+> what the bundle must launch and which config it must collect**, not as a
+> submission mechanism.
+
 **Deliverables**
 - [x] `smithery.yaml` at repo root declaring:
   - the `ankusdrive mcp` start command (stdio),
   - the one optional user-supplied env var (`ANKUSDRIVE_FREECADCMD`, with a
     note that it's only needed on non-default installs),
   - a short description and the supported MCP host platforms.
-- [ ] **(human)** Submit at smithery.ai (their flow scans the repo and renders
-  the install button automatically once the yaml is detected). Requires the
-  PyPI release (Phase B) to be live first.
-- [ ] **(human)** Verify the install button writes a correct config block into
+  Its trailing comment block also records the hosted/remote shape (#296) and
+  the blockers that must clear before this file may ever point at a URL.
+- [ ] **(human)** Confirm the live publish format at smithery.ai/new *before*
+  cutting the release. If the repo-scanned yaml is indeed gone, the real
+  deliverable becomes an MCPB bundle wrapping this same `ankusdrive mcp`
+  invocation — see Anthropic's "Build a desktop extension with MCPB" guide and
+  the MCPB spec — published with
+  `smithery mcp publish ./server.mcpb -n <namespace>/ankusdrive`.
+- [ ] **(human)** Submit at smithery.ai. Requires the PyPI release (Phase B)
+  to be live first (see **Dependencies**).
+- [ ] **(human)** Verify the install path writes a correct config block into
   Claude Desktop, Cursor, and Claude Code on a fresh machine.
 
 **Success criteria**
-- The Smithery install button works without manual config edits for the
-  default-FreeCAD-path case.
-- The yaml schema correctly prompts for `ANKUSDRIVE_FREECADCMD` when the
+- Install works without manual config edits for the default-FreeCAD-path case.
+- The config schema correctly prompts for `ANKUSDRIVE_FREECADCMD` when the
   user opts into a custom path.
+- The server page shows a real tool list. Smithery scans to extract it —
+  relevant only on the URL route, and if that route is ever taken, note that a
+  server behind auth must return **401, not 403** (RFC 9728 OAuth discovery),
+  or serve a static card at `/.well-known/mcp/server-card.json`. Smithery's
+  scanner sends `User-Agent: SmitheryBot/1.0` from Cloudflare Workers, which
+  some WAF defaults block.
 
 **Dependencies**
-- Phase B must be complete — Smithery's install template assumes a
-  pip-installable command, not a clone-based setup.
+- Phase B must be complete — the install template assumes a pip-installable
+  command, not a clone-based setup.
+
+**Open questions**
+- Does the MCPB route weaken the Phase B dependency? A bundle can carry its
+  own Python deps, but it cannot carry FreeCAD, so the upstream install is
+  still on the user either way. Decide when the format is confirmed — if the
+  bundle can `pipx`/`pip` the published wheel at install time, Phase B stays a
+  hard dependency; if it vendors the package, it becomes a soft one.
 
 ---
 
@@ -156,10 +193,17 @@ community section. Lowest effort, highest trust signal.
 
 ## What we are explicitly not doing
 
-- **Hosted/cloud MCP server**: AnkusDrive needs a local FreeCAD install to
-  run. A SaaS version would mean shipping FreeCAD in a container and
-  exposing it over the network — a different product, not a distribution
-  channel.
+- **Hosted/cloud MCP server — moved out of this plan, not off the table.**
+  This plan distributes a *local* stdio server, and that stays the default and
+  the reference implementation. Running the stack on a server and reaching it
+  over MCP/HTTPS really is a different product rather than a distribution
+  channel — but it is now opened deliberately as **epic #296** (HTTP
+  transport, a solver image, per-session isolation, bearer/OAuth auth, remote
+  file shuttling, tenancy). The trailing comment block in `smithery.yaml`
+  records the shape, the three routes to it, and the blockers. If #296 ships,
+  it reaches Smithery through Phase C's **URL** route as a *second* listing
+  alongside the local one — it does not replace it, and this bullet gets
+  rewritten rather than deleted.
 - **Bundling FreeCAD**: out of scope. Users install FreeCAD themselves;
   AnkusDrive only wraps it.
 - **Windows support hardening**: the env-var override in Phase A makes
@@ -173,10 +217,14 @@ community section. Lowest effort, highest trust signal.
 ```
 Phase A (pyproject + env var) ──► Phase B (PyPI release)
                                        │
-                                       ├──► Phase C (Smithery)
+                                       ├──► Phase C (Smithery — local/MCPB route)
                                        │
                                        └──► Phase D (official list PR)
+
+epic #296 (hosted box) ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄► Phase C's URL route, as a SECOND
+                                         listing alongside the local one
 ```
 
 Phases C and D are independent of each other once B is done; do them in
-parallel.
+parallel. Epic #296 is a separate track on its own schedule — nothing in
+Phases A–D waits on it, and it waits on none of them.
