@@ -1,4 +1,4 @@
-"""Random-vibration toys — two-sided oracles for driftpin.analysis.vibration.
+"""Random-vibration toys — two-sided oracles for ankusdrive.analysis.vibration.
 
 Pure-Python, no FreeCAD. Pins the SDOF response against the exact closed form
 (Miles' equation) AND the relative/limit behaviors from docs/SIMULATION_EXAMPLES.md
@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import vibration as vib  # noqa: E402
+from ankusdrive.analysis import vibration as vib  # noqa: E402
 
 # The §5 reference PSD: flat 0.01 g²/Hz across 20–2000 Hz.
 FLAT = [{"hz": 20, "g2_hz": 0.01}, {"hz": 2000, "g2_hz": 0.01}]

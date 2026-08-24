@@ -7,7 +7,7 @@ exercised on any host OS. Pins:
 
   * ``bash_argv`` — POSIX boxes launch ``["bash","-c",…]``; Windows launches
     ``["wsl","-d",<distro>,"-e","bash","-c",…]`` pinned to the discovered distro.
-  * Distro resolution — ``DRIFTPIN_WSL_DISTRO`` beats the registry default; both
+  * Distro resolution — ``ANKUSDRIVE_WSL_DISTRO`` beats the registry default; both
     are None off-Windows; no wsl.exe / no distro degrades cleanly.
   * \\wsl$ path mapping — UNC<->POSIX normalization (incl. \\wsl.localhost),
     ``_posix_glob`` maps UNC hits back to POSIX and expands ``~`` to the LINUX
@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import solvers  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
 
 _UNC_BIN = (r"\\wsl$\Ubuntu\usr\lib\openfoam\openfoam2512\platforms"
             r"\linux64GccDPInt32Opt\bin\simpleFoam")
@@ -48,17 +48,17 @@ _VM_OIMS_BASHRC = "/home/ubuntu/OpenFOAM/OpenFOAM-7/etc/bashrc"
 _VM_CCX = "/home/ubuntu/calculix-adapter/bin/ccx_preCICE"
 
 # env vars that would leak the real box's wiring into these tests
-_ISOLATE = ("DRIFTPIN_WSL_DISTRO", "DRIFTPIN_OPENFOAM_BASHRC",
-            "DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_DIRS",
-            "DRIFTPIN_OPENFOAM_INSTANCE", "DRIFTPIN_OPENINJMOLDSIM",
-            "DRIFTPIN_OPENINJMOLDSIM_PATH", "DRIFTPIN_OPENINJMOLDSIM_BASHRC",
-            "DRIFTPIN_CCX_PRECICE", "DRIFTPIN_PRECICE_PATH",
-            "WM_PROJECT_DIR", "DRIFTPIN_CONFIG")
+_ISOLATE = ("ANKUSDRIVE_WSL_DISTRO", "ANKUSDRIVE_OPENFOAM_BASHRC",
+            "ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_DIRS",
+            "ANKUSDRIVE_OPENFOAM_INSTANCE", "ANKUSDRIVE_OPENINJMOLDSIM",
+            "ANKUSDRIVE_OPENINJMOLDSIM_PATH", "ANKUSDRIVE_OPENINJMOLDSIM_BASHRC",
+            "ANKUSDRIVE_CCX_PRECICE", "ANKUSDRIVE_PRECICE_PATH",
+            "WM_PROJECT_DIR", "ANKUSDRIVE_CONFIG")
 
 
 class _patch:
     """Patch attributes on modules, restoring them on exit; isolates the
-    DRIFTPIN_* env vars above AND the config.toml layer (DRIFTPIN_CONFIG is
+    ANKUSDRIVE_* env vars above AND the config.toml layer (ANKUSDRIVE_CONFIG is
     pointed at a nonexistent file, which config.load() treats as {})."""
 
     def __init__(self):
@@ -73,7 +73,7 @@ class _patch:
 
     def __enter__(self):
         self._env = {n: os.environ.pop(n, None) for n in _ISOLATE}
-        os.environ["DRIFTPIN_CONFIG"] = os.path.join(
+        os.environ["ANKUSDRIVE_CONFIG"] = os.path.join(
             os.path.dirname(__file__), "no-such-config.toml")
         return self
 
@@ -138,11 +138,11 @@ def test_wsl_distro_override_beats_registry():
     with _patch() as p:
         _fake_windows(p, distro="Debian")
         assert solvers.wsl_distro() == "Debian"          # registry default
-        os.environ["DRIFTPIN_WSL_DISTRO"] = "Ubuntu-24.04"
+        os.environ["ANKUSDRIVE_WSL_DISTRO"] = "Ubuntu-24.04"
         try:
             assert solvers.wsl_distro() == "Ubuntu-24.04"
         finally:
-            os.environ.pop("DRIFTPIN_WSL_DISTRO", None)
+            os.environ.pop("ANKUSDRIVE_WSL_DISTRO", None)
     with _patch() as p:
         p.set(solvers, "platform", _fake_platform("Linux"))
         assert solvers.wsl_distro() is None
@@ -239,22 +239,22 @@ def test_bashrc_only_reports_unwired_with_wsl_hint():
         assert info["status"] == "unwired", info
         assert info["found_at"] == _POSIX_BASHRC, info
         assert info["wire_hint"] == (
-            f"set DRIFTPIN_OPENFOAM_BASHRC={_POSIX_BASHRC} "
+            f"set ANKUSDRIVE_OPENFOAM_BASHRC={_POSIX_BASHRC} "
             "(runs via WSL distro 'Ubuntu')"), info
 
 
 def test_openfoam_bashrc_accepts_unc_override():
-    """A DRIFTPIN_OPENFOAM_BASHRC override in \\wsl$ form normalizes to the POSIX
+    """A ANKUSDRIVE_OPENFOAM_BASHRC override in \\wsl$ form normalizes to the POSIX
     form the in-distro scripts source."""
     with _patch() as p:
         _fake_windows(p)
         p.set(solvers.os.path, "isfile", lambda x: x == _UNC_BASHRC)
         p.set(glob, "glob", lambda pat, recursive=False: [])
-        os.environ["DRIFTPIN_OPENFOAM_BASHRC"] = _UNC_BASHRC
+        os.environ["ANKUSDRIVE_OPENFOAM_BASHRC"] = _UNC_BASHRC
         try:
             assert solvers.openfoam_bashrc() == _POSIX_BASHRC
         finally:
-            os.environ.pop("DRIFTPIN_OPENFOAM_BASHRC", None)
+            os.environ.pop("ANKUSDRIVE_OPENFOAM_BASHRC", None)
 
 
 def test_clean_wsl_text_strips_nuls():
@@ -283,12 +283,12 @@ def test_bash_argv_macos_multipass():
         argv = solvers.bash_argv("blockMesh", "/tmp/my case")
         assert argv[-1] == "cd '/tmp/my case' && blockMesh", argv
         # instance name is overridable (openfoam.org's `multipass launch -n <name>`)
-        os.environ["DRIFTPIN_OPENFOAM_INSTANCE"] = "foam-dev"
+        os.environ["ANKUSDRIVE_OPENFOAM_INSTANCE"] = "foam-dev"
         try:
             assert solvers.foam_instance() == "foam-dev"
             assert solvers.bash_argv("x", "/c")[2] == "foam-dev"
         finally:
-            os.environ.pop("DRIFTPIN_OPENFOAM_INSTANCE", None)
+            os.environ.pop("ANKUSDRIVE_OPENFOAM_INSTANCE", None)
 
 
 def test_macos_openfoam_unwired_when_multipass_present():
@@ -329,7 +329,7 @@ def test_runs_in_substrate_by_platform():
 
 def test_substrate_override_trusts_in_vm_path_on_macos():
     """The OpenFOAM-backed stacks live inside the Multipass VM on macOS; their
-    DRIFTPIN_* overrides name in-VM POSIX paths the host can't stat.
+    ANKUSDRIVE_* overrides name in-VM POSIX paths the host can't stat.
     `_substrate_override` trusts an absolute override when multipass is present,
     rejects it otherwise, and on Linux the host check governs (issue #193)."""
     with _patch() as p:
@@ -351,14 +351,14 @@ def test_substrate_override_trusts_in_vm_path_on_macos():
 
 
 def test_macos_openfoam_ready_via_multipass_override():
-    """With the VM provisioned, DRIFTPIN_OPENFOAM_PATH names the in-VM binary: the
+    """With the VM provisioned, ANKUSDRIVE_OPENFOAM_PATH names the in-VM binary: the
     solver resolves `available` with via:'multipass' (propagated by require_solver),
     so the OpenFOAM-exclusive families run instead of degrading. The tag comes from
     the resolution branch, not the path shape — a native macOS path is absolute
     POSIX too. Without multipass the same override is NOT trusted."""
     with _patch() as p:
         _fake_macos(p)
-        os.environ["DRIFTPIN_OPENFOAM_PATH"] = _VM_BIN
+        os.environ["ANKUSDRIVE_OPENFOAM_PATH"] = _VM_BIN
         info = solvers.find_solver("openfoam")
         assert info["available"] is True and info["status"] == "ok", info
         assert info["path"] == _VM_BIN and info["via"] == "multipass", info
@@ -376,7 +376,7 @@ def test_macos_openfoam_bashrc_trusts_in_vm_override():
     so the family degrades cleanly rather than sourcing a phantom path."""
     with _patch() as p:
         _fake_macos(p)
-        os.environ["DRIFTPIN_OPENFOAM_BASHRC"] = _VM_BASHRC
+        os.environ["ANKUSDRIVE_OPENFOAM_BASHRC"] = _VM_BASHRC
         assert solvers.openfoam_bashrc() == _VM_BASHRC
         _fake_macos(p, multipass=None)
         assert solvers.openfoam_bashrc() is None
@@ -388,8 +388,8 @@ def test_macos_openinjmoldsim_trusts_in_vm_overrides():
     could never reach the openInjMoldSim path there (issue #193)."""
     with _patch() as p:
         _fake_macos(p)
-        os.environ["DRIFTPIN_OPENINJMOLDSIM"] = _VM_OIMS
-        os.environ["DRIFTPIN_OPENINJMOLDSIM_BASHRC"] = _VM_OIMS_BASHRC
+        os.environ["ANKUSDRIVE_OPENINJMOLDSIM"] = _VM_OIMS
+        os.environ["ANKUSDRIVE_OPENINJMOLDSIM_BASHRC"] = _VM_OIMS_BASHRC
         assert solvers.openinjmoldsim_bin() == _VM_OIMS
         assert solvers.openinjmoldsim_bashrc() == _VM_OIMS_BASHRC
         _fake_macos(p, multipass=None)
@@ -398,13 +398,13 @@ def test_macos_openinjmoldsim_trusts_in_vm_overrides():
 
 
 def test_precice_env_alias_resolves_the_solver():
-    """DRIFTPIN_CCX_PRECICE is the variable the FSI docs/provisioning set, so
-    discovery honors it too (`env_aliases`) — otherwise `driftpin doctor` reports
+    """ANKUSDRIVE_CCX_PRECICE is the variable the FSI docs/provisioning set, so
+    discovery honors it too (`env_aliases`) — otherwise `ankusdrive doctor` reports
     the FSI family unwired on a box where the coupled solve runs. On macOS it
     resolves in-VM (via:'multipass'); on Linux the host check governs."""
     with _patch() as p:
         _fake_macos(p)
-        os.environ["DRIFTPIN_CCX_PRECICE"] = _VM_CCX
+        os.environ["ANKUSDRIVE_CCX_PRECICE"] = _VM_CCX
         info = solvers.find_solver("precice")
         assert info["available"] is True and info["path"] == _VM_CCX, info
         assert info["via"] == "multipass", info
@@ -417,10 +417,10 @@ def test_precice_env_alias_resolves_the_solver():
 
 
 def test_doctor_names_the_substrate_for_ready_families():
-    """`driftpin doctor` says WHERE a ready-but-not-native solver runs: "ready via
+    """`ankusdrive doctor` says WHERE a ready-but-not-native solver runs: "ready via
     openfoam (in WSL)" / "(in Multipass VM)". Without the suffix, "cfd ready via
     openfoam" on a box with no local OpenFOAM is baffling (issue #193)."""
-    from driftpin import doctor
+    from ankusdrive import doctor
 
     def _caps(via):
         state = {"name": "openfoam", "available": True, "status": "ok",
@@ -444,7 +444,7 @@ def test_fsi_routes_participants_through_multipass_on_macos():
     """The FSI runner threads each participant's workdir into bash_argv so the macOS
     branch cd's into the (VM-mounted) case subdir, and _stop_participant's pidfile
     sweep fires on macOS too (multipass is a relay, like WSL). Issue #193 slice 2."""
-    from driftpin.analysis import fsi_case
+    from ankusdrive.analysis import fsi_case
 
     calls = []                       # (script, case_dir) for every bash_argv call
 

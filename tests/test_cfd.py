@@ -1,4 +1,4 @@
-"""Internal-flow toys — exact oracles for driftpin.analysis.cfd.
+"""Internal-flow toys — exact oracles for ankusdrive.analysis.cfd.
 
 Pure-Python, no FreeCAD, no CFD solver. The straight circular pipe is the kickoff's
 unambiguous CFD gate: laminar flow obeys Hagen–Poiseuille Δp = 128·μ·L·Q/(π·D⁴)
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import cfd  # noqa: E402
+from ankusdrive.analysis import cfd  # noqa: E402
 
 
 def test_laminar_matches_hagen_poiseuille():

@@ -123,7 +123,7 @@ def run_trial(client, model, n, mode, condition, tmp):
     built = all(a["ok_built"] for a in agents.values()) and all(p.exists() for p in files.values())
     if built:
         mp = gb.build_manifest(tmp, n, files)
-        from driftpin import Worker
+        from ankusdrive import Worker
         with Worker() as w:
             rep = w.call("merge_assembly", manifest=str(mp))
         passed, reason = rep["ok"], _gate_reason(rep)

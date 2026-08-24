@@ -1,7 +1,7 @@
 {
-  "schema": "driftpin.feature_template/1",
+  "schema": "ankusdrive.feature_template/1",
   "feature_schema": {
-    "schema": "driftpin.feature_template/1",
+    "schema": "ankusdrive.feature_template/1",
     "template": "mounting_boss",
     "doc": "A cylindrical mounting boss with a co-axial pilot bore, stamped onto a seat frame and fused to the host (PowerCopy/UDF reference, issue #139). Supply a placement frame by name (interface / f_ face tag / literal) plus a boss diameter; publishes a 'boss_top' seat for what mounts on it.",
     "refs": [
@@ -54,7 +54,7 @@
     }
   },
   "bolt_schema": {
-    "schema": "driftpin.feature_template/1",
+    "schema": "ankusdrive.feature_template/1",
     "template": "bolt_pattern",
     "doc": "A circular bolt pattern: `count` blind holes on a bolt circle in a reference frame, drilled into the host (issue #139). Supply the frame by name plus the circle diameter, count, and thread; thread rides as metadata (machined, not modeled). Publishes a 'bolt_circle' interface.",
     "refs": [

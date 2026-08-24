@@ -26,7 +26,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import feature_templates as ft  # noqa: E402
+from ankusdrive import feature_templates as ft  # noqa: E402
 
 FIXTURE = json.loads((Path(__file__).resolve().parent / "fixtures"
                       / "feature_mounting_boss.json").read_text(encoding="utf-8"))
@@ -63,7 +63,7 @@ def test_schema_matches_golden_fixture():
            ft.feature_schema("mounting_boss"), FIXTURE["feature_schema"])
     _check("feature_schema(bolt_pattern) == golden fixture",
            ft.feature_schema("bolt_pattern"), FIXTURE["bolt_schema"])
-    _check("contract schema stamp", ft.SCHEMA, "driftpin.feature_template/1")
+    _check("contract schema stamp", ft.SCHEMA, "ankusdrive.feature_template/1")
 
 
 def test_valid_instantiation_passes():
@@ -174,7 +174,7 @@ def _has_cyl_face(w, handle, radius):
 def test_instantiate_twice_on_one_body():
     """The DoD: a template registered ONCE, instantiated TWICE onto two different
     reference frames on one body — correct geometry both times."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as w:
         ra, rb = _stamp_two(w)
         # Correct geometry both times: a boss wall of the SUPPLIED diameter exists.
@@ -202,7 +202,7 @@ def test_instantiate_twice_on_one_body():
 def test_instantiation_is_deterministic_two_workers():
     """Same host + inputs -> byte-equivalent geometry across two independent
     workers (rides the determinism envelope #123/#127)."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as wa:
         ra1, rb1 = _stamp_two(wa)
         sa1, sb1 = _summary(wa, ra1), _summary(wa, rb1)
@@ -216,7 +216,7 @@ def test_instantiation_is_deterministic_two_workers():
 def test_reference_by_f_tag_resolves():
     """A reference supplied as an f_ face tag (no UI picking) reduces to a frame at
     the face's centroid+normal and stamps a bolt pattern there."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as w:
         host = _make_host(w)
         top = [f for f in w.call("query_faces", handle=host,
@@ -241,8 +241,8 @@ def test_reference_by_f_tag_resolves():
 def test_unresolvable_reference_is_loud():
     """A face tag that doesn't resolve, and an unpublished interface name, each
     fail loudly at instantiation — the DoD's loud half."""
-    from driftpin import Worker
-    from driftpin.client import WorkerError
+    from ankusdrive import Worker
+    from ankusdrive.client import WorkerError
     with Worker() as w:
         host = _make_host(w)
         bad_tag = False
@@ -265,7 +265,7 @@ def test_unresolvable_reference_is_loud():
 def test_worker_surface_handlers():
     """feature_list / feature_schema / feature_validate are exposed and
     discriminate good from bad."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as w:
         lst = w.call("feature_list")
         sch = w.call("feature_schema", template="mounting_boss")

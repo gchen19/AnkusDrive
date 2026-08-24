@@ -63,7 +63,7 @@ def fig_spot():
 
 
 def fig_optimize_before_after():
-    from driftpin.analysis import optics_design as od
+    from ankusdrive.analysis import optics_design as od
     system = {"surfaces": [
         {"radius": 80.0, "thickness": 4.0, "material": "N-BK7", "stop": True},
         {"radius": -80.0, "thickness": 96.0, "material": "air"}],
@@ -125,7 +125,7 @@ def fig_prism_tir():
     stl.close()
     Ltri = _prism_stl(stl.name)
     runner = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "driftpin", "optics_gpl_runner.py")
+                          "ankusdrive", "optics_gpl_runner.py")
     rays = [{"origin": [0.0, 6.0 + dy, -4.0], "dir": [0, 0, 1.0]} for dy in (-3, 0, 3, 6)]
     problem = {"problem": "solid_trace", "stl_path": stl.name, "glass": "BK7",
                "wavelength_um": 0.55, "solid": {"diameter": 40, "thickness": 30, "axis_move": 1},

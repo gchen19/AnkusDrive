@@ -27,8 +27,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from driftpin import Worker                                   # noqa: E402
-from driftpin.client import WorkerError                       # noqa: E402
+from ankusdrive import Worker                                   # noqa: E402
+from ankusdrive.client import WorkerError                       # noqa: E402
 
 # Preferred display order; any others reported available are appended after these.
 _ORDER = ["Povray", "Luxcore", "Appleseed", "Cycles", "Ospray", "Pbrt"]

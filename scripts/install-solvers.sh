@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install-solvers.sh — provision the external P2 solvers DriftPin's heavy
+# install-solvers.sh — provision the external P2 solvers AnkusDrive's heavy
 # simulation families shell out to, and make them discoverable by the agent. The
 # solver twin of scripts/install-renderers.sh (see docs/archive/SIMULATION_P2_KICKOFF.md).
 #
@@ -14,36 +14,36 @@
 #       process (like optiland); when absent the screens fall back to constants.
 #     * GPL opt-in wheel (optics_gpl: KrakenOS, for non-sequential tracing through STL
 #       solids) — GPL-3.0, so it is NOT installed by the default (no-arg) run; request
-#       it explicitly (`install-solvers.sh optics_gpl`). DriftPin only ever runs it
-#       out-of-process via driftpin/optics_gpl_runner.py, so its copyleft does not reach
-#       DriftPin's own code (same arm's-length boundary as the GPL Elmer/OpenFOAM bins).
+#       it explicitly (`install-solvers.sh optics_gpl`). AnkusDrive only ever runs it
+#       out-of-process via ankusdrive/optics_gpl_runner.py, so its copyleft does not reach
+#       AnkusDrive's own code (same arm's-length boundary as the GPL Elmer/OpenFOAM bins).
 #     * dedicated-venv wheel (acoustics_bem: bempp-cl, exterior-acoustics BEM) — MIT,
 #       NOT a license boundary, but it needs meshio>=4 which clashes with solidspy's
 #       meshio==3 in the shared venv. So it installs into a DEDICATED venv (.venv-bempp)
-#       and runs out-of-process via driftpin/bempp_runner.py. Request it explicitly
+#       and runs out-of-process via ankusdrive/bempp_runner.py. Request it explicitly
 #       (`install-solvers.sh acoustics_bem`); never installed in the no-arg run.
 #     * GPL opt-in SOURCE BUILD (em_gpl: openEMS FDTD full-wave EM) — GPL-3.0 AND not
 #       on PyPI/conda, so it is source-built from the openEMS-Project meta-repo into a
 #       DEDICATED venv (.venv-openems) and run ONLY out-of-process via
-#       driftpin/em_fullwave_gpl_runner.py. Request it explicitly
+#       ankusdrive/em_fullwave_gpl_runner.py. Request it explicitly
 #       (`install-solvers.sh em_gpl`); never installed in the no-arg run. Same
 #       arm's-length copyleft boundary as KrakenOS / the GPL Elmer/OpenFOAM bins.
 #     * FSI coupling SOURCE BUILD (fsi: preCICE OpenFOAM<->CalculiX) — LGPL-3.0 core
 #       + two C++ adapters, version-sensitive and NOT a pip wheel for this path, so it
 #       is source-built (serial libprecice + calculix-adapter ccx_preCICE +
 #       openfoam-adapter .so) and the two heavy solvers run ONLY out-of-process via
-#       driftpin/analysis/fsi_case.py. Request it explicitly (`install-solvers.sh fsi`);
+#       ankusdrive/analysis/fsi_case.py. Request it explicitly (`install-solvers.sh fsi`);
 #       capped at -j8 + ccache to spare the co-located CI runner.
 #     * system-package solvers (CFD: OpenFOAM/SU2; transient/radiation thermal:
 #       Elmer) — large apt/conda installs that vary by distro and need root, so this
 #       script PRINTS the documented commands rather than running them. Install them,
-#       then ensure their binary is on PATH (or set DRIFTPIN_<SOLVER>_PATH).
+#       then ensure their binary is on PATH (or set ANKUSDRIVE_<SOLVER>_PATH).
 #
 # DISCOVERY (mirrors the renderers)
-#   A family resolves its solver via driftpin/solvers.py: for a wheel, the module
-#   must import in the worker's env; for a binary, DRIFTPIN_<SOLVER>_PATH env ->
+#   A family resolves its solver via ankusdrive/solvers.py: for a wheel, the module
+#   must import in the worker's env; for a binary, ANKUSDRIVE_<SOLVER>_PATH env ->
 #   PATH (shutil.which) -> common per-OS install dirs. So the wheel installs MUST
-#   target the SAME interpreter that launches `python -m driftpin mcp`, and a
+#   target the SAME interpreter that launches `python -m ankusdrive mcp`, and a
 #   system binary must be on that env's PATH. Verify with the solve_capabilities
 #   MCP tool (or `do_list` below) — absent -> a family degrades to a clean
 #   {ok:false, reason, install} dict; present -> the family can solve.
@@ -66,8 +66,8 @@
 #
 # macOS (issue #194): the pip-wheel extras install the same way (mbd resolves to
 # mujoco there — PyBullet has no macOS wheels). `su2` and `prusaslicer` are the two
-# native binaries with a turnkey path; both land where driftpin/solvers.py discovers
-# them with NO env vars (~/Library/Application Support/DriftPin/solvers and
+# native binaries with a turnkey path; both land where ankusdrive/solvers.py discovers
+# them with NO env vars (~/Library/Application Support/AnkusDrive/solvers and
 # /Applications). The apt/source-build recipes (dem_gpl, em_gpl, fsi) and the
 # OpenFOAM families are Linux-only — see docs/MACOS.md.
 #
@@ -76,7 +76,7 @@
 #            present, else python3 — MUST match the MCP server's interpreter)
 #   FORCE=1  pass --force-reinstall to pip
 #   SOLVERS_DIR  where macOS portable binaries are extracted
-#            (default: ~/Library/Application Support/DriftPin/solvers)
+#            (default: ~/Library/Application Support/AnkusDrive/solvers)
 #
 # Idempotent: pip skips an already-satisfied wheel; re-running is safe. Heavy
 # *solves* belong on the provisioned/self-hosted FreeCAD runner — this script only
@@ -93,10 +93,10 @@ if [ -z "${PY:-}" ]; then
 fi
 FORCE="${FORCE:-0}"
 OS="$(uname -s)"
-# macOS provisioner dir — the Darwin analog of the Windows %LOCALAPPDATA%\DriftPin\
-# solvers layout; driftpin/solvers.py globs it, so binaries extracted here resolve
-# with NO env vars (the way a minimal-env MCP host launches `driftpin mcp`).
-SOLVERS_DIR="${SOLVERS_DIR:-$HOME/Library/Application Support/DriftPin/solvers}"
+# macOS provisioner dir — the Darwin analog of the Windows %LOCALAPPDATA%\AnkusDrive\
+# solvers layout; ankusdrive/solvers.py globs it, so binaries extracted here resolve
+# with NO env vars (the way a minimal-env MCP host launches `ankusdrive mcp`).
+SOLVERS_DIR="${SOLVERS_DIR:-$HOME/Library/Application Support/AnkusDrive/solvers}"
 
 # Wheel-installable extras (pyproject [project.optional-dependencies]) -> the pip
 # install this script automates. Keep in lockstep with pyproject.toml. WHEEL_EXTRAS
@@ -118,8 +118,8 @@ pip_install_extra() {  # extra
   case " $WHEEL_EXTRAS $GPL_EXTRAS " in *" $extra "*) ;; *) die "unknown wheel extra: $extra (have: $WHEEL_EXTRAS $GPL_EXTRAS)";; esac
   command -v "$PY" >/dev/null 2>&1 || [ -x "$PY" ] || die "interpreter not found: $PY (set PY=...)"
   case " $GPL_EXTRAS " in *" $extra "*)
-    warn "'$extra' pulls GPL-3.0 software (e.g. KrakenOS). DriftPin runs it only"
-    warn "out-of-process (driftpin/optics_gpl_runner.py), keeping its own license clean."
+    warn "'$extra' pulls GPL-3.0 software (e.g. KrakenOS). AnkusDrive runs it only"
+    warn "out-of-process (ankusdrive/optics_gpl_runner.py), keeping its own license clean."
   ;; esac
   local force_flag=""; [ "$FORCE" = "1" ] && force_flag="--force-reinstall"
   log "pip install '.[$extra]'  (into $PY)"
@@ -144,7 +144,7 @@ CFD (OpenFOAM / SU2) — system package, install manually then put on PATH:
            OpenFOAM: Docker only — the runner glue is Linux-only (issue #193)
   FreeCAD CfdOF workbench bundles a usable OpenFOAM on some platforms.
   SU2 alternative:  download from https://su2code.github.io/download.html
-  Verify:  foamRun -help  (or set DRIFTPIN_OPENFOAM_PATH / DRIFTPIN_SU2_PATH)
+  Verify:  foamRun -help  (or set ANKUSDRIVE_OPENFOAM_PATH / ANKUSDRIVE_SU2_PATH)
 EOF
   fi
   if [ "$which" = "thermal" ] || [ "$which" = "all" ]; then
@@ -155,7 +155,7 @@ Transient/radiation thermal (Elmer) — system package:
   Windows: pwsh scripts/install-solvers.ps1 elmer   (portable no-GUI zip)
   macOS:   no prebuilt binaries exist (no Homebrew formula or conda-forge
            package) — source build from https://www.elmerfem.org/
-  Verify:  ElmerSolver -v  (or set DRIFTPIN_ELMER_PATH)
+  Verify:  ElmerSolver -v  (or set ANKUSDRIVE_ELMER_PATH)
 EOF
   fi
 }
@@ -197,7 +197,7 @@ install_su2_darwin() {
   chmod +x "$(dirname "$exe")"/* 2>/dev/null || true
   ok "SU2_CFD -> $exe"
   ok "auto-discovered from $SOLVERS_DIR (no env var needed);"
-  ok "for a non-default SOLVERS_DIR set DRIFTPIN_SU2_PATH=$exe"
+  ok "for a non-default SOLVERS_DIR set ANKUSDRIVE_SU2_PATH=$exe"
   [ "$(uname -m)" = "arm64" ] && ok "(x86_64 binary — runs under Rosetta 2 on this arm64 Mac)"
   ok "verify with a live solve:  python3 tests/test_su2_native.py"
 }
@@ -219,14 +219,14 @@ install_prusa_darwin() {
 # --- em_gpl: openEMS FDTD full-wave EM (GPL-3.0, source build) ------------------
 # openEMS is NOT a pip wheel — it is built from the openEMS-Project meta-repo with
 # its update_openEMS.sh into a prefix + a DEDICATED venv (.venv-openems) carrying
-# the openEMS/CSXCAD python bindings. DriftPin runs it only out-of-process
-# (driftpin/em_fullwave_gpl_runner.py); set DRIFTPIN_OPENEMS_PYTHON to that venv's
+# the openEMS/CSXCAD python bindings. AnkusDrive runs it only out-of-process
+# (ankusdrive/em_fullwave_gpl_runner.py); set ANKUSDRIVE_OPENEMS_PYTHON to that venv's
 # python so the worker resolves it. Override the prefix/clone/venv with EM_PREFIX /
 # EM_SRC / EM_VENV.
 build_openems() {
   [ "$OS" = "Linux" ] || die "the em_gpl build recipe is Linux-only (apt toolchain) — see docs/MACOS.md / docs/WINDOWS.md"
-  warn "openEMS is GPL-3.0. DriftPin runs it ONLY out-of-process"
-  warn "(driftpin/em_fullwave_gpl_runner.py), keeping its own license clean."
+  warn "openEMS is GPL-3.0. AnkusDrive runs it ONLY out-of-process"
+  warn "(ankusdrive/em_fullwave_gpl_runner.py), keeping its own license clean."
   local prefix="${EM_PREFIX:-$HOME/opt/openEMS}"
   local src="${EM_SRC:-$HOME/openEMS-Project}"
   local venv="${EM_VENV:-$REPO_ROOT/.venv-openems}"
@@ -256,20 +256,20 @@ EOF
   "$venv/bin/python" -c "import openEMS, CSXCAD; print('openEMS', openEMS.__version__)" \
     || die "openEMS import failed — check $prefix/lib is on the runtime path"
   ok "openEMS built. Point the worker at it:"
-  ok "    export DRIFTPIN_OPENEMS_PYTHON=$venv/bin/python"
+  ok "    export ANKUSDRIVE_OPENEMS_PYTHON=$venv/bin/python"
   ok "(or it is auto-discovered if .venv-openems sits beside the repo)"
 }
 
 # --- FSI: preCICE OpenFOAM<->CalculiX coupling (LGPL core + two source adapters) -
-# preCICE is LGPL-3.0 and DriftPin runs both heavy solvers ONLY out-of-process
-# (driftpin/analysis/fsi_case.py), so the copyleft never links in. This builds the
+# preCICE is LGPL-3.0 and AnkusDrive runs both heavy solvers ONLY out-of-process
+# (ankusdrive/analysis/fsi_case.py), so the copyleft never links in. This builds the
 # version-sensitive stack EXACTLY as validated on the self-hosted runner. RESOURCE
 # GUARDRAIL: every compile is capped at -j8 (never -j$(nproc)) + ccache — this host
 # also runs the CI runner and parallel full-core builds crash it.
 build_fsi() {
   [ "$OS" = "Linux" ] || die "the fsi build recipe is Linux-only (apt + OpenFOAM wmake) — see docs/MACOS.md / docs/WINDOWS.md"
   warn "preCICE FSI stack (LGPL core + precice/calculix-adapter + precice/openfoam-adapter)."
-  warn "Both heavy solvers run out-of-process (fsi_case.py) — DriftPin never imports preCICE."
+  warn "Both heavy solvers run out-of-process (fsi_case.py) — AnkusDrive never imports preCICE."
   local jobs="${FSI_JOBS:-8}"        # -j cap: NEVER $(nproc) on the CI host
   local pserial="${PRECICE_PREFIX:-$HOME/precice-serial}"
   local ccxadapter="${CCX_ADAPTER:-$HOME/calculix-adapter}"
@@ -323,17 +323,17 @@ build_fsi() {
   #  (Allwmake's post-build ldd may warn 'undefined symbols' — harmless; the .so
   #   resolves once $pserial/lib is on LD_LIBRARY_PATH at run time.)
 
-  # ---- 4) point DriftPin at the stack ---------------------------------------
-  export DRIFTPIN_CCX_PRECICE=$ccxadapter/bin/ccx_preCICE
-  export DRIFTPIN_PRECICE_LIB=$pserial/lib
-  export DRIFTPIN_OPENFOAM_ADAPTER_LIB=\$(echo ~/OpenFOAM/*-v${ofver}/platforms/*/lib)
-  export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam${ofver}/etc/bashrc
+  # ---- 4) point AnkusDrive at the stack ---------------------------------------
+  export ANKUSDRIVE_CCX_PRECICE=$ccxadapter/bin/ccx_preCICE
+  export ANKUSDRIVE_PRECICE_LIB=$pserial/lib
+  export ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=\$(echo ~/OpenFOAM/*-v${ofver}/platforms/*/lib)
+  export ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam${ofver}/etc/bashrc
   # (all four are auto-discovered at the default build paths above, so the env
   #  overrides are only needed for non-default prefixes.)
 EOF
   warn "This prints the exact validated build; run the steps above (they need sudo +"
   warn "network and take a few minutes). Verify with the solve_capabilities tool"
-  warn "(family 'fsi') or: python3 -c \"from driftpin import solvers; print(solvers.fsi_stack_status())\""
+  warn "(family 'fsi') or: python3 -c \"from ankusdrive import solvers; print(solvers.fsi_stack_status())\""
   ok "smoke-test the coupled stack: python3 tests/test_fsi.py  (runs the live solve when present)"
 }
 
@@ -344,7 +344,7 @@ build_optics_gallery() {
   pip_install_extra optics_gpl        # non-sequential: KrakenOS (GPL-3.0, prints its notice)
   local gens="examples/optics_gallery.py examples/optics_gallery_3d.py examples/optics_ball_lens.py"
   for g in $gens; do
-    [ -f "$REPO_ROOT/$g" ] || die "generator not found: $g (run from a DriftPin checkout)"
+    [ -f "$REPO_ROOT/$g" ] || die "generator not found: $g (run from a AnkusDrive checkout)"
     log "render $g"
     ( cd "$REPO_ROOT" && "$PY" "$g" >/dev/null ) || die "rendering $g failed"
   done
@@ -353,14 +353,14 @@ build_optics_gallery() {
 
 # --- acoustics_bem: Bempp exterior-acoustics BEM (MIT, dedicated venv) ----------
 # Bempp is MIT — NOT a license boundary. It still installs into a DEDICATED venv
-# (.venv-bempp) and runs out-of-process (driftpin/bempp_runner.py) for a DEPENDENCY
+# (.venv-bempp) and runs out-of-process (ankusdrive/bempp_runner.py) for a DEPENDENCY
 # reason: bempp needs meshio>=4 (cells_dict) while the shared venv pins meshio==3
 # for solidspy (the `topology` extra). Installing bempp into the shared venv would
 # break topology optimisation. Override the venv path with BEMPP_VENV.
 build_bempp() {
   warn "Bempp is MIT, but it needs meshio>=4 — which clashes with solidspy's"
   warn "meshio==3 in the shared venv. Installing it in a DEDICATED venv to keep"
-  warn "topology optimisation working; DriftPin runs it out-of-process."
+  warn "topology optimisation working; AnkusDrive runs it out-of-process."
   local venv="${BEMPP_VENV:-$REPO_ROOT/.venv-bempp}"
   log "dedicated venv -> $venv  (bempp-cl + gmsh + meshio>=5)"
   python3 -m venv "$venv" || die "venv create failed"
@@ -377,20 +377,20 @@ print("bempp-cl", bem.__version__ if hasattr(bem, "__version__") else "ok",
       "sphere", g.number_of_elements, "slp", n)
 PYEOF
   ok "Bempp built. Point the worker at it:"
-  ok "    export DRIFTPIN_BEMPP_PYTHON=$venv/bin/python"
+  ok "    export ANKUSDRIVE_BEMPP_PYTHON=$venv/bin/python"
   ok "(or it is auto-discovered if .venv-bempp sits beside the repo)"
 }
 
 # --- DEM source-build: YADE (GPL-3.0, not a pip wheel) -------------------------
 # YADE ships no PyPI/conda-noble wheel, so the `dem_gpl` extra is a SOURCE BUILD,
-# not a pip install. DriftPin drives it only out-of-process via the `yade`
-# executable running driftpin/dem_gpl_runner.py, so its GPL-3.0 copyleft does not
-# reach into DriftPin's own (permissive) code. Installs into ~/opt/yade by default.
+# not a pip install. AnkusDrive drives it only out-of-process via the `yade`
+# executable running ankusdrive/dem_gpl_runner.py, so its GPL-3.0 copyleft does not
+# reach into AnkusDrive's own (permissive) code. Installs into ~/opt/yade by default.
 # RESOURCE NOTE: caps the build at -j8 so it never starves a co-resident CI runner.
 build_dem_gpl() {
   [ "$OS" = "Linux" ] || die "the dem_gpl build recipe is Linux-only (apt toolchain) — see docs/MACOS.md / docs/WINDOWS.md"
-  warn "'dem_gpl' source-builds YADE (GPL-3.0). DriftPin runs it only out-of-process"
-  warn "(driftpin/dem_gpl_runner.py via the \`yade\` executable), keeping its own license clean."
+  warn "'dem_gpl' source-builds YADE (GPL-3.0). AnkusDrive runs it only out-of-process"
+  warn "(ankusdrive/dem_gpl_runner.py via the \`yade\` executable), keeping its own license clean."
   local prefix="${YADE_PREFIX:-$HOME/opt/yade}"
   local src="${YADE_SRC:-$HOME/yade-trunk}"
   local jobs="${YADE_JOBS:-8}"   # cap parallelism — do NOT use -j$(nproc) on a CI host
@@ -412,16 +412,16 @@ build_dem_gpl() {
   log "cmake build -j$jobs  (capped — keep headroom for any co-resident runner)"
   cmake --build "$src/build" -j"$jobs" || die "cmake build failed"
   cmake --build "$src/build" --target install || die "cmake install failed"
-  ok "YADE installed to $prefix — verify: $prefix/bin/yade --version  (or set DRIFTPIN_YADE)"
+  ok "YADE installed to $prefix — verify: $prefix/bin/yade --version  (or set ANKUSDRIVE_YADE)"
 }
 
-# --- list / status (delegates to driftpin.solvers — same probe as the tool) ----
+# --- list / status (delegates to ankusdrive.solvers — same probe as the tool) ----
 do_list() {
   printf 'P2 solver discovery (what resolves in %s right now):\n\n' "$PY"
-  PY="$PY" "$PY" - <<'PYEOF' || warn "could not import driftpin.solvers (run from a checkout with driftpin importable)"
+  PY="$PY" "$PY" - <<'PYEOF' || warn "could not import ankusdrive.solvers (run from a checkout with ankusdrive importable)"
 import os, sys
 sys.path.insert(0, os.getcwd())
-from driftpin import solvers
+from ankusdrive import solvers
 caps = solvers.capabilities()
 print(f"  platform: {caps['platform']}")
 for name in solvers.known_solvers():
@@ -433,7 +433,7 @@ for name in solvers.known_solvers():
         where = f"{info.get('found_at', '')}  ({info.get('wire_hint', '')})"
     else:
         where = info.get("path") or info.get("module") or "(absent)"
-    extra = f"  [pip install 'driftpin[{info['extra']}]']" if info["extra"] else "  [system package]"
+    extra = f"  [pip install 'ankusdrive[{info['extra']}]']" if info["extra"] else "  [system package]"
     print(f"  {mark} {name:10s} {info['kind']:6s} family={info['family']:18s} {where}{'' if info['available'] or status == 'unwired' else extra}")
 print()
 for fam, fi in sorted(caps["families"].items()):
@@ -450,13 +450,13 @@ PYEOF
 provision_multipass() {
   # The macOS twin of install-solvers.ps1's `wsl` target (issue #193). OpenFOAM has
   # no native macOS build, so the CFD/FSI/molding families run INSIDE a Multipass VM
-  # and DriftPin launches into it with `multipass exec`; discovery trusts an absolute
+  # and AnkusDrive launches into it with `multipass exec`; discovery trusts an absolute
   # in-VM path when `multipass` is present, because the VM filesystem is opaque from
   # the host. Same shape as WSL: provision in the substrate, run the server natively.
   echo "== OpenFOAM families (CFD / FSI / injection molding) via Multipass (issue #193) =="
   [ "$OS" = "Darwin" ] || die "the multipass target is macOS-only (Linux installs natively; Windows uses install-solvers.ps1 wsl)"
   command -v multipass >/dev/null 2>&1 || die "Multipass not installed: 'brew install --cask multipass', then re-run this target"
-  local inst="${DRIFTPIN_OPENFOAM_INSTANCE:-openfoam}"
+  local inst="${ANKUSDRIVE_OPENFOAM_INSTANCE:-openfoam}"
   local state
   state="$(multipass info "$inst" --format csv 2>/dev/null | awk -F, 'NR==2{print $2}')"
   if [ -z "$state" ]; then
@@ -479,8 +479,8 @@ provision_multipass() {
   warn "filesystem is opaque from here), and point TMPDIR at the mount so case dirs"
   warn "resolve at the same absolute path on both sides:"
   warn "  export TMPDIR=\$HOME/fsi-run"
-  warn "  export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc"
-  warn "  export DRIFTPIN_OPENFOAM_PATH=<that prefix>/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam"
+  warn "  export ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc"
+  warn "  export ANKUSDRIVE_OPENFOAM_PATH=<that prefix>/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam"
   warn "See docs/MACOS.md for the per-family variable table, and note that plain CFD"
   warn "also has a NATIVE path now: 'scripts/install-solvers.sh su2' needs no VM at all."
 }

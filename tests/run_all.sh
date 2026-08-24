@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full DriftPin test suite. Two interpreters:
+# Run the full AnkusDrive test suite. Two interpreters:
 #   - system python3 for FreeCAD-loading tests (worker, integration, etc.)
 #   - .venv python3 for tests that need Pillow + numpy (render, integration)
 # Both are wired so the same test files just work under either.
@@ -25,7 +25,7 @@ if [ -x ".venv/bin/ruff" ]; then RUFF=".venv/bin/ruff"
 elif command -v ruff >/dev/null 2>&1; then RUFF="ruff"
 else RUFF=""; fi
 if [ -n "$RUFF" ]; then
-    "$RUFF" check driftpin tests
+    "$RUFF" check ankusdrive tests
 else
     echo "  WARNING: ruff not found — 'pip install ruff==0.15.15' to lint locally as CI does (skipping)"
 fi
@@ -33,6 +33,20 @@ fi
 echo
 echo "== Static contracts (registry parity + docstrings + escalate_to integrity + determinism-class coverage; no FreeCAD) =="
 python3 tests/test_contracts.py
+
+echo
+echo "== Naming: the pre-rename name stays gone (#295; no FreeCAD) =="
+# Greps every tracked file and path for the old project name against a small,
+# self-validating allowlist. Cheap insurance against a pre-rename branch merging
+# a second name for one thing back in.
+python3 tests/test_naming.py
+
+echo
+echo "== Rename compatibility shims: legacy env / config / DP_* props (#295) =="
+# The shims that keep a <=0.4.x install working. Every one of them fails SILENTLY
+# if it regresses (an unset override auto-discovers; an unread property reads as
+# un-annotated), so they are asserted, not assumed. Delete with the shims in 0.6.
+python3 tests/test_compat_rename.py
 
 echo
 echo "== Packaging: the BUILT wheel/sdist carries every runtime corpus (no FreeCAD) =="

@@ -42,10 +42,10 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from determinism_registry import ANALYSIS_SWEEP, BOUNDED_SUBMITS  # noqa: E402
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 try:
-    from driftpin import render as render_lib
+    from ankusdrive import render as render_lib
     _RENDER_OK = True
 except ImportError:
     _RENDER_OK = False
@@ -177,7 +177,7 @@ def _solve_box_cantilever(w):
     w.call("fem_add_constraint", analysis=an, kind="force",
            refs=[{"handle": bh, "tag": loaded}], force=1000.0)
     w.call("fem_mesh", analysis=an, body=bh, char_length=4.0, _timeout=180.0)
-    w.call("fem_run", analysis=an, workdir="/tmp/driftpin_probe_det_fem",
+    w.call("fem_run", analysis=an, workdir="/tmp/ankusdrive_probe_det_fem",
            _timeout=300.0)
     return an, bh, fixed, loaded
 

@@ -1,7 +1,7 @@
 """
 Determinism-class registry for the MCP tool surface (issue #123).
 
-Every DriftPin MCP tool falls into one of three determinism classes:
+Every AnkusDrive MCP tool falls into one of three determinism classes:
 
   "exact"
       Closed-form / kernel computation that MUST be bit-for-bit identical across

@@ -1,6 +1,6 @@
 {
   "manifest": "gearbox.manifest.json",
-  "schema": "driftpin.manifest/1",
+  "schema": "ankusdrive.manifest/1",
   "manifest_hash": "fixturehash0001",
   "components": {
     "housing": {

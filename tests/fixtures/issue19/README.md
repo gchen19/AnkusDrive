@@ -1,7 +1,7 @@
 # issue #19 golden fixtures — router → shop-vac adapter
 
 Real FreeCAD source files for the enclosed-flow adapter from
-[issue #19](https://github.com/gchen19/DriftPin/issues/19), provided by the
+[issue #19](https://github.com/gchen19/AnkusDrive/issues/19), provided by the
 reporter **@mpetne** for use as regression fixtures. They are the actual models
 the LLM agent produced — not reductions — so they exercise the real geometry
 (curved shells, oblique cuts, snap features) that the synthetic fixtures in

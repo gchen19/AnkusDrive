@@ -1,5 +1,5 @@
 {
-  "schema": "driftpin.items/1",
+  "schema": "ankusdrive.items/1",
   "part_number_format": {
     "prefix": "DP-",
     "digits": 6,

@@ -1,26 +1,26 @@
-# Smithery listing config for DriftPin — https://smithery.ai/docs/config
+# Smithery listing config for AnkusDrive — https://smithery.ai/docs/config
 #
-# DriftPin is a LOCAL stdio MCP server: it drives a FreeCAD install on the
-# user's machine, so Smithery launches the `driftpin` command (installed via
-# `pipx install driftpin`, Phase B) rather than running it in Smithery's cloud.
+# AnkusDrive is a LOCAL stdio MCP server: it drives a FreeCAD install on the
+# user's machine, so Smithery launches the `ankusdrive` command (installed via
+# `pipx install ankusdrive`, Phase B) rather than running it in Smithery's cloud.
 #
 # Submission is a human step: once this file is on the default branch and the
 # PyPI release is live, submit the repo at https://smithery.ai/new — their
 # crawler detects this file and renders the one-click install button.
 
-name: driftpin
+name: ankusdrive
 description: >-
   CLI + MCP server that drives FreeCAD's Python API for LLM-driven mechanical
   design and FEM — 240+ tools spanning CAD modeling, drawings, and a broad
   simulation surface (thermal, CFD/CHT, EM, acoustics, FSI, molding, optics,
   multibody) plus a design-control (PLM) layer.
 
-# Local stdio server. `command: driftpin` resolves once the package is
+# Local stdio server. `command: ankusdrive` resolves once the package is
 # pipx/pip-installed and on PATH; `mcp` is the stdio-server subcommand.
 startCommand:
   type: stdio
   # Only surfaced to users who install onto a non-default FreeCAD layout;
-  # left unset, DriftPin auto-discovers freecadcmd on PATH / standard dirs.
+  # left unset, AnkusDrive auto-discovers freecadcmd on PATH / standard dirs.
   configSchema:
     type: object
     additionalProperties: false
@@ -35,9 +35,9 @@ startCommand:
   # Maps the user config into the launched process. Optional env var only.
   commandFunction: |
     (config) => ({
-      command: 'driftpin',
+      command: 'ankusdrive',
       args: ['mcp'],
-      env: config.freecadCmd ? { DRIFTPIN_FREECADCMD: config.freecadCmd } : {}
+      env: config.freecadCmd ? { ANKUSDRIVE_FREECADCMD: config.freecadCmd } : {}
     })
 
 # The upstream dependency users must install themselves (not shipped by pip).
@@ -47,5 +47,5 @@ build:
       version: "1.1.x"
       url: https://www.freecad.org/
 
-homepage: https://github.com/gchen19/DriftPin
+homepage: https://github.com/gchen19/AnkusDrive
 license: Apache-2.0

@@ -19,7 +19,7 @@ Two tiers, mirroring every other family in the suite:
         the analytic c/(2a) within ~1% — openEMS reproduces the exact cutoff
 
 openEMS is GPL-3.0, so the live legs run it ONLY out-of-process via
-driftpin/em_fullwave_gpl_runner.py (the same arm's-length boundary as KrakenOS),
+ankusdrive/em_fullwave_gpl_runner.py (the same arm's-length boundary as KrakenOS),
 under a DEDICATED openEMS venv resolved exactly like the worker does.
 
 Run:  python3 tests/test_em_fullwave.py
@@ -37,11 +37,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import em_fullwave as ew  # noqa: E402
+from ankusdrive.analysis import em_fullwave as ew  # noqa: E402
 from tests.heavy_solve import skip_heavy  # noqa: E402
 
 C0 = 299_792_458.0
-RUNNER = str(REPO / "driftpin" / "em_fullwave_gpl_runner.py")
+RUNNER = str(REPO / "ankusdrive" / "em_fullwave_gpl_runner.py")
 
 
 def _openems_python():
@@ -50,7 +50,7 @@ def _openems_python():
     .venv-openems beside the repo or one level up → PATH. Each candidate is probed
     with find_spec (no import here — the copyleft boundary holds). None if absent."""
     cands = []
-    if env := os.environ.get("DRIFTPIN_OPENEMS_PYTHON"):
+    if env := os.environ.get("ANKUSDRIVE_OPENEMS_PYTHON"):
         cands.append(env)
     for base in (REPO, REPO.parent):
         cands += [str(base / ".venv-openems" / "bin" / "python3"),

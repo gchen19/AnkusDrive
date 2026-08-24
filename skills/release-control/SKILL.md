@@ -42,7 +42,7 @@ revisions. Allocate a part number from the registry; prefer **non-significant**
 namespace that stops "two components both named *Box*" from colliding
 (`MULTI_AGENT.md` §5).
 
-- **Leans on:** the item model (#140, `driftpin/items.py`) —
+- **Leans on:** the item model (#140, `ankusdrive/items.py`) —
   `allocate_part_number`, `new_item`, `resolve_item_ref`, `validate_manifest_refs`.
 - **Do:** `allocate_part_number(registry)` → an opaque number; attach files +
   metadata as an item.
@@ -63,7 +63,7 @@ Classify the edit by **Form / Fit / Function**:
 > assembly would accept the new part with no other change, it is F3-preserving →
 > revise. If not → new part number.
 
-- **Leans on:** the lifecycle / F3 predicate (#141, `driftpin/lifecycle.py`) — a
+- **Leans on:** the lifecycle / F3 predicate (#141, `ankusdrive/lifecycle.py`) — a
   pure, unit-testable function over the published interface.
 - **Released-immutable:** a Released item **cannot mutate.** A change forces a new
   revision (F3-preserving) or a new part number (F3-breaking) — never a silent
@@ -86,7 +86,7 @@ A change does not stop at one part. Drive it through:
 - **Baseline** — pin `{item: rev}` for a configuration so a rebuild reproduces
   identical bytes; a rebuild with a drifted input is caught.
 
-- **Leans on:** the ECO / where-used / baseline layer (#142, `driftpin/change.py`)
+- **Leans on:** the ECO / where-used / baseline layer (#142, `ankusdrive/change.py`)
   reusing the `depends_on` graph; the determinism suite (#123/#127) guarantees a
   baseline rebuild is byte-reproducible.
 

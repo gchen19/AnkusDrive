@@ -1,5 +1,5 @@
 """Injection-molding screening toys — two-sided oracles for
-driftpin.analysis.molding.
+ankusdrive.analysis.molding.
 
 Pure-Python, no FreeCAD. Pins the one-term cooling solution against the hand
 formula and its exact s^2 scaling, the spiral-flow fill check two-sided, and
@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import molding as mo  # noqa: E402
+from ankusdrive.analysis import molding as mo  # noqa: E402
 
 
 def test_cooling_hand_anchor_abs():

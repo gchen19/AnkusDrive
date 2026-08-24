@@ -1,7 +1,7 @@
-# DriftPin docs — index
+# AnkusDrive docs — index
 
 Orientation for the `docs/` tree. The top-level [`README.md`](../README.md)
-describes what DriftPin *is*; these docs go deep on individual subsystems and
+describes what AnkusDrive *is*; these docs go deep on individual subsystems and
 record the design decisions behind shipped work.
 
 Docs fall into two kinds:
@@ -55,7 +55,7 @@ current gaps.
 | [`KICKOFF_molding_pack_cool_warp.md`](archive/KICKOFF_molding_pack_cool_warp.md) | Molding packing/cooling/warpage stages (see `MOLDING_FILL_SOLVER.md` for the live reference). |
 
 > **Note:** several of these are cited from source code and tests (e.g.
-> `driftpin/realize.py`, `driftpin/solvers.py`, `driftpin/worker.py`, `tests/`)
+> `ankusdrive/realize.py`, `ankusdrive/solvers.py`, `ankusdrive/worker.py`, `tests/`)
 > via their `docs/archive/…` path. If you relocate one again, update the
 > referencing code in the same change.
 

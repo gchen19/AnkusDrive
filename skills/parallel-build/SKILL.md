@@ -4,8 +4,8 @@ description: >-
   Run this when you are the ORCHESTRATOR fanning out several agents to build one
   mechanical assembly in parallel — a Claude Code main session spawning subagents,
   a Cursor task tree, a CI matrix, or any MCP host. It is the host-agnostic recipe
-  for DriftPin's partition-and-merge contract: decompose the product into standalone
-  per-component `builder brief`s, hand each builder its brief plus the FULL DriftPin
+  for AnkusDrive's partition-and-merge contract: decompose the product into standalone
+  per-component `builder brief`s, hand each builder its brief plus the FULL AnkusDrive
   tool surface (not a bundled 6-tool loop), isolate each builder in its own workspace,
   have each self-gate with `component_contract_check` before saving, then merge and
   gate the integrated result with `merge_assembly` + `interference_check` +
@@ -16,7 +16,7 @@ description: >-
 
 # parallel-build
 
-DriftPin builds an assembly by **partition and merge**, never by co-editing one
+AnkusDrive builds an assembly by **partition and merge**, never by co-editing one
 file (docs/MULTI_AGENT.md §1). Each component is one `.FCStd` with exactly one
 writer; the agents never share process state — their only shared truth is data on
 the filesystem: the per-component **builder brief** and the assembly **manifest**.
@@ -35,12 +35,12 @@ every integration gate. Run it: `.venv/bin/python3 example/host_agnostic_builder
 ### 1. Decompose into builder briefs
 
 Cut the product along **coupled constraints, not merely part count** (the eval
-finding, §10.1–10.2). Emit one `driftpin.builder_brief/1` per component
-(`driftpin/builder_brief.py`, `validate_builder_brief`):
+finding, §10.1–10.2). Emit one `ankusdrive.builder_brief/1` per component
+(`ankusdrive/builder_brief.py`, `validate_builder_brief`):
 
 ```json
 {
-  "schema": "driftpin.builder_brief/1",
+  "schema": "ankusdrive.builder_brief/1",
   "component": "housing", "assembly": "gearbox",
   "task": "Build an 80x80x40 mm housing ...; publish 'lid_seat' at (0,0,40) +Z; save.",
   "output": "components/housing.FCStd",
@@ -70,13 +70,13 @@ the whole 240+ tool surface — sketches, PartDesign, fillets, gears, FEM — no
 
 **Isolate every builder.** Two equivalent options (docs/MULTI_AGENT.md §7):
 
-- **Own MCP server / worker** — the classic model: one agent = one `driftpin mcp`
+- **Own MCP server / worker** — the classic model: one agent = one `ankusdrive mcp`
   process = one worker = one file. Real OS-level parallelism, zero shared state.
 - **Own named workspace on a shared server** (issue #167) — one MCP server, each
   builder calls `use_workspace("<component-id>")` once up front to claim its own
   freecadcmd process; handles and documents do NOT cross workspaces
   (`list_workspaces` to see the pool, `close_workspace` to free a slot; cap
-  `DRIFTPIN_MAX_WORKSPACES`, default 4). Use this when you cannot spawn N servers.
+  `ANKUSDRIVE_MAX_WORKSPACES`, default 4). Use this when you cannot spawn N servers.
 
 Either way: **handles never cross a builder boundary.** A handle from one
 builder is meaningless to another; the only cross-builder currency is the saved
@@ -106,7 +106,7 @@ per-feature self-checks like a gear module or bore Ø.)
 ### 4. Fan in — merge and gate the integrated result
 
 The orchestrator projects the built files + their mates into a
-`driftpin.manifest/1` and calls `merge_assembly`, which links each component by
+`ankusdrive.manifest/1` and calls `merge_assembly`, which links each component by
 file, seats it by published frame (mate-by-frame), and runs the integration gates:
 
 - **`interference_check`** — no pair of parts clashes.

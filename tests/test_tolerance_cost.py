@@ -1,7 +1,7 @@
 """Tolerance–cost coupling (issue #235) — pure-core unit tests.
 
-No FreeCAD, no worker, no LLM: :mod:`driftpin.analysis.tolerance_cost` is arithmetic
-over the ISO 286 tables that :mod:`driftpin.analysis.tolerance` already owns, so
+No FreeCAD, no worker, no LLM: :mod:`ankusdrive.analysis.tolerance_cost` is arithmetic
+over the ISO 286 tables that :mod:`ankusdrive.analysis.tolerance` already owns, so
 these run on the host interpreter in a second. They prove the four things the layer
 promises:
 
@@ -25,7 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import cost, tolerance, tolerance_cost as tc  # noqa: E402
+from ankusdrive.analysis import cost, tolerance, tolerance_cost as tc  # noqa: E402
 
 _PASS = _FAIL = 0
 

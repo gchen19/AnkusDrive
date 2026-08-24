@@ -1,7 +1,7 @@
 """
 Item model + part numbering (issue #140, C1 — docs/DESIGN_HIERARCHY.md §2 Theme C)
 — free, no LLM, no key, no FreeCAD. C1 is pure data/text (items.json identity +
-validation), so this suite imports driftpin.items directly and runs fast.
+validation), so this suite imports ankusdrive.items directly and runs fast.
 
 Two-sided gate-validated (the house standard, MULTI_AGENT.md §11.x): the reference
 registry loads + resolves an item-ref to its file(s); every negative control —
@@ -17,7 +17,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import items as I  # noqa: E402
+from ankusdrive import items as I  # noqa: E402
 
 FIXTURES = REPO / "tests" / "fixtures" / "items"
 
@@ -43,7 +43,7 @@ def _has(label, problems, substr):
 def test_golden_registry_valid_and_resolves():
     reg = I.load_registry(FIXTURES / "items.json")
     _check("golden registry validates clean", I.validate_registry(reg), [])
-    _check("schema stamp", reg["schema"], "driftpin.items/1")
+    _check("schema stamp", reg["schema"], "ankusdrive.items/1")
     # resolve an item-ref (both forms) to its declared file(s)
     files = I.resolve_item_ref(reg, "bracket")
     _check("bare-string ref resolves to files",
@@ -94,7 +94,7 @@ def test_duplicate_part_number_caught():
 def test_malformed_schema_rejected():
     reg = I.load_registry(FIXTURES / "items.json")
     # bad schema version
-    bad = dict(reg, schema="driftpin.items/99")
+    bad = dict(reg, schema="ankusdrive.items/99")
     _has("bad schema version flagged", I.validate_registry(bad), "unknown schema")
     # items not an object
     _has("non-object items flagged",

@@ -1,6 +1,6 @@
 {
   "_doc": "JSON form of the SAME gear family as gear_family.csv (issue #138, B1). JSON carries native types (numbers, bools) where CSV carries strings; both normalize to the same resolved recipe inputs (tests/test_families.py asserts the two forms materialize identically). external (bool) is the feature-flag column; material is item metadata.",
-  "schema": "driftpin.family/1",
+  "schema": "ankusdrive.family/1",
   "family": "gear_family",
   "recipe": "spur_gear",
   "mode": "instances",

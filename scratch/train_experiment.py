@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 import compound_train as ct          # noqa: E402  (geometry + manifest)
 import gearbox_real as gb            # noqa: E402
-from driftpin import Worker          # noqa: E402
+from ankusdrive import Worker          # noqa: E402
 
 RESOLVED = [12, 24, 32]              # driver teeth per stage -> product == target
 TARGET = ct.TARGET                   # (16/32)(24/24)(12/36)=1/6 ... recomputed below

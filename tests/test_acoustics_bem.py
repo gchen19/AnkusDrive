@@ -25,7 +25,7 @@ Two tiers, mirroring every other family in the suite:
 Bempp is MIT, so the subprocess here is NOT a license boundary — it is a meshio
 dependency clash (bempp needs meshio>=4, the shared venv pins meshio==3 for
 solidspy). The live legs run bempp ONLY out-of-process via
-driftpin/bempp_runner.py under a DEDICATED .venv-bempp resolved exactly like the
+ankusdrive/bempp_runner.py under a DEDICATED .venv-bempp resolved exactly like the
 worker does.
 
 Run:  python3 tests/test_acoustics_bem.py
@@ -43,10 +43,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import acoustics_bem as ab  # noqa: E402
+from ankusdrive.analysis import acoustics_bem as ab  # noqa: E402
 from tests.heavy_solve import skip_heavy  # noqa: E402
 
-RUNNER = str(REPO / "driftpin" / "bempp_runner.py")
+RUNNER = str(REPO / "ankusdrive" / "bempp_runner.py")
 
 
 def _bempp_python():
@@ -55,7 +55,7 @@ def _bempp_python():
     .venv-bempp beside the repo or one level up → PATH. Each candidate is probed
     with find_spec (no import here). None if absent."""
     cands = []
-    if env := os.environ.get("DRIFTPIN_BEMPP_PYTHON"):
+    if env := os.environ.get("ANKUSDRIVE_BEMPP_PYTHON"):
         cands.append(env)
     for base in (REPO, REPO.parent):
         cands += [str(base / ".venv-bempp" / "bin" / "python3"),

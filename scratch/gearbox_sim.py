@@ -1,7 +1,7 @@
 """Tier-2 dynamic confirmation — actually SPIN the gearbox and measure the ratio.
 
-The Tier-1 oracle (driftpin/mechanism.py) is closed-form: it says DOF and ratio.
-This drives the input shaft in PyBullet (driftpin/analysis/mbd.py) and MEASURES
+The Tier-1 oracle (ankusdrive/mechanism.py) is closed-form: it says DOF and ratio.
+This drives the input shaft in PyBullet (ankusdrive/analysis/mbd.py) and MEASURES
 omega_out/omega_in, the ground truth that the closed-form must reproduce:
 
   FUNCTIONAL  one engaged pair -> output spins up to omega_out/omega_in = -N_in/N_out.
@@ -20,7 +20,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 import gearbox_real as gb                       # noqa: E402
-from driftpin.analysis import mbd               # noqa: E402
+from ankusdrive.analysis import mbd               # noqa: E402
 
 W_IN = 10.0           # input drive speed (rad/s)
 C_M = gb.C / 1000.0   # centre distance in metres

@@ -42,7 +42,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "optics_gallery")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUNNER = os.path.join(ROOT, "driftpin", "optics_gpl_runner.py")
+RUNNER = os.path.join(ROOT, "ankusdrive", "optics_gpl_runner.py")
 os.makedirs(OUT, exist_ok=True)
 
 R, N_GLASS = 10.0, 1.5168

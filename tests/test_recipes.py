@@ -25,7 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import recipes  # noqa: E402
+from ankusdrive import recipes  # noqa: E402
 
 FIXTURE = json.loads((Path(__file__).resolve().parent / "fixtures"
                       / "recipe_spur_gear.json").read_text(encoding="utf-8"))
@@ -61,7 +61,7 @@ def test_input_schema_matches_golden_fixture():
     fixture — the contract downstream Wave-1 work pins to."""
     _check("input_schema == golden fixture",
            recipes.input_schema("spur_gear"), FIXTURE["input_schema"])
-    _check("contract schema stamp", recipes.SCHEMA, "driftpin.recipe/1")
+    _check("contract schema stamp", recipes.SCHEMA, "ankusdrive.recipe/1")
 
 
 def test_lowering_matches_golden_fixture():
@@ -88,7 +88,7 @@ def test_unknown_recipe_is_loud():
 
 def test_missing_required_no_default_is_loud():
     """A required input with NO default, omitted, fails loudly."""
-    import driftpin.recipes as r
+    import ankusdrive.recipes as r
     spec = r.Recipe(
         name="_t_req", doc="t",
         inputs=[r.InputSpec("w", "length", unit="mm", required=True)],  # no default
@@ -163,11 +163,11 @@ def _build(w, inputs):
 
 
 def test_recipe_builds_part_with_interface_and_intent():
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as w:
         res, summary = _build(w, {"module_mm": 2.0, "teeth": 24, "width_mm": 6.0})
     _check("recipe stamps its name", res["recipe"], "spur_gear")
-    _check("recipe stamps contract schema", res["schema"], "driftpin.recipe/1")
+    _check("recipe stamps contract schema", res["schema"], "ankusdrive.recipe/1")
     _check("publishes a gear_mesh interface", "gear_mesh" in res["interfaces"], True)
     _check("declares watertight intent", res["intent"].get("watertight"), True)
     _check("pitch radius = module*teeth/2", summary["pitch_radius"], 24.0)
@@ -177,7 +177,7 @@ def test_recipe_builds_part_with_interface_and_intent():
 def test_recipe_build_is_deterministic_two_workers():
     """Same inputs -> byte-identical geometry across two independent workers
     (rides the determinism envelope) — the A1 reference gate."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     inputs = {"module_mm": 2.0, "teeth": 24, "width_mm": 6.0}
     with Worker() as wa:
         _, sa = _build(wa, inputs)
@@ -188,7 +188,7 @@ def test_recipe_build_is_deterministic_two_workers():
 
 def test_recipe_build_is_idempotent_one_worker():
     """Re-running the recipe in one worker reproduces the same part exactly."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     inputs = {"module_mm": 2.5, "teeth": 19}
     with Worker() as w:
         _, s1 = _build(w, inputs)
@@ -198,7 +198,7 @@ def test_recipe_build_is_idempotent_one_worker():
 
 def test_recipe_handlers_on_the_worker_surface():
     """recipe_list / recipe_schema / recipe_validate are exposed and discriminate."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as w:
         lst = w.call("recipe_list")
         sch = w.call("recipe_schema", recipe="spur_gear")
@@ -215,9 +215,9 @@ def test_recipe_handlers_on_the_worker_surface():
 def test_merge_builds_a_recipe_component():
     """merge_assembly materializes a (lowered) recipe component through the library
     path and gates it green — two gears placed clear of each other."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     man = {
-        "schema": "driftpin.manifest/1", "name": "gearpair", "root": "gearpair.FCStd",
+        "schema": "ankusdrive.manifest/1", "name": "gearpair", "root": "gearpair.FCStd",
         "components": {
             "g_big": {"recipe": "spur_gear",
                       "inputs": {"module_mm": 2.0, "teeth": 24, "width_mm": 6.0}},

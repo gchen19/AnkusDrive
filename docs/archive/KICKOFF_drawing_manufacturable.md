@@ -3,7 +3,7 @@
 Written 2026-06-15. The TechDraw export work (PR #80,
 `docs/KICKOFF_techdraw_export.md`) shipped the **renderer + dimension palette**:
 the agent can place any extent / linear / Ø / R dimension and get a clean,
-true-valued (DP_TrueValue) drawing out. It deliberately stopped short of two
+true-valued (AD_TrueValue) drawing out. It deliberately stopped short of two
 things, both tracked by issue #85:
 
 1. **Legibility** is heuristic (offset-stacking) and never validated.
@@ -12,13 +12,13 @@ things, both tracked by issue #85:
 
 > **Status (2026-06-15): both gates shipped.** A green render is not a
 > manufacturable drawing — the same failure mode the geometry-realizes-declaration
-> gate (`driftpin/realize.py`, §11.10) closed for assemblies. These are that gate,
+> gate (`ankusdrive/realize.py`, §11.10) closed for assemblies. These are that gate,
 > one layer up: validate the *drawing*. The placement *rewrite* (A2/A3 below) is
 > still open — these gates make it measurable first.
 
 ## What shipped
 
-`driftpin/drawing_gate.py` — pure, FreeCAD-free, unit-tested
+`ankusdrive/drawing_gate.py` — pure, FreeCAD-free, unit-tested
 (`tests/test_drawing_gate.py`, 29 cases). Two checks, both returning realize-style
 violation lists (`[]` == pass; each violation has a `code` + human `reason`):
 
@@ -44,15 +44,15 @@ violation lists (`[]` == pass; each violation has a `code` + human `reason`):
 * `_dim_to_svg` refactored onto a single `_dim_layout` so the renderer **and** the
   legibility gate read one source of truth — the gate checks the real layout, not a
   re-derivation. (Rendered SVG is byte-identical; the existing drawing tests pass.)
-* `_h_add_dimension` now stamps **`DP_ModelRef`** (the model-space circle/span a dim
+* `_h_add_dimension` now stamps **`AD_ModelRef`** (the model-space circle/span a dim
   references) on each manual dim, so the completeness gate can tell *which* feature
   DOF a dim pins — a Ø on hole A vs the X location of hole B — which the projected
   2-D dim alone cannot recover.
 * `_h_drawing_gate` enumerates features off the real `Part.Shape` (bounding box;
   inward cylinders grouped coaxially so a counterbore is recognised; outer
   cylindrical steps for a turned part), infers `process` (or takes an override),
-  builds dim descriptors (kind via DP_Prefix, value via DP_TrueValue, ref via
-  DP_ModelRef), and calls `completeness_report`.
+  builds dim descriptors (kind via AD_Prefix, value via AD_TrueValue, ref via
+  AD_ModelRef), and calls `completeness_report`.
 * `_h_drawing_legibility` replays the composer's stacking via `_dim_layout` to
   extract label boxes + line segments + view boxes, then calls `legibility_report`.
 * MCP tools `drawing_gate(page, process='auto', datums_declared=False)` and
@@ -66,10 +66,10 @@ placed graphics.
 
 ## Design notes / honest edges
 
-* **True-valued dims rarely "conflict".** Because every DriftPin dim reads the real
+* **True-valued dims rarely "conflict".** Because every AnkusDrive dim reads the real
   solid, two dims on one DOF normally *agree* → `redundant`. `conflict` exists for
   manually-overridden values; it binds by reference (the worker's resolved refs /
-  DP_ModelRef), not by value, so a wrong number still lands on its slot.
+  AD_ModelRef), not by value, so a wrong number still lands on its slot.
 * **Datums (DONE 2026-06-15).** `annotate_face` gained a `datum` role; the gate reads
   the source body's datum faces (`_datum_faces`) and sets each location dim's
   `from_datum` by whether an endpoint actually sits on a datum face
@@ -90,7 +90,7 @@ placed graphics.
 * **Tolerances (DONE 2026-06-15).** `add_dimension` takes a `tolerance`:
   `{"sym": 0.1}` (±0.1), `{"plus": .., "minus": ..}` (asymmetric), or
   `{"fit": "H7"}` / `{"fit": "H7/g6"}` — ISO 286 hole-side limits looked up at the
-  dimension's basic size via `tolerance.fit_class`. Stamped (`DP_TolPlus/Minus`) and
+  dimension's basic size via `tolerance.fit_class`. Stamped (`AD_TolPlus/Minus`) and
   rendered next to the value (`Ø12.00 +0.018/-0`). This is the *palette* layer; a
   gate check for *which* features must carry a tolerance (fits, positions) is future
   work, building on `gdt_check` / `tolerance_stackup`.
@@ -126,9 +126,9 @@ The gate (A1) is the prerequisite; it makes "legible" a regression assertion.
 
 * **A3 — title block.** DONE 2026-06-15. FreeCAD's default A4 template is a BARE
   sheet (no frame, no title block — which is why drawings exported blank), so
-  DriftPin composes its own bottom-right block (`_title_block_svg`): scale, sheet
+  AnkusDrive composes its own bottom-right block (`_title_block_svg`): scale, sheet
   size, units and part name auto-derived from the page; material / rev / drawn-by /
-  date / project supplied via `set_title_block` (stamped `DP_TitleBlock` JSON, MCP
+  date / project supplied via `set_title_block` (stamped `AD_TitleBlock` JSON, MCP
   tool). Opt-in (rendered only once `set_title_block` is called). Its box is a
   keep-out in the legibility gate, so a dim line crossing it is flagged. Demo
   artifacts (`artifacts/{plate,lbracket}_demo.pdf`) now carry it. Test:
@@ -169,7 +169,7 @@ the rest of the path uses (so both stay vector line drawings, decided automatica
   `DrawViewPart` (Direction (1,1,1), XDirection (1,−1,0)) rendered through the very
   same `viewPartAsSvg` the orthographic views use — a vector line drawing, not an
   embedded raster — scaled to a reserved top-right box (the mirror of the bottom-right
-  title block) and pinned there (`DP_Thumbnail`; `_page_main_view` keeps it out of the
+  title block) and pinned there (`AD_Thumbnail`; `_page_main_view` keeps it out of the
   title block / scale / gate, `_page_top_views` keeps `fit_page` from dragging it off
   its corner). Best-effort: skips with `placed: False` when the corner is occupied.
   Crucial fix: occupancy is tested **element-wise** (`_region_is_clear`), not against
@@ -189,7 +189,7 @@ the rest of the path uses (so both stay vector line drawings, decided automatica
 
 ## Anchors
 
-- Pure core: `driftpin/drawing_gate.py` (incl. `needs_section`). Tests:
+- Pure core: `ankusdrive/drawing_gate.py` (incl. `needs_section`). Tests:
   `tests/test_drawing_gate.py`, `tests/test_drawing_gate_worker.py`,
   `tests/test_drawing_thumbnail_section.py`.
 - Worker thumbnail/section: `_h_add_thumbnail`, `_h_add_section_view`,
@@ -197,7 +197,7 @@ the rest of the path uses (so both stay vector line drawings, decided automatica
   `_place_section`, `_page_main_view`, `_is_thumbnail`/`_is_section`.
 - Worker: `_dim_layout`, `_h_drawing_gate`, `_h_drawing_legibility`,
   `_enumerate_features`, `_infer_process`, `_dim_descriptors`, `_page_dim_graphics`,
-  `_stamp_model_ref` in `driftpin/worker.py`.
-- MCP: `drawing_gate`, `drawing_legibility` in `driftpin/mcp_server.py`.
-- Gate pattern this mirrors: `driftpin/realize.py`,
+  `_stamp_model_ref` in `ankusdrive/worker.py`.
+- MCP: `drawing_gate`, `drawing_legibility` in `ankusdrive/mcp_server.py`.
+- Gate pattern this mirrors: `ankusdrive/realize.py`,
   `docs/KICKOFF_validate_the_artifact.md`.

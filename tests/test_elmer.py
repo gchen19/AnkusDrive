@@ -25,9 +25,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import solvers  # noqa: E402
-from driftpin.analysis import elmer  # noqa: E402
-from driftpin.analysis import thermal  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
+from ankusdrive.analysis import elmer  # noqa: E402
+from ankusdrive.analysis import thermal  # noqa: E402
 from tests.heavy_solve import skip_heavy  # noqa: E402
 
 

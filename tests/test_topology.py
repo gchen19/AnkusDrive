@@ -1,4 +1,4 @@
-"""Topology-optimization toys — oracles for driftpin.analysis.topology (SIMP).
+"""Topology-optimization toys — oracles for ankusdrive.analysis.topology (SIMP).
 
 Needs NumPy (a base dependency), so this runs under the venv lane like the render
 tests. The grids are kept small because a dense FE solve runs every iteration (the
@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import topology as topo  # noqa: E402
+from ankusdrive.analysis import topology as topo  # noqa: E402
 
 
 def test_holds_volume_and_reduces_compliance():

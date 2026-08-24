@@ -42,9 +42,9 @@ on:
     branches:
       - main
     paths:
-      - "driftpin/analysis/**"
-      - "driftpin/solvers.py"
-      - "driftpin/jobs.py"
+      - "ankusdrive/analysis/**"
+      - "ankusdrive/solvers.py"
+      - "ankusdrive/jobs.py"
       - "tools/**"
       - "scripts/install-solvers.sh"
       - "scripts/ci-macos-preflight.sh"
@@ -85,9 +85,9 @@ jobs:
   heavy-solves:
     name: Live external-solver regressions (Linux, self-hosted)
     # Pin `Linux`: these live solvers (OpenFOAM/YADE/openEMS/bempp/preCICE) are Linux-only
-    # and the steps are bash + AppImage. The Windows box shares the `driftpin` label, so
+    # and the steps are bash + AppImage. The Windows box shares the `ankusdrive` label, so
     # without this an unrelated Windows job could match. OS label is auto-applied.
-    runs-on: [self-hosted, driftpin, Linux]
+    runs-on: [self-hosted, ankusdrive, Linux]
     # The full suite plus every live solve — molding (~15 min), the openEMS /
     # Bempp / FSI / Elmer / YADE solves on top. 90 min bounds a wedged solver
     # without cutting a real run.
@@ -112,10 +112,10 @@ jobs:
 
   heavy-solves-macos:
     name: macOS substrate regressions — SU2/Rosetta + FSI/Multipass (self-hosted)
-    # Pin `macOS`: the Linux and Windows self-hosted boxes share the `driftpin` label,
+    # Pin `macOS`: the Linux and Windows self-hosted boxes share the `ankusdrive` label,
     # and this job's substrate (Multipass, Rosetta) exists only on the Mac. The OS
     # label is auto-applied by the Actions runner.
-    runs-on: [self-hosted, driftpin, macOS]
+    runs-on: [self-hosted, ankusdrive, macOS]
     # Far short of the Linux lane's 90: this is three files, not the whole suite —
     # measured ~10s of solve on the reference box (FSI 8.9s for four preCICE windows,
     # SU2 0.2s). The budget is almost entirely headroom for a WEDGED VM, where
@@ -124,12 +124,12 @@ jobs:
     timeout-minutes: 30
     env:
       RUN_HEAVY_SOLVES: "1"
-      # The FSI stack lives INSIDE the Multipass VM, so the four DRIFTPIN_* overrides
+      # The FSI stack lives INSIDE the Multipass VM, so the four ANKUSDRIVE_* overrides
       # and TMPDIR are absolute paths on that specific box — they come from the
       # runner's own environment (~/actions-runner/.env), NOT from this file. The
       # preflight step below fails with the exact `.env` lines when they are missing;
       # docs/MACOS.md ("Self-hosted CI runner") has the setup.
-      DRIFTPIN_SKIP_PREFLIGHT: "1"   # the preflight is its own step, below
+      ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # the preflight is its own step, below
     steps:
       - uses: actions/checkout@v5
 

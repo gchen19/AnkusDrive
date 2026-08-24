@@ -4,8 +4,8 @@ Layer D reliability — tool-use correctness, multi-trial, multi-model.
 Layers A/B/C test *visual judgment under spec* (can the model SEE a divergence
 in a render). This layer tests the other half: *can the model DRIVE the tools to
 produce geometry that meets a goal*. The agent gets an English design goal and
-the DriftPin tool surface, runs a real tool-use loop against a real FreeCAD
-worker, then we grade the resulting SOLID with DriftPin's own Tier-3 inspection
+the AnkusDrive tool surface, runs a real tool-use loop against a real FreeCAD
+worker, then we grade the resulting SOLID with AnkusDrive's own Tier-3 inspection
 tools (bounding_box / check_shape / min_clearance / mass_properties) as the
 ground-truth oracle. We never assert *which* tools it called — only that the
 artifact is correct. That tolerates the many valid tool paths to one result.
@@ -32,7 +32,7 @@ Usage:
 
     # real, compare models (and bump trials):
     ANTHROPIC_API_KEY=sk-... RUN_RELIABILITY=1 \
-        DRIFTPIN_MODELS=haiku,sonnet,opus DRIFTPIN_TRIALS=8 \
+        ANKUSDRIVE_MODELS=haiku,sonnet,opus ANKUSDRIVE_TRIALS=8 \
         .venv/bin/python3 tests/test_reliability_tasks.py
 """
 import json
@@ -47,7 +47,7 @@ from typing import Callable
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 from orchestration import agentkit  # noqa: E402
 
 CACHE_DIR = REPO / "tests" / "reliability_cache"
@@ -365,8 +365,8 @@ def main():
         import anthropic
         client = anthropic.Anthropic()
         models = [agentkit.MODELS[m] for m in
-                  os.environ.get("DRIFTPIN_MODELS", "sonnet").split(",")]
-        trials = int(os.environ.get("DRIFTPIN_TRIALS", "5"))
+                  os.environ.get("ANKUSDRIVE_MODELS", "sonnet").split(",")]
+        trials = int(os.environ.get("ANKUSDRIVE_TRIALS", "5"))
     else:
         print("\n[dry run] RUN_RELIABILITY unset — using the scripted stub client "
               "(free).\nThis validates the harness + grader; set RUN_RELIABILITY=1 "

@@ -2,7 +2,7 @@
 Revision + lifecycle state machine + the Form/Fit/Function predicate (issue #141,
 C2 — docs/DESIGN_HIERARCHY.md §2 Theme C) — free, no LLM, no key, no FreeCAD.
 C2 is pure data/text (the state machine, the rev counter, and the F3 predicate
-on items.json), so this suite imports driftpin.lifecycle directly and runs fast.
+on items.json), so this suite imports ankusdrive.lifecycle directly and runs fast.
 
 Two-sided gate-validated (the house standard, MULTI_AGENT.md §11.x):
 
@@ -25,8 +25,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import items as I       # noqa: E402
-from driftpin import lifecycle as L   # noqa: E402
+from ankusdrive import items as I       # noqa: E402
+from ankusdrive import lifecycle as L   # noqa: E402
 
 FIXTURES = REPO / "tests" / "fixtures" / "lifecycle"
 

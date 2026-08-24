@@ -16,7 +16,7 @@ The MERGE GATES are the oracle:
 A toy is sound iff the gates pass ONLY the reference and CATCH every negative
 control. test_multiagent_m1.py drives that assertion.
 
-These helpers take a live Worker (driftpin.client.Worker) and a tmp dir; the
+These helpers take a live Worker (ankusdrive.client.Worker) and a tmp dir; the
 runner owns the worker lifecycle so the whole suite shares one freecadcmd process.
 """
 import json
@@ -131,7 +131,7 @@ def run_gates(w, asm_handle, envelopes=None, align_pairs=None):
 # =============================================================================
 
 TOY1_MANIFEST = {
-    "schema": "driftpin.manifest/0-phase0",
+    "schema": "ankusdrive.manifest/0-phase0",
     "name": "peg_in_hole",
     "shared_parameters": {"bore_diameter_mm": 16.0, "clearance_mm": 0.4},
     "components": {
@@ -174,7 +174,7 @@ def toy1_build(w, tmp, variant):
 # =============================================================================
 
 TOY2_MANIFEST = {
-    "schema": "driftpin.manifest/0-phase0",
+    "schema": "ankusdrive.manifest/0-phase0",
     "name": "bolted_flange",
     "shared_parameters": {"bolt": "M5", "bolt_circle_count": 4,
                           "bolt_circle_radius_mm": 20.0, "hole_diameter_mm": 5.2},
@@ -231,7 +231,7 @@ def toy2_build(w, tmp, variant):
 TOY3_BRACKET_ENVELOPE = {"min": [25, 25, 40], "max": [55, 55, 52]}
 
 TOY3_MANIFEST = {
-    "schema": "driftpin.manifest/0-phase0",
+    "schema": "ankusdrive.manifest/0-phase0",
     "name": "bracket_on_housing",
     "components": {
         "housing": {"owner": "agent-housing", "file": "t3_housing.FCStd",
@@ -276,7 +276,7 @@ def toy3_build(w, tmp, variant):
 # =============================================================================
 
 TOY4_MANIFEST = {
-    "schema": "driftpin.manifest/0-phase0",
+    "schema": "ankusdrive.manifest/0-phase0",
     "name": "nested_stack",
     "components": {
         "sub": {"file": "<subassembly S: A+B>"},
@@ -330,7 +330,7 @@ def toy4_build(w, tmp, variant):
 # =============================================================================
 
 TOY5_MANIFEST = {
-    "schema": "driftpin.manifest/0-phase0",
+    "schema": "ankusdrive.manifest/0-phase0",
     "name": "enclosure",
     "components": {
         "housing": {"file": "t5_housing.FCStd"},

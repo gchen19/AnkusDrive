@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 ART = ROOT / "artifacts"
 ART.mkdir(exist_ok=True)
@@ -42,7 +42,7 @@ def lbracket(w):
     w.call("add_dimension", page=page, view="Front", kind="vertical",    # step height
            from_point=[0, 0, 0], to_point=[0, 0, 7])
     w.call("set_title_block", page=page, part="L-BRACKET", material="STEEL 1045",
-           rev="A", drawn_by="DriftPin", date="2026-06-15", project="DEMO")
+           rev="A", drawn_by="AnkusDrive", date="2026-06-15", project="DEMO")
     _export_all(w, page, "lbracket_demo")
 
 
@@ -66,7 +66,7 @@ def plate(w):
     w.call("add_dimension", page=page, view="Top", kind="vertical",      # hole Y
            from_point=[30, 0, 0], to_point=[30, 20, 0])
     w.call("set_title_block", page=page, part="MOUNT PLATE", material="AL 6061-T6",
-           rev="A", drawn_by="DriftPin", date="2026-06-15", project="DEMO")
+           rev="A", drawn_by="AnkusDrive", date="2026-06-15", project="DEMO")
     _export_all(w, page, "plate_demo")
 
 
@@ -100,7 +100,7 @@ def fillet_chamfer(w):
     w.call("add_dimension", page=page, view="Top", kind="horizontal",
            from_point=[66, 45, 0], to_point=[70, 45, 0])    # chamfer leg = 4
     w.call("set_title_block", page=page, part="FC BRACKET", material="STEEL 1018",
-           rev="A", drawn_by="DriftPin", date="2026-06-15", project="DEMO")
+           rev="A", drawn_by="AnkusDrive", date="2026-06-15", project="DEMO")
     w.call("fit_page", page=page)
     _export_all(w, page, "fc_bracket_demo")
 
@@ -123,7 +123,7 @@ def cbblock(w):
     w.call("set_property", handle=pg["handle"], name="Scale", value=1.5)
     w.call("add_dimension", page=page, auto=True)                        # overall
     w.call("set_title_block", page=page, part="CB BLOCK", material="STEEL 1045",
-           rev="A", drawn_by="DriftPin", date="2026-06-15", project="DEMO")
+           rev="A", drawn_by="AnkusDrive", date="2026-06-15", project="DEMO")
     rec = w.call("drawing_gate", page=page)["section_recommended"]
     print(f"  section recommended: {rec['recommended']} ({'; '.join(rec['reasons'])})")
     sec = w.call("add_section_view", page=page)                          # auto section

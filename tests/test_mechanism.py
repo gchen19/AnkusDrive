@@ -1,4 +1,4 @@
-"""Mechanism motion oracle (driftpin/mechanism.py) — the *moving*-assembly gate.
+"""Mechanism motion oracle (ankusdrive/mechanism.py) — the *moving*-assembly gate.
 
 Pure Python, no FreeCAD, no API. The same constant-mesh gearbox geometry is
 declared two ways and the oracle must separate them:
@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.mechanism import (  # noqa: E402
+from ankusdrive.mechanism import (  # noqa: E402
     analyze, _speed_ratio, meshes_from_checks, validate)
 
 # gearbox_real.py: tooth-sum S=48, RATIOS = N_out/N_in (size). teeth() below.

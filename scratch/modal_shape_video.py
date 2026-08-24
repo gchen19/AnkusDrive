@@ -35,7 +35,7 @@ import matplotlib.pyplot as plt                             # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection     # noqa: E402
 from PIL import Image                                       # noqa: E402
 
-from driftpin import Worker                                 # noqa: E402
+from ankusdrive import Worker                                 # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
 ART = REPO / "artifacts"
@@ -109,7 +109,7 @@ def _build_and_solve(w):
     w.call("fem_mesh", analysis=analysis["handle"], body=box["handle"],
            char_length=MESH, element_order="2nd", _timeout=180.0)
     w.call("fem_modal", analysis=analysis["handle"], n_modes=N_MODES)
-    w.call("fem_run", analysis=analysis["handle"], workdir="/tmp/driftpin_modal_video",
+    w.call("fem_run", analysis=analysis["handle"], workdir="/tmp/ankusdrive_modal_video",
            _timeout=400.0)
     return analysis["handle"]
 

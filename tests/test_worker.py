@@ -1,5 +1,5 @@
 """
-Toy problems proving the DriftPin worker scaffold.
+Toy problems proving the AnkusDrive worker scaffold.
 
 Each test exercises ONE design property:
   - test_ready_and_ping           : worker boots, protocol handshake works
@@ -26,8 +26,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker, WorkerError  # noqa: E402
-from driftpin.client import WorkerDied  # noqa: E402
+from ankusdrive import Worker, WorkerError  # noqa: E402
+from ankusdrive.client import WorkerDied  # noqa: E402
 
 
 # --- individual tests ---------------------------------------------------------
@@ -1137,7 +1137,7 @@ def test_fem_modal_cantilever():
                                   element_order="2nd")
         w.call("fem_modal", analysis=h["analysis"], n_modes=6)
         w.call("fem_run", analysis=h["analysis"],
-               workdir="/tmp/driftpin_modal", _timeout=300.0)
+               workdir="/tmp/ankusdrive_modal", _timeout=300.0)
         freqs = w.call("fem_modal_results", analysis=h["analysis"])["frequencies_hz"]
         assert len(freqs) == 6 and all(f > 0 for f in freqs), freqs
         assert freqs == sorted(freqs), f"freqs must ascend: {freqs}"
@@ -1190,7 +1190,7 @@ def test_fem_buckling_column():
         )
         w.call("fem_buckling", analysis=h["analysis"], n_factors=1)
         w.call("fem_run", analysis=h["analysis"],
-               workdir="/tmp/driftpin_buckle", _timeout=300.0)
+               workdir="/tmp/ankusdrive_buckle", _timeout=300.0)
         results = w.call("fem_buckling_results", analysis=h["analysis"])
         factors = results["buckling_factors"]
         assert len(factors) >= 1, f"expected at least 1 buckling factor, got {factors}"
@@ -1266,7 +1266,7 @@ def test_fem_thermal_steady_state():
         )
         try:
             w.call("fem_run", analysis=h["analysis"],
-                   workdir="/tmp/driftpin_thermal", _timeout=300.0)
+                   workdir="/tmp/ankusdrive_thermal", _timeout=300.0)
         except WorkerError as e:
             # Some FreeCAD/CCX combos error on thermomech without an initial
             # condition or extra constraint — note and skip rather than fail.
@@ -1683,7 +1683,7 @@ def test_fem_decomposed_cantilever():
         w.call(
             "fem_run",
             analysis=analysis["handle"],
-            workdir="/tmp/driftpin_fem_decomp",
+            workdir="/tmp/ankusdrive_fem_decomp",
             _timeout=300.0,
         )
         results = w.call("fem_results", analysis=analysis["handle"], top_n=3)
@@ -3760,7 +3760,7 @@ def test_every_add_command_has_a_producer_smoke():
     Non-solid add_* tools are explicitly excluded (and the exclusions are checked
     to be real tools, so the allowlist can't hide a missing producer)."""
     import ast
-    src = (REPO / "driftpin" / "mcp_server.py").read_text(encoding="utf-8")
+    src = (REPO / "ankusdrive" / "mcp_server.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     add_tools = {
         n.name for n in tree.body
@@ -4195,7 +4195,7 @@ def test_geometry_bridge_validation_errors_are_clean():
     import shutil as _shutil
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from driftpin import solvers
+    from ankusdrive import solvers
     if not solvers.is_available("elmer") or not os.path.isfile(
             solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ElmerGrid")):
         print("    SKIP — ElmerSolver/ElmerGrid not installed")
@@ -4229,7 +4229,7 @@ def test_slice_gcode_cube_end_to_end_matches_analytic():
     the analytic slice_estimate. At 100% infill the deposited_ratio must be ~1
     (measured 1.008 — the skirt). SKIPs without a slicer."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from driftpin import solvers
+    from ankusdrive import solvers
     if not solvers.is_available("prusaslicer"):
         print("    SKIP — PrusaSlicer not installed")
         return
@@ -4271,8 +4271,8 @@ def test_geometry_bridge_box_end_to_end_matches_heisler():
     import shutil as _shutil
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from driftpin import solvers
-    from driftpin.analysis import thermal as _thermal
+    from ankusdrive import solvers
+    from ankusdrive.analysis import thermal as _thermal
     if not solvers.is_available("elmer") or not os.path.isfile(
             solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ElmerGrid")):
         print("    SKIP — ElmerSolver/ElmerGrid not installed")

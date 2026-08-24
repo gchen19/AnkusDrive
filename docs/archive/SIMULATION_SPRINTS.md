@@ -1,4 +1,4 @@
-# DriftPin simulation tools — dedicated sprint plan  ✅ COMPLETE
+# AnkusDrive simulation tools — dedicated sprint plan  ✅ COMPLETE
 
 > **Status (2026-06-10): every sprint in this plan is shipped** — the pure-Python
 > P0 wave, the P1 CLI tier (slicer analytic + the PrusaSlicer external-CLI
@@ -8,7 +8,7 @@
 > plan of record; **what comes next** (screening estimators + higher-order
 > solves) is assessed in [`SIMULATION_NEXT.md`](../SIMULATION_NEXT.md).
 
-The **execution sequence** for building out DriftPin's physical-simulation
+The **execution sequence** for building out AnkusDrive's physical-simulation
 algorithms and exposing them over MCP. Sits between the two existing docs:
 
 - [`SIMULATION_TOOLS.md`](../SIMULATION_TOOLS.md) — the *scope map* (what each of the
@@ -35,7 +35,7 @@ negative is caught.
 | 4 · Thermal (lumped) | ✅ **shipped** — `thermal_lumped` (RC transient + radiation screen), 5 hand-verified toys (Sprint 3) |
 | 9 · Design for X | ✅ **shipped (v1 explicit-input)** — `dfm_check` / `dfa_check` / `pack_check` / `cost_estimate` / `slice_estimate`, 21 hand-verified toys (Sprints 3–4) |
 | 7 · Optics | ✅ **shipped** (P3 M1) — Snell/Fresnel/TIR exact oracle + `optics_raytrace` (rayoptics, degrades) + `optics_moldability_check`, 16 toys |
-| 6 · Async / long-solve infra | ✅ **shipped** — `driftpin/jobs.py` (submit/poll/cache) + `job_status`/`job_result`/`job_list`, 7 toys (Sprint 6); unblocks all P2 |
+| 6 · Async / long-solve infra | ✅ **shipped** — `ankusdrive/jobs.py` (submit/poll/cache) + `job_status`/`job_result`/`job_list`, 7 toys (Sprint 6); unblocks all P2 |
 | 6 · CFD · 5 · structural ext · 8 · MBD · 4 · transient thermal | ✅ **shipped** (P2 M0–M5 + P3) — OpenFOAM pipe/flat-plate vs Hagen–Poiseuille/Blasius, Elmer slab/radiation vs Heisler/σ-exchange, in-house SIMP (2-D+3-D), PyBullet MBD, Miles PSD + `beam_modal` vs CalculiX `fem_modal` |
 | — · Geometry bridge | ✅ **shipped** (P3 M4) — `meshbridge.py`: FreeCAD solid → Gmsh/ElmerGrid (thermal) · STL/snappyHexMesh (internal flow), body modes on the `*_submit` tools |
 
@@ -60,10 +60,10 @@ Beyond these happy-path toys, every `analysis/` family now carries a sharper
 
 The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
 
-1. **`driftpin/analysis/<module>.py`** — the math. No FreeCAD import. Pure
+1. **`ankusdrive/analysis/<module>.py`** — the math. No FreeCAD import. Pure
    functions returning a small typed dict with a `pass` bool.
-2. **`driftpin/worker.py`** — `@handler("<tool>")` shims calling into the module.
-3. **`driftpin/mcp_server.py`** — thin `@mcp.tool()` wrappers (intent-encoded
+2. **`ankusdrive/worker.py`** — `@handler("<tool>")` shims calling into the module.
+3. **`ankusdrive/mcp_server.py`** — thin `@mcp.tool()` wrappers (intent-encoded
    params, documented return shape).
 4. **`tests/test_<module>.py`** — the two-sided toys from `SIMULATION_EXAMPLES.md`,
    wired into `tests/run_all.sh`. Prove the oracle catches the negative first.
@@ -87,7 +87,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   Monte-Carlo `pct_in_spec` converges to RSS within ±0.3% at 10 000 samples; ISO 286
   `H7/g6` on Ø20 reproduces handbook deviations. **Negatives:** an interference pair
   → `fit_class:"interference"`, `prob_interference > 0`.
-- **Depends on:** nothing. **Shipped** — `driftpin/analysis/tolerance.py` +
+- **Depends on:** nothing. **Shipped** — `ankusdrive/analysis/tolerance.py` +
   worker/MCP wiring + `tests/test_tolerance.py` (13 toys, incl. the §1 gap-stack
   reproduction at Cpk≈1.49 and the ISO 286 H7/g6 handbook check). v1 `fit_class`
   covers hole-basis H + clearance shaft letters (h, g, f, e); interference letters
@@ -104,7 +104,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
   AL6061 K_IC≈29 → SF≈2.2; invert to a_c≈9.5 mm at K=K_IC. Goodman σ_a=90/σ_m=40 on
   6061 → SF≈0.94 `pass:false`. **Negatives:** tensile mean > UTS forces `pass:false`
   regardless of cycles; crack > a_c reports negative margin, never a positive SF.
-- **Depends on:** Materials DB (done). **Shipped** — `driftpin/analysis/durability.py`
+- **Depends on:** Materials DB (done). **Shipped** — `ankusdrive/analysis/durability.py`
   + worker/MCP wiring + `tests/test_durability.py` (9 toys: LEFM K=13.3 / a_c=9.5 mm,
   Goodman SF=0.94 with the pass/fail crossing, Archard 45 mm³, two-sided negatives
   for static overload, past-critical-crack, and missing material data). Strengths,
@@ -175,7 +175,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
 ### Sprint 6 — Async / long-solve infrastructure ✅ shipped
 - **Goal:** run a multi-minute solve without holding the MCP channel; cache by
   content-hash so unchanged work isn't re-solved.
-- **Status: shipped** as a **FreeCAD-free `driftpin/jobs.py`** facility — a job
+- **Status: shipped** as a **FreeCAD-free `ankusdrive/jobs.py`** facility — a job
   registry + background-thread runner + content-hash cache + bounded eviction,
   generalizing the render-job pattern (`render_photoreal_submit` + `render_job`)
   into one shared poll surface. MCP surface: `async_demo_submit` (the reference
@@ -198,7 +198,7 @@ The pattern families 2 and 10 already shipped, repeated verbatim per sprint:
 
 ### Sprint 7 — CFD ✅ shipped (P2 M2 + P3 M3/M4)
 - **Tools:** `cfd_internal_flow` · `cfd_external_flow`. OpenFOAM (CfdOF/SU2) behind
-  `pip install driftpin[cfd]`.
+  `pip install ankusdrive[cfd]`.
 - **Acceptance:** straight Ø10 mm pipe, water, Re≈1700 → Hagen–Poiseuille
   Δp≈53 Pa within 10%; halving D raises laminar Δp ~16× (D⁴). **Negative:** missing
   OpenFOAM → graceful "solver not installed".

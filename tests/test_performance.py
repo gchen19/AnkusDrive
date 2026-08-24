@@ -27,8 +27,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import performance as pf  # noqa: E402
-from driftpin.gates import performance as pgate  # noqa: E402
+from ankusdrive.analysis import performance as pf  # noqa: E402
+from ankusdrive.gates import performance as pgate  # noqa: E402
 
 
 # --- the three-state verdict ----------------------------------------------------
@@ -296,8 +296,8 @@ def test_contract_round_trips_and_verifies_on_a_part():
     """Declare a Δp limit whose metric comes from the analytic pipe screen, and verify
     it end to end: a generous limit passes, an impossible one fails, and a limit sitting
     inside the correlation band comes back indeterminate rather than guessing."""
-    from driftpin import Worker
-    from driftpin.client import WorkerError
+    from ankusdrive import Worker
+    from ankusdrive.client import WorkerError
 
     # 10 mm bore, 1 m long, 0.5 L/min of water -> laminar, 34.0 Pa (the exact
     # Hagen-Poiseuille branch, so band_pct is None and the verdict is clean)
@@ -391,8 +391,8 @@ def test_solver_tier_proves_an_aero_spec_end_to_end():
     actual CFD solve with its trust block attached. Two-sided on the same solve — a
     generous limit passes, an impossible one fails — plus a trust demand that no solve
     can satisfy, which must come back indeterminate rather than pass."""
-    from driftpin import Worker, solvers
-    from driftpin.analysis import cfd
+    from ankusdrive import Worker, solvers
+    from ankusdrive.analysis import cfd
     from tests.heavy_solve import skip_heavy
     if skip_heavy("OpenFOAM performance contract"):
         return
@@ -495,7 +495,7 @@ def test_merge_assembly_gates_on_a_declared_performance_contract():
     BLOCKED with the requirement named; an unverified one is neither (it surfaces as
     its own outcome and the merge is not failed for it); and a component that declares
     nothing produces no performance block whatsoever — the pre-#261 report, exactly."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         # The builder session saves; a SEPARATE coordinator session merges — so this
@@ -545,7 +545,7 @@ def test_editing_a_verified_part_makes_the_gate_report_stale_not_met():
     """A verdict is about the shape that was measured. Verify a part, then change it,
     and the gate must stop honoring the old answer — the conservative half of "a gate
     never treats absence of evidence as evidence"."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         with Worker() as w:

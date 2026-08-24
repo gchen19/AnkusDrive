@@ -1,4 +1,4 @@
-"""Design-for-Cost toys — two-sided oracles for driftpin.analysis.cost.
+"""Design-for-Cost toys — two-sided oracles for ankusdrive.analysis.cost.
 
 Pure-Python, no FreeCAD. Each check pins a closed-form / handbook cost against a
 hand calculation AND verifies a deliberately-bad input is caught, mirroring
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import cost, materials  # noqa: E402
+from ankusdrive.analysis import cost, materials  # noqa: E402
 
 
 # --- the MCP-visible signature (issue #238) -----------------------------------
@@ -25,11 +25,11 @@ from driftpin.analysis import cost, materials  # noqa: E402
 # instruction ("pass price_usd_kg") got a schema rejection instead of a price.
 # Calling the analysis function directly cannot see that gap. These helpers bind a
 # call against the wrapper's parameter list AND the names it forwards to the
-# worker, read straight out of driftpin/mcp_server.py by ast — so the check stays
+# worker, read straight out of ankusdrive/mcp_server.py by ast — so the check stays
 # pure-Python (no mcp import, no FreeCAD worker) while still failing if the two
 # layers drift apart again.
 
-_MCP = Path(__file__).resolve().parent.parent / "driftpin" / "mcp_server.py"
+_MCP = Path(__file__).resolve().parent.parent / "ankusdrive" / "mcp_server.py"
 
 
 def _mcp_cost_estimate_signature():

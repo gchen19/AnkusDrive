@@ -3,11 +3,11 @@ Layer M2 — agents in the loop (gated, needs ANTHROPIC_API_KEY).
 
 See tests/MULTI_AGENT_EVAL.md. Layer M1 proved the merge/gate oracle discriminates
 correct from broken. M2 asks the real question: can an LLM, given only a contract
-slice, drive DriftPin's tools to build a component that PASSES the gates when merged
+slice, drive AnkusDrive's tools to build a component that PASSES the gates when merged
 with another agent's work — and is partitioning better than one agent doing it all?
 
 Each agent is a fresh Anthropic API call (NOT a Claude Code subagent): a cold model
-with only its contract slice, a small DriftPin tool surface, and no shared state.
+with only its contract slice, a small AnkusDrive tool surface, and no shared state.
 That isolation is the point — a controlled measurement, reproducible, billed to a
 metered key, not a hand-driven demo.
 
@@ -42,8 +42,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin.manifest import resolve_constraints  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive.manifest import resolve_constraints  # noqa: E402
 
 MODELS = {
     "haiku": "claude-haiku-4-5-20251001",
@@ -81,7 +81,7 @@ def cost_of(result, model):
             + result.get("out_tokens", 0) * po) / 1e6
 
 
-# --- the DriftPin tool surface exposed to the agent --------------------------
+# --- the AnkusDrive tool surface exposed to the agent --------------------------
 
 TOOLS = [
     {
@@ -983,7 +983,7 @@ TOY7_TCHAINU = _make_tchain_unequal()
 # =============================================================================
 # toy 7r: tchainu + the RESOLVE STEP (RFC §11.1) — the design's answer to toy 7.
 # Same contract (unequal nominals, whole-mm grid, total exactly 100), but the
-# coordinator runs driftpin.manifest.resolve_constraints on the manifest and
+# coordinator runs ankusdrive.manifest.resolve_constraints on the manifest and
 # every builder receives its LITERAL resolved length — no rounding asked, no
 # global total to reconcile. tchainu measured the failure (partition 2/20,
 # single 0/20); this toy validates the fix. The lengths below are computed BY
@@ -1669,7 +1669,7 @@ TOY12_ANGULARITY = Toy(
 #   * a swept-motion interference gate (_sweep_clear): pose every part at each motion
 #     step via forward kinematics the gate encodes, then interference-check.
 # Gears can't be built with box/cylinder, so the agent surface gains add_gear (the
-# same DriftPin primitive). NOTE: add_gear (and rotate) change the tool surface — not
+# same AnkusDrive primitive). NOTE: add_gear (and rotate) change the tool surface — not
 # a clean baseline against the pre-kinematic Haiku numbers.
 # =============================================================================
 

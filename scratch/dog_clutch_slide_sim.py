@@ -26,7 +26,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scratch"))
-from driftpin import Worker          # noqa: E402
+from ankusdrive import Worker          # noqa: E402
 import sim_video as sv               # noqa: E402
 import numpy as np                   # noqa: E402
 import matplotlib                    # noqa: E402
@@ -43,7 +43,7 @@ BUILD = r"""
 import Part, math, Mesh
 import FreeCAD as App
 from FreeCAD import Vector, Placement, Rotation
-from driftpin import realize
+from ankusdrive import realize
 doc = App.ActiveDocument
 SR, GH, ND, RDOG, N, START = %f, %f, %d, %f, %d, %f
 og = doc.getObject(%r).Shape

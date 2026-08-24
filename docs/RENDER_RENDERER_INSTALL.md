@@ -5,7 +5,7 @@
 
 
 **Status: all six renderers provisioned on Linux x86_64.** The *code* side was done in
-PR #18 (all six renderers wired into `driftpin/worker.py`'s `_RENDERERS` registry,
+PR #18 (all six renderers wired into `ankusdrive/worker.py`'s `_RENDERERS` registry,
 scene-export-verified headless). The prebuilt pair (Appleseed, LuxCore) ship via
 `scripts/install-renderers.sh`; the three source-only renderers (pbrt-v4, Cycles,
 OSPRay Studio) now build via `scripts/build-renderers.sh` (§7 item 3). On a fully
@@ -95,22 +95,22 @@ agent → MCP tool → worker handler → _resolve_renderer_exec("X")
        → proj.Proxy.render() → addon → Popen(<binary> …)   # inherits the worker's env
 ```
 
-`_resolve_renderer_exec` (in `driftpin/worker.py`) finds the binary in this order and
+`_resolve_renderer_exec` (in `ankusdrive/worker.py`) finds the binary in this order and
 then writes it into the FreeCAD param the plugin reads:
 
-1. `DRIFTPIN_<RENDERER>_PATH` env var (e.g. `DRIFTPIN_LUXCORE_PATH`)
+1. `ANKUSDRIVE_<RENDERER>_PATH` env var (e.g. `ANKUSDRIVE_LUXCORE_PATH`)
 2. an exec path already set in FreeCAD prefs
 3. **`PATH`** via `shutil.which`
 4. per-OS standard dirs in the `_RENDERERS[...]["dirs"]` table
 
-**Environment inheritance is the crux.** Neither `driftpin/client.py` (which spawns
+**Environment inheritance is the crux.** Neither `ankusdrive/client.py` (which spawns
 `freecadcmd`) nor the Render addon's `RendererWorker` (which `Popen`s the renderer)
 passes an explicit `env=`, so the renderer subprocess inherits the **worker's** env,
 which inherits the **MCP server's** env. Therefore:
 
 > Making a renderer "available to the agent" = making it discoverable by one of the
 > four mechanisms above **in the environment that launches the MCP server**
-> (`python -m driftpin mcp`). Setting it only in an interactive shell does nothing.
+> (`python -m ankusdrive mcp`). Setting it only in an interactive shell does nothing.
 
 ## 2. The two hurdles
 
@@ -134,7 +134,7 @@ exec /opt/luxcore/luxcoreconsole "$@"
 ```
 
 `shutil.which("luxcoreconsole")` finds the wrapper, libs load, the render runs.
-Alternative (no wrapper): set `DRIFTPIN_<R>_PATH` to the real binary **and** export
+Alternative (no wrapper): set `ANKUSDRIVE_<R>_PATH` to the real binary **and** export
 `LD_LIBRARY_PATH` in the MCP server's launch env — but the wrapper is self-contained
 and preferred.
 
@@ -172,7 +172,7 @@ Pick one and apply it to the **MCP server launch env**:
 - **PATH wrappers (recommended):** drop the §3 wrappers in a dir on the MCP server's
   `PATH`. Nothing else to configure.
 - **MCP client config `env` block:** if the agent launches the server via an MCP
-  config (Claude Desktop/Code `mcpServers` entry), set `DRIFTPIN_<R>_PATH` and
+  config (Claude Desktop/Code `mcpServers` entry), set `ANKUSDRIVE_<R>_PATH` and
   `LD_LIBRARY_PATH` there so the spawned server (and its worker) inherit them.
 - **Service/shell env:** if the server runs from a shell or unit file, export the
   vars there.
@@ -292,10 +292,10 @@ Pinned source revisions (hardcoded in `scripts/build-renderers.sh`):
   montage above, regenerated across all six available renderers.
 - ✅ `scripts/render-material-gallery.py` + `docs/render_gallery_{povray,luxcore,appleseed,cycles,ospray,pbrt}.png`
   — the material library rendered as a grid per renderer (now all six).
-- ✅ `driftpin/worker.py` — added `@handler("render_capabilities")`; refactored
+- ✅ `ankusdrive/worker.py` — added `@handler("render_capabilities")`; refactored
   `_resolve_renderer_exec` to share a side-effect-free `_find_renderer_exec` the probe
   reuses. The `_RENDERERS` registry was already complete (unchanged).
-- ✅ `driftpin/mcp_server.py` — added the `render_capabilities` tool.
+- ✅ `ankusdrive/mcp_server.py` — added the `render_capabilities` tool.
 - ✅ `tests/test_render_photoreal.py` — added `test_render_capabilities` (a pure probe,
   so it never skips). The gated renderer tests still SKIP until binaries land on a box.
 - ⬜ `docs/` — `RENDER_WORKBENCH.md` notes the new tool + script; deeper §6/§7 updates and

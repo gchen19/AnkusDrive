@@ -40,8 +40,8 @@ import matplotlib.pyplot as plt                             # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection     # noqa: E402
 from PIL import Image                                       # noqa: E402
 
-from driftpin import Worker                                 # noqa: E402
-from driftpin.analysis import nonlinear as nl               # noqa: E402
+from ankusdrive import Worker                                 # noqa: E402
+from ankusdrive.analysis import nonlinear as nl               # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
 ART = REPO / "artifacts"
@@ -125,7 +125,7 @@ def _solve_at(w, force_n):
            direction={"handle": box["handle"], "edge": zed["tag"]}, reversed=True)
     w.call("fem_mesh", analysis=an["handle"], body=box["handle"],
            char_length=MESH, element_order="2nd", _timeout=180.0)
-    w.call("fem_run", analysis=an["handle"], workdir="/tmp/driftpin_elastica_video",
+    w.call("fem_run", analysis=an["handle"], workdir="/tmp/ankusdrive_elastica_video",
            _timeout=400.0)
     return w.call("run_script", _timeout=120.0, code=EXTRACT)["result"]
 

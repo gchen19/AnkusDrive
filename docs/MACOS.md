@@ -1,10 +1,10 @@
 # macOS support (incl. Apple Silicon)
 
-DriftPin's core — CAD modeling and structural FEM — runs natively on macOS against a
+AnkusDrive's core — CAD modeling and structural FEM — runs natively on macOS against a
 stock FreeCAD.app install, no extra setup. This page covers how FreeCAD is located, what
-`driftpin doctor` tells you, and the honest per-solver install reality on macOS.
+`ankusdrive doctor` tells you, and the honest per-solver install reality on macOS.
 
-Tracking epic: [#189](https://github.com/gchen19/DriftPin/issues/189).
+Tracking epic: [#189](https://github.com/gchen19/AnkusDrive/issues/189).
 
 ## TL;DR — verified working on macOS 26.5, Apple Silicon (arm64) + FreeCAD 1.1.1
 
@@ -13,8 +13,8 @@ Tracking epic: [#189](https://github.com/gchen19/DriftPin/issues/189).
 python3 -m venv .venv
 .venv/bin/pip install -e .
 
-.venv/bin/driftpin ping      # ping=pong freecad=1.1.1
-.venv/bin/driftpin doctor    # FreeCAD + solver checklist
+.venv/bin/ankusdrive ping      # ping=pong freecad=1.1.1
+.venv/bin/ankusdrive doctor    # FreeCAD + solver checklist
 ```
 
 - **Core CAD** — the `freecadcmd` worker boots from the app bundle and builds geometry. ✅
@@ -34,37 +34,37 @@ python3 -m venv .venv
   under Rosetta 2 on Apple Silicon. ✅
 - **OpenFOAM-backed families and the GPL source builds** stay Linux-only — see below.
 
-## How DriftPin finds FreeCAD
+## How AnkusDrive finds FreeCAD
 
-Resolution order (in [`driftpin/client.py`](../driftpin/client.py) `_resolve_freecadcmd`):
+Resolution order (in [`ankusdrive/client.py`](../ankusdrive/client.py) `_resolve_freecadcmd`):
 
-1. **`$DRIFTPIN_FREECADCMD`** — explicit override, returned verbatim.
+1. **`$ANKUSDRIVE_FREECADCMD`** — explicit override, returned verbatim.
 2. **PATH** — `shutil.which` tries `freecadcmd`, `FreeCADCmd`, `freecad.cmd`. The macOS
    app bundle does not put anything on PATH, so this usually misses — which is why
    step 3 exists.
 3. **The default bundle path**: `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd`.
 
 So a stock drag-to-Applications install needs no configuration. For a non-standard
-location, set `DRIFTPIN_FREECADCMD` — and to make it stick across shells and MCP-host
+location, set `ANKUSDRIVE_FREECADCMD` — and to make it stick across shells and MCP-host
 launches (MCP hosts spawn the server with a minimal env), put it in the config file
-instead: `~/.config/driftpin/config.toml` (the [#199](https://github.com/gchen19/DriftPin/issues/199)
-layer; every `DRIFTPIN_*` var can live there).
+instead: `~/.config/ankusdrive/config.toml` (the [#199](https://github.com/gchen19/AnkusDrive/issues/199)
+layer; every `ANKUSDRIVE_*` var can live there).
 
 Note: `import FreeCAD` does **not** work in any stock interpreter on macOS — not even
 the bundle's own `Contents/Resources/bin/python` without a `sys.path` shim. That's fine:
-nothing in DriftPin (or its tests) imports FreeCAD in-process; everything goes through
+nothing in AnkusDrive (or its tests) imports FreeCAD in-process; everything goes through
 the `freecadcmd` worker subprocess.
 
-## `driftpin doctor`
+## `ankusdrive doctor`
 
 One cross-platform health report: resolves FreeCAD **and** every solver family and
 prints, per item, found/missing, the resolved path (or why it didn't resolve), and the
 exact fix.
 
 ```bash
-driftpin doctor            # human-readable checklist
-driftpin doctor --json     # machine-readable (CI preflight; exits non-zero if FreeCAD unresolved)
-driftpin doctor --no-boot  # resolve FreeCAD's path only, skip the version probe (faster)
+ankusdrive doctor            # human-readable checklist
+ankusdrive doctor --json     # machine-readable (CI preflight; exits non-zero if FreeCAD unresolved)
+ankusdrive doctor --no-boot  # resolve FreeCAD's path only, skip the version probe (faster)
 ```
 
 ## Running the test suite on macOS
@@ -81,16 +81,16 @@ Linux (Windows has [`install-solvers.ps1`](../scripts/install-solvers.ps1)):
 ```bash
 scripts/install-solvers.sh                    # pip-wheel extras (mbd, topology, optics, fluids)
 scripts/install-solvers.sh su2 prusaslicer    # native binaries, auto-discovered — no env vars
-scripts/install-solvers.sh --list             # what resolves right now (≈ driftpin doctor)
+scripts/install-solvers.sh --list             # what resolves right now (≈ ankusdrive doctor)
 ```
 
-- **pip-wheel families** install into the `.venv` that runs `driftpin mcp`, best-effort
+- **pip-wheel families** install into the `.venv` that runs `ankusdrive mcp`, best-effort
   and independently — one missing wheel doesn't abort the rest. On macOS the `mbd` extra
   resolves to **mujoco**: PyBullet ships no macOS wheels and its sdist fails to compile
   under clang (verified on arm64 / Python 3.14); the registry accepts either engine.
 - **SU2** downloads the official `macos64` release into
-  `~/Library/Application Support/DriftPin/solvers` — the Darwin analog of the Windows
-  `%LOCALAPPDATA%\DriftPin\solvers` layout, which `driftpin/solvers.py` globs so the
+  `~/Library/Application Support/AnkusDrive/solvers` — the Darwin analog of the Windows
+  `%LOCALAPPDATA%\AnkusDrive\solvers` layout, which `ankusdrive/solvers.py` globs so the
   binary resolves with **no env var**. The official build is x86_64-only; on Apple
   Silicon it runs under **Rosetta 2** (the script checks and refuses to install without
   it: `softwareupdate --install-rosetta --agree-to-license`). A native arm64 SU2 is a
@@ -104,39 +104,39 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ dri
 | Family | Solver | macOS status |
 |---|---|---|
 | Core FEM / warpage | CalculiX `ccx` | ✅ **bundled** in FreeCAD.app's `Contents/Resources/bin` — nothing to install |
-| MBD | MuJoCo | ✅ `pip install 'driftpin[mbd]'` (arm64 wheels; PyBullet has none and won't compile — the extra selects mujoco on Darwin) |
-| Topology | topopt / solidspy | ✅ `pip install 'driftpin[topology]'` |
-| Optics (sequential) | optiland / rayoptics | ✅ `pip install 'driftpin[optics]'` |
-| Optics (non-seq) | KrakenOS (GPL) | ✅ `pip install 'driftpin[optics_gpl]'`, run out-of-process |
+| MBD | MuJoCo | ✅ `pip install 'ankusdrive[mbd]'` (arm64 wheels; PyBullet has none and won't compile — the extra selects mujoco on Darwin) |
+| Topology | topopt / solidspy | ✅ `pip install 'ankusdrive[topology]'` |
+| Optics (sequential) | optiland / rayoptics | ✅ `pip install 'ankusdrive[optics]'` |
+| Optics (non-seq) | KrakenOS (GPL) | ✅ `pip install 'ankusdrive[optics_gpl]'`, run out-of-process |
 | Fluids properties | CoolProp | ✅ pip wheel (arm64) |
 | Slicing | PrusaSlicer | ✅ `brew install --cask prusaslicer` (or `install-solvers.sh prusaslicer`) — auto-discovered, live slice verified |
-| CFD (pipe / plate / bridge / wind tunnel) | OpenFOAM | ✅ **Multipass**, same routing as FSI — needs the two in-VM exports below. All built-in CFD case builders are OpenFOAM-only; live-verified on Apple Silicon ([#223](https://github.com/gchen19/DriftPin/issues/223)) |
-| CFD (native, plane channel) | SU2 | ✅ `install-solvers.sh su2` installs it (official x86_64 binary under **Rosetta 2**, auto-discovered from the provisioner dir). Since [#237](https://github.com/gchen19/DriftPin/issues/237) item 3 DriftPin **builds** the plane-Poiseuille case for it (`channel_height_mm`), gated exactly, so SU2 alone makes the cfd family available. Geometry-bearing CFD still needs OpenFOAM in the VM |
-| Transient/radiation thermal | Elmer | ⚠️ **no prebuilt macOS binaries exist** — no Homebrew formula, no conda-forge package (older hints claiming one were wrong). Source build (CMake + gfortran) from https://www.elmerfem.org/, then `DRIFTPIN_ELMER_PATH` |
-| Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD (`pocl` on Apple Silicon); dedicated venv (`DRIFTPIN_BEMPP_PYTHON`) |
+| CFD (pipe / plate / bridge / wind tunnel) | OpenFOAM | ✅ **Multipass**, same routing as FSI — needs the two in-VM exports below. All built-in CFD case builders are OpenFOAM-only; live-verified on Apple Silicon ([#223](https://github.com/gchen19/AnkusDrive/issues/223)) |
+| CFD (native, plane channel) | SU2 | ✅ `install-solvers.sh su2` installs it (official x86_64 binary under **Rosetta 2**, auto-discovered from the provisioner dir). Since [#237](https://github.com/gchen19/AnkusDrive/issues/237) item 3 AnkusDrive **builds** the plane-Poiseuille case for it (`channel_height_mm`), gated exactly, so SU2 alone makes the cfd family available. Geometry-bearing CFD still needs OpenFOAM in the VM |
+| Transient/radiation thermal | Elmer | ⚠️ **no prebuilt macOS binaries exist** — no Homebrew formula, no conda-forge package (older hints claiming one were wrong). Source build (CMake + gfortran) from https://www.elmerfem.org/, then `ANKUSDRIVE_ELMER_PATH` |
+| Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD (`pocl` on Apple Silicon); dedicated venv (`ANKUSDRIVE_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ source build with brew deps; the `em_gpl` recipe is Linux-only today |
 | DEM (granular) | YADE (GPL) | ⚠️ no macOS build path in this repo — Linux box or container |
-| FSI (preCICE) | OpenFOAM + CalculiX | ✅ **Multipass** (arm64-native Ubuntu VM) — DriftPin runs the apps via `multipass exec`; live coupled solve verified ([#193](https://github.com/gchen19/DriftPin/issues/193), see below). Needs the in-VM `DRIFTPIN_*` exports |
-| Injection-molding fill | openInjMoldSim / interFoam | ✅ **Multipass**, same routing — needs the in-VM exports below. Both paths **live-verified on Apple Silicon**: the `interFoam` cavity-fill gates (2026-08-05) and `openInjMoldSim` fill/pack/cool itself (2026-08-15, [#276](https://github.com/gchen19/DriftPin/issues/276) — arm64 OF7-org source build via `tools/build_openinjmoldsim.sh`, gcc-11 pin) |
+| FSI (preCICE) | OpenFOAM + CalculiX | ✅ **Multipass** (arm64-native Ubuntu VM) — AnkusDrive runs the apps via `multipass exec`; live coupled solve verified ([#193](https://github.com/gchen19/AnkusDrive/issues/193), see below). Needs the in-VM `ANKUSDRIVE_*` exports |
+| Injection-molding fill | openInjMoldSim / interFoam | ✅ **Multipass**, same routing — needs the in-VM exports below. Both paths **live-verified on Apple Silicon**: the `interFoam` cavity-fill gates (2026-08-05) and `openInjMoldSim` fill/pack/cool itself (2026-08-15, [#276](https://github.com/gchen19/AnkusDrive/issues/276) — arm64 OF7-org source build via `tools/build_openinjmoldsim.sh`, gcc-11 pin) |
 
 Every absent solver **degrades cleanly** — the family returns `{ok: false, reason, install}`
 rather than crashing — so an incomplete solver set never breaks the server; those tools
-just report "not available" with the fix. `driftpin doctor` shows the current state.
+just report "not available" with the fix. `ankusdrive doctor` shows the current state.
 
 ## OpenFOAM-backed families via Multipass (CFD / FSI / molding)
 
 OpenFOAM has no native macOS build; [openfoam.org](https://openfoam.org/version/macos/)
 ships it inside a **Canonical Multipass** VM (arm64-native on Apple Silicon — no
-emulation). DriftPin routes the OpenFOAM apps through that VM: on macOS
+emulation). AnkusDrive routes the OpenFOAM apps through that VM: on macOS
 `solvers.bash_argv` launches `multipass exec <instance> -- bash -c "cd <case> && …"`
-(issue [#193](https://github.com/gchen19/DriftPin/issues/193)), so the same case the
+(issue [#193](https://github.com/gchen19/AnkusDrive/issues/193)), so the same case the
 host builds is meshed/solved inside the VM. That includes **plain CFD**: every built-in
 case mode of `cfd_internal_flow_submit` / `cfd_external_flow_submit` — pipe, RANS pipe,
 snappyHexMesh geometry bridge, flat plate, wind tunnel — emits an OpenFOAM dictionary
 tree, so CFD needs this VM exactly as much as molding and FSI do.
 
 > **CFD does degrade to SU2 — for one case.** Since
-> [#237](https://github.com/gchen19/DriftPin/issues/237) item 3, DriftPin builds a
+> [#237](https://github.com/gchen19/AnkusDrive/issues/237) item 3, AnkusDrive builds a
 > native SU2 case: `cfd_internal_flow_submit(channel_height_mm=...)` writes its own
 > `.su2` mesh, config and inlet profile and solves plane Poiseuille against the exact
 > closed form Δp = 12·μ·U·L/h² (live ratio **1.000000**, mesh-independent over 400 and
@@ -151,7 +151,7 @@ tree, so CFD needs this VM exactly as much as molding and FSI do.
 > below.
 
 **1. Install Multipass and launch the VM** (the instance name must be `openfoam`, or set
-`DRIFTPIN_OPENFOAM_INSTANCE`):
+`ANKUSDRIVE_OPENFOAM_INSTANCE`):
 
 ```bash
 brew install --cask multipass
@@ -174,19 +174,19 @@ mkdir -p ~/fsi-run
 multipass mount ~/fsi-run openfoam:$HOME/fsi-run      # same path both sides
 ```
 
-**4. Point DriftPin at the in-VM stack.** These are absolute *in-VM* paths. Discovery
+**4. Point AnkusDrive at the in-VM stack.** These are absolute *in-VM* paths. Discovery
 cannot stat or glob them — a Multipass VM's filesystem is opaque from macOS, unlike WSL's
-`\\wsl$` mirror — so on macOS an absolute `DRIFTPIN_*` override is **trusted as a VM path**
+`\\wsl$` mirror — so on macOS an absolute `ANKUSDRIVE_*` override is **trusted as a VM path**
 whenever `multipass` is on PATH, and that trust is the only way these families resolve
 here. Get one wrong and the solve fails inside the VM rather than degrading; with none set
-`driftpin doctor` reports OpenFOAM `unwired` and its fix line points back here:
+`ankusdrive doctor` reports OpenFOAM `unwired` and its fix line points back here:
 
 ```bash
 export TMPDIR=$HOME/fsi-run                            # so test case dirs land in the mount
-export DRIFTPIN_CCX_PRECICE=/home/ubuntu/calculix-adapter/bin/ccx_preCICE
-export DRIFTPIN_PRECICE_LIB=/home/ubuntu/precice-serial/lib
-export DRIFTPIN_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
-export DRIFTPIN_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+export ANKUSDRIVE_CCX_PRECICE=/home/ubuntu/calculix-adapter/bin/ccx_preCICE
+export ANKUSDRIVE_PRECICE_LIB=/home/ubuntu/precice-serial/lib
+export ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
+export ANKUSDRIVE_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
 ```
 
 **Verify** — the coupled preCICE OpenFOAM↔CalculiX solve, live on Apple Silicon:
@@ -207,13 +207,13 @@ Two exports on top of the step-3 mount wire them up; they need none of the preCI
 
 ```bash
 export TMPDIR=$HOME/fsi-run                            # case dirs land in the mount
-export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
-export DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
+export ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+export ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
 ```
 
-Until those are set, `driftpin doctor` / `solve_capabilities` report OpenFOAM `unwired`
+Until those are set, `ankusdrive doctor` / `solve_capabilities` report OpenFOAM `unwired`
 with the fix for **the state your VM is actually in** — discovery reads (never starts)
-`multipass info`, time-boxed, and picks one of three hints ([#237](https://github.com/gchen19/DriftPin/issues/237)):
+`multipass info`, time-boxed, and picks one of three hints ([#237](https://github.com/gchen19/AnkusDrive/issues/237)):
 
 | `found_at` | VM state | `wire_hint` says |
 |---|---|---|
@@ -250,31 +250,31 @@ nor the bashrc is visible from the host:
 
 ```bash
 # interFoam path — also what a generic `cfd_*_flow_submit` on OpenFOAM would use
-export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
-export DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/interFoam
+export ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+export ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/interFoam
 
 # openInjMoldSim path — build OpenFOAM-7 (.org) + the solver in the VM first:
 #   multipass shell openfoam   →   bash tools/build_openinjmoldsim.sh --build
 # (.org spells the arm64 platform linuxArm64…, unlike ESI's linuxARM64…)
-export DRIFTPIN_OPENINJMOLDSIM=/home/ubuntu/OpenFOAM/ubuntu-7/platforms/linuxArm64GccDPInt32Opt/bin/openInjMoldSim
-export DRIFTPIN_OPENINJMOLDSIM_BASHRC=/home/ubuntu/OpenFOAM/OpenFOAM-7/etc/bashrc
+export ANKUSDRIVE_OPENINJMOLDSIM=/home/ubuntu/OpenFOAM/ubuntu-7/platforms/linuxArm64GccDPInt32Opt/bin/openInjMoldSim
+export ANKUSDRIVE_OPENINJMOLDSIM_BASHRC=/home/ubuntu/OpenFOAM/OpenFOAM-7/etc/bashrc
 ```
 
 The case dir must sit under the shared mount (`TMPDIR` above), same absolute path on both
 sides — `multipass exec` starts in the VM home, so the launcher `cd`s into the case by its
-host path. `driftpin doctor` then reports the family as **ready … (in Multipass VM)**,
+host path. `ankusdrive doctor` then reports the family as **ready … (in Multipass VM)**,
 which is how you tell an in-VM resolution from a native one.
 
 Status: **live-verified on Apple Silicon 2026-08-05** for the `interFoam` path — both
 heavy gates solve in the VM (`test_fillable_cavity_reaches_far_end`, a fillable cavity
 reaching the far end, and `test_short_shot_cavity_stalls`, a short shot that does not),
-29/29 in `tests/test_molding_fill.py` with `DRIFTPIN_OPENFOAM_PATH` pointed at
+29/29 in `tests/test_molding_fill.py` with `ANKUSDRIVE_OPENFOAM_PATH` pointed at
 `interFoam`. Control check: with the exports unset those two are exactly the tests that
 report `SKIP — OpenFOAM not installed`, so they really did solve. The file is now in the
 default `tests/run_macos_heavy.sh` set.
 
 **openInjMoldSim is live-verified on Apple Silicon too (2026-08-15,
-[#276](https://github.com/gchen19/DriftPin/issues/276)).** The full OF7-org parallel
+[#276](https://github.com/gchen19/AnkusDrive/issues/276)).** The full OF7-org parallel
 stack built in the VM — `tools/build_openinjmoldsim.sh --build` completes there — and
 all three solver-backed tests run and pass with the two exports above:
 `test_openinjmoldsim_generated_case_fills`,
@@ -299,9 +299,9 @@ on any OS yet.
 ## CI: the Apple-Silicon lane
 
 Everything above was verified by hand. [`heavy-solves.yml`](../.github/workflows/heavy-solves.yml)
-now carries a second job — `heavy-solves-macos`, label `[self-hosted, driftpin, macOS]` —
+now carries a second job — `heavy-solves-macos`, label `[self-hosted, ankusdrive, macOS]` —
 so a regression in the Darwin substrate is caught automatically instead of on the next
-manual run (issue [#220](https://github.com/gchen19/DriftPin/issues/220)). It shares the
+manual run (issue [#220](https://github.com/gchen19/AnkusDrive/issues/220)). It shares the
 Linux lane's triggers (solver-path push to `main`, `workflow_dispatch`, the 06:00 UTC
 cron) and its `RUN_HEAVY_SOLVES: "1"`, but the two jobs are independent — a stopped
 Multipass VM never blocks the Linux regression report, and vice versa.
@@ -330,12 +330,12 @@ bash tests/run_macos_heavy.sh tests/test_some_new_gate.py
 1. **Provision the box** exactly as the sections above describe: SU2 (`install-solvers.sh su2`)
    + Rosetta, Multipass with a persistent `openfoam` instance carrying the FSI stack
    (`install-solvers.sh fsi`), and the host scratch dir mounted at a matching path.
-2. **Register the runner** with the `driftpin` label (the `macOS` and `self-hosted` labels
+2. **Register the runner** with the `ankusdrive` label (the `macOS` and `self-hosted` labels
    are applied automatically from the host OS):
 
    ```bash
    # token from  Settings -> Actions -> Runners -> New self-hosted runner
-   ./config.sh --url https://github.com/gchen19/DriftPin --token <TOKEN> --labels driftpin
+   ./config.sh --url https://github.com/gchen19/AnkusDrive --token <TOKEN> --labels ankusdrive
    ./svc.sh install && ./svc.sh start      # run as a service so the cron lane fires unattended
    ```
 
@@ -345,19 +345,19 @@ bash tests/run_macos_heavy.sh tests/test_some_new_gate.py
 
    ```
    TMPDIR=/Users/<you>/fsi-run
-   DRIFTPIN_CCX_PRECICE=/home/ubuntu/calculix-adapter/bin/ccx_preCICE
-   DRIFTPIN_PRECICE_LIB=/home/ubuntu/precice-serial/lib
-   DRIFTPIN_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
-   DRIFTPIN_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
-   DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
-   DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
+   ANKUSDRIVE_CCX_PRECICE=/home/ubuntu/calculix-adapter/bin/ccx_preCICE
+   ANKUSDRIVE_PRECICE_LIB=/home/ubuntu/precice-serial/lib
+   ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
+   ANKUSDRIVE_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+   ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+   ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
    ```
 
    `TMPDIR` is the host side of the `multipass mount`, so the `mkdtemp` case dirs land
    somewhere the VM can `cd` into at the same absolute path. The other six are in-VM
    paths. The last two are the plain-CFD pair from
    [Plain CFD … in the VM](#plain-cfd-pipe-flat-plate-mesh-bridge-wind-tunnel-in-the-vm):
-   the built-in CFD builders resolve through `DRIFTPIN_OPENFOAM_*`, *not* the FSI pair
+   the built-in CFD builders resolve through `ANKUSDRIVE_OPENFOAM_*`, *not* the FSI pair
    above, so omitting them leaves `test_openfoam` / `test_meshbridge` / `test_wind_tunnel`
    skipping their live halves — which is exactly what the preflight refuses to let pass.
    Restart the service after editing (`./svc.sh stop && ./svc.sh start`).
@@ -398,6 +398,6 @@ unrelated-looking error minutes later:
 
 ## Process cleanup
 
-On worker shutdown DriftPin sweeps any renderer subprocesses `freecadcmd` spawned via a
+On worker shutdown AnkusDrive sweeps any renderer subprocesses `freecadcmd` spawned via a
 POSIX process-group `SIGKILL` — macOS takes the same path as Linux
 (`client.py`, guarded on `os.name == "posix"`), so nothing leaks.

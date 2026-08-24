@@ -1,7 +1,7 @@
 """
-DriftPin orchestration — the HOST-SIDE reference layer for multi-agent design.
+AnkusDrive orchestration — the HOST-SIDE reference layer for multi-agent design.
 
-This package is deliberately NOT part of the `driftpin` package. DriftPin ships
+This package is deliberately NOT part of the `ankusdrive` package. AnkusDrive ships
 thin, tool-agnostic primitives (merge_assembly, publish_interface, the gates,
 the lockfile); *orchestration* — decomposing a design, fanning out builder
 agents, merging, and renegotiating — lives here, on the host side, exactly as

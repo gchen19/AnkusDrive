@@ -15,7 +15,7 @@ fraction φ climbing as the cloud densifies and the mean coordination number ris
 to the ≈6 isostatic signature of RCP — the two banded gates the test asserts.
 
 The whole settle is ONE real DEM solve (YADE, GPL-3.0, run out-of-process via
-driftpin/dem_gpl_runner.py — this script never imports YADE); the animation is its
+ankusdrive/dem_gpl_runner.py — this script never imports YADE); the animation is its
 position snapshots, not an interpolation.
 
 Outputs (artifacts/): granular_pack_settling.gif + granular_pack_settling_filmstrip.png
@@ -40,11 +40,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt                             # noqa: E402
 from PIL import Image                                       # noqa: E402
 
-from driftpin.analysis import granular as g                 # noqa: E402
+from ankusdrive.analysis import granular as g                 # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
 ART = REPO / "artifacts"
-RUNNER = REPO / "driftpin" / "dem_gpl_runner.py"
+RUNNER = REPO / "ankusdrive" / "dem_gpl_runner.py"
 
 # pour config (mm shown to the viewer; the solve is in SI metres)
 N_SPHERES = 800
@@ -54,13 +54,13 @@ N_SNAPSHOTS = 14
 
 
 def _yade_exec():
-    for env in ("DRIFTPIN_YADE", "DRIFTPIN_YADE_PATH"):
+    for env in ("ANKUSDRIVE_YADE", "ANKUSDRIVE_YADE_PATH"):
         if (v := os.environ.get(env)) and Path(v).is_file():
             return v
     cand = Path(os.path.expanduser("~/opt/yade/bin/yade"))
     if cand.is_file():
         return str(cand)
-    from driftpin import solvers
+    from ankusdrive import solvers
     return solvers.find_solver("yade").get("path")
 
 
@@ -139,7 +139,7 @@ def main():
     ART.mkdir(parents=True, exist_ok=True)
     exe = _yade_exec()
     if not exe:
-        print("  no `yade` executable (set DRIFTPIN_YADE) — cannot render the REAL "
+        print("  no `yade` executable (set ANKUSDRIVE_YADE) — cannot render the REAL "
               "pile; skipping (this artifact requires the GPL DEM solver).")
         return 2
 

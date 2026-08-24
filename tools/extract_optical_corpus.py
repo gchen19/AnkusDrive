@@ -10,7 +10,7 @@ Dev dependency: PyYAML (``pip install pyyaml``). Run after updating the submodul
 
     python3 tools/extract_optical_corpus.py \
         --source vendor/refractiveindex.info-database/database \
-        --out driftpin/analysis/materials/optical.json
+        --out ankusdrive/analysis/materials/optical.json
 
 Provenance (the submodule tag) is recorded in each card's ``optical_source`` and
 in the file header. Data is CC0 (public domain).
@@ -126,7 +126,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--source", default="vendor/refractiveindex.info-database/database",
                     help="path to the database/ dir of the submodule")
-    ap.add_argument("--out", default="driftpin/analysis/materials/optical.json")
+    ap.add_argument("--out", default="ankusdrive/analysis/materials/optical.json")
     args = ap.parse_args()
 
     source = Path(args.source)

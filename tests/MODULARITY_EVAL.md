@@ -1,6 +1,6 @@
 # Modularity eval ladder — evaluation plan
 
-How we decide whether handing the agent DriftPin's **modularity** abstractions —
+How we decide whether handing the agent AnkusDrive's **modularity** abstractions —
 recipes, design-table families, the substitutability gate, the lockfile change
 detector, and the Form/Fit/Function predicate — actually makes it *design better*.
 Companion to [`MULTI_AGENT_EVAL.md`](MULTI_AGENT_EVAL.md) (a *team* that partitions

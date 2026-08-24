@@ -1,4 +1,4 @@
-# DriftPin examples
+# AnkusDrive examples
 
 ## Phase 0 multi-agent walkthrough
 
@@ -6,7 +6,7 @@
 [`docs/MULTI_AGENT.md`](../docs/MULTI_AGENT.md) §12 (Phase 0): a team of agents
 **partitions** a design into components, builds them independently, then a
 coordinator **merges** them into one assembly and runs the verification gates —
-all with **today's** DriftPin tools, zero new code.
+all with **today's** AnkusDrive tools, zero new code.
 
 The point it proves: agents that never share process state can still build one
 product together, because their only coupling is a shared **interface contract**
@@ -45,7 +45,7 @@ The demo product is a plate with two pegs standing on it.
    - **BOM** (`bom_extract`) — rolls up `Box ×1, Cylinder ×2` with mass.
    - **Visual** — an `App::Part` has no single Shape, so the script compounds the
      placed parts (via the `run_script` escape hatch), meshes with `tessellate`,
-     and rasterizes `phase0_assembly_iso.png` with `driftpin.render`.
+     and rasterizes `phase0_assembly_iso.png` with `ankusdrive.render`.
 4. **Negative control.** The same interference gate is re-run on a deliberately
    broken layout (a peg embedded 4 mm into the plate) and must **catch** the clash
    (~804 mm³) — proving the gate discriminates fit from collision, not just passes.

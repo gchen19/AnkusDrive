@@ -2,7 +2,7 @@
 analytic oracle — the runnable evidence behind the heavy-solver PRs.
 
 Unlike the unit suites in ``tests/``, this drives the **real MCP tool surface**
-through a live FreeCAD worker (``driftpin.Worker``): each example composes a case,
+through a live FreeCAD worker (``ankusdrive.Worker``): each example composes a case,
 runs the actual solver via ``jobs.py``, polls the shared ``job_result`` surface, and
 compares the solved numbers to the closed-form answer from
 ``docs/SIMULATION_EXAMPLES.md``.
@@ -69,8 +69,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import Worker
-from driftpin.analysis import optics, thermal
+from ankusdrive import Worker
+from ankusdrive.analysis import optics, thermal
 
 
 def _poll(w, job_id, timeout_s=360):
@@ -352,7 +352,7 @@ def example_modal(w, log):
         mesh = w.call("fem_mesh", analysis=an, body=box, char_length=6.0,
                       element_order="2nd", _timeout=120.0)
         w.call("fem_modal", analysis=an, n_modes=6)
-        w.call("fem_run", analysis=an, workdir="/tmp/driftpin_modal_ex", _timeout=300.0)
+        w.call("fem_run", analysis=an, workdir="/tmp/ankusdrive_modal_ex", _timeout=300.0)
         freqs = w.call("fem_modal_results", analysis=an)["frequencies_hz"]
     except Exception as e:  # noqa: BLE001 — CalculiX absent / FEM stack unavailable
         log(f"  SKIP — CalculiX modal unavailable ({type(e).__name__}: {str(e)[:80]})")
@@ -438,7 +438,7 @@ def _plot_topology(outdir):
     """Panel A: the SIMP density field and the topology_to_solid reconstruction."""
     import matplotlib.pyplot as plt
     import numpy as np
-    from driftpin.analysis import topology as topo
+    from ankusdrive.analysis import topology as topo
     r = topo.simp_topology_2d(nelx=30, nely=10, keep_fraction=0.4, rmin=1.4, max_iter=22)
     dec = topo.density_to_rects(r["density"], threshold=0.5)
     nelx, nely = dec["nelx"], dec["nely"]
@@ -462,14 +462,14 @@ def _plot_topology(outdir):
 
 def _plot_thermal(outdir):
     """Panel B: the Elmer slab cooling curves over the centre/surface Heisler lines."""
-    from driftpin import solvers
+    from ankusdrive import solvers
     if not solvers.is_available("elmer"):
         return False
     import os
     import subprocess
     import tempfile
     import matplotlib.pyplot as plt
-    from driftpin.analysis import elmer
+    from ankusdrive.analysis import elmer
     L, k, rho, cp, h, ti, ta = 0.02, 15.0, 8000.0, 500.0, 375.0, 100.0, 25.0
     alpha = k / (rho * cp)
     dur, nsteps = 1.0 * L * L / alpha, 200
@@ -510,14 +510,14 @@ def _plot_thermal(outdir):
 
 def _plot_cfd(outdir):
     """Panel C: solved Δp over a diameter sweep on the Hagen–Poiseuille D⁻⁴ line."""
-    from driftpin import solvers
+    from ankusdrive import solvers
     if not solvers.is_available("openfoam"):
         return False
     import math as _m
     import subprocess
     import tempfile
     import matplotlib.pyplot as plt
-    from driftpin.analysis import cfd, openfoam
+    from ankusdrive.analysis import cfd, openfoam
     nu, rho = 1.0038e-6, 998.2
     Q = 50.0 * nu * _m.pi * 0.010 / 4.0                # fixed flow; Re=50 at D=10mm
     Ds = [4.0, 6.0, 8.0, 10.0, 12.0, 14.0]
@@ -673,8 +673,8 @@ def _run_elmer_radiation(t1_c, t2_c, e1, e2):
     import os
     import subprocess
     import tempfile
-    from driftpin import solvers
-    from driftpin.analysis import elmer
+    from ankusdrive import solvers
+    from ankusdrive.analysis import elmer
     d = tempfile.mkdtemp(prefix="rad_fig_")
     built = elmer.write_radiation_plates_case(d, t1_c=t1_c, t2_c=t2_c,
                                               emissivity_1=e1, emissivity_2=e2, n_x=80)
@@ -691,11 +691,11 @@ def _plot_radiation(outdir):
     """Panel E: Elmer diffuse-gray two-plate flux over the σ(T⁴) law (temperature sweep)
     and the 1/ε denominator (emissivity sweep), each on the exact two-plate oracle line.
     Needs ElmerSolver; returns False (skip) when absent."""
-    from driftpin import solvers
+    from ankusdrive import solvers
     if not solvers.is_available("elmer"):
         return False
     import matplotlib.pyplot as plt
-    from driftpin.analysis import thermal as _thermal
+    from ankusdrive.analysis import thermal as _thermal
     fig, axes = plt.subplots(1, 2, figsize=(9.4, 4.0))
 
     # (left) net flux vs hot-plate temperature, T2=100C, eps=0.8 — the σ(T1^4-T2^4) law.
@@ -734,14 +734,14 @@ def _plot_radiation(outdir):
 def _plot_external(outdir):
     """Panel F: solved flat-plate Cd over a Reynolds sweep on the Blasius
     Cf=1.328/√Re_L line. Needs OpenFOAM; returns False (skip) when absent."""
-    from driftpin import solvers
+    from ankusdrive import solvers
     if not solvers.is_available("openfoam"):
         return False
     import math as _m
     import subprocess
     import tempfile
     import matplotlib.pyplot as plt
-    from driftpin.analysis import cfd, openfoam
+    from ankusdrive.analysis import cfd, openfoam
     nu, rho, L = 1.5e-5, 1.2, 0.1
     bashrc = solvers.openfoam_bashrc()
     src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
@@ -789,10 +789,10 @@ def _plot_bridge(outdir):
 
     import matplotlib.pyplot as plt
 
-    from driftpin import solvers
-    from driftpin.analysis import cfd as _cfd
-    from driftpin.analysis import meshbridge as mb
-    from driftpin.analysis import openfoam as of
+    from ankusdrive import solvers
+    from ankusdrive.analysis import cfd as _cfd
+    from ankusdrive.analysis import meshbridge as mb
+    from ankusdrive.analysis import openfoam as of
     if not (solvers.is_available("elmer") and shutil.which("ElmerGrid")
             and solvers.is_available("openfoam")):
         return False
@@ -877,7 +877,7 @@ def _plot_modal(outdir):
     CalculiX bars are the measured live results from Example H / tests/test_worker.py —
     they reproduce on the provisioned box. The oracle bars are computed here."""
     import matplotlib.pyplot as plt
-    from driftpin.analysis import vibration as vib
+    from ankusdrive.analysis import vibration as vib
     L, b, h = 300.0, 30.0, 10.0
     orc = vib.beam_natural_frequencies(L, b, h, "cantilever", n_modes=2,
                                        youngs_gpa=210, density_kg_m3=7900)
@@ -933,8 +933,8 @@ def _plot_cht(outdir):
 
     import matplotlib.pyplot as plt
 
-    from driftpin import solvers
-    from driftpin.analysis import cht
+    from ankusdrive import solvers
+    from ankusdrive.analysis import cht
     if not solvers.is_available("elmer"):
         return False
     elmer = solvers.find_solver("elmer")["path"]
@@ -990,8 +990,8 @@ def _plot_em(outdir):
 
     import matplotlib.pyplot as plt
 
-    from driftpin import solvers
-    from driftpin.analysis import em
+    from ankusdrive import solvers
+    from ankusdrive.analysis import em
     if not solvers.is_available("elmer"):
         return False
     elmer = solvers.find_solver("elmer")["path"]

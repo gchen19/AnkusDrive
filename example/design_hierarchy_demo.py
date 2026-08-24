@@ -20,9 +20,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))  # prefer the repo source over any installed copy
 
-from driftpin import Worker  # noqa: E402
-from driftpin import change as C  # noqa: E402
-from driftpin import items as I  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import change as C  # noqa: E402
+from ankusdrive import items as I  # noqa: E402
 
 FAM_TABLE = REPO / "tests" / "fixtures" / "families" / "gear_family.csv"
 CHANGE_FIXTURE = REPO / "tests" / "fixtures" / "change"  # a released 5-part gearbox

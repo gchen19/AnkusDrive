@@ -1,5 +1,5 @@
 """
-Toy problems for the DriftPin CLI. Each test invokes `python3 -m driftpin <cmd>`
+Toy problems for the AnkusDrive CLI. Each test invokes `python3 -m ankusdrive <cmd>`
 as a subprocess, checks exit code, stdout shape, and any on-disk artifacts.
 """
 import json
@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 def dp(*args, timeout=300):
     return subprocess.run(
-        [sys.executable, "-m", "driftpin", *args],
+        [sys.executable, "-m", "ankusdrive", *args],
         cwd=str(REPO),
         capture_output=True,
         text=True,
@@ -122,23 +122,23 @@ def test_setup_print_mcp_config():
     assert r.returncode == 0, r.stderr
     start, end = r.stdout.index("{"), r.stdout.rindex("}") + 1
     snippet = json.loads(r.stdout[start:end])
-    server = snippet["mcpServers"]["driftpin"]
+    server = snippet["mcpServers"]["ankusdrive"]
     assert os.path.isabs(server["command"]), server
     assert os.path.isfile(server["command"]), server
     assert server["args"][-1] == "mcp", server
-    assert "claude mcp add driftpin" in r.stdout, r.stdout
+    assert "claude mcp add ankusdrive" in r.stdout, r.stdout
 
 
 def test_setup_yes_writes_config():
     # issue #200 acceptance: --yes resolves FreeCAD and persists it to the
-    # config file (pointed at a temp location via DRIFTPIN_CONFIG).
+    # config file (pointed at a temp location via ANKUSDRIVE_CONFIG).
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         cfg = os.path.join(d, "config.toml")
-        env = dict(os.environ, DRIFTPIN_CONFIG=cfg, PYTHONUTF8="1")
-        env.pop("DRIFTPIN_FREECADCMD", None)
+        env = dict(os.environ, ANKUSDRIVE_CONFIG=cfg, PYTHONUTF8="1")
+        env.pop("ANKUSDRIVE_FREECADCMD", None)
         r = subprocess.run(
-            [sys.executable, "-m", "driftpin", "setup", "--yes"],
+            [sys.executable, "-m", "ankusdrive", "setup", "--yes"],
             cwd=str(REPO), capture_output=True, text=True, timeout=300, env=env)
         assert r.returncode == 0, r.stderr + r.stdout
         assert "mcpServers" in r.stdout, r.stdout
@@ -149,7 +149,7 @@ def test_setup_yes_writes_config():
             assert "freecadcmd = " in body, body
         # unknown extras are refused cleanly, not installed
         r2 = subprocess.run(
-            [sys.executable, "-m", "driftpin", "setup", "--yes",
+            [sys.executable, "-m", "ankusdrive", "setup", "--yes",
              "--extras", "bogus"],
             cwd=str(REPO), capture_output=True, text=True, timeout=300, env=env)
         assert r2.returncode == 0, r2.stderr + r2.stdout

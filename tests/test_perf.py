@@ -22,10 +22,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 try:
-    from driftpin import render as render_lib
+    from ankusdrive import render as render_lib
     _RENDER_OK = True
 except ImportError:
     _RENDER_OK = False

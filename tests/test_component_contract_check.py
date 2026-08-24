@@ -2,7 +2,7 @@
 component_contract_check + the builder-brief schema (issue #169) — free, no LLM,
 no key. Two halves:
 
-  * The PURE core (driftpin.builder_brief) — validation, slice rendering, and the
+  * The PURE core (ankusdrive.builder_brief) — validation, slice rendering, and the
     FreeCAD-free evaluate_contract judgement — tested with synthetic inputs, so the
     gate's logic is verified without a worker process.
   * The WORKER tool — component_contract_check driven against real geometry,
@@ -24,9 +24,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin import builder_brief as bb  # noqa: E402
-from driftpin.gates import performance as pg  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import builder_brief as bb  # noqa: E402
+from ankusdrive.gates import performance as pg  # noqa: E402
 
 _PASS = _FAIL = 0
 
@@ -192,7 +192,7 @@ _GEOM_OK = {"watertight": True, "bbox": {"min": [0, 0, 0], "max": [60, 60, 10]},
 
 
 def _block(state, **row):
-    """A driftpin.gates.performance block as evaluate() would build it."""
+    """A ankusdrive.gates.performance block as evaluate() would build it."""
     record = None if state == pg.UNVERIFIED else {
         "signature": "sig", "results": [{"name": "dp_at_rated", "state": state,
                                          "measured": 34.0, **row}]}

@@ -1,5 +1,5 @@
 """Machine-element rating toys — two-sided oracles for
-driftpin.analysis.machine_elements.
+ankusdrive.analysis.machine_elements.
 
 Pure-Python, no FreeCAD. Each check pins a closed-form result against a hand
 calculation AND verifies a deliberately-bad input is caught, mirroring
@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import durability, machine_elements as me  # noqa: E402
+from ankusdrive.analysis import durability, machine_elements as me  # noqa: E402
 
 
 # --- the MCP-visible signature (issue #271) -----------------------------------
@@ -27,7 +27,7 @@ from driftpin.analysis import durability, machine_elements as me  # noqa: E402
 # parameter list out of mcp_server.py so the check crosses the layer the bug lives
 # in, while staying pure-Python.
 
-_MCP = Path(__file__).resolve().parent.parent / "driftpin" / "mcp_server.py"
+_MCP = Path(__file__).resolve().parent.parent / "ankusdrive" / "mcp_server.py"
 
 
 def _mcp_params(tool_name):

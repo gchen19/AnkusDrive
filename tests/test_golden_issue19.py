@@ -21,7 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker, WorkerError  # noqa: E402
+from ankusdrive import Worker, WorkerError  # noqa: E402
 
 FIXTURES = REPO / "tests" / "fixtures" / "issue19"
 

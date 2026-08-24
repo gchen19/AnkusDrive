@@ -193,7 +193,7 @@ like Layer A/B/C and shares `reliability_cache` conventions.
 2. **Add toys #4–6** as the merge primitives land in RFC Phase 1 (recursive BOM,
    mate-by-frame, change propagation each unlock a toy).
 3. **Stand up M2** once a key is available (tracked in
-   `project_driftpin_reliability.md`): run the M1 toys with real agents, report the
+   `project_ankusdrive_reliability.md`): run the M1 toys with real agents, report the
    metrics above, always against the single-agent baseline.
 
 The order is deliberate: never measure agent reliability against an oracle you
@@ -423,7 +423,7 @@ GD&T coverage map: **Location ✅** (position, concentricity, symmetry — clean
 Seven mechanism toys — gear trains, linkages, and moving assemblies — a different
 class from the static-fit toys. Two new gate capabilities back them:
 
-- **Gear geometry** via a new first-class DriftPin primitive **`add_gear`** (FreeCAD's
+- **Gear geometry** via a new first-class AnkusDrive primitive **`add_gear`** (FreeCAD's
   core involute generator, extruded to a solid; external + internal/ring). Committed
   separately (`feat(worker): add_gear`). The agent builder surface gains `add_gear`
   too (gears can't be built from box/cylinder). Pitch radius is read back from the
@@ -613,7 +613,7 @@ nslot8 fixed-prompt $3.98 + nslot8 budget-30 $4.06 ≈ **$20.8**.
 
 `tchainu` measured the failure (partition 2/20, single 0/20: no agent reconciles
 a global total against a grid). The RFC §11.1 fix — `resolve_constraints`
-(`driftpin/manifest.py`) evaluates the constraint in plain code and hands each
+(`ankusdrive/manifest.py`) evaluates the constraint in plain code and hands each
 builder a literal length — shipped, and `tchainu_r` is the same contract with the
 resolve step in front of it. The toy's resolved lengths are computed *by the
 shipped resolver* at import, so the eval gates exactly what the contract
@@ -797,11 +797,11 @@ whether the assembly has the freedom to move. With two shafts and every gear rig
 keyed, the six pairs demand six different ratios of the same shaft pair: the only
 consistent motion is none.
 
-Quantified by the Grübler/Kutzbach criterion (`driftpin/analysis/kinematics.py`,
+Quantified by the Grübler/Kutzbach criterion (`ankusdrive/analysis/kinematics.py`,
 already shipped) the as-built train has mobility **DOF −1 (3-speed) / −4 (6-speed)** —
 redundantly over-constrained. A working mechanism needs DOF +1.
 
-**Tier-1 — closed-form motion gate (`driftpin/mechanism.py`, RFC §11.9).** A
+**Tier-1 — closed-form motion gate (`ankusdrive/mechanism.py`, RFC §11.9).** A
 `mechanism` manifest block + a `mobility` gate in `merge_assembly`. It runs Grübler
 plus a **ratio-consistency** pass that propagates a rate through the mesh graph and
 *names the conflict* (`input_shaft→output_shaft implies −0.500 but it is already
@@ -816,7 +816,7 @@ the motion gate is the only thing that tells them apart:
 | **rigid** (every gear keyed) | PASS | **FAIL — locked** | DOF −1 / −4, conflicting ratios |
 | **selective** (freewheel + one dog-clutch/speed) | PASS | **PASS — functional** | every speed DOF +1, realised ratio = design |
 
-**Tier-2 — dynamic confirmation (`driftpin/analysis/mbd.py` gear couplings, PyBullet).**
+**Tier-2 — dynamic confirmation (`ankusdrive/analysis/mbd.py` gear couplings, PyBullet).**
 The closed-form prediction, driven in a real solver: spin the input, measure
 ω_out/ω_in. All six speeds reproduce the closed form **exactly** (`−1/3, −1/2, −5/7,
 −1, −7/5, −2`, err 0.0000, input tracking command to 100%). The over-constrained
@@ -832,7 +832,7 @@ sufficient.
 ## Experiment-readiness gate — which emergent toys are worth billing (2026-06-13, free)
 
 Emergent properties open a *set* of multi-agent toys, but not all are worth a billed
-run. `driftpin/experiment.py:readiness()` decides GO/NO-GO for free, on the oracle,
+run. `ankusdrive/experiment.py:readiness()` decides GO/NO-GO for free, on the oracle,
 against known-good/known-bad controls. Five criteria: **discriminates**,
 **deterministic**, **margin** (no knife-edge), **emergent** (every local slice passes
 yet the system fails), **agent-determined** (agent choices actually move the verdict).

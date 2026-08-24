@@ -4,7 +4,7 @@
 
 Builds a thin plate, imposes the frozen-in differential cooling as a through-thickness
 temperature field, and runs the CalculiX (``ccx``) thermo-elastic free-distortion
-solve via :mod:`driftpin.analysis.warpage` — exactly the deck/parse/gate the worker
+solve via :mod:`ankusdrive.analysis.warpage` — exactly the deck/parse/gate the worker
 uses. Renders the deformed mid-surface profile (the bow) against the closed-form
 plate-curvature twin, for an **asymmetric** field (bows) and a **balanced** field
 (stays flat) side by side.
@@ -28,8 +28,8 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from driftpin import solvers                             # noqa: E402
-from driftpin.analysis import warpage as W               # noqa: E402
+from ankusdrive import solvers                             # noqa: E402
+from ankusdrive.analysis import warpage as W               # noqa: E402
 
 # Abaqus/CalculiX C3D8 corner order: bottom face CCW, then top face CCW.
 _HEX = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
@@ -123,7 +123,7 @@ def main():
 
     if solvers.ccx_bin() is None:
         print("ccx (CalculiX) not found — apt install calculix-ccx, or set "
-              "DRIFTPIN_CALCULIX_PATH", file=sys.stderr)
+              "ANKUSDRIVE_CALCULIX_PATH", file=sys.stderr)
         return 1
 
     base = tempfile.mkdtemp(prefix="warpage_toy_")

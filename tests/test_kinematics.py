@@ -1,4 +1,4 @@
-"""Planar-kinematics toys — exact oracles for driftpin.analysis.kinematics.
+"""Planar-kinematics toys — exact oracles for ankusdrive.analysis.kinematics.
 
 Pure-Python, no FreeCAD, no PyBullet. These are the hard-edged closed-form anchors
 the MBD family (docs/SIMULATION_EXAMPLES.md §8) is gated against: four-bar Grübler
@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import kinematics as kin  # noqa: E402
+from ankusdrive.analysis import kinematics as kin  # noqa: E402
 
 
 def test_gruebler_dof():

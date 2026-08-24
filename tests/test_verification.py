@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import verification as ver  # noqa: E402
+from ankusdrive.analysis import verification as ver  # noqa: E402
 
 
 def _sequence(exact, coeff, order, sizes):

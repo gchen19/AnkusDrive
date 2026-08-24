@@ -1,12 +1,12 @@
 name: Tests
 
-# Run the DriftPin test suite on every push to main and every PR — on a
+# Run the AnkusDrive test suite on every push to main and every PR — on a
 # SELF-HOSTED runner. This project's test CI does NOT use GitHub-hosted
 # runners; it runs on a machine that already has FreeCAD 1.1 installed.
 #
 # Because FreeCAD is already present, we don't download it via conda. Instead
 # tests/setup_local.sh reuses the installed AppImage: it puts `freecadcmd` on
-# PATH (so driftpin's worker resolves it via shutil.which) and points
+# PATH (so ankusdrive's worker resolves it via shutil.which) and points
 # .venv/bin/python3 at FreeCAD's bundled python, which already ships numpy +
 # Pillow. That feeds run_all.sh's two-interpreter split (system python3 for
 # the worker tests, .venv python3 for the numpy/Pillow tests).
@@ -39,10 +39,10 @@ permissions:
 jobs:
   test:
     name: Test suite (FreeCAD 1.1, self-hosted)
-    # Pin `Linux`: this box's Windows sibling shares the `driftpin` label, and this job's
+    # Pin `Linux`: this box's Windows sibling shares the `ankusdrive` label, and this job's
     # steps are bash + AppImage + a Linux two-interpreter split. The Windows suite is a
     # separate lane (.github/workflows/test-windows.yml). The OS label is auto-applied.
-    runs-on: [self-hosted, driftpin, Linux]
+    runs-on: [self-hosted, ankusdrive, Linux]
     # The suite is ~1 min; this only bounds a wedged freecadcmd worker so it
     # can't hold the self-hosted runner indefinitely.
     timeout-minutes: 20

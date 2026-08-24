@@ -21,7 +21,7 @@ verdicts and they stay strict — a floppy fork must fail the merge. But a solve
 that never finished (busy runner, ccx killed, the wall-clock budget below) is a
 statement about the RUN, not the part, so it SKIPs loudly instead of masquerading
 as either verdict. Both live tests read their outcome through
-`driftpin.gates.modal.classify` — the same predicate the worker gate writes its
+`ankusdrive.gates.modal.classify` — the same predicate the worker gate writes its
 report with — so the test can't drift from the gate, and
 `test_incomplete_solve_is_never_a_verdict` pins that predicate with no solver at
 all.
@@ -37,8 +37,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin.gates import modal as modal_gate  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive.gates import modal as modal_gate  # noqa: E402
 
 STEEL = {"Name": "Steel-Generic", "YoungsModulus": "210000 MPa",
          "PoissonRatio": "0.30", "Density": "7900 kg/m^3"}
@@ -65,13 +65,13 @@ def _skip(label, reason):
 
 
 def _ccx_present():
-    # ccx on PATH, OR reachable via DriftPin's resolver — which finds FreeCAD's bundled
+    # ccx on PATH, OR reachable via AnkusDrive's resolver — which finds FreeCAD's bundled
     # ccx (Windows/macOS ship it in FreeCAD's bin, off PATH), so the live solve runs there
     # too instead of skipping.
     if any(shutil.which(n) for n in ("ccx", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_2.19")):
         return True
     try:
-        from driftpin import solvers
+        from ankusdrive import solvers
         return solvers.ccx_bin() is not None
     except Exception:
         return False
@@ -132,7 +132,7 @@ _MERGE_TIMEOUT_S = 1800.0
 
 def _merge_with_deadline(w, manifest):
     """Run the gated merge under a wall-clock budget. Returns
-    (report_or_None, outcome) where `outcome` is a driftpin.gates.modal
+    (report_or_None, outcome) where `outcome` is a ankusdrive.gates.modal
     classification — INCOMPLETE both when the worker reports a solve that never
     produced a frequency and when it never answered at all."""
     try:

@@ -3,7 +3,7 @@ Layer C reliability — design specs paired with geometric ground truth.
 
 Each Spec is a parametric design intent (volumes, hole counts, dimensions)
 plus a deterministic builder + a ground-truth checker. The builder produces
-the "correct" geometry; the checker takes a DriftPin handle and verifies
+the "correct" geometry; the checker takes a AnkusDrive handle and verifies
 whether the handle matches the spec.
 
 The agent-loop test asks the model to look at a render and judge whether the

@@ -36,8 +36,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin import release as rel  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import release as rel  # noqa: E402
 
 _PASS = _FAIL = 0
 
@@ -363,7 +363,7 @@ def test_draft_marks_every_artifact_not_just_the_drawing():
                 by_kind.setdefault(f["kind"], []).append(f["name"])
             svg = _read(out, by_kind["drawing_svg"][0])
             _check("the drawing carries a real diagonal stamp",
-                   b'id="driftpin-watermark"' in svg and mark in svg, svg[:200])
+                   b'id="ankusdrive-watermark"' in svg and mark in svg, svg[:200])
             step = _read(out, by_kind["step"][0])
             _check("the STEP carries it as a legal comment",
                    b"/* " + mark in step, step[:200])

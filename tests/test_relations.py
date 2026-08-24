@@ -1,5 +1,5 @@
 """
-Unit tests for the relation layer (driftpin/relations.py, issue #137 / RFC
+Unit tests for the relation layer (ankusdrive/relations.py, issue #137 / RFC
 docs/DESIGN_HIERARCHY.md §2.1 A2) — pure Python, no FreeCAD, no API key.
 
 Two-sided gate validation (the house standard, MULTI_AGENT.md §11.x):
@@ -29,8 +29,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.relations import resolve_relations            # noqa: E402
-from driftpin.manifest import resolve_manifest               # noqa: E402
+from ankusdrive.relations import resolve_relations            # noqa: E402
+from ankusdrive.manifest import resolve_manifest               # noqa: E402
 
 
 def _raises(fn, *needles):

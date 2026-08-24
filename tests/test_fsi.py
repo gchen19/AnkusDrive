@@ -33,8 +33,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import solvers  # noqa: E402
-from driftpin.analysis import fsi  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
+from ankusdrive.analysis import fsi  # noqa: E402
 from tests.heavy_solve import skip_heavy  # noqa: E402
 
 _E_STEEL_GPA = 210.0
@@ -140,7 +140,7 @@ def test_fsi_coupled_plate_deflects():
         return
 
     import tempfile
-    from driftpin.analysis import fsi_case
+    from ankusdrive.analysis import fsi_case
 
     case_dir = tempfile.mkdtemp(prefix="fsi_test_")
     # a short solve: 4 windows is enough to prove coupling + monotone deflection

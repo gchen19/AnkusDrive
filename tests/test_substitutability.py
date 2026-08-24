@@ -29,9 +29,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin.gates import performance as pgate  # noqa: E402
-from driftpin.gates import substitutability as subst  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive.gates import performance as pgate  # noqa: E402
+from ankusdrive.gates import substitutability as subst  # noqa: E402
 
 
 # --- scripted component builders (mirror test_typed_interfaces.py) -----------

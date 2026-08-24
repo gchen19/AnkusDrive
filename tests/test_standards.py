@@ -3,10 +3,10 @@ Standard reference tables — ISO threads/fasteners, deep-groove ball bearings
 (C/C0), ISO 286 limits & fits, and ASME B36.10 stock/profiles (issue #101).
 
 Pure-Python, FreeCAD-free: each table is a small JSON corpus + accessor in
-driftpin/analysis/standards, plus the wiring that lets bearing_life() pull C/C0
+ankusdrive/analysis/standards, plus the wiring that lets bearing_life() pull C/C0
 from a designation and bolted_joint_check() pull pitch / tensile-stress-area /
 proof strength from a bolt size + property class. ISO 286 fits already live as
-computed tables in driftpin.analysis.tolerance.fit_class — verified here too so
+computed tables in ankusdrive.analysis.tolerance.fit_class — verified here too so
 the four-table acceptance is one lane.
 
 Golden anchors (transcribed from public engineering references — see each JSON
@@ -28,9 +28,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import standards as std          # noqa: E402
-from driftpin.analysis import machine_elements as me     # noqa: E402
-from driftpin.analysis import tolerance as tol           # noqa: E402
+from ankusdrive.analysis import standards as std          # noqa: E402
+from ankusdrive.analysis import machine_elements as me     # noqa: E402
+from ankusdrive.analysis import tolerance as tol           # noqa: E402
 
 
 # --- 1. threads & fasteners ---------------------------------------------------

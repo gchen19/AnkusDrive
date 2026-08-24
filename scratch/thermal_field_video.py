@@ -46,7 +46,7 @@ from matplotlib.cm import ScalarMappable                    # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection     # noqa: E402
 from PIL import Image                                       # noqa: E402
 
-from driftpin import Worker                                 # noqa: E402
+from ankusdrive import Worker                                 # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
 ART = REPO / "artifacts"
@@ -86,7 +86,7 @@ def _heisler_field(z_star, t):
     """Temperature at normalized through-thickness coord ``z_star``∈[0,1] (0=centre,
     1=surface) at time ``t``, from the one-term Heisler series. Returns (T_field array,
     info dict with the centre/surface/lumped scalars and Fo)."""
-    from driftpin.analysis import thermal
+    from ankusdrive.analysis import thermal
     r = thermal.thermal_transient_1d(half_thickness_mm=L, h_conv=H_CONV, duration_s=t,
                                      t_initial_c=T0, t_ambient_c=TINF, k=K, rho=RHO, cp=CP)
     z1, c1, fo = r["eigenvalue_1"], r["c1"], r["fourier"]

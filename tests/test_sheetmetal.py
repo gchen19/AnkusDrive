@@ -1,6 +1,6 @@
 """Sheet metal (issue #230) — pure-core unit tests.
 
-No FreeCAD, no worker, no OCC: :mod:`driftpin.sheetmetal` is stdlib vector math
+No FreeCAD, no worker, no OCC: :mod:`ankusdrive.sheetmetal` is stdlib vector math
 over a feature model, so these run on the host interpreter in milliseconds. They
 prove the five things the layer promises:
 
@@ -29,7 +29,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import sheetmetal as sm  # noqa: E402
+from ankusdrive import sheetmetal as sm  # noqa: E402
 
 _PASS = _FAIL = 0
 
@@ -644,7 +644,7 @@ def test_dfm_check_delegates_to_the_same_rules():
     # There must be exactly ONE implementation of the press-brake rules. dfx's
     # sheet path and sheetmetal.check both go through check_bends, so a change to a
     # threshold cannot make the two tools disagree about the same part.
-    from driftpin.analysis import dfx
+    from ankusdrive.analysis import dfx
     bends = [{"id": "flange1", "angle_deg": 90.0, "inner_radius_mm": 1.0,
               "outer_length_mm": 30.0}]
     direct = sm.check_bends(bends, T, material="AL6061-T6")

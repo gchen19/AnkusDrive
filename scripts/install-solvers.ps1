@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Provision DriftPin's external solvers on Windows - the Windows analog of
+  Provision AnkusDrive's external solvers on Windows - the Windows analog of
   scripts/install-solvers.sh (which is Linux/apt/conda + source builds).
 
 .DESCRIPTION
@@ -9,54 +9,54 @@
 
     * pip-wheel solvers (MBD: pybullet/mujoco; topology: solidspy; optics: rayoptics +
       optiland; fluids: CoolProp) - a plain `pip install '.[<extra>]'` into the venv that
-      launches `python -m driftpin mcp`. Same as Linux; verified to install on py3.13.
+      launches `python -m ankusdrive mcp`. Same as Linux; verified to install on py3.13.
 
     * self-contained native binaries (CFD: SU2; slicing: PrusaSlicer) - downloaded as a
-      portable zip, extracted under -Dir, and wired via a DRIFTPIN_<SOLVER>_PATH env var.
+      portable zip, extracted under -Dir, and wired via a ANKUSDRIVE_<SOLVER>_PATH env var.
       No installer, no admin. SU2_CFD.exe and prusa-slicer-console.exe run standalone.
 
   It also REPORTS the two families that don't have a turnkey Windows path:
 
     * CalculiX (warpage) - already auto-detected: FreeCAD BUNDLES ccx.exe in its bin\, and
-      driftpin/solvers.py discovers it there. Nothing to install; `driftpin doctor` shows
+      ankusdrive/solvers.py discovers it there. Nothing to install; `ankusdrive doctor` shows
       `warpage ... ready` once FreeCAD is installed.
     * Elmer (thermal/CHT/EM/acoustic FEM: CFD-adjacent families) is ALSO a portable
       zip now - the 'elmer' target downloads the no-GUI build and wires
-      DRIFTPIN_ELMER_PATH (there is no Elmer winget package).
+      ANKUSDRIVE_ELMER_PATH (there is no Elmer winget package).
     * OpenFOAM families (CFD solve / FSI / injection molding) - WSL2-backed since
       issue #193: the 'wsl' target provisions them INSIDE the default distro (the
-      Linux install-solvers.sh runs verbatim there) and driftpin discovers/launches
+      Linux install-solvers.sh runs verbatim there) and ankusdrive discovers/launches
       them through \wsl$ + `wsl -e bash` automatically. One-time prerequisite:
       `wsl --install -d Ubuntu` + reboot.
     * YADE, openEMS, bempp - still need Linux mechanisms; same WSL route works
       manually (see docs/WINDOWS.md).
 
-  DISCOVERY: a family resolves its solver via driftpin/solvers.py - a wheel must import in
-  the venv; a binary is found via DRIFTPIN_<SOLVER>_PATH -> PATH -> per-OS dirs -> (for
+  DISCOVERY: a family resolves its solver via ankusdrive/solvers.py - a wheel must import in
+  the venv; a binary is found via ANKUSDRIVE_<SOLVER>_PATH -> PATH -> per-OS dirs -> (for
   ccx) FreeCAD's bundled bin. So the wheel installs MUST target the same venv that runs
-  `driftpin mcp`, and a downloaded binary must be on PATH or named by its env var. Verify
-  with `driftpin doctor` (or this script's `list`).
+  `ankusdrive mcp`, and a downloaded binary must be on PATH or named by its env var. Verify
+  with `ankusdrive doctor` (or this script's `list`).
 
 .PARAMETER Targets
   Any of: pip su2 prusaslicer elmer wsl all list. Default (no args) = pip + guidance.
 
 .PARAMETER Dir
-  Where portable binaries are extracted. Default: %LOCALAPPDATA%\DriftPin\solvers.
+  Where portable binaries are extracted. Default: %LOCALAPPDATA%\AnkusDrive\solvers.
 
 .PARAMETER Persist
-  Also `setx` the DRIFTPIN_<SOLVER>_PATH vars so they survive new shells and MCP-host
+  Also `setx` the ANKUSDRIVE_<SOLVER>_PATH vars so they survive new shells and MCP-host
   launches (else they are only set for THIS shell and the script prints the setx lines).
 
 .EXAMPLE
   pwsh scripts\install-solvers.ps1                       # pip extras + guidance
   pwsh scripts\install-solvers.ps1 su2 prusaslicer -Persist
-  pwsh scripts\install-solvers.ps1 list                 # driftpin doctor
+  pwsh scripts\install-solvers.ps1 list                 # ankusdrive doctor
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$Targets = @('pip'),
-    [string]$Dir = (Join-Path $env:LOCALAPPDATA 'DriftPin\solvers'),
+    [string]$Dir = (Join-Path $env:LOCALAPPDATA 'AnkusDrive\solvers'),
     [switch]$Persist
 )
 
@@ -70,7 +70,7 @@ $SU2_URL  = "https://github.com/su2code/SU2/releases/download/v$SU2_VER/SU2-v$SU
 $PRUSA_VER = '2.9.6'
 $PRUSA_URL = "https://github.com/prusa3d/PrusaSlicer/releases/download/version_$PRUSA_VER/PrusaSlicer-$PRUSA_VER.zip"
 # Elmer ships a PORTABLE no-GUI zip (no installer, no admin; there is NO winget package
-# despite older guidance). nogui-nompi is all DriftPin needs: ElmerSolver + ElmerGrid +
+# despite older guidance). nogui-nompi is all AnkusDrive needs: ElmerSolver + ElmerGrid +
 # ViewFactors as plain subprocesses.
 $ELMER_URL = 'https://www.nic.funet.fi/pub/sci/physics/elmer/bin/windows/ElmerFEM-nogui-nompi-Windows-AMD64.zip'
 
@@ -125,7 +125,7 @@ function Install-SU2 {
     $exe = Get-ChildItem -Path $d -Recurse -Filter 'SU2_CFD.exe' | Select-Object -First 1
     if (-not $exe) { throw "SU2_CFD.exe not found under $d" }
     Write-Host "  SU2_CFD.exe -> $($exe.FullName)"
-    Set-SolverEnv 'DRIFTPIN_SU2_PATH' $exe.FullName
+    Set-SolverEnv 'ANKUSDRIVE_SU2_PATH' $exe.FullName
 }
 
 function Install-Prusa {
@@ -134,7 +134,7 @@ function Install-Prusa {
     $exe = Get-ChildItem -Path $d -Recurse -Filter 'prusa-slicer-console.exe' | Select-Object -First 1
     if (-not $exe) { throw "prusa-slicer-console.exe not found under $d" }
     Write-Host "  prusa-slicer-console.exe -> $($exe.FullName)"
-    Set-SolverEnv 'DRIFTPIN_PRUSASLICER_PATH' $exe.FullName
+    Set-SolverEnv 'ANKUSDRIVE_PRUSASLICER_PATH' $exe.FullName
 }
 
 function Install-Elmer {
@@ -148,7 +148,7 @@ function Install-Elmer {
             Write-Warning "  $companion not found next to ElmerSolver.exe"
         }
     }
-    Set-SolverEnv 'DRIFTPIN_ELMER_PATH' $exe.FullName
+    Set-SolverEnv 'ANKUSDRIVE_ELMER_PATH' $exe.FullName
 }
 
 function Install-WslSolvers {
@@ -160,7 +160,7 @@ function Install-WslSolvers {
     # (.gitattributes), so the Linux provisioning scripts run verbatim inside the
     # distro. The cfd/fsi targets PRINT the validated apt + source-build recipes
     # (they need sudo + network); run those inside the distro, then re-run
-    # `driftpin doctor` here - discovery probes \wsl$ automatically.
+    # `ankusdrive doctor` here - discovery probes \wsl$ automatically.
     wsl -e bash -lc 'bash scripts/install-solvers.sh cfd fsi'
     Write-Host ''
     Write-Host 'Injection molding (openInjMoldSim, needs a parallel OpenFOAM-7 .org source'
@@ -168,12 +168,12 @@ function Install-WslSolvers {
     Write-Host '  bash tools/build_openinjmoldsim.sh --build'
     Write-Host 'IMPORTANT: clone/build INSIDE the distro filesystem (~), not /mnt/c - the'
     Write-Host '9P mount is slow for compiles. Case dirs staying on /mnt/c is fine.'
-    Write-Host 'Override the probed distro with DRIFTPIN_WSL_DISTRO (env or config.toml).'
+    Write-Host 'Override the probed distro with ANKUSDRIVE_WSL_DISTRO (env or config.toml).'
 }
 
 function Show-List {
-    if (Test-Path $venvPy) { & $venvPy -m driftpin doctor }
-    else { Write-Warning 'no .venv - cannot run driftpin doctor' }
+    if (Test-Path $venvPy) { & $venvPy -m ankusdrive doctor }
+    else { Write-Warning 'no .venv - cannot run ankusdrive doctor' }
 }
 
 $did = $false
@@ -195,4 +195,4 @@ if (-not $did) { Install-Pip }
 # CalculiX is never 'installed' here - it rides on FreeCAD's bundled ccx.exe.
 Write-Host ''
 Write-Host 'CalculiX (warpage): auto-detected from FreeCAD''s bundled ccx.exe - nothing to install.'
-Write-Host 'Verify everything with:  pwsh scripts\install-solvers.ps1 list   (== driftpin doctor)'
+Write-Host 'Verify everything with:  pwsh scripts\install-solvers.ps1 list   (== ankusdrive doctor)'

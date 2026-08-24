@@ -1,4 +1,4 @@
-"""Plate-bending toys — two-sided oracles for driftpin.analysis.plates.
+"""Plate-bending toys — two-sided oracles for ankusdrive.analysis.plates.
 
 Pure-Python, no FreeCAD. Pins the Roark/Timoshenko coefficients against the
 exact 1-D beam-strip limits and the exact circular closed forms, plus the
@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import plates as pl  # noqa: E402
+from ankusdrive.analysis import plates as pl  # noqa: E402
 
 
 def test_square_ss_handbook_anchor():

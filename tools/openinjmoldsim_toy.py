@@ -5,7 +5,7 @@ solver, the headline path of GitHub issue #105.
 Generates a small 2-D plaque-cavity case programmatically (Cross-WLF + 2-domain
 Tait pulled from the #106 materials corpus), runs ``blockMesh`` → ``setFields`` →
 ``openInjMoldSim -fillEnd`` on the from-source OpenFOAM-7 build (auto-resolved by
-``driftpin.solvers``), parses the fill result through the same ``molding_fill``
+``ankusdrive.solvers``), parses the fill result through the same ``molding_fill``
 parser/gate the worker uses, and renders an animated GIF of the melt front
 advancing across the cavity.
 
@@ -28,8 +28,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from driftpin import solvers                      # noqa: E402
-from driftpin.analysis import molding_fill as mf  # noqa: E402
+from ankusdrive import solvers                      # noqa: E402
+from ankusdrive.analysis import molding_fill as mf  # noqa: E402
 
 
 def run_solver(case_dir: str, bashrc: str, fill_end: float = 0.98) -> int:

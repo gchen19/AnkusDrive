@@ -1,4 +1,4 @@
-"""Materials DB toys — two-sided oracles for driftpin.analysis.materials.
+"""Materials DB toys — two-sided oracles for ankusdrive.analysis.materials.
 
 Pure-Python, no FreeCAD, no numpy: imports the analysis module directly and
 checks it against known answers. Every test is two-sided — the right answer
@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import materials  # noqa: E402
+from ankusdrive.analysis import materials  # noqa: E402
 
 
 def test_parse_quantity():
@@ -246,7 +246,7 @@ def test_golden_shrinkage_anchors():
 def test_molding_screen_temps_match_cards():
     """The card melt/mold/eject temps are the source of truth; molding_screen's
     _POLYMERS mirror them (consolidation check, issue #106)."""
-    from driftpin.analysis import molding
+    from ankusdrive.analysis import molding
     name_map = {"ABS": "ABS", "PP": "PP", "PC": "PC", "PA66": "Nylon-6/6",
                 "POM": "POM", "HDPE": "HDPE", "PS": "PS"}
     for poly, card_name in name_map.items():
@@ -299,7 +299,7 @@ def test_molding_polymers_derived_from_cards_no_duplication():
     """Consolidation is real (issue #106): molding._POLYMERS holds NO duplicated
     temperature literals — it is assembled from the corpus cards at import. Edit
     a card temp in memory, rebuild, and the derived table must follow."""
-    from driftpin.analysis import molding
+    from ankusdrive.analysis import molding
     base = molding._build_polymers()
     assert base == molding._POLYMERS, "derived table must match module table"
     # the screen-only chart layer carries no temperatures, only alpha + L/t.
@@ -572,7 +572,7 @@ def test_dedup_preserves_seed_values_and_inherits_fcmat_fields():
 def test_electrical_layer_folds_em_conductor_table():
     """issue #175: em.py's handbook conductor table (σ, µ_r) now lives in the DB
     with provenance, so em_* tools and material_get share one source of truth."""
-    from driftpin.analysis import em
+    from ankusdrive.analysis import em
     # every conductor em ships resolves to a card carrying the handbook σ + µ_r
     for name, sigma in em._FALLBACK_CONDUCTORS.items():
         card = materials.get(name)

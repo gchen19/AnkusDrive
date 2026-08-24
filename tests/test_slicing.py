@@ -1,4 +1,4 @@
-"""FDM slice-estimate toys — two-sided oracles for driftpin.analysis.slicing.
+"""FDM slice-estimate toys — two-sided oracles for ankusdrive.analysis.slicing.
 
 Pure-Python, no FreeCAD. Each toy pins a closed-form result against a hand
 calculation AND verifies a deliberately-bad input is caught, mirroring
@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import materials, slicing as sl  # noqa: E402
+from ankusdrive.analysis import materials, slicing as sl  # noqa: E402
 
 PLA_RHO = 1.24  # g/cc, from the Materials DB (asserted below)
 
@@ -28,7 +28,7 @@ PLA_RHO = 1.24  # g/cc, from the Materials DB (asserted below)
 # apart again. A test that calls slicing.slice_estimate directly cannot catch a
 # wrapper that never exposed the parameter.
 
-_MCP = Path(__file__).resolve().parent.parent / "driftpin" / "mcp_server.py"
+_MCP = Path(__file__).resolve().parent.parent / "ankusdrive" / "mcp_server.py"
 
 
 def _mcp_slice_estimate_signature():
@@ -81,7 +81,7 @@ def test_solid_filament_equals_mass_at_full_infill():
 def test_density_is_read_from_materials_db():
     # the closed-form anchor above assumes PLA = 1.24 g/cc; pin that the value
     # really comes from the Materials DB (an explicit override would also work).
-    from driftpin.analysis import materials
+    from ankusdrive.analysis import materials
     rho = materials.numeric(materials.get("PLA"), "density_g_cc")
     assert abs(rho - PLA_RHO) < 1e-6, rho
 
@@ -314,7 +314,7 @@ def test_real_slicer_brackets_the_analytic_estimate():
     import subprocess
     import tempfile
 
-    from driftpin import solvers
+    from ankusdrive import solvers
     if not solvers.is_available("prusaslicer"):
         print("    SKIP — PrusaSlicer not installed")
         return

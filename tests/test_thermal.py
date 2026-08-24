@@ -1,5 +1,5 @@
 """Lumped transient thermal toys — two-sided oracles for
-driftpin.analysis.thermal.
+ankusdrive.analysis.thermal.
 
 Pure-Python, no FreeCAD. Pins the first-order RC response against the exact
 exponential AND checks the degenerate/limit cases, mirroring tests/TOYS.md and
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import thermal as th  # noqa: E402
+from ankusdrive.analysis import thermal as th  # noqa: E402
 
 
 def test_rc_warmup_matches_exact_exponential():

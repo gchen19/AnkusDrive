@@ -24,10 +24,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import families  # noqa: E402
-from driftpin import items as _items  # noqa: E402
-from driftpin import recipes  # noqa: E402
-from driftpin.analysis import standards as _std  # noqa: E402
+from ankusdrive import families  # noqa: E402
+from ankusdrive import items as _items  # noqa: E402
+from ankusdrive import recipes  # noqa: E402
+from ankusdrive.analysis import standards as _std  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "families"
 GEAR_CSV = FIX / "gear_family.csv"
@@ -273,7 +273,7 @@ def _vol(w, handle):
 def test_worker_gear_family_builds_n_parts():
     """A gear family materializes N real solids on the worker, each with a handle, a
     distinct item and a sequential part number."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         tbl = _write(td, "wfam.json", _SMALL_GEARS)
         with Worker() as w:
@@ -290,7 +290,7 @@ def test_worker_gear_family_builds_n_parts():
 def test_worker_modes_yield_identical_geometry():
     """The same family materialized in instances vs configurations mode builds
     byte-identical geometry — modes differ only in file/item allocation."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         tbl = _write(td, "wfam.json", _SMALL_GEARS)
         with Worker() as w:
@@ -309,7 +309,7 @@ def test_worker_modes_yield_identical_geometry():
 
 def test_worker_catalog_matches_standard_table():
     """A built bearing catalog row's bore matches the ISO standards table value."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     catalog = {
         "schema": families.SCHEMA, "family": "wcat", "recipe": "ball_bearing",
         "mode": "instances", "key": "designation",
@@ -336,7 +336,7 @@ def test_worker_catalog_matches_standard_table():
 def test_worker_family_validate_handler():
     """The family_validate worker handler discriminates a good table from a bad
     one (out-of-range), naming the row+column."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     bad = {**_SMALL_GEARS, "rows": [{"size": "X", "module_mm": 1.0, "teeth": 1}]}
     with tempfile.TemporaryDirectory() as td:
         good_p = _write(td, "good.json", _SMALL_GEARS)

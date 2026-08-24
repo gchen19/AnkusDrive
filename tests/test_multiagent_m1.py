@@ -21,7 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 from tests.multiagent_toys import (  # noqa: E402
     TOYS, toy1_build, run_gates,
     toy6_setup, toy6_internal_change, toy6_interface_change,

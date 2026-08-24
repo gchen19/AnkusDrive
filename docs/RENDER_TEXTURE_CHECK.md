@@ -1,6 +1,6 @@
 # Verifying POV-Ray texture-map rendering (manual QA runbook)
 
-A repeatable procedure for confirming that DriftPin's `render_photoreal` actually
+A repeatable procedure for confirming that AnkusDrive's `render_photoreal` actually
 renders the **image texture maps** of the FreeCAD Render addon's textured material
 cards, under POV-Ray specifically. This complements the automated photoreal tests in
 [`tests/test_render_photoreal.py`](../tests/test_render_photoreal.py) and closes the
@@ -51,7 +51,7 @@ relief, use a renderer that supports it — e.g. LuxCore — which is a separate
 - The Render addon **and** POV-Ray installed (see `RENDER_WORKBENCH.md` §6).
   Confirm with: `.venv/bin/python3 tests/test_render_photoreal.py` — the renderer
   tests should PASS, not SKIP. If they SKIP, the addon/binary isn't found.
-- A Python env with `driftpin` importable (the repo `.venv`).
+- A Python env with `ankusdrive` importable (the repo `.venv`).
 
 ## Procedure
 
@@ -60,7 +60,7 @@ Render the two textured cards plus a solid reference, from the repo root:
 ```bash
 PYTHONPATH=. .venv/bin/python3 - <<'PY'
 import base64
-from driftpin.client import Worker
+from ankusdrive.client import Worker
 with Worker() as w:
     w.call("new_document", name="texcheck")
     # a wide, shallow slab shows a surface pattern better than a cube

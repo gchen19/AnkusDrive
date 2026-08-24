@@ -30,9 +30,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import fluids  # noqa: E402
-from driftpin.analysis import cfd  # noqa: E402
-from driftpin.analysis import convection  # noqa: E402
+from ankusdrive.analysis import fluids  # noqa: E402
+from ankusdrive.analysis import cfd  # noqa: E402
+from ankusdrive.analysis import convection  # noqa: E402
 
 _HAVE = fluids.available()
 _R_AIR = 287.05  # J/kg·K, dry-air gas constant

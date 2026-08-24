@@ -1,6 +1,6 @@
-# DriftPin roadmap
+# AnkusDrive roadmap
 
-Living plan for getting DriftPin from "CSG primitives + one FEM demo" to a substrate
+Living plan for getting AnkusDrive from "CSG primitives + one FEM demo" to a substrate
 an LLM agent can use to drive end-to-end mechanical design: parametric geometry,
 robust selection, simulation, assembly, and manufacturing outputs.
 
@@ -40,7 +40,7 @@ watertight solid can still have a blocked or leaky flow path. Plan:
   airtight | bottleneck | blocked | leaky.
 - `annotate_face` / `list_face_roles` — bind semantic roles
   (inlet/outlet/sealing/wetted/ambient/mating) to stable `f_*` tags, persisted in
-  a `DP_FaceRoles` bag (mirrors `publish_interface`); drift-aware read-back.
+  a `AD_FaceRoles` bag (mirrors `publish_interface`); drift-aware read-back.
 - `classify_face_sides` — inside-vs-outside (wetted/ambient) topology, sealing
   declared ports so an open duct's bore reads as the enclosed cavity.
 - `declare_intent` / `verify_intent` — persist a contract (watertight,
@@ -364,7 +364,7 @@ plausible-but-wrong part. A render closes the loop.
 
 **Shipped:**
 - Worker `tessellate(handle, deflection)` returning `{vertices, triangles, bbox}`.
-- Host renderer (`driftpin/render.py`): NumPy + Pillow software rasterizer.
+- Host renderer (`ankusdrive/render.py`): NumPy + Pillow software rasterizer.
   Orthographic projection, auto-fit camera, painter's-algorithm depth sort
   via per-triangle mean z, Lambertian flat shading from a fixed light, edge
   lines on by default. Views: iso/top/bottom/front/back/left/right/side.
@@ -552,7 +552,7 @@ canonical example in this house is the `~/diffuser` project: FreeCAD held the
 `.FCStd` files, but the actual physics — 2D Snell/TIR ray tracing, moldability
 scoring, BSpline parameter sweep — lived in a separate Python pipeline that
 *imported* FreeCAD just for geometry extraction. That's the right pattern for
-any domain FreeCAD doesn't natively cover: a thin MCP tool that takes a DriftPin
+any domain FreeCAD doesn't natively cover: a thin MCP tool that takes a AnkusDrive
 handle (or its exported STEP/STL/mesh) and returns structured results.
 
 **Expanded into [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md)** — the full tool-family

@@ -2,7 +2,7 @@
 Phase 0 multi-agent walkthrough — partition + merge with TODAY's tools.
 
 Companion to docs/MULTI_AGENT.md §12 (Phase 0). Proves the partition+merge model
-end-to-end with ZERO new DriftPin code: separate "builder" sessions each produce a
+end-to-end with ZERO new AnkusDrive code: separate "builder" sessions each produce a
 component .FCStd; a "coordinator" session links them by file path into one assembly
 and runs the verification gates.
 
@@ -36,12 +36,12 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 try:
     import numpy  # noqa: F401
     from PIL import Image  # noqa: F401
-    from driftpin import render as render_lib
+    from ankusdrive import render as render_lib
     _RENDER_OK = True
 except ImportError as e:
     _RENDER_OK = False
@@ -55,7 +55,7 @@ def _save_render(w, handle, out_name):
     """Best-effort iso render to a PNG next to this script. Returns True if written.
 
     render_view is a host-side MCP tool; the raw Worker only exposes `tessellate`,
-    so we mesh in the worker and rasterize here with driftpin.render (same as the
+    so we mesh in the worker and rasterize here with ankusdrive.render (same as the
     render_view tool does internally)."""
     if not _RENDER_OK:
         return False

@@ -1,4 +1,4 @@
-"""Drop/impact screening toys — two-sided oracles for driftpin.analysis.impact.
+"""Drop/impact screening toys — two-sided oracles for ankusdrive.analysis.impact.
 
 Pure-Python, no FreeCAD. Pins the energy-balance identities: G = h/d, the
 exact pulse-shape factors, v = sqrt(2gh), mass independence of G, and the
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import impact as im  # noqa: E402
+from ankusdrive.analysis import impact as im  # noqa: E402
 
 
 def test_energy_balance_identity():

@@ -2,7 +2,7 @@
 (validate-kickoff #3 — docs/archive/KICKOFF_validate_the_artifact.md, docs/VALIDATE_THE_ARTIFACT.md).
 
 Items #1/#2/#4/#5 of that kickoff consume the real geometry *statically*: the §11.10
-oracle (driftpin/realize.py) reads the exported Part.Shape, and the slide-and-catch
+oracle (ankusdrive/realize.py) reads the exported Part.Shape, and the slide-and-catch
 (scratch/dog_clutch_slide_sim.py) drives a prescribed kinematic path and reads the
 geometry at each step. #3 is the one structural piece left — a *dynamic* rigid-body
 contact sim that couples through the metal itself, with NO constraint imposing the
@@ -54,7 +54,7 @@ sys.path.insert(0, str(REPO / "scratch"))
 
 import pybullet as p                 # noqa: E402
 import numpy as np                   # noqa: E402
-from driftpin import Worker          # noqa: E402
+from ankusdrive import Worker          # noqa: E402
 import sim_video as sv               # noqa: E402
 
 ART = REPO / "artifacts"
@@ -75,7 +75,7 @@ BUILD = r"""
 import Part, math, Mesh
 import FreeCAD as App
 from FreeCAD import Vector, Placement, Rotation
-from driftpin import realize
+from ankusdrive import realize
 doc = App.ActiveDocument
 SR, GH, ND, RDOG, DOG_H = %f, %f, %d, %f, %f
 og = doc.getObject(%r).Shape

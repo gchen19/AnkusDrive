@@ -1,4 +1,4 @@
-# DriftPin simulation tools — execution examples & verification toys
+# AnkusDrive simulation tools — execution examples & verification toys
 
 Companion to [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md). That doc is the *scope
 map* — what each family answers, its backend, and its build risk. This doc is the
@@ -53,7 +53,7 @@ deterministic oracle returning `{ok, reason}`.
 - **Results return numbers, not solver dumps.** Every extractor hands back a small
   typed dict the agent can branch on.
 - **External solvers degrade gracefully.** A missing OpenFOAM/PrusaSlicer yields
-  `{"ok": false, "reason": "solver not installed", "install": "pip install driftpin[cfd]"}`,
+  `{"ok": false, "reason": "solver not installed", "install": "pip install ankusdrive[cfd]"}`,
   never an import crash.
 
 ---
@@ -97,7 +97,7 @@ Actual output from the bundled demo at default args (verified by running it):
   "nodes": 164, "tets": 412,
   "max_displacement_mm": 0.0538,
   "max_vonmises_mpa": 0.224,
-  "workdir": "/tmp/driftpin_fem"
+  "workdir": "/tmp/ankusdrive_fem"
 }
 ```
 
@@ -174,7 +174,7 @@ must converge to RSS within ±0.3% at samples=10000.
 20 mm shaft must reproduce the handbook deviations (hole +0.021/0, shaft
 −0.007/−0.020) — a wrong table entry is caught here.
 
-> This is the family that stands up the `driftpin/analysis/` subpackage
+> This is the family that stands up the `ankusdrive/analysis/` subpackage
 > (Appendix A of `SIMULATION_TOOLS.md`). It's pure math, so the toy runs without
 > spawning FreeCAD.
 
@@ -400,7 +400,7 @@ wrong is caught immediately; a missing OpenFOAM must return the graceful
 `solver not installed` dict, not a stack trace.
 
 > CFD cannot block the MCP channel — this family is gated on the async/long-solve
-> work and ships behind `driftpin[cfd]`.
+> work and ships behind `ankusdrive[cfd]`.
 
 ---
 
@@ -585,7 +585,7 @@ The Materials DB (§2) and every family that reads it (fatigue, fracture, cost,
 optics) are only as trustworthy as their source data. The short answer to "what's
 more reliable than a web search": **there is no single free, machine-readable
 corpus that covers both mechanical and optical properties — use a layered corpus,
-seeded from data DriftPin already ships.**
+seeded from data AnkusDrive already ships.**
 
 ### Mechanical / thermal — recommended layering
 
@@ -618,7 +618,7 @@ seeded from data DriftPin already ships.**
 6. **Open schema to model your store on:**
    [`mvernacc/material-properties-interchange`](https://github.com/mvernacc/material-properties-interchange)
    — a small open database of engineering materials with a Python interface and a
-   clean YAML schema; a good template for `driftpin/analysis/materials/`. And
+   clean YAML schema; a good template for `ankusdrive/analysis/materials/`. And
    [`sedaoturak/data-resources-for-materials-science`](https://github.com/sedaoturak/data-resources-for-materials-science)
    catalogs further open datasets.
 
@@ -661,7 +661,7 @@ no general mechanical database gives you for free.
   checking out a newer tag and committing the gitlink.)
 - `tools/extract_optical_corpus.py` reads a curated `TARGETS` set from the
   submodule YAML (Sellmeier coefficients + catalog n_d / Abbe / density / CTE) and
-  emits the lean, committed `driftpin/analysis/materials/optical.json`. The runtime
+  emits the lean, committed `ankusdrive/analysis/materials/optical.json`. The runtime
   loader reads only that JSON — **no PyYAML or submodule needed at runtime**, only
   to regenerate.
 - `materials._load_corpus()` merges `optical.json` onto `seed.json`

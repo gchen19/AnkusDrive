@@ -61,7 +61,7 @@ mating contract (the bolt circle, the bore, the datum frame).
 > decisions most likely to change; if any of them is visible across a module
 > boundary, you have leaked an implementation detail — pull it back inside.
 
-- **Leans on:** the **recipe** (#136, `driftpin/recipes.py`) is the encapsulation
+- **Leans on:** the **recipe** (#136, `ankusdrive/recipes.py`) is the encapsulation
   boundary — a named build function with a *declared public input schema*; its
   baked internal geometry is private. `publish_interface` is the act of declaring
   what is public.

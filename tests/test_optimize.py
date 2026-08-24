@@ -22,7 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import optimize as op  # noqa: E402
+from ankusdrive.analysis import optimize as op  # noqa: E402
 
 # the oracle toy, shared by the live tests
 Q_LPM = 2.0
@@ -217,7 +217,7 @@ def test_the_optimizer_rides_the_constraint_to_a_known_optimum():
     NARROW as possible. Both are closed-form, so the optimum is exactly where the
     constraint binds: D = sqrt(4Q/(pi*v_min)). Riding a binding constraint to a known
     answer is the whole job."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         sub = w.call(
@@ -256,7 +256,7 @@ def test_an_infeasible_spec_returns_the_best_margin_not_a_false_pass():
     """The two-sided half. A velocity floor of 5 m/s is unreachable anywhere in the box
     (the narrowest allowed pipe gives ~1.7 m/s), so the honest answer is 'not proven,
     here is how close it got' — never a pass, and never an exception."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         got = _await(w, w.call(
@@ -283,7 +283,7 @@ def test_a_margin_inside_the_band_is_reported_unproven():
     """A constraint measured by the turbulent correlation carries ±10 %. Put the limit
     just under the measured value and the verdict must be indeterminate — the design may
     well be fine, but this measurement has not shown it, so `proven` stays False."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         # 12 mm at 2 L/min is turbulent, so cfd_pipe_flow reports band_pct 10
@@ -318,7 +318,7 @@ def test_a_margin_inside_the_band_is_reported_unproven():
 
 
 def test_the_budget_is_a_ceiling_and_cache_hits_do_not_count():
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         got = _await(w, w.call(
@@ -345,8 +345,8 @@ def test_an_unbindable_handle_is_refused_at_the_door():
     THIS candidate built, in an optimization that builds nothing, must be refused at
     the door — substituting nothing deep inside the search is how a sweep ends up
     measuring a literal string at every point."""
-    from driftpin import Worker
-    from driftpin.client import WorkerError
+    from ankusdrive import Worker
+    from ankusdrive.client import WorkerError
 
     with Worker() as w:
         try:
@@ -397,7 +397,7 @@ def test_shape_optimization_rides_the_constraint_to_a_known_optimum():
     Both legs are linear in face width, so the optimum is exactly where the constraint
     binds — width = w0/SF(w0) — the same closed-form oracle shape the parametric gate
     uses, which is what makes "it found it" mean something."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     power_w, module_mm, teeth, rpm = 10_000.0, 2.0, 24, 1200
     gear = {"module_mm": module_mm, "teeth": teeth,
@@ -457,7 +457,7 @@ def test_a_shape_search_that_cannot_build_says_why():
     only "no point could be measured" is true and useless — it is the symptom, and the
     same silent-absence trap the modal gate (#248) and the performance gates (#261)
     were fixed for. The build error rides out in `warnings`, deduped."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         w.call("new_document", name="badshape")
@@ -486,7 +486,7 @@ def test_a_shape_search_that_cannot_build_says_why():
 def test_an_optimization_with_no_constraints_says_it_proved_nothing():
     """Optimizing an objective is not the same as meeting a spec. Without a constraint
     there is no spec, and reporting `proven` would be meaningless."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         got = _await(w, w.call(

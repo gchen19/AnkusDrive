@@ -37,8 +37,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin import render as render_lib  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import render as render_lib  # noqa: E402
 from tests.reliability_specs import SPECS, Spec  # noqa: E402
 
 

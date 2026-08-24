@@ -1,7 +1,7 @@
 """Apply the experiment-readiness gate to gearbox-derived emergent-property toys —
 the free GO/NO-GO that decides where a billed multi-agent run is worth spending.
 
-Two toys, opposite verdicts, both judged by the motion oracle (driftpin/mechanism):
+Two toys, opposite verdicts, both judged by the motion oracle (ankusdrive/mechanism):
 
   TOY 1  gearbox mobility, FIXED rigid topology — agents build the gears.
          Emergent (the lock is invisible to any single gear builder) but NOT
@@ -25,8 +25,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 
-from driftpin import mechanism                                  # noqa: E402
-from driftpin.experiment import readiness                       # noqa: E402
+from ankusdrive import mechanism                                  # noqa: E402
+from ankusdrive.experiment import readiness                       # noqa: E402
 from test_mechanism import rigid_spec, selective_spec, S  # noqa: E402
 
 

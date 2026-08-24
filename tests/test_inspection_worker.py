@@ -33,7 +33,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 _PASS = _FAIL = 0
 
@@ -273,9 +273,9 @@ def test_balloons_render_into_the_exported_svg():
             # NB: the part geometry draws <circle> elements of its own (the hole is
             # one), so balloons are counted by their class, not by element type.
             _eq("an unballooned page draws no balloons",
-                before.count('class="driftpin-balloon"'), 0)
+                before.count('class="ankusdrive-balloon"'), 0)
             _eq("one balloon per characteristic",
-                after.count('class="driftpin-balloon"'), res["count"])
+                after.count('class="ankusdrive-balloon"'), res["count"])
             _check("the feature control frame is drawn as a frame",
                    "⏥" in after, "flatness symbol missing from the SVG")
             _check("the ballooned export is larger", len(after) > len(before))

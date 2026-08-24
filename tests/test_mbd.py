@@ -1,4 +1,4 @@
-"""PyBullet multibody-dynamics checks for driftpin.analysis.mbd.
+"""PyBullet multibody-dynamics checks for ankusdrive.analysis.mbd.
 
 Needs the `pybullet` wheel (the `mbd` extra). When it is absent this suite SKIPS
 cleanly (exit 0) so the no-FreeCAD/no-solver fast lane stays green — the solver
@@ -39,7 +39,7 @@ def _pendulum_spec(driven_velocity=0.0, obstacle=None, L=1.0, m=1.0):
 
 
 def test_pendulum_gravity_torque_matches_closed_form():
-    from driftpin.analysis import mbd
+    from ankusdrive.analysis import mbd
     L, m, g = 1.0, 1.0, 9.81
     r = mbd.run_mbd(_pendulum_spec(driven_velocity=0.0, L=L, m=m),
                     duration_s=0.2, dt_s=1 / 240, gravity=(0, 0, -g))
@@ -50,7 +50,7 @@ def test_pendulum_gravity_torque_matches_closed_form():
 
 
 def test_driven_link_sweeps_expected_envelope():
-    from driftpin.analysis import mbd
+    from ankusdrive.analysis import mbd
     L = 1.0
     r = mbd.run_mbd(_pendulum_spec(driven_velocity=6.283, L=L),  # ~1 rev/s for 1 s
                     duration_s=1.0, dt_s=1 / 240, gravity=(0, 0, -9.81))
@@ -62,7 +62,7 @@ def test_driven_link_sweeps_expected_envelope():
 
 
 def test_collision_through_motion_two_sided():
-    from driftpin.analysis import mbd
+    from ankusdrive.analysis import mbd
     clean = mbd.run_mbd(_pendulum_spec(driven_velocity=6.283),
                         duration_s=1.0, dt_s=1 / 240, gravity=(0, 0, -9.81))
     assert clean["collisions_through_motion"] == [], clean["collisions_through_motion"][:2]
@@ -83,7 +83,7 @@ def test_orientations_track_driven_revolution():
     motion video consumes (docs/archive/KICKOFF_simulation_video_capture.md, item A)."""
     import math
 
-    from driftpin.analysis import mbd
+    from ankusdrive.analysis import mbd
     w, dur = 2.0, 1.0                                     # 2 rad/s for 1 s -> 2.0 rad (<pi)
     spec = {
         "base": {"half_extents_m": [0.01, 0.01, 0.01], "mass_kg": 0.0, "pos_m": [0, 0, 0]},
@@ -128,7 +128,7 @@ def _two_shaft_gear_spec(gears, drive=10.0, driver_force=50.0):
 def test_gear_coupling_reproduces_ratio():
     """A single gear coupling drives the output to omega_out/omega_in = -Na/Nb — the
     closed-form gear ratio the Tier-1 mechanism oracle predicts (12/36 -> -1/3)."""
-    from driftpin.analysis import mbd
+    from ankusdrive.analysis import mbd
     na, nb = 12, 36
     r = mbd.run_mbd(_two_shaft_gear_spec(
         [{"link_a": 0, "link_b": 1, "ratio": nb / na, "axis": [0, 0, 1], "max_force": 2e3}]),
@@ -144,7 +144,7 @@ def test_overconstrained_gears_lock_the_train():
     solution — the driven shaft cannot hold its commanded speed (the dynamic image of
     the closed-form over-constraint). A single pair holds command; the conflicting set
     departs from it wildly."""
-    from driftpin.analysis import mbd
+    from ankusdrive.analysis import mbd
     good = mbd.run_mbd(_two_shaft_gear_spec(
         [{"link_a": 0, "link_b": 1, "ratio": 2.0, "axis": [0, 0, 1], "max_force": 2e3}]),
         duration_s=3.0)
@@ -160,8 +160,8 @@ def test_overconstrained_gears_lock_the_train():
 def test_runs_through_jobs_facility():
     # the exact async composition mechanism_simulate_submit uses: run_mbd on the
     # jobs.py background thread, polled via status/result, with content-key caching.
-    from driftpin import jobs
-    from driftpin.analysis import mbd
+    from ankusdrive import jobs
+    from ankusdrive.analysis import mbd
     jobs.reset()
     spec = _pendulum_spec(driven_velocity=0.0)
     key = jobs.content_key("mechanism_simulate", {"spec": "pendulum"})
@@ -192,7 +192,7 @@ def _discover():
 
 def main():
     if not _has_pybullet():
-        print("  SKIP test_mbd — pybullet not installed (pip install 'driftpin[mbd]')")
+        print("  SKIP test_mbd — pybullet not installed (pip install 'ankusdrive[mbd]')")
         print("== 0 run, suite skipped ==")
         return
     tests = _discover()

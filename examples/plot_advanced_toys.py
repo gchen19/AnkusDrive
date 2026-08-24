@@ -5,7 +5,7 @@ Each advanced toy asserts an exact closed-form limit (an invariant, a scaling la
 a reciprocity, a conservation identity, or a regression edge). The asserts pin a
 single number; this script sweeps the *same* pure-Python analysis functions across
 a parameter range and plots the underlying curve, so you can see the law the toy
-gates on. No FreeCAD, no external solver — just ``driftpin.analysis`` + matplotlib.
+gates on. No FreeCAD, no external solver — just ``ankusdrive.analysis`` + matplotlib.
 
 Five figures, one per batch, written to ``examples/results/``:
   * toys_batch1.png — pure-math cores   (tolerance · materials · cfd)
@@ -28,21 +28,21 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import cfd                       # noqa: E402
-from driftpin.analysis import cht                       # noqa: E402
-from driftpin.analysis import cost                      # noqa: E402
-from driftpin.analysis import dfx                       # noqa: E402
-from driftpin.analysis import durability as du          # noqa: E402
-from driftpin.analysis import em                        # noqa: E402
-from driftpin.analysis import kinematics                # noqa: E402
-from driftpin.analysis import machine_elements as me    # noqa: E402
-from driftpin.analysis import materials as mat          # noqa: E402
-from driftpin.analysis import optics as op              # noqa: E402
-from driftpin.analysis import slicing as sl             # noqa: E402
-from driftpin.analysis import thermal as th             # noqa: E402
-from driftpin.analysis import tolerance as tol          # noqa: E402
-from driftpin.analysis import topology as topo          # noqa: E402
-from driftpin.analysis import vibration as vib          # noqa: E402
+from ankusdrive.analysis import cfd                       # noqa: E402
+from ankusdrive.analysis import cht                       # noqa: E402
+from ankusdrive.analysis import cost                      # noqa: E402
+from ankusdrive.analysis import dfx                       # noqa: E402
+from ankusdrive.analysis import durability as du          # noqa: E402
+from ankusdrive.analysis import em                        # noqa: E402
+from ankusdrive.analysis import kinematics                # noqa: E402
+from ankusdrive.analysis import machine_elements as me    # noqa: E402
+from ankusdrive.analysis import materials as mat          # noqa: E402
+from ankusdrive.analysis import optics as op              # noqa: E402
+from ankusdrive.analysis import slicing as sl             # noqa: E402
+from ankusdrive.analysis import thermal as th             # noqa: E402
+from ankusdrive.analysis import tolerance as tol          # noqa: E402
+from ankusdrive.analysis import topology as topo          # noqa: E402
+from ankusdrive.analysis import vibration as vib          # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results"
 _N_PMMA = 1.49062
