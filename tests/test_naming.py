@@ -52,11 +52,12 @@ ALLOWED = {
     "tests/test_naming.py":         "this file — it has to name what it forbids",
     "tests/test_compat_rename.py":  "asserts the compatibility shims still work",
     "MIGRATION.md":                 "tells users what changed and how to move",
-    "README.md":                    "one line: the wordmark is pending redesign",
+    "docs/PUBLISHING_PLAN.md":      "the old name is an unclaimed PyPI project to reserve",
     # Brand artwork. The DriftPin mark is a drift pin threading a reticle — the
-    # picture IS the old name, so it needs a redesign, not a re-export. Tracked
-    # under its original filenames until that lands (#295 follow-up).
-    "logo/":                        "name-derived artwork pending redesign",
+    # picture IS the old name, so it could not be re-exported. The AnkusDrive
+    # redesign now lives in logo/ankusdrive/; these are the superseded originals,
+    # kept under their original filenames as the pre-rename archive.
+    "logo/":                        "superseded pre-rename artwork, kept as archive",
 }
 
 

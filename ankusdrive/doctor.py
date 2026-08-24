@@ -18,12 +18,32 @@ from __future__ import annotations
 import os
 import platform
 
+from pathlib import Path
+
 from . import solvers
 from .client import (
     _DEFAULT_FREECADCMD_CANDIDATES,
     _freecadcmd_candidates,
     _resolve_freecadcmd,
 )
+
+
+_REPO_URL = "https://github.com/gchen19/AnkusDrive"
+
+
+def _installer_scripts_location() -> str:
+    """Where the ``scripts/install-solvers.*`` named by the fix hints actually lives.
+
+    The hints spell a *repo-relative* path, which is correct from a clone and a dead
+    end for everyone else: the installers are not package data, so a
+    ``pip install ankusdrive`` never puts them on disk and the advice reads as a
+    missing file. Resolve the real directory when we are running out of a checkout,
+    and hand out the URL when we are not.
+    """
+    local = Path(__file__).resolve().parent.parent / "scripts"
+    if (local / "install-solvers.sh").is_file():
+        return str(local)
+    return f"{_REPO_URL}/tree/main/scripts"
 
 
 def _freecad_fix_hint() -> str:
@@ -243,5 +263,10 @@ def render(report: dict) -> str:
     ready = sum(1 for f in fam.values() if f["any_available"])
     unwired = sum(1 for f in fam.values() if not f["any_available"] and f["unwired"])
     absent = len(fam) - ready - unwired
+    if ready < len(fam):
+        # The fix hints above name scripts/install-solvers.{sh,ps1}; say where that is
+        # for the pip-installed case, where no such path exists locally.
+        out.append(f"install-solvers scripts: {_installer_scripts_location()}")
+        out.append("")
     out.append(f"{ready} families ready | {unwired} unwired | {absent} absent")
     return "\n".join(out)

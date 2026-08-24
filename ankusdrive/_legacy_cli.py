@@ -19,7 +19,7 @@ def main() -> int:
     sys.stderr.write(
         "driftpin: renamed to `ankusdrive` in 0.5 — this shim runs it for you, "
         "and goes away in 0.6. Update your MCP host config, scripts and aliases "
-        "(see MIGRATION.md).\n"
+        "(see https://github.com/gchen19/AnkusDrive/blob/main/MIGRATION.md).\n"
     )
     from .cli import main as _main
     return _main()

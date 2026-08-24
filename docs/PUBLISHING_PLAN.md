@@ -64,9 +64,10 @@ shippable — stop after any phase if the next one isn't worth the cost.
 cloning.
 
 **Deliverables**
-- [ ] **(human)** Reserve the `ankusdrive` name on PyPI + TestPyPI (register
-  account). No placeholder upload needed — trusted publishing claims the name
-  on the first real upload.
+- [x] **(human)** Reserve the `ankusdrive` name on PyPI + TestPyPI (register
+  account). Done 2026-08-24: the name is held on PyPI (pending trusted
+  publisher — the project materialises on the first upload), and a 0.5.0
+  dry-run is live on TestPyPI.
 - [ ] **(human)** Configure the PyPI/TestPyPI trusted-publisher binding
   (owner `gchen19`, repo `AnkusDrive`, workflow `publish.yml`, environments
   `pypi` / `testpypi`) and create the matching GitHub environments. See the
@@ -77,9 +78,13 @@ cloning.
   smoke-installs the wheel, and uploads via OIDC trusted publishing
   (`pypa/gh-action-pypi-publish`) — no stored token. `workflow_dispatch`
   supports a TestPyPI dry-run.
-- [ ] **(human)** First real release: tag `v0.4.0` (matches
+- [ ] **(human)** First real release: tag `v0.5.0` (matches
   `ankusdrive/__init__.py`), push it, verify the wheel installs cleanly in a
-  fresh venv on macOS and Linux.
+  fresh venv on macOS and Linux. Note that PyPI filenames are immutable — a
+  bad `0.5.0` can only be yanked, never replaced, and TestPyPI has already
+  burned `0.5.0`, so pre-release validation happens locally (`python -m build`
+  → `twine check --strict` → clean-venv wheel install), not with a second
+  TestPyPI round.
 - [x] Update README setup section: `pipx install ankusdrive` is documented as
   the primary path, marked "on release", with the `git+https` and clone paths
   retained as the interim/contributor routes.
@@ -92,8 +97,10 @@ cloning.
   set), not a venv-relative path.
 
 **Risks**
-- Name squatting: confirm `ankusdrive` is free on PyPI before announcing
-  anywhere. Fallback names: `ankusdrive-mcp`, `freecad-ankusdrive`.
+- Name squatting: `ankusdrive` is reserved (2026-08-24). The *old* name
+  `driftpin` is still unclaimed on PyPI while `MIGRATION.md` and the deprecated
+  `driftpin` console script both name it — reserve it too, so nobody else can
+  answer a `pip install driftpin` typed by someone following our own docs.
 - FreeCAD versioning: if 1.2 ships during this phase and breaks the API
   surface, hold the release and fix forward.
 
