@@ -23,7 +23,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 
 def _close(got, want, tol=1e-3, label=""):

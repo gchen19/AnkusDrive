@@ -1,4 +1,4 @@
-"""A real compound (multi-stage) gear TRAIN as a DriftPin assembly, and the scripted
+"""A real compound (multi-stage) gear TRAIN as a AnkusDrive assembly, and the scripted
 proof that the motion gate checks its EMERGENT invariant — the overall reduction.
 
 Layout: 4 collinear shafts S0..S3 on the X axis, 48 mm apart (shared centre distance
@@ -22,7 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 import gearbox_real as gb            # noqa: E402  (build_gear/build_shaft + constants)
-from driftpin import Worker          # noqa: E402
+from ankusdrive import Worker          # noqa: E402
 
 NSTAGE = 3
 SSUM = 48                            # tooth-sum per stage (shared centre distance)
@@ -90,7 +90,7 @@ def build_manifest(tmp, drivers, files, target=TARGET, with_target=True,
         mech["target_ratio"] = {"input": "shaft0", "output": f"shaft{NSTAGE}",
                                 "ratio": target, "tol": 0.01}
 
-    man = {"schema": "driftpin.manifest/1", "name": "train",
+    man = {"schema": "ankusdrive.manifest/1", "name": "train",
            "root": "train.FCStd", "components": comps, "instances": insts,
            "checks": checks, "mechanism": mech}
     mp = tmp / manifest_name

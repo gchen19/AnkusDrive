@@ -1,5 +1,5 @@
 """Convection-coefficient screening toys — two-sided oracles for
-driftpin.analysis.convection.
+ankusdrive.analysis.convection.
 
 Pure-Python, no FreeCAD. Pins the Churchill–Chu / flat-plate / Hilpert
 correlations against independent handbook anchors and exact scaling
@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import convection as cv  # noqa: E402
+from ankusdrive.analysis import convection as cv  # noqa: E402
 
 
 def test_air_film_properties_match_table_air():

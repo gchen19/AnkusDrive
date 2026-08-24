@@ -1,8 +1,8 @@
 """
 Static contract tests for the two parallel command registries.
 
-DriftPin exposes every capability twice: a worker-side handler (`@handler("x")`
-in driftpin/worker.py) and an MCP tool (`@mcp.tool()` in driftpin/mcp_server.py)
+AnkusDrive exposes every capability twice: a worker-side handler (`@handler("x")`
+in ankusdrive/worker.py) and an MCP tool (`@mcp.tool()` in ankusdrive/mcp_server.py)
 that marshals to it via `_call("x")`. These two registries are authored by hand
 and MUST stay in lockstep — a forgotten tool wrapper, a copy-pasted `_call`
 target, or a double-pasted handler is a silent break.
@@ -25,9 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import determinism_registry as detreg  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-WORKER = REPO / "driftpin" / "worker.py"
-MCP = REPO / "driftpin" / "mcp_server.py"
-ANALYSIS_DIR = REPO / "driftpin" / "analysis"
+WORKER = REPO / "ankusdrive" / "worker.py"
+MCP = REPO / "ankusdrive" / "mcp_server.py"
+ANALYSIS_DIR = REPO / "ankusdrive" / "analysis"
 
 
 # --- known, intentional exceptions (keep these honest; the tests verify that
@@ -125,7 +125,7 @@ _DISPATCH_TARGETS = {t["target"] for t in _TOOLS if t["target"]}
 # A screen's `escalate_to` names the higher-fidelity tool an agent should run
 # next. If that name is a typo or a renamed/removed handler, the escalation is a
 # dead end the LLM can't act on. We harvest every `escalate_to` VALUE any tool can
-# emit by static-parsing the dict literals across driftpin/ (no imports), and
+# emit by static-parsing the dict literals across ankusdrive/ (no imports), and
 # require each to be either None or a real tool/handler name.
 
 def _str_constants(node):
@@ -140,7 +140,7 @@ def _str_constants(node):
 
 def _escalate_targets():
     """{source: set(targets)} — every string an `escalate_to` dict key can hold,
-    parsed from driftpin/analysis/*.py + worker.py. None (escalate to nothing) is
+    parsed from ankusdrive/analysis/*.py + worker.py. None (escalate to nothing) is
     represented by the literal None in the set."""
     out = {}
     files = sorted(ANALYSIS_DIR.glob("*.py")) + [WORKER]
@@ -371,8 +371,8 @@ _WRAPPER_DRIFT_OK = {
 
 
 def _local_module_aliases(func):
-    """{local name: real module} for `from driftpin.analysis import x as y` /
-    `import driftpin.analysis.x as y` inside a handler body. Handlers almost always
+    """{local name: real module} for `from ankusdrive.analysis import x as y` /
+    `import ankusdrive.analysis.x as y` inside a handler body. Handlers almost always
     alias (`me`, `_em`, `_slicing`), so without this the sweep silently covers a
     handful of tools instead of most of them."""
     aliases = {}
@@ -382,7 +382,7 @@ def _local_module_aliases(func):
                 aliases[a.asname or a.name] = a.name
         elif isinstance(sub, ast.Import):
             for a in sub.names:
-                if a.name.startswith("driftpin.analysis."):
+                if a.name.startswith("ankusdrive.analysis."):
                     aliases[a.asname or a.name.split(".")[-1]] = a.name.split(".")[-1]
     return aliases
 
@@ -441,7 +441,7 @@ def _forwarded_kwargs(func):
 
 
 def _analysis_optional_params(mod_name, fn_name):
-    """Optional (defaulted) parameter names of driftpin.analysis.<mod>.<fn>, read by
+    """Optional (defaulted) parameter names of ankusdrive.analysis.<mod>.<fn>, read by
     AST from the source — this file deliberately imports none of its targets, and an
     import here would silently no-op the whole check when the repo root is off
     sys.path (which is exactly how the runner invokes it)."""
@@ -618,14 +618,14 @@ def test_bounded_submits_are_classified_bounded():
 # --- encoding hygiene (issue #204) --------------------------------------------
 #
 # On Windows a text-mode open()/read_text()/write_text() with no explicit
-# encoding= uses the locale codec (cp1252), not UTF-8. DriftPin's sources,
+# encoding= uses the locale codec (cp1252), not UTF-8. AnkusDrive's sources,
 # generated solver decks and result files carry non-ASCII (em-dashes, µ, °, ×),
 # so an encoding-less text open corrupts data or raises UnicodeDecodeError on a
 # Windows MCP host — which is spawned with a minimal env (no PYTHONUTF8). This
-# guard fails if any text-mode open in driftpin/ or tests/ omits encoding, so a
+# guard fails if any text-mode open in ankusdrive/ or tests/ omits encoding, so a
 # future regression is caught here instead of on a user's machine.
 
-_ENC_ROOTS = [REPO / "driftpin", REPO / "tests"]
+_ENC_ROOTS = [REPO / "ankusdrive", REPO / "tests"]
 
 
 def _binary_mode(call):
@@ -655,7 +655,7 @@ def _is_pil_open(call):
 
 def _encodingless_text_opens():
     """(file:line, snippet) for every text-mode open/read_text/write_text in
-    driftpin/ and tests/ that omits encoding=. PIL Image.open and binary-mode
+    ankusdrive/ and tests/ that omits encoding=. PIL Image.open and binary-mode
     opens are exempt."""
     offenders = []
     for root in _ENC_ROOTS:
@@ -701,7 +701,7 @@ def test_mcp_dependency_is_ceiling_pinned():
 
     mcp 2.0.0 restructured the server package and dropped `mcp.server.fastmcp`
     — the exact symbol mcp_server.py imports — so an unconstrained resolve
-    installs cleanly and then `driftpin mcp` dies with ImportError while
+    installs cleanly and then `ankusdrive mcp` dies with ImportError while
     ping/doctor still pass. The break came from OUTSIDE the repo, so only a
     declared ceiling (plus this guard that it never regresses) protects a
     fresh install. Loosen this test only alongside an actual port of
@@ -716,7 +716,7 @@ def test_mcp_dependency_is_ceiling_pinned():
     spec = mcp_deps[0]
     assert re.search(r"<\s*2", spec), (
         f'mcp dependency {spec!r} has no "<2" ceiling — mcp 2.x drops '
-        "mcp.server.fastmcp and silently breaks `driftpin mcp` on fresh "
+        "mcp.server.fastmcp and silently breaks `ankusdrive mcp` on fresh "
         "installs (issue #277)"
     )
     # The ceiling exists to protect this exact import — if the import ever

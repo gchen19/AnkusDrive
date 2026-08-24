@@ -1,6 +1,6 @@
 """Release packages (issue #233) — pure-core unit tests.
 
-No FreeCAD, no worker, no LLM: :mod:`driftpin.release` is the gate logic, the
+No FreeCAD, no worker, no LLM: :mod:`ankusdrive.release` is the gate logic, the
 naming, the determinism scrub and the manifest arithmetic, so these run on the host
 interpreter in milliseconds. They prove the four things the layer promises:
 
@@ -28,7 +28,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import release as rel  # noqa: E402
+from ankusdrive import release as rel  # noqa: E402
 
 _PASS = _FAIL = 0
 
@@ -435,7 +435,7 @@ def test_the_svg_mark_is_a_real_diagonal_stamp():
     svg = (b'<svg xmlns="http://www.w3.org/2000/svg" width="420mm" height="297mm" '
            b'viewBox="0 0 420 297"><g id="art"/></svg>\n')
     out = rel.stamp_watermark("x.svg", svg, rel.WATERMARK_TEXT)
-    _ok("it is drawn", b'id="driftpin-watermark"' in out, out)
+    _ok("it is drawn", b'id="ankusdrive-watermark"' in out, out)
     _ok("rotated, so it reads as a stamp not a title", b"rotate(-30" in out)
     _ok("centred on the REAL sheet, not a hard-coded A4",
         b'x="210.00" y="148.50"' in out, out)

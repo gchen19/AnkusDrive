@@ -1,7 +1,7 @@
 """Drawing-is-manufacturable gates (issue #85) — end-to-end through the FreeCAD
 worker. The pure core is unit-tested in test_drawing_gate.py; this drives the real
 integration shim: feature enumeration off a Part.Shape, dim-descriptor extraction
-off real DrawViewDimensions (DP_TrueValue / DP_ModelRef), and the legibility
+off real DrawViewDimensions (AD_TrueValue / AD_ModelRef), and the legibility
 graphics replay. Builds a mounting plate (the drawing_demo `plate`) and asserts:
 
   * a thoughtfully-dimensioned plate is manufacturing-complete (ok=True);
@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 _PASS = _FAIL = 0
 
@@ -354,14 +354,14 @@ def test_title_block_renders_fields():
         _check("rev in title block", "REV" in svg and ">B<" in svg)
         _check("auto scale present", "SCALE" in svg)
         _check("auto sheet size present", "A4" in svg)
-        _check("title-block group emitted", "driftpin-titleblock" in svg)
+        _check("title-block group emitted", "ankusdrive-titleblock" in svg)
         # no title block when never set
         page2, _h2, _p2 = _plate(w, "gate_no_tb")
         w.call("add_dimension", page=page2, auto=True)
         out2 = os.path.join(tmp, "notb.svg")
         w.call("export_drawing", page=page2, path=out2)
         _check("block is opt-in (absent when unset)",
-               "driftpin-titleblock" not in open(out2, encoding="utf-8").read())
+               "ankusdrive-titleblock" not in open(out2, encoding="utf-8").read())
 
 
 def test_dimension_tolerances_render():

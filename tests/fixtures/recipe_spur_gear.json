@@ -25,7 +25,7 @@
   },
 
   "input_schema": {
-    "schema": "driftpin.recipe/1",
+    "schema": "ankusdrive.recipe/1",
     "recipe": "spur_gear",
     "doc": "Involute spur gear (wraps add_gear): a solid disc of teeth on the XY plane about +Z, publishing a 'gear_mesh' frame at its axis and declaring a watertight-solid intent. The canonical reference recipe (issue #136).",
     "inputs": [

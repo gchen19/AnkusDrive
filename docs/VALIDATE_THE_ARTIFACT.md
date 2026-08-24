@@ -27,7 +27,7 @@ the eye was needed because a gate was missing.
 
 ## What was built
 
-`driftpin/realize.py` — a FreeCAD-bound oracle that consumes the **real `Part.Shape`**
+`ankusdrive/realize.py` — a FreeCAD-bound oracle that consumes the **real `Part.Shape`**
 (never a separate idealised model) and asserts the geometry implements the declared
 topology. The two per-part primitives read about the part's own axis so they are
 placement-independent (a property of the part, not of one assembled pose):
@@ -48,7 +48,7 @@ A third primitive reads the **relative phase** of two parts in a common (engaged
   offset. `dog_ring` asks "does this part have gaps?"; `interleave` asks "do a's teeth
   fall in b's gaps?".
 
-Wired into `merge_assembly` as four typed-interface gates (`driftpin/worker.py`):
+Wired into `merge_assembly` as four typed-interface gates (`ankusdrive/worker.py`):
 
 - **`contact_band`** (kickoff item #1, the cheap anomaly gate) — an *expected* contact
   (engaged dog clutch, press band) has a characteristic overlap volume; one far outside
@@ -209,8 +209,8 @@ the rotational selector above is the artifact-consuming dynamic result #3 was af
 
 ## Pointers
 
-- Oracle: `driftpin/realize.py` (`bore_keying`, `dog_ring`, `interleave`); gates in
-  `driftpin/worker.py` (`_gate_contact_band`, `_gate_dog_ring`, `_gate_bore_keying`,
+- Oracle: `ankusdrive/realize.py` (`bore_keying`, `dog_ring`, `interleave`); gates in
+  `ankusdrive/worker.py` (`_gate_contact_band`, `_gate_dog_ring`, `_gate_bore_keying`,
   `_gate_interleave`, `_TYPED_GATES`, `_CONTACT_KINDS`).
 - Regression: `tests/test_realize.py` (solid-face, keyed-to-nothing, in-phase jam).
   Calibration: `scratch/calibrate_realize.py` (all four signals on real CAD).
@@ -220,4 +220,4 @@ the rotational selector above is the artifact-consuming dynamic result #3 was af
   `gearbox_multispeed`). Shift animation: `scratch/gearbox_shift_animate.py`.
 - Sim-from-CAD (#3): `scratch/dog_clutch_cad_sim.py` (vhacd-decomposed real metal driven
   in PyBullet; faithfulness gate + emergent selector; `artifacts/dog_clutch_cad_sim.gif`).
-- Lineage: §11.9 motion oracle (`driftpin/mechanism.py`, `tests/test_mechanism.py`).
+- Lineage: §11.9 motion oracle (`ankusdrive/mechanism.py`, `tests/test_mechanism.py`).

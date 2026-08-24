@@ -1,5 +1,5 @@
 {
-  "schema": "driftpin.manifest/1",
+  "schema": "ankusdrive.manifest/1",
   "name": "pinned_bracket",
   "root": "pinned_bracket.FCStd",
   "components": {

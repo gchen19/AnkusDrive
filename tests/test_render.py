@@ -29,8 +29,8 @@ from PIL import Image
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin import render as r  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import render as r  # noqa: E402
 
 
 def _make_box(w, dims=(10, 10, 10)):
@@ -416,11 +416,11 @@ def test_feature_edges_kill_diagonal_forest():
 
 
 def _ccx_available():
-    # PATH, or DriftPin's resolver (finds FreeCAD's bundled ccx — off PATH on Win/macOS).
+    # PATH, or AnkusDrive's resolver (finds FreeCAD's bundled ccx — off PATH on Win/macOS).
     if any(shutil.which(b) for b in ("ccx", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_2.19")):
         return True
     try:
-        from driftpin import solvers
+        from ankusdrive import solvers
         return solvers.ccx_bin() is not None
     except Exception:
         return False

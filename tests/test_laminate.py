@@ -1,5 +1,5 @@
 """Laminate / composite-stack oracle toys — two-sided anchors for
-driftpin.analysis.laminate (issue #103).
+ankusdrive.analysis.laminate (issue #103).
 
 Pure-Python, no FreeCAD, no solver: imports the analysis module directly and
 checks it against known closed-form answers. Every test is two-sided — the
@@ -32,8 +32,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import laminate as lm  # noqa: E402
-from driftpin.client import FREECADCMD  # noqa: E402
+from ankusdrive.analysis import laminate as lm  # noqa: E402
+from ankusdrive.client import FREECADCMD  # noqa: E402
 
 
 def _freecad_available():

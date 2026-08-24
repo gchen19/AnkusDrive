@@ -1,6 +1,6 @@
 name: Tests (Windows)
 
-# Windows counterpart of test.yml. It runs the DriftPin suite on a SELF-HOSTED
+# Windows counterpart of test.yml. It runs the AnkusDrive suite on a SELF-HOSTED
 # Windows runner that already has FreeCAD 1.1 installed (bundling ccx.exe + gmsh.exe,
 # so structural FEM solves for real). This lane is deliberately its own thing rather
 # than a reuse of test.yml because the Linux lane is bash + AppImage + a two-interpreter
@@ -8,7 +8,7 @@ name: Tests (Windows)
 #
 #   - Setup is tests/setup_local.ps1 (PowerShell): one .venv from `pip install -e .`,
 #     no AppImage extraction, no PATH symlinks. FreeCAD is discovered by
-#     driftpin/client.py under 'C:\Program Files\FreeCAD *\bin\freecadcmd.exe' and run
+#     ankusdrive/client.py under 'C:\Program Files\FreeCAD *\bin\freecadcmd.exe' and run
 #     as a subprocess, so the driver interpreter never imports FreeCAD.
 #   - The suite is tests/run_all.ps1, which skips the Linux-only external-solver
 #     families (OpenFOAM / YADE / openEMS / bempp / preCICE — no native Windows build)
@@ -18,7 +18,7 @@ name: Tests (Windows)
 # job could land on the wrong OS and run the other OS's shell scripts. The
 # `Windows`/`Linux` labels are applied automatically by the Actions runner from the host
 # OS. NOTE: unlike the Linux box, the Windows runner is registered WITHOUT the custom
-# `driftpin` label, so requiring it here leaves the job queued forever (that is exactly
+# `ankusdrive` label, so requiring it here leaves the job queued forever (that is exactly
 # how the first run of this lane died — 24 h in `queued`, then cancelled).
 # `[self-hosted, Windows]` uniquely selects the one Windows box in this repo.
 
@@ -54,9 +54,9 @@ jobs:
       - name: Set up venv + FreeCAD-viable deps (no download; reuses installed FreeCAD)
         run: .\tests\setup_local.ps1
 
-      - name: Sanity check — driftpin resolves FreeCAD
+      - name: Sanity check — ankusdrive resolves FreeCAD
         run: |
-          .\.venv\Scripts\python.exe -m driftpin doctor --no-boot
+          .\.venv\Scripts\python.exe -m ankusdrive doctor --no-boot
           # doctor exits nonzero if FreeCAD is unresolved -> the run fails fast here.
 
       - name: Run Windows test suite

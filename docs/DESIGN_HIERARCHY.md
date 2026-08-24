@@ -4,14 +4,14 @@
 > *scoping* doc — the §0 verdict below reads "not yet" because that was true when
 > it was written (2026-06-28). Every gap it identified has since shipped and the
 > verdict is now **yes**:
-> [#136 part recipes](../driftpin/recipes.py) (PR #151) ·
-> [#137 driving/driven relation DAG](../driftpin/relations.py) (PR #153) ·
-> [#138 variant families / design tables](../driftpin/families.py) (PR #156) ·
-> [#139 declared-input feature templates](../driftpin/feature_templates.py) (PR #157) ·
-> [#140 item model + part numbering](../driftpin/items.py) (PR #150) ·
-> [#141 revision + lifecycle state machine](../driftpin/lifecycle.py) (PR #154) ·
-> [#142 ECO / where-used / baselines](../driftpin/change.py) (PR #160) ·
-> [#143 project container + ref-integrity](../driftpin/project.py) (PR #158).
+> [#136 part recipes](../ankusdrive/recipes.py) (PR #151) ·
+> [#137 driving/driven relation DAG](../ankusdrive/relations.py) (PR #153) ·
+> [#138 variant families / design tables](../ankusdrive/families.py) (PR #156) ·
+> [#139 declared-input feature templates](../ankusdrive/feature_templates.py) (PR #157) ·
+> [#140 item model + part numbering](../ankusdrive/items.py) (PR #150) ·
+> [#141 revision + lifecycle state machine](../ankusdrive/lifecycle.py) (PR #154) ·
+> [#142 ECO / where-used / baselines](../ankusdrive/change.py) (PR #160) ·
+> [#143 project container + ref-integrity](../ankusdrive/project.py) (PR #158).
 > Runnable showcase: `example/design_hierarchy_*` (PRs #163, #164). Read the §0
 > table below as the *original problem statement*; the "Today" column is a
 > historical snapshot, not current state.
@@ -22,9 +22,9 @@ single agent). This doc scopes the **third axis**: making a *design* (not just a
 part) — parameter hierarchies that drive geometry, variant families generated from
 a table, and the formal release/change control a team needs to evolve a design over
 time. It maps the mechanisms proven in SolidWorks / Creo / NX / Inventor / CATIA and
-PLM/PDM practice onto DriftPin's deterministic, headless, text-first grain.
+PLM/PDM practice onto AnkusDrive's deterministic, headless, text-first grain.
 
-The unifying lens — DriftPin is positioned to make MCAD modular the way *software* is
+The unifying lens — AnkusDrive is positioned to make MCAD modular the way *software* is
 modular (encapsulation, interfaces, composition, versioning) — is drawn out in **§6**;
 how every item is checked deterministically and evaluated is **§7**; and the agent-facing
 **`design-modularly` skill** that turns these primitives into design *judgment* is **§8**.
@@ -38,14 +38,14 @@ how every item is checked deterministically and evaluated is **§7**; and the ag
 > (e.g. every gear in a family); and a formal design-control / release process — and
 > how should files be structured for a team?*
 
-**Verdict: not yet, and the gaps are specific.** DriftPin has the *coupling*
+**Verdict: not yet, and the gaps are specific.** AnkusDrive has the *coupling*
 substrate (manifest + resolve step + published interfaces + lockfile) but not the
 *hierarchy*, *variant*, or *lifecycle* layers. Concretely:
 
 | Capability | Today | Evidence |
 |---|---|---|
-| Master/global parameters | **Partial** — `shared_parameters` + the resolve step (`sum`/`grid_mm`) write literal values into slices coordinator-side | `MULTI_AGENT.md` §11.1; `driftpin/manifest.py:resolve_constraints` |
-| Driving→driven relations (formulas) | **No** — resolve does sum-to-target only; no general expression DAG, no driving/driven distinction | `driftpin/manifest.py` |
+| Master/global parameters | **Partial** — `shared_parameters` + the resolve step (`sum`/`grid_mm`) write literal values into slices coordinator-side | `MULTI_AGENT.md` §11.1; `ankusdrive/manifest.py:resolve_constraints` |
+| Driving→driven relations (formulas) | **No** — resolve does sum-to-target only; no general expression DAG, no driving/driven distinction | `ankusdrive/manifest.py` |
 | Intra-part parametric model (change a number → regen) | **No** — every generator bakes a static B-rep solid and deletes the parametric helper | `worker.py:_h_add_gear` (`doc.removeObject(g.Name)  # keep a static solid`) |
 | Variant / family / design table | **No** — multi-part is hand-rolled Python loops; each output is an independent static file | `example/gearbox_manifest.py` |
 | Feature templates with declared inputs (PowerCopy/UDF) | **No** | — |
@@ -54,7 +54,7 @@ substrate (manifest + resolve step + published interfaces + lockfile) but not th
 | Item vs document vs file; part numbers | **No** — a part *is* its file path; no item identity, no part number, no metadata layer | — |
 | Project/workspace container | **No** — the directory layout in `MULTI_AGENT.md` §3 is a *convention*, unenforced; no manifest-of-manifests, no reference-integrity guard | `MULTI_AGENT.md` §3, §7 |
 
-The good news: DriftPin's existing decisions point the same direction the industry
+The good news: AnkusDrive's existing decisions point the same direction the industry
 settled on. The resolve step already embodies *"hand agents resolved results, not
 derivations"* (`MULTI_AGENT.md` §11.1) — that is the **driving→driven** rule. The
 manifest is already the **single source of truth**. `publish_interface` /
@@ -67,11 +67,11 @@ primitive. This program extends those, it doesn't fight them.
 ## 1. The one architectural decision that frames everything
 
 Other CAD systems store an *editable feature tree* in the file: change a dimension,
-the kernel replays the tree, geometry regenerates. DriftPin deliberately does **not**
+the kernel replays the tree, geometry regenerates. AnkusDrive deliberately does **not**
 do this — generators bake a static solid and drop the parametric helper, and the team
 explicitly **rejected live FreeCAD expression links across files as fragile-headless**
 (`MULTI_AGENT.md` §11.1, §13). That is a sound call for a headless, deterministic,
-git-diffable tool. But it means DriftPin needs a *different* answer to "what is the
+git-diffable tool. But it means AnkusDrive needs a *different* answer to "what is the
 parametric model," and the answer is already latent in the codebase:
 
 > **The build recipe is the feature tree. The parameters are its inputs.
@@ -97,7 +97,7 @@ Four themes, in dependency order. Each work item is sized to one GitHub issue.
 **A1. Part recipes — named, parameterized, declared-input build templates.**
 The keystone. A *recipe* is a named build function with a declared **input schema**
 (its driving parameters, with types/units/defaults/ranges) that deterministically
-emits a part (geometry + published interfaces + intent). This is DriftPin's
+emits a part (geometry + published interfaces + intent). This is AnkusDrive's
 PowerCopy/UDF *and* its intra-part parametric model in one: "regenerate with new
 parameters" = "re-run the recipe." Builds directly on the existing
 `build_manifest(params)` pattern and the determinism envelope. Deliverables: a recipe
@@ -133,7 +133,7 @@ supported: **configurations** (variants share one artifact, cheap) and **instanc
 The feature-level (sub-part) analog of A1: a reusable recipe with declared
 **reference-geometry inputs** (a placement frame, an axis, a face tag) plus published
 parameters, instantiated repeatedly into new contexts — PowerCopy/UDF/iFeature. An
-agent supplies inputs *by name* (frame tags, resolved faces — DriftPin already has
+agent supplies inputs *by name* (frame tags, resolved faces — AnkusDrive already has
 content-addressed `f_`/`e_` tags), no UI picking. Example: a "mounting boss" template
 taking `{plane, axis, boss_dia}`. *Depends on A1; reuses the resolve/handle system.*
 
@@ -231,7 +231,7 @@ exist. A1 and C1 are the two keystones; everything else hangs off them.
 
 This is the lens that ties the whole program together, and it is more than an analogy:
 the constructs that make *software* modular have exact mechanical-CAD counterparts, and
-DriftPin's text-first, deterministic grain lets us implement them more like a programming
+AnkusDrive's text-first, deterministic grain lets us implement them more like a programming
 language than like a GUI CAD kernel. The keystone fact, from the modularity literature:
 
 > Baldwin & Clark (*Design Rules*, MIT Press, 2000) split a modular design's parameters
@@ -243,13 +243,13 @@ language than like a GUI CAD kernel. The keystone fact, from the modularity lite
 > interfaces**, so a module changes independently; an **integral** one couples everything.
 > That is **low coupling / high cohesion** for steel.
 
-DriftPin already lives on the right side of this split — `publish_interface` is the act of
+AnkusDrive already lives on the right side of this split — `publish_interface` is the act of
 declaring public API; the baked internal geometry is private. The program below makes the
 rest of the software-module toolbox first-class.
 
 ### 6.1 The mapping
 
-| Software construct | Mechanical-CAD analog | DriftPin primitive (✅ exists / ⛏ proposed) |
+| Software construct | Mechanical-CAD analog | AnkusDrive primitive (✅ exists / ⛏ proposed) |
 |---|---|---|
 | **Information hiding / encapsulation** (Parnas 1972 — hide each likely-to-change decision behind an interface) | Published mating interface (bolt circle, bore, datum frame) is public; wall thickness, ribs, pocketing are private and free to change | ✅ `publish_interface` + `verify_contract`; the recipe (A1) is the encapsulation boundary |
 | **Interface / abstract type** (a contract independent of any implementation) | Standardized mating face / ICD — many parts satisfy one interface (NEMA flange, bearing seat) | ✅ typed interfaces (`gear_mesh`/`bore_fit`/`frame_orientation`, `MULTI_AGENT.md` §11.2); ⛏ a named **interface-type registry** (§6.3) |
@@ -277,7 +277,7 @@ is itself a generic, or nested **configurations** (SolidWorks) — is *inheritan
 derives from a parent and overrides cells. It works, but it inherits inheritance's
 problems (fragile base model, override sprawl, the well-documented brittleness of
 interpart expression links — NX since v10 *preserves* broken WAVE links rather than
-deleting them, precisely because they break so often). DriftPin should **favor composition**:
+deleting them, precisely because they break so often). AnkusDrive should **favor composition**:
 
 - A **recipe** (A1) is a module/class: a named build function with a declared public input
   schema. Reuse is *calling* it with new inputs, not subclassing a master.
@@ -321,7 +321,7 @@ should hand the agent this heuristic explicitly.
 
 ## 7. Determinism, testing & evaluation
 
-Every item above must be checkable the way the rest of DriftPin is: **two-sided
+Every item above must be checkable the way the rest of AnkusDrive is: **two-sided
 gate-validated (reference passes; every negative caught), runnable free with no API key, in
 `run_all.sh`** — the house standard (`MULTI_AGENT.md` §11.x). Modularity is unusually
 friendly to this because its core claims *are* deterministic predicates, not judgment
@@ -507,10 +507,10 @@ work parallelizes against fixtures with no agent blocked on another's geometry.
 
 2. **One module, one owner — keep agents off the shared files.** The collision hazard is
    real and already in the project's memory (the multi-agent git-worktree hazard, the
-   parallel-sprint integration gap): `driftpin/worker.py` and `driftpin/mcp_server.py` are
+   parallel-sprint integration gap): `ankusdrive/worker.py` and `ankusdrive/mcp_server.py` are
    giant shared files that *every* item wants to touch to register a handler/tool. So:
-   **each work item implements its logic in its own new module** (`driftpin/recipes.py`,
-   `driftpin/items.py`, `driftpin/families.py`, …) exposing a single registration function;
+   **each work item implements its logic in its own new module** (`ankusdrive/recipes.py`,
+   `ankusdrive/items.py`, `ankusdrive/families.py`, …) exposing a single registration function;
    the only shared edit is **one import + one `register()` line** per feature, appended (not
    interleaved) to `worker.py`/`mcp_server.py`. Append-only touches to a shared file rarely
    conflict; interleaved edits to `merge_assembly` do. Run each builder in a **worktree**,
@@ -524,17 +524,17 @@ Each item names the module it **owns** (no other agent writes it), the schema/fi
 
 | Wave | Item | Owns (new module) | Consumes | Notes |
 |---|---|---|---|---|
-| **0 — keystones** (run first, parallel *with each other*; publish schema+fixture in PR #1) | **A1** recipes | `driftpin/recipes.py` + recipe-ref schema | units (#102) | emits the `{recipe,inputs}` contract B1/B2/registry build on |
-| | **C1** item model | `driftpin/items.py` + `items.json` schema | — | emits the item-ref contract B1/C2/C3/D1 build on |
-| **1 — fan out** (all parallel once Wave 0 schemas are frozen; each owns a disjoint module) | **A2** relations | resolve layer in `driftpin/manifest.py` | param-dict shape | independent of A1; meet at "driven values → recipe inputs" |
-| | **B1** design tables | `driftpin/families.py` + table format | A1, C1 (fixtures) | the headline demo |
-| | **B2** feature templates | `driftpin/feature_templates.py` | A1 (fixtures) | reuses `resolve_face`/`f_`,`e_` tags |
-| | **C2** revision + lifecycle | `driftpin/lifecycle.py` (+ items.json fields) | C1 (fixtures) | F3 predicate is pure + unit-testable |
-| | **M1** interface-type registry (§6.3) | `driftpin/iface_registry.py` | A1, C1 (fixtures) | strengthens B1 + the §11.2 typed gates |
-| | **D1** project container | `driftpin/project.py` | C1 (fixtures) | scaffold + ref-integrity guard |
-| | **T1** substitutability gate (§7.1) | `driftpin/gates/substitutability.py` | `merge_assembly` (exists) | builds against existing typed-interface fixtures *today* |
+| **0 — keystones** (run first, parallel *with each other*; publish schema+fixture in PR #1) | **A1** recipes | `ankusdrive/recipes.py` + recipe-ref schema | units (#102) | emits the `{recipe,inputs}` contract B1/B2/registry build on |
+| | **C1** item model | `ankusdrive/items.py` + `items.json` schema | — | emits the item-ref contract B1/C2/C3/D1 build on |
+| **1 — fan out** (all parallel once Wave 0 schemas are frozen; each owns a disjoint module) | **A2** relations | resolve layer in `ankusdrive/manifest.py` | param-dict shape | independent of A1; meet at "driven values → recipe inputs" |
+| | **B1** design tables | `ankusdrive/families.py` + table format | A1, C1 (fixtures) | the headline demo |
+| | **B2** feature templates | `ankusdrive/feature_templates.py` | A1 (fixtures) | reuses `resolve_face`/`f_`,`e_` tags |
+| | **C2** revision + lifecycle | `ankusdrive/lifecycle.py` (+ items.json fields) | C1 (fixtures) | F3 predicate is pure + unit-testable |
+| | **M1** interface-type registry (§6.3) | `ankusdrive/iface_registry.py` | A1, C1 (fixtures) | strengthens B1 + the §11.2 typed gates |
+| | **D1** project container | `ankusdrive/project.py` | C1 (fixtures) | scaffold + ref-integrity guard |
+| | **T1** substitutability gate (§7.1) | `ankusdrive/gates/substitutability.py` | `merge_assembly` (exists) | builds against existing typed-interface fixtures *today* |
 | | **G1** design-modularly skill (§8) | `docs`/skill files only | — | **zero code dep — can start immediately**, fully parallel |
-| **2 — integration** (need multiple Wave-1 outputs) | **C3** ECO / where-used / baseline | `driftpin/change.py` + baseline format | C1, C2, lockfile (§9) | reuses the `depends_on` graph |
+| **2 — integration** (need multiple Wave-1 outputs) | **C3** ECO / where-used / baseline | `ankusdrive/change.py` + baseline format | C1, C2, lockfile (§9) | reuses the `depends_on` graph |
 | | **E1** modularity eval ladder (§7.2) | `tests/MODULARITY_EVAL.md` + scripted builders | A1, B1, C2, T1 | capstone; mirrors `MULTI_AGENT_EVAL.md` |
 
 ### 10.3 Critical path & crew sizing

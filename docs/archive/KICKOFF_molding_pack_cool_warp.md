@@ -31,12 +31,12 @@ Code map (all paths relative to repo root):
 
 | Thing | Location |
 |---|---|
-| Case generator (fill) | `driftpin/analysis/molding_fill.py` → `openinjmoldsim_case_files` / `write_openinjmoldsim_case` |
+| Case generator (fill) | `ankusdrive/analysis/molding_fill.py` → `openinjmoldsim_case_files` / `write_openinjmoldsim_case` |
 | Field parser + gate | `molding_fill.py` → `parse_fill` (reads `alpha.poly`), `fill_gate` |
-| Worker handler | `driftpin/worker.py` → `_molding_openinjmoldsim_build_and_run` (gen+run), `_molding_openinjmoldsim_submit` (prepared case), dispatch in `_h_molding_fill_submit` |
+| Worker handler | `ankusdrive/worker.py` → `_molding_openinjmoldsim_build_and_run` (gen+run), `_molding_openinjmoldsim_submit` (prepared case), dispatch in `_h_molding_fill_submit` |
 | Foam runner | `worker.py` → `_run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False)` |
-| Solver resolvers | `driftpin/solvers.py` → `openinjmoldsim_bin()`, `openinjmoldsim_bashrc()` |
-| MCP tool | `driftpin/mcp_server.py` → `molding_fill_submit(...)` |
+| Solver resolvers | `ankusdrive/solvers.py` → `openinjmoldsim_bin()`, `openinjmoldsim_bashrc()` |
+| MCP tool | `ankusdrive/mcp_server.py` → `molding_fill_submit(...)` |
 | Toy runner + GIF | `tools/openinjmoldsim_toy.py` |
 | Tests | `tests/test_molding_fill.py` |
 | Built solver | `~/OpenFOAM/george-7/platforms/linux64GccDPInt32Opt/bin/openInjMoldSim` (auto-resolved); bashrc `~/OpenFOAM/OpenFOAM-7/etc/bashrc` |
@@ -94,7 +94,7 @@ close_outlet(){           # seal the gate + let the part cool through the former
 time_extend <endTime> <writeInterval> <maxDeltaT>  # rewrite system/controlDict
 ```
 
-Sequence (serial translation — driftpin runs serial, NO decomposePar/reconstructPar):
+Sequence (serial translation — ankusdrive runs serial, NO decomposePar/reconstructPar):
 1. **fill:** `controlDict` endTime≈0.6, run `openInjMoldSim -fillEnd 0.98`.
 2. **pack1:** `new_deltaT` (reset latest step) → `close_outlet` → run `openInjMoldSim`
    (NO `-fillEnd`); the solver restarts from `<latestTime>` (needs `startFrom latestTime`).
@@ -163,11 +163,11 @@ beat Elmer here because a per-node `*TEMPERATURE` maps the frozen-in field direc
 node-level `*BOUNDARY` gives an exact 3-2-1 (the openInjMoldSim `elSigDev` elastic path
 stays disabled — it was never needed for warpage).
 
-- **Module:** `driftpin/analysis/warpage.py` — `free_plate_thermal_bow` (analytic twin
+- **Module:** `ankusdrive/analysis/warpage.py` — `free_plate_thermal_bow` (analytic twin
   κ=α·ΔT/h, δ=κL²/8), `pick_321_nodes` + `thickness_axis`, `linear_through_thickness_temps`,
   `warpage_inp_text`/`write_warpage_case` (the ccx deck), `parse_warp_frd`, `warpage_gate`.
 - **Solver resolver:** `solvers.ccx_bin()` + a `calculix` registry entry (family `warpage`,
-  binary `ccx`, `DRIFTPIN_CALCULIX_PATH`). Distinct from `ccx_precice_bin`.
+  binary `ccx`, `ANKUSDRIVE_CALCULIX_PATH`). Distinct from `ccx_precice_bin`.
 - **Worker:** `_molding_warpage_submit` / handler `_h_molding_warpage_submit` — mirrors
   `_thermal_body_submit` (Gmsh mesh main thread → C3D10 `writeABAQUS(path, 2, False)` →
   ccx in background → parse → gate). `_resolve_warpage_props` (E/ν/CTE from corpus or

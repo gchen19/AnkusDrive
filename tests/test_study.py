@@ -22,7 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import study as st  # noqa: E402
+from ankusdrive.analysis import study as st  # noqa: E402
 
 
 # --- declaring the space --------------------------------------------------------
@@ -225,7 +225,7 @@ def test_a_swept_table_reproduces_the_hagen_poiseuille_law():
     exponent from the SWEEP proves the study transported each point's parameters into
     the measuring tool correctly — which is the one thing a study engine can get wrong
     in a way that still looks completely plausible."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         got = w.call(
@@ -268,7 +268,7 @@ def test_a_swept_table_reproduces_the_hagen_poiseuille_law():
 
 
 def test_two_variables_sweep_as_a_grid_and_carry_evidence():
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         got = w.call(
@@ -303,8 +303,8 @@ def test_two_variables_sweep_as_a_grid_and_carry_evidence():
 def test_a_bad_substitution_is_refused_before_any_evaluation():
     """A sweep whose response silently measured a literal "$diamter_mm" at every point
     returns a flat, plausible, entirely wrong table. Refuse it at the door."""
-    from driftpin import Worker
-    from driftpin.client import WorkerError
+    from ankusdrive import Worker
+    from ankusdrive.client import WorkerError
 
     with Worker() as w:
         for bad, why in (
@@ -344,8 +344,8 @@ def test_a_bad_substitution_is_refused_before_any_evaluation():
 def test_an_oversized_sweep_is_refused_rather_than_run():
     """Every point is a real evaluation and a solver point is a real solve, so the
     default guard refuses a grid bigger than you probably meant."""
-    from driftpin import Worker
-    from driftpin.client import WorkerError
+    from ankusdrive import Worker
+    from ankusdrive.client import WorkerError
 
     with Worker() as w:
         variables = [{"name": "diameter_mm", "min": 5, "max": 25, "levels": 9},
@@ -371,7 +371,7 @@ def test_an_oversized_sweep_is_refused_rather_than_run():
 def test_a_study_can_sweep_geometry_through_a_recipe():
     """The parametric half: each point rebuilds the part and the response measures the
     part it built, not a number typed alongside it."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         w.call("new_document", name="study_recipe")
@@ -417,7 +417,7 @@ def test_an_async_study_fans_out_concurrently_joins_once_and_resumes_from_cache(
     the points run CONCURRENTLY (four 0.6 s evaluations must not take 2.4 s), the whole
     study is ONE poll rather than N, and re-submitting an identical study re-solves
     nothing — which is what makes a crashed or widened study resumable for free."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     spec = dict(
         variables=[{"name": "v", "values": [1.0, 2.0, 3.0, 4.0]}],
@@ -468,7 +468,7 @@ def test_two_metrics_off_the_same_call_solve_once():
     The jobs-layer content cache cannot catch this: it only serves COMPLETED jobs, and
     during a fan-out the twin submission is still running. Caught live on the real
     OpenFOAM sweep, where 3 diameters x 2 responses launched 6 solves for 3 cases."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         sub = w.call(
@@ -495,7 +495,7 @@ def test_two_metrics_off_the_same_call_solve_once():
 def test_a_failing_point_is_a_row_and_the_rest_of_the_table_survives():
     """A study that hits a bad point must still return its table — the surrounding
     points are exactly the evidence you need to see WHY it failed."""
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         got = w.call(
@@ -519,7 +519,7 @@ def test_the_job_layer_pins_a_dependency_against_cap_eviction():
     """A fan-out study's children must survive the retention cap until the collector has
     read them — otherwise eviction drops the points that finished FIRST (terminal and
     therefore first in line) and the join raises JobNotFound for work that succeeded."""
-    from driftpin import jobs
+    from ankusdrive import jobs
 
     jobs.reset()
     original = jobs._MAX_JOBS

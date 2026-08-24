@@ -2,7 +2,7 @@
 Change orders + where-used impact + baselines (issue #142, C3 —
 docs/DESIGN_HIERARCHY.md §2 Theme C) — free, no LLM, no key, no FreeCAD. C3 is
 pure data/text (the lockfile `depends_on` graph + the items.json registry), so
-this suite imports driftpin.change directly and runs fast.
+this suite imports ankusdrive.change directly and runs fast.
 
 Two-sided gate-validated (the house standard, MULTI_AGENT.md §11.x; the C3 row of
 DESIGN_HIERARCHY §7):
@@ -30,8 +30,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import change as C   # noqa: E402
-from driftpin import items as I    # noqa: E402
+from ankusdrive import change as C   # noqa: E402
+from ankusdrive import items as I    # noqa: E402
 
 FIXTURES = REPO / "tests" / "fixtures" / "change"
 

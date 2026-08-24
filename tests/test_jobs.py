@@ -1,4 +1,4 @@
-"""Async job-registry toys — two-sided oracles for driftpin.jobs.
+"""Async job-registry toys — two-sided oracles for ankusdrive.jobs.
 
 Pure-Python, no FreeCAD. The async lifecycle is made deterministic with a
 threading.Event (no sleeps / no timing assumptions): the worker submits real
@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import jobs  # noqa: E402
+from ankusdrive import jobs  # noqa: E402
 
 
 def _wait(job_id, want=("done", "failed"), timeout=5.0):

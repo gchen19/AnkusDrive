@@ -36,7 +36,7 @@
 #                                 far end, a short shot stalls. The openInjMoldSim
 #                                 (OF7-org) tests inside it run too where the VM has the
 #                                 arm64 source build (#276, tools/build_openinjmoldsim.sh
-#                                 + the DRIFTPIN_OPENINJMOLDSIM exports) and SKIP where
+#                                 + the ANKUSDRIVE_OPENINJMOLDSIM exports) and SKIP where
 #                                 it doesn't
 #
 #   Add more files as arguments once their in-VM provisioning is validated:
@@ -50,7 +50,7 @@
 # USAGE
 #   bash tests/run_macos_heavy.sh                 # preflight + the default set
 #   bash tests/run_macos_heavy.sh <file>...       # preflight + just these files
-#   DRIFTPIN_SKIP_PREFLIGHT=1 bash tests/run_macos_heavy.sh
+#   ANKUSDRIVE_SKIP_PREFLIGHT=1 bash tests/run_macos_heavy.sh
 #       skip the substrate health check — the CI job runs it as its own step so a
 #       substrate failure is attributed there instead of to the solves.
 set -uo pipefail
@@ -60,7 +60,7 @@ cd "$(dirname "$0")/.."
 # lane would be a no-op that passes.
 export RUN_HEAVY_SOLVES=1
 
-if [ "${DRIFTPIN_SKIP_PREFLIGHT:-}" != "1" ]; then
+if [ "${ANKUSDRIVE_SKIP_PREFLIGHT:-}" != "1" ]; then
   bash scripts/ci-macos-preflight.sh || {
     echo
     echo "Aborting: the macOS heavy-solve substrate is not healthy (see above)." >&2

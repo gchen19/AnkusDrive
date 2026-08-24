@@ -1,15 +1,15 @@
 <#
 .SYNOPSIS
-  Set up THIS Windows machine to run the DriftPin test suite - the Windows analog of
+  Set up THIS Windows machine to run the AnkusDrive test suite - the Windows analog of
   tests/setup_local.sh (which is Linux/bash-only: AppImage extraction + PATH symlinks +
   a bundled-python .venv). Windows needs none of that.
 
 .DESCRIPTION
   On Windows the model is simpler than on Linux, so this is NOT a port of setup_local.sh:
 
-    * FreeCAD is a normal installer, not an AppImage. `driftpin/client.py` already
+    * FreeCAD is a normal installer, not an AppImage. `ankusdrive/client.py` already
       discovers `freecadcmd.exe` under `C:\Program Files\FreeCAD *\bin\` (or via
-      $env:DRIFTPIN_FREECADCMD) - no symlink onto PATH is needed. The worker runs
+      $env:ANKUSDRIVE_FREECADCMD) - no symlink onto PATH is needed. The worker runs
       freecadcmd.exe as a SUBPROCESS, so the test-driver interpreter never imports
       FreeCAD and doesn't have to be FreeCAD's bundled python.
 
@@ -19,8 +19,8 @@
       Pillow AND can drive freecadcmd.exe - it covers the whole Windows suite.
 
   Idempotent - safe to re-run. Honors:
-    $env:DRIFTPIN_FREECADCMD   a specific freecadcmd.exe to use (else auto-discovered)
-    $env:DRIFTPIN_PY           python launcher to build the venv from (default: python)
+    $env:ANKUSDRIVE_FREECADCMD   a specific freecadcmd.exe to use (else auto-discovered)
+    $env:ANKUSDRIVE_PY           python launcher to build the venv from (default: python)
 
 .EXAMPLE
   pwsh tests\setup_local.ps1
@@ -42,7 +42,7 @@ Set-Location $repo
 # uses.
 function Find-Python([string]$freecadcmd) {
     $candidates = @()
-    if ($env:DRIFTPIN_PY) { $candidates += ,@($env:DRIFTPIN_PY) }
+    if ($env:ANKUSDRIVE_PY) { $candidates += ,@($env:ANKUSDRIVE_PY) }
     $candidates += ,@('python')
     $candidates += ,@('py', '-3')
     $globs = @(
@@ -68,12 +68,12 @@ function Find-Python([string]$freecadcmd) {
         } catch {}
     }
     throw ('no working Python found (tried python, py -3, common install dirs, ' +
-           "FreeCAD's bundled python.exe) - install Python 3 or set `$env:DRIFTPIN_PY")
+           "FreeCAD's bundled python.exe) - install Python 3 or set `$env:ANKUSDRIVE_PY")
 }
 
 # --- 1. locate FreeCAD (report only; the client resolves it at runtime) ---------
 function Find-Freecadcmd {
-    if ($env:DRIFTPIN_FREECADCMD) { return $env:DRIFTPIN_FREECADCMD }
+    if ($env:ANKUSDRIVE_FREECADCMD) { return $env:ANKUSDRIVE_FREECADCMD }
     $globs = @(
         'C:\Program Files\FreeCAD *\bin\freecadcmd.exe',
         'C:\Program Files\FreeCAD*\bin\freecadcmd.exe',
@@ -96,7 +96,7 @@ if ($freecadcmd) {
     Write-Host "FreeCAD:  $freecadcmd"
 } else {
     Write-Warning "freecadcmd.exe not found. Install FreeCAD 1.1 from https://www.freecad.org/"
-    Write-Warning "or set `$env:DRIFTPIN_FREECADCMD to the freecadcmd.exe path. Pure-Python"
+    Write-Warning "or set `$env:ANKUSDRIVE_FREECADCMD to the freecadcmd.exe path. Pure-Python"
     Write-Warning "tests will still run; the FreeCAD/worker tests will fail to boot."
 }
 
@@ -110,7 +110,7 @@ if (-not (Test-Path $venvPy)) {
     if ($LASTEXITCODE -ne 0) { throw "python -m venv failed (tried '$pyLabel')" }
 }
 
-Write-Host "Installing driftpin (editable) + ruff + Windows-viable solver extras..."
+Write-Host "Installing ankusdrive (editable) + ruff + Windows-viable solver extras..."
 & $venvPy -m pip install --upgrade --quiet pip
 if ($LASTEXITCODE -ne 0) { throw 'pip self-upgrade failed' }
 
@@ -179,8 +179,8 @@ Write-Host '== verify =='
 $verify = @'
 import sys, numpy, PIL
 print('  .venv python', sys.version.split()[0], ' numpy', numpy.__version__, ' Pillow', PIL.__version__)
-from driftpin import client
-print('  driftpin resolves freecadcmd ->', client._resolve_freecadcmd())
+from ankusdrive import client
+print('  ankusdrive resolves freecadcmd ->', client._resolve_freecadcmd())
 '@
 $verify | & $venvPy -
 if ($LASTEXITCODE -ne 0) { throw 'verification import failed' }

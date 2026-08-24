@@ -5,25 +5,25 @@ Given a design brief (a manifest with per-component build briefs + the mates tha
 join them), the coordinator:
 
   1. fans out one builder agent per component (each cold, contract-slice only),
-  2. merges them with DriftPin's merge_assembly primitive,
+  2. merges them with AnkusDrive's merge_assembly primitive,
   3. reads the gates (interference / envelope / interface alignment),
   4. on failure, RENEGOTIATES — re-dispatches only the components implicated by the
      failing gate — and re-merges, up to a round budget.
 
 This is one reference binding of the roles in docs/MULTI_AGENT.md §8; it is NOT
-part of the DriftPin primitive surface. The contract between coordinator and
+part of the AnkusDrive primitive surface. The contract between coordinator and
 builders is only the manifest + the component files on disk.
 
 The coordinator drives builders through orchestration.agentkit, so it runs against
 a real Anthropic client OR the scripted ScriptedClient (free dry runs). The merge
-and gates are real DriftPin worker calls either way.
+and gates are real AnkusDrive worker calls either way.
 """
 import json
 from pathlib import Path
 
-from driftpin import Worker
-from driftpin import builder_brief
-from driftpin.manifest import resolve_constraints, resolve_manifest
+from ankusdrive import Worker
+from ankusdrive import builder_brief
+from ankusdrive.manifest import resolve_constraints, resolve_manifest
 from . import agentkit
 
 
@@ -299,7 +299,7 @@ def _implicated(brief, gates, placed):
 # their own round 0 when they orchestrate, so they are skipped here.
 
 def builder_brief_for(brief, cid):
-    """The standalone builder brief (driftpin.builder_brief/1) for one component of
+    """The standalone builder brief (ankusdrive.builder_brief/1) for one component of
     a coordinator brief — the shared schema this reference harness converges onto
     (issue #169). Any MCP host can hand this same brief to a subagent."""
     return builder_brief.brief_from_slice(brief, cid)

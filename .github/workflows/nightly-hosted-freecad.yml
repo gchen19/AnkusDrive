@@ -18,8 +18,8 @@ name: Nightly (hosted FreeCAD)
 #      bounded `<1.2` (no unversioned fallback) so that a future minor can't
 #      silently install and fail the version assert with a confusing message —
 #      an unsatisfiable solve will surface as a clear conda error instead.
-#   2. freecadcmd RESOLUTION. driftpin/client.py finds the binary via
-#      $DRIFTPIN_FREECADCMD -> shutil.which -> known paths. We export the conda
+#   2. freecadcmd RESOLUTION. ankusdrive/client.py finds the binary via
+#      $ANKUSDRIVE_FREECADCMD -> shutil.which -> known paths. We export the conda
 #      binary's path explicitly so resolution doesn't depend on PATH activation.
 #   3. SCOPE. Runs the FreeCAD-side worker tests (test_worker + test_mating_dims)
 #      plus the FreeCAD-free contracts as a baseline. The FEM subset of
@@ -63,7 +63,7 @@ jobs:
           miniforge-version: latest
           channels: conda-forge
           channel-priority: strict
-          activate-environment: driftpin
+          activate-environment: ankusdrive
           python-version: "3.11"
 
       - name: Install FreeCAD 1.1 + CalculiX from conda-forge
@@ -80,7 +80,7 @@ jobs:
           echo "--- ccx (CalculiX FEM solver) ---"
           which ccx
           ccx -v 2>&1 | head -2 || true
-          echo "DRIFTPIN_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
+          echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
 
       # The worker suite ships on main; the contracts (#8) and mating-dims (#11)
       # files arrive when those PRs merge — run them when present, skip cleanly

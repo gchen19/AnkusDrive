@@ -26,9 +26,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin import solvers  # noqa: E402
-from driftpin.analysis import cfd  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
+from ankusdrive.analysis import cfd  # noqa: E402
 from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
@@ -342,7 +342,7 @@ def test_wind_tunnel_refuses_a_cell_that_would_mesh_an_empty_tunnel():
         print("    SKIP — OpenFOAM not installed (the guard sits behind the "
               "solver-presence check)")
         return
-    from driftpin.client import WorkerError
+    from ankusdrive.client import WorkerError
     with Worker() as w:
         w.call("new_document", name="tunnel_guard")
         sphere = w.call("add_primitive", kind="sphere", radius=5)

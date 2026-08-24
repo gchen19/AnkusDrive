@@ -2,7 +2,7 @@
 
 `tests/test_toys_advanced.py` holds the **advanced** acceptance toys: fast-lane,
 pure-Python/NumPy gates that probe the *exact closed-form limits* of each
-`driftpin/analysis/` module — sharper than the happy-path anchors in the per-module
+`ankusdrive/analysis/` module — sharper than the happy-path anchors in the per-module
 `tests/test_<module>.py` and in [`SIMULATION_EXAMPLES.md`](../SIMULATION_EXAMPLES.md).
 
 An advanced toy must be one of five kinds (and its inline comment should say which):

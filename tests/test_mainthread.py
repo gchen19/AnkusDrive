@@ -1,4 +1,4 @@
-"""Main-thread work queue — two-sided oracles for driftpin.mainthread (issue #260).
+"""Main-thread work queue — two-sided oracles for ankusdrive.mainthread (issue #260).
 
 Pure-Python, no FreeCAD. This is the primitive that lets a BACKGROUND job ask for
 work on the main thread, which is what unblocks adaptive *shape* search: the
@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import mainthread as mt  # noqa: E402
+from ankusdrive import mainthread as mt  # noqa: E402
 
 
 def _job(fn):

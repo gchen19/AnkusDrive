@@ -1,5 +1,5 @@
 {
-  "schema": "driftpin.manifest/0-phase0",
+  "schema": "ankusdrive.manifest/0-phase0",
   "name": "peg_plate_demo",
   "root": "phase0_assembly.FCStd",
   "_note": "Phase 0 manifest. The RFC (docs/MULTI_AGENT.md) defines a richer manifest with published interface frames and mate-by-frame. Phase 0 has no manifest tooling yet, so this file uses raw [x,y,z] placements and is consumed by phase0_walkthrough.py by hand to show where Phase 1 plugs in.",

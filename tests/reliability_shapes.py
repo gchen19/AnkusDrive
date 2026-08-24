@@ -1,5 +1,5 @@
 """
-Library of reliability-test shapes. Each shape returns the DriftPin handle to
+Library of reliability-test shapes. Each shape returns the AnkusDrive handle to
 render. Shapes are paired with a `grader` spec: which keywords identify the
 shape correctly, and which keywords would be a wrong answer.
 

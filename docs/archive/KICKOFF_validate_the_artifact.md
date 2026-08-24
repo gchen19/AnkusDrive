@@ -4,7 +4,7 @@ Scope of work for the next session, written 2026-06-14 at the end of the gearbox
 
 > **Status (2026-06-14):** ALL FIVE items are now done. Items #1 (anomaly gate) and #2
 > (geometry-realizes-declaration) shipped as **RFC §11.10** — see
-> `docs/VALIDATE_THE_ARTIFACT.md` for the writeup, `driftpin/realize.py` for the oracle,
+> `docs/VALIDATE_THE_ARTIFACT.md` for the writeup, `ankusdrive/realize.py` for the oracle,
 > and `tests/test_realize.py` for the regression (a merge that FAILS the solid-face collar
 > at 249.5 mm³). Since extended: a **`interleave`** gate (relative half-pitch phase —
 > catches teeth-on-teeth that pass the per-part gap check), the whole **`gearbox_multispeed`**
@@ -106,8 +106,8 @@ feasible. Candidate RFC slot: **§11.10 — geometry-realizes-declaration**.
   emergent selector; `artifacts/dog_clutch_cad_sim.gif`.
 - Renders: `scratch/render_dogclutch.py` (the two-colour interleave),
   `artifacts/dogclutch_engaged.png`, `artifacts/gearbox_multispeed.{step,stl}`.
-- Motion oracle: `driftpin/mechanism.py` + the `merge_assembly` mobility/typed gates
-  in `driftpin/worker.py`.
+- Motion oracle: `ankusdrive/mechanism.py` + the `merge_assembly` mobility/typed gates
+  in `ankusdrive/worker.py`.
 - The interference-magnitude signal: the pairwise common-volume scan run this session
   (250 mm³ jammed vs ~5 mm³ interleaved) — formalize that into item #1.
 - Narrative + corrections: `tests/MULTI_AGENT_EVAL.md` (gearbox sections).

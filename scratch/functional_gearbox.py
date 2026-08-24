@@ -31,8 +31,8 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 sys.path.insert(0, str(REPO / "scratch"))
 import gearbox_real as gb                    # noqa: E402
-from driftpin import Worker                  # noqa: E402
-from driftpin.analysis import mbd            # noqa: E402
+from ankusdrive import Worker                  # noqa: E402
+from ankusdrive.analysis import mbd            # noqa: E402
 
 W_IN = 10.0                                  # PyBullet input drive (rad/s)
 

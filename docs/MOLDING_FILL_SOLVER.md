@@ -32,7 +32,7 @@ for a coarse 2-D case, and still answers the single most reliable molding questi
 (short-shot). It loses the packing/cooling stage and the published IM validation;
 those ride on the OF7 path, which is now the default wherever the build is present.
 
-## The interFoam fill case (`driftpin/analysis/molding_fill.py`)
+## The interFoam fill case (`ankusdrive/analysis/molding_fill.py`)
 
 A **2-D rectangular plaque cavity** (`length` × `wall_thickness`, one cell deep,
 `empty` front/back). The gate is a short inlet patch at the bottom of the left edge;
@@ -93,7 +93,7 @@ on this host (Ubuntu 24.04, gcc 13.3):
    `applications/solvers/multiphase/openInjMoldSim/Allwmake` against the sourced OF7
    `etc/bashrc`. Binaries `openInjMoldSim`/`openInjMoldSimF` land in `$FOAM_USER_APPBIN`.
 3. `solvers.openinjmoldsim_bin()` **auto-resolves** the binary via its
-   `~/OpenFOAM/*/platforms/*/bin` glob — `DRIFTPIN_OPENINJMOLDSIM*` env vars are
+   `~/OpenFOAM/*/platforms/*/bin` glob — `ANKUSDRIVE_OPENINJMOLDSIM*` env vars are
    optional, not required.
 4. **Validated** on the bundled `tutorials/demo/fill_pack` (9600 cells), serial,
    `-fillEnd 0.98` → *"Filled to 0.98005119 and terminating"* (~9.5 min). The full
@@ -261,7 +261,7 @@ There is no purpose-built open-source injection-molding warpage solver, so we ta
 realistic loose-coupling path the issue scopes (mirroring the preCICE OpenFOAM↔CalculiX
 FSI pattern): hand the **frozen-in differential cooling** from the part to **CalculiX
 (`ccx`)** as a **thermo-elastic free-distortion** solve. Lives in
-`driftpin/analysis/warpage.py`; surfaced as the async MCP tool `molding_warpage_submit`
+`ankusdrive/analysis/warpage.py`; surfaced as the async MCP tool `molding_warpage_submit`
 (worker `_molding_warpage_submit`); the GPL `ccx` is held at the subprocess boundary
 (its own deck is written and run — never imported), like every other heavy solver here.
 

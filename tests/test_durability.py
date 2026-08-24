@@ -1,5 +1,5 @@
 """Wear / fatigue / fracture toys — two-sided oracles for
-driftpin.analysis.durability.
+ankusdrive.analysis.durability.
 
 Pure-Python, no FreeCAD. Each check pins a closed-form result against a hand
 calculation AND verifies a deliberately-bad input is caught, mirroring
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import durability as dur  # noqa: E402
+from ankusdrive.analysis import durability as dur  # noqa: E402
 
 
 def test_fatigue_goodman_fails():

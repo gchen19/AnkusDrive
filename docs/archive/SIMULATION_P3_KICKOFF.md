@@ -31,18 +31,18 @@ It complements:
 
 **Shipped:** the materials DB, the entire pure-Python closed-form wave (tolerance,
 durability, lumped thermal, DfX, cost, slicing, machine-element rating), the async
-facility ([`driftpin/jobs.py`](../../driftpin/jobs.py)), and the **complete P2 tier** —
-[`analysis/{cfd,mbd,kinematics,topology,vibration,elmer,openfoam}.py`](../../driftpin/analysis/)
-with their `*_submit` tools, the [`solvers.py`](../../driftpin/solvers.py) discovery +
+facility ([`ankusdrive/jobs.py`](../../ankusdrive/jobs.py)), and the **complete P2 tier** —
+[`analysis/{cfd,mbd,kinematics,topology,vibration,elmer,openfoam}.py`](../../ankusdrive/analysis/)
+with their `*_submit` tools, the [`solvers.py`](../../ankusdrive/solvers.py) discovery +
 degradation glue, and the case-builders that build a slab/pipe from physical params,
 run **the real ElmerSolver / OpenFOAM**, and gate against the analytic oracle.
 
 **Missing — four things, none of them new infrastructure:**
 1. **Optics (Sprint 5).** `optics_raytrace` + `optics_moldability_check`. The `optics`
    extra and the `rayoptics`/`optiland` solver are **already registered**
-   ([`solvers.py`](../../driftpin/solvers.py), [`pyproject.toml`](../../pyproject.toml)); the
+   ([`solvers.py`](../../ankusdrive/solvers.py), [`pyproject.toml`](../../pyproject.toml)); the
    optical material corpus is in
-   [`analysis/materials/optical.json`](../../driftpin/analysis/materials/optical.json)
+   [`analysis/materials/optical.json`](../../ankusdrive/analysis/materials/optical.json)
    (PMMA n=1.49062, etc.). Snell + Fresnel + TIR are **exact** closed-form anchors. This
    is the lowest-risk, most de-risked item — **ship it first.**
 2. **Radiation thermal.** `thermal_radiation` (Elmer's enclosure/view-factor radiation),
@@ -50,7 +50,7 @@ run **the real ElmerSolver / OpenFOAM**, and gate against the analytic oracle.
 3. **External-flow CFD builder.** A from-geometry builder behind
    `cfd_external_flow_submit` (drag/lift), the counterpart to the shipped internal-pipe
    builder. Needs a new analytic oracle (Stokes / flat-plate) in
-   [`analysis/cfd.py`](../../driftpin/analysis/cfd.py).
+   [`analysis/cfd.py`](../../ankusdrive/analysis/cfd.py).
 4. **The geometry-driven meshing bridge.** The cross-cutting unlock (see below).
 
 ---

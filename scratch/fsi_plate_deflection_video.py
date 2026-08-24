@@ -38,8 +38,8 @@ import matplotlib.pyplot as plt                             # noqa: E402
 from matplotlib.collections import PolyCollection           # noqa: E402
 from PIL import Image                                       # noqa: E402
 
-from driftpin import solvers                                # noqa: E402
-from driftpin.analysis import fsi, fsi_case                 # noqa: E402
+from ankusdrive import solvers                                # noqa: E402
+from ankusdrive.analysis import fsi, fsi_case                 # noqa: E402
 
 ART = REPO / "artifacts"
 ART.mkdir(exist_ok=True)

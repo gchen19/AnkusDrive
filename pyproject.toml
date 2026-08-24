@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "driftpin"
-# Version comes from driftpin/__init__.py — single source of truth. Bump
+name = "ankusdrive"
+# Version comes from ankusdrive/__init__.py — single source of truth. Bump
 # __version__ there and tag matching vX.Y.Z to release.
 dynamic = ["version"]
 description = "CLI + MCP server that drives FreeCAD's Python API for LLM-driven mechanical design and FEM."
@@ -40,19 +40,19 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 # Host-side runtime deps. Floors are the OLDEST versions verified to work:
-#   mcp>=1.2,<2 — driftpin/mcp_server.py imports `mcp.server.fastmcp.FastMCP`,
+#   mcp>=1.2,<2 — ankusdrive/mcp_server.py imports `mcp.server.fastmcp.FastMCP`,
 #                which was first shipped in mcp 1.2.0; 1.0/1.1 lack that module
 #                (empirically confirmed) so an older pin would install and then
 #                fail to boot the MCP server. The <2 CEILING is just as load-
 #                bearing: mcp 2.0.0 restructured the server package and dropped
 #                `mcp.server.fastmcp`, so an unconstrained resolve installs
-#                fine and then `driftpin mcp` dies with ImportError while
+#                fine and then `ankusdrive mcp` dies with ImportError while
 #                ping/doctor still pass (field-reported, issue #277). Raising
 #                the ceiling requires porting mcp_server.py to the 2.x server
 #                API and re-verifying the anyio thread-pool concurrency
 #                contract documented there (issue #167).
 #   Pillow>=10 — render path uses only Image.{fromarray,new,open,convert}
-#                (driftpin/render.py), stable since Pillow 9; 10.0 is a safe
+#                (ankusdrive/render.py), stable since Pillow 9; 10.0 is a safe
 #                conservative floor with wheels for py3.10–3.13.
 #   numpy>=1.24 — basic ndarray/dtype usage only, no post-1.24 APIs; a lower
 #                bound (pip still selects a py3.13-compatible newer numpy where
@@ -75,8 +75,8 @@ dev = [
     "python-dotenv>=1.0",
 ]
 # P2 external-solver extras (docs/archive/SIMULATION_P2_KICKOFF.md). Each family discovers
-# its solver via driftpin.solvers; these extras pull the pip-installable ones.
-# `pip install driftpin[mbd]` is a clean wheel install (no system package). The
+# its solver via ankusdrive.solvers; these extras pull the pip-installable ones.
+# `pip install ankusdrive[mbd]` is a clean wheel install (no system package). The
 # apt/conda solvers (OpenFOAM, Elmer) are documented in scripts/install-solvers.sh,
 # not vendored — so `cfd` is intentionally empty (the solver is a system package).
 mbd = [
@@ -101,9 +101,9 @@ fluids = [
     "CoolProp",             # ρ, μ, cp, k, Pr f(T,P) for air/water/refrigerants (BSD-3)
 ]
 # Non-sequential STL solid tracing runs on KrakenOS, which is GPL-3.0. It is a
-# SEPARATE, opt-in extra because DriftPin invokes it only out-of-process (via
-# driftpin/optics_gpl_runner.py) to keep the copyleft boundary clean — installing it
-# does not link GPL code into DriftPin. setuptools<81 restores pkg_resources, which
+# SEPARATE, opt-in extra because AnkusDrive invokes it only out-of-process (via
+# ankusdrive/optics_gpl_runner.py) to keep the copyleft boundary clean — installing it
+# does not link GPL code into AnkusDrive. setuptools<81 restores pkg_resources, which
 # KrakenOS imports.
 optics_gpl = [
     "KrakenOS",
@@ -111,12 +111,12 @@ optics_gpl = [
 ]
 # Exterior-acoustics BEM runs on bempp-cl, which is MIT (NOT copyleft). It is still
 # a SEPARATE, opt-in extra installed into a DEDICATED venv (.venv-bempp) and invoked
-# only out-of-process (via driftpin/bempp_runner.py) for a DEPENDENCY reason, not a
+# only out-of-process (via ankusdrive/bempp_runner.py) for a DEPENDENCY reason, not a
 # license one: bempp needs meshio>=4 (cells_dict), but the shared venv pins
 # meshio==3 for solidspy (the `topology` extra / analysis/topology.py). Installing
 # this extra into the shared venv would break topology optimisation — so install it
 # in its own venv (scripts/install-solvers.sh acoustics_bem) and point
-# DRIFTPIN_BEMPP_PYTHON at that venv's python.
+# ANKUSDRIVE_BEMPP_PYTHON at that venv's python.
 acoustics_bem = [
     "bempp-cl",
     "gmsh",                 # bempp's shape generators shell out to the gmsh CLI binary
@@ -125,10 +125,10 @@ acoustics_bem = [
 # Full-wave FDTD EM runs on openEMS/CSXCAD, which is GPL-3.0 AND is not a pip wheel
 # (not on PyPI/conda — it is source-built from the openEMS-Project meta-repo). Like
 # optics_gpl it is a SEPARATE, opt-in extra invoked only out-of-process (via
-# driftpin/em_fullwave_gpl_runner.py) so its copyleft does not link into DriftPin.
+# ankusdrive/em_fullwave_gpl_runner.py) so its copyleft does not link into AnkusDrive.
 # The python bindings install into a DEDICATED venv; this extra carries only the
 # pure-Python deps the runner needs there. See scripts/install-solvers.sh em_gpl
-# for the source build, then set DRIFTPIN_OPENEMS_PYTHON to that venv's python.
+# for the source build, then set ANKUSDRIVE_OPENEMS_PYTHON to that venv's python.
 em_gpl = [
     "numpy",
     "h5py",
@@ -140,11 +140,11 @@ cfd = []                    # OpenFOAM / SU2 ship via apt/conda — see scripts/
 # OpenFOAM <-> CalculiX. preCICE itself is NOT a pip wheel for this path (the version-
 # sensitive serial libprecice + the two C++ adapters — calculix-adapter producing
 # ccx_preCICE, openfoam-adapter producing the function-object .so — are source-built),
-# and the two heavy solvers run ONLY out-of-process (driftpin/analysis/fsi_case.py) so
-# the LGPL coupling lib never links into DriftPin. This extra carries only the pure-
+# and the two heavy solvers run ONLY out-of-process (ankusdrive/analysis/fsi_case.py) so
+# the LGPL coupling lib never links into AnkusDrive. This extra carries only the pure-
 # Python deps the artifact/render path needs; the C++ stack is built by
 # scripts/install-solvers.sh fsi (then auto-discovered or pointed at via
-# DRIFTPIN_CCX_PRECICE / DRIFTPIN_PRECICE_LIB / DRIFTPIN_OPENFOAM_ADAPTER_LIB).
+# ANKUSDRIVE_CCX_PRECICE / ANKUSDRIVE_PRECICE_LIB / ANKUSDRIVE_OPENFOAM_ADAPTER_LIB).
 fsi = [
     "numpy",
     # libprecice + ccx_preCICE + the OpenFOAM adapter are NOT here — they are
@@ -153,19 +153,24 @@ fsi = [
 # Granular / powder discrete-element mechanics runs on YADE, which is GPL-3.0 and
 # ships no PyPI/conda-noble wheel — it is SOURCE-BUILT (scripts/install-solvers.sh
 # dem_gpl, into ~/opt/yade) and driven ONLY out-of-process via the `yade` executable
-# running driftpin/dem_gpl_runner.py, so installing it does not link GPL code into
-# DriftPin. There is no pip package to pull, so this opt-in extra is intentionally
-# empty (the marker exists so `driftpin[dem_gpl]` resolves and the registry can name
+# running ankusdrive/dem_gpl_runner.py, so installing it does not link GPL code into
+# AnkusDrive. There is no pip package to pull, so this opt-in extra is intentionally
+# empty (the marker exists so `ankusdrive[dem_gpl]` resolves and the registry can name
 # the extra); the build itself is the install step, documented in install-solvers.sh.
 dem_gpl = []                # YADE (GPL-3.0) is source-built — see scripts/install-solvers.sh
 
 [project.scripts]
-driftpin = "driftpin.cli:main"
+ankusdrive = "ankusdrive.cli:main"
+# Deprecated pre-0.5 name (#295). Kept for one minor release so existing MCP
+# host configs, aliases and scripts don't break with `command not found`; the
+# shim prints a rename notice, then delegates. Remove in 0.6 together with
+# ankusdrive/_legacy_cli.py.
+driftpin = "ankusdrive._legacy_cli:main"
 
 [project.urls]
-Homepage = "https://github.com/gchen19/DriftPin"
-Repository = "https://github.com/gchen19/DriftPin"
-Issues = "https://github.com/gchen19/DriftPin/issues"
+Homepage = "https://github.com/gchen19/AnkusDrive"
+Repository = "https://github.com/gchen19/AnkusDrive"
+Issues = "https://github.com/gchen19/AnkusDrive/issues"
 
 [tool.ruff]
 # Fast "real-bug" lint for the CI fast lane (no FreeCAD needed). Throwaway
@@ -185,10 +190,10 @@ select = ["E9", "F"]
 "tests/*" = ["F401", "F841"]
 
 [tool.setuptools.dynamic]
-version = { attr = "driftpin.__version__" }
+version = { attr = "ankusdrive.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["driftpin*"]
+include = ["ankusdrive*"]
 exclude = ["tests*", "scratch*", "example*", "docs*"]
 
 [tool.setuptools.package-data]
@@ -208,7 +213,7 @@ exclude = ["tests*", "scratch*", "example*", "docs*"]
 #                           extensionless OpenFOAM dictionaries in nested dirs
 #                           with no __init__.py, so it needs a recursive `**/*`
 #                           rather than an extension glob.
-driftpin = [
+ankusdrive = [
     "worker.py",
     "analysis/materials/*.json",
     "analysis/standards/*.json",

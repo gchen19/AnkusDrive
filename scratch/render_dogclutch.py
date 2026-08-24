@@ -16,7 +16,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection      # noqa: E402
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scratch"))
-from driftpin import Worker                                  # noqa: E402
+from ankusdrive import Worker                                  # noqa: E402
 from render_gearbox import read_binary_stl                   # noqa: E402
 
 ART = REPO / "artifacts"

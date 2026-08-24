@@ -2,8 +2,8 @@
 
 Pure-Python, no FreeCAD. The config file is the resolution layer that survives an
 MCP host's minimal launch env: a path set once in
-``~/.config/driftpin/config.toml`` (``%APPDATA%`` on Windows) resolves FreeCAD
-and solver binaries with NO environment variables, while a ``DRIFTPIN_*`` env
+``~/.config/ankusdrive/config.toml`` (``%APPDATA%`` on Windows) resolves FreeCAD
+and solver binaries with NO environment variables, while a ``ANKUSDRIVE_*`` env
 var still wins when present (CI / one-off runs unchanged).
 
 Run:  python3 tests/test_config.py
@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import config, solvers  # noqa: E402
+from ankusdrive import config, solvers  # noqa: E402
 
 
 @contextmanager
@@ -41,30 +41,30 @@ def _env(**vars):
 
 
 def _write_config(text: str) -> str:
-    fd, path = tempfile.mkstemp(prefix="driftpin_cfg_", suffix=".toml")
+    fd, path = tempfile.mkstemp(prefix="ankusdrive_cfg_", suffix=".toml")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
     return path
 
 
 def test_config_path_override_and_platform_default():
-    with _env(DRIFTPIN_CONFIG=r"C:\somewhere\my.toml"):
+    with _env(ANKUSDRIVE_CONFIG=r"C:\somewhere\my.toml"):
         assert config.config_path() == r"C:\somewhere\my.toml"
-    with _env(DRIFTPIN_CONFIG=None):
+    with _env(ANKUSDRIVE_CONFIG=None):
         p = config.config_path()
-        assert p.endswith(os.path.join("driftpin", "config.toml")), p
+        assert p.endswith(os.path.join("ankusdrive", "config.toml")), p
         if os.name == "nt":
-            assert os.environ.get("APPDATA", "~") in p or "driftpin" in p, p
+            assert os.environ.get("APPDATA", "~") in p or "ankusdrive" in p, p
         else:
             assert ".config" in p or os.environ.get("XDG_CONFIG_HOME", "") in p, p
 
 
 def test_load_missing_and_malformed_are_empty():
-    with _env(DRIFTPIN_CONFIG=os.path.join(tempfile.gettempdir(), "nope_driftpin.toml")):
+    with _env(ANKUSDRIVE_CONFIG=os.path.join(tempfile.gettempdir(), "nope_ankusdrive.toml")):
         assert config.load() == {}
     bad = _write_config("this is [ not toml = = =")
     try:
-        with _env(DRIFTPIN_CONFIG=bad):
+        with _env(ANKUSDRIVE_CONFIG=bad):
             assert config.load() == {}          # malformed -> optional, never raises
     finally:
         os.unlink(bad)
@@ -75,12 +75,12 @@ def test_lookup_precedence_env_beats_config():
                         "[solvers]\n"
                         'su2_path = "/from/config/SU2_CFD"\n')
     try:
-        with _env(DRIFTPIN_CONFIG=cfg, DRIFTPIN_FREECADCMD=None, DRIFTPIN_SU2_PATH=None):
-            assert config.lookup("DRIFTPIN_FREECADCMD") == ("/from/config/freecadcmd", "config")
-            assert config.lookup("DRIFTPIN_SU2_PATH") == ("/from/config/SU2_CFD", "config")
-            assert config.lookup("DRIFTPIN_ELMER_PATH") == (None, None)
-        with _env(DRIFTPIN_CONFIG=cfg, DRIFTPIN_SU2_PATH="/from/env/SU2_CFD"):
-            assert config.lookup("DRIFTPIN_SU2_PATH") == ("/from/env/SU2_CFD", "env")
+        with _env(ANKUSDRIVE_CONFIG=cfg, ANKUSDRIVE_FREECADCMD=None, ANKUSDRIVE_SU2_PATH=None):
+            assert config.lookup("ANKUSDRIVE_FREECADCMD") == ("/from/config/freecadcmd", "config")
+            assert config.lookup("ANKUSDRIVE_SU2_PATH") == ("/from/config/SU2_CFD", "config")
+            assert config.lookup("ANKUSDRIVE_ELMER_PATH") == (None, None)
+        with _env(ANKUSDRIVE_CONFIG=cfg, ANKUSDRIVE_SU2_PATH="/from/env/SU2_CFD"):
+            assert config.lookup("ANKUSDRIVE_SU2_PATH") == ("/from/env/SU2_CFD", "env")
     finally:
         os.unlink(cfg)
 
@@ -88,14 +88,14 @@ def test_lookup_precedence_env_beats_config():
 def test_edit_is_picked_up_without_restart():
     cfg = _write_config("[solvers]\nsu2_path = '/v1'\n")
     try:
-        with _env(DRIFTPIN_CONFIG=cfg, DRIFTPIN_SU2_PATH=None):
-            assert config.get("DRIFTPIN_SU2_PATH") == "/v1"
+        with _env(ANKUSDRIVE_CONFIG=cfg, ANKUSDRIVE_SU2_PATH=None):
+            assert config.get("ANKUSDRIVE_SU2_PATH") == "/v1"
             time.sleep(0.01)
             with open(cfg, "w", encoding="utf-8") as f:
                 f.write("[solvers]\nsu2_path = '/v2'\n")
             now = time.time()
             os.utime(cfg, (now + 2, now + 2))   # force a distinct mtime
-            assert config.get("DRIFTPIN_SU2_PATH") == "/v2"
+            assert config.get("ANKUSDRIVE_SU2_PATH") == "/v2"
     finally:
         os.unlink(cfg)
 
@@ -120,7 +120,7 @@ def test_solver_discovery_reads_config_layer():
     cfg = _write_config(
         f'[solvers]\nsu2_path = "{fake_bin.replace(os.sep, "/")}"\n')
     try:
-        with _env(DRIFTPIN_CONFIG=cfg, DRIFTPIN_SU2_PATH=None):
+        with _env(ANKUSDRIVE_CONFIG=cfg, ANKUSDRIVE_SU2_PATH=None):
             info = solvers.find_solver("su2")
             assert info["available"] is True, info
             assert os.path.normpath(info["path"]) == os.path.normpath(fake_bin), info
@@ -130,11 +130,11 @@ def test_solver_discovery_reads_config_layer():
 
 
 def test_client_resolves_freecadcmd_from_config():
-    from driftpin import client
+    from ankusdrive import client
     fake = _write_config("")                     # any existing file path will do
     cfg = _write_config(f'freecadcmd = "{fake.replace(os.sep, "/")}"\n')
     try:
-        with _env(DRIFTPIN_CONFIG=cfg, DRIFTPIN_FREECADCMD=None):
+        with _env(ANKUSDRIVE_CONFIG=cfg, ANKUSDRIVE_FREECADCMD=None):
             got = client._resolve_freecadcmd()
             assert os.path.normpath(got) == os.path.normpath(fake), (got, fake)
     finally:
@@ -143,14 +143,14 @@ def test_client_resolves_freecadcmd_from_config():
 
 
 def test_doctor_reports_config_layer():
-    from driftpin import doctor
+    from ankusdrive import doctor
     cfg = _write_config('freecadcmd = "/x/freecadcmd"\n[solvers]\nsu2_path = "/x/su2"\n')
     try:
-        with _env(DRIFTPIN_CONFIG=cfg):
+        with _env(ANKUSDRIVE_CONFIG=cfg):
             rep = doctor.config_report()
             assert rep["path"] == cfg and rep["present"] is True, rep
             assert rep["keys"] == ["freecadcmd", "solvers.su2_path"], rep
-        with _env(DRIFTPIN_CONFIG=cfg + ".absent"):
+        with _env(ANKUSDRIVE_CONFIG=cfg + ".absent"):
             rep = doctor.config_report()
             assert rep["present"] is False and rep["keys"] == [], rep
     finally:
@@ -158,19 +158,19 @@ def test_doctor_reports_config_layer():
 
 
 def test_write_merges_and_persists():
-    # driftpin setup's persistence step (issue #200): write() creates the file
+    # ankusdrive setup's persistence step (issue #200): write() creates the file
     # (and directory), later writes MERGE rather than clobber, and values
     # round-trip through the normal lookup.
     with tempfile.TemporaryDirectory() as d:
-        with _env(DRIFTPIN_CONFIG=os.path.join(d, "sub", "config.toml"),
-                  DRIFTPIN_FREECADCMD=None, DRIFTPIN_SU2_PATH=None):
+        with _env(ANKUSDRIVE_CONFIG=os.path.join(d, "sub", "config.toml"),
+                  ANKUSDRIVE_FREECADCMD=None, ANKUSDRIVE_SU2_PATH=None):
             path = config.write(
-                {"DRIFTPIN_FREECADCMD": os.sep.join(["C:", "fc", "freecadcmd.exe"])})
+                {"ANKUSDRIVE_FREECADCMD": os.sep.join(["C:", "fc", "freecadcmd.exe"])})
             assert os.path.isfile(path), path
-            assert config.get("DRIFTPIN_FREECADCMD") == "C:/fc/freecadcmd.exe"
-            config.write({"DRIFTPIN_SU2_PATH": "/opt/su2/SU2_CFD"})
-            assert config.get("DRIFTPIN_FREECADCMD") == "C:/fc/freecadcmd.exe"
-            assert config.get("DRIFTPIN_SU2_PATH") == "/opt/su2/SU2_CFD"
+            assert config.get("ANKUSDRIVE_FREECADCMD") == "C:/fc/freecadcmd.exe"
+            config.write({"ANKUSDRIVE_SU2_PATH": "/opt/su2/SU2_CFD"})
+            assert config.get("ANKUSDRIVE_FREECADCMD") == "C:/fc/freecadcmd.exe"
+            assert config.get("ANKUSDRIVE_SU2_PATH") == "/opt/su2/SU2_CFD"
             body = open(path, encoding="utf-8").read()
             assert "[solvers]" in body and 'su2_path = "/opt/su2/SU2_CFD"' in body, body
 

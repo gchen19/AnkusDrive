@@ -25,8 +25,8 @@
 #   4. TMPDIR is set and round-trips host->VM at a MATCHING absolute path
 #      (writes a sentinel and reads it back inside the VM) — remounts once and
 #      retries, since a dropped sshfs mount is the common flake
-#   5. the four DRIFTPIN_* FSI overrides are set AND their paths exist in the VM
-#   6. driftpin's own host-side resolution agrees (`fsi_stack_status().ok`)
+#   5. the four ANKUSDRIVE_* FSI overrides are set AND their paths exist in the VM
+#   6. ankusdrive's own host-side resolution agrees (`fsi_stack_status().ok`)
 #   7. Rosetta 2 present on arm64 and SU2_CFD resolves
 #
 #   Checks report ALL failures (dependent checks are skipped when a prerequisite
@@ -66,7 +66,7 @@ warn() { printf '%s%s\n' "$(_gha warning)" "$*"; }
 fail() { printf '%s%s\n' "$(_gha error)" "$*"; FAILED=$((FAILED + 1)); }
 step() { printf '\n== %s ==\n' "$*"; }
 
-INSTANCE="${DRIFTPIN_OPENFOAM_INSTANCE:-openfoam}"
+INSTANCE="${ANKUSDRIVE_OPENFOAM_INSTANCE:-openfoam}"
 
 # --- 1. host ------------------------------------------------------------------
 step "Host"
@@ -122,7 +122,7 @@ if [ "$WANT_FSI" = 1 ]; then
       fail "TMPDIR=$MOUNT does not exist on the host — create it and mount it into the VM"
     else
       probe_mount() {
-        local sentinel="$MOUNT/.driftpin-preflight-$$"
+        local sentinel="$MOUNT/.ankusdrive-preflight-$$"
         : > "$sentinel" 2>/dev/null || return 1
         local rc=0
         multipass exec "$INSTANCE" -- test -f "$sentinel" >/dev/null 2>&1 || rc=1
@@ -168,32 +168,32 @@ if [ "$WANT_FSI" = 1 ]; then
       fail "$var=$val does not exist in '$INSTANCE' ($what) — reprovision:  scripts/install-solvers.sh fsi  (run the printed recipe inside 'multipass shell $INSTANCE')"
     fi
   }
-  check_in_vm DRIFTPIN_CCX_PRECICE          -x "ccx_preCICE solid solver"        # executed
-  check_in_vm DRIFTPIN_PRECICE_LIB          -d "libprecice.so directory"
-  check_in_vm DRIFTPIN_OPENFOAM_ADAPTER_LIB -d "OpenFOAM preCICE adapter lib directory"
+  check_in_vm ANKUSDRIVE_CCX_PRECICE          -x "ccx_preCICE solid solver"        # executed
+  check_in_vm ANKUSDRIVE_PRECICE_LIB          -d "libprecice.so directory"
+  check_in_vm ANKUSDRIVE_OPENFOAM_ADAPTER_LIB -d "OpenFOAM preCICE adapter lib directory"
   # -r, not -x: the bashrc is SOURCED, and the ESI deb ships it 644.
-  check_in_vm DRIFTPIN_FSI_OPENFOAM_BASHRC  -r "OpenFOAM etc/bashrc the adapter was built against"
+  check_in_vm ANKUSDRIVE_FSI_OPENFOAM_BASHRC  -r "OpenFOAM etc/bashrc the adapter was built against"
 
   # --- 5b. the plain-CFD overrides (issue #223) -------------------------------
   # The built-in CFD case builders (pipe, flat plate, snappy bridge, wind tunnel)
-  # are OpenFOAM-only and resolve through DRIFTPIN_OPENFOAM_*, NOT the FSI pair
+  # are OpenFOAM-only and resolve through ANKUSDRIVE_OPENFOAM_*, NOT the FSI pair
   # above. Without them test_openfoam / test_meshbridge / test_wind_tunnel SKIP
   # their live halves and the lane goes green having solved nothing.
   step "In-VM plain-CFD overrides"
-  check_in_vm DRIFTPIN_OPENFOAM_BASHRC -r "OpenFOAM etc/bashrc for the built-in CFD cases"
-  check_in_vm DRIFTPIN_OPENFOAM_PATH   -x "OpenFOAM solver binary (simpleFoam/interFoam)"
+  check_in_vm ANKUSDRIVE_OPENFOAM_BASHRC -r "OpenFOAM etc/bashrc for the built-in CFD cases"
+  check_in_vm ANKUSDRIVE_OPENFOAM_PATH   -x "OpenFOAM solver binary (simpleFoam/interFoam)"
 
-  # --- 6. driftpin's own host-side view --------------------------------------
+  # --- 6. ankusdrive's own host-side view --------------------------------------
   # The overrides above can all be right and the stack still report not-ok if the
   # config layer disagrees (e.g. config.toml shadowing, multipass off PATH). This
   # is the exact predicate tests/test_fsi.py gates the live solve on, so check it
   # rather than infer it.
-  step "driftpin fsi_stack_status() (the predicate test_fsi.py gates on)"
+  step "ankusdrive fsi_stack_status() (the predicate test_fsi.py gates on)"
   status=$(python3 - <<'PY' 2>&1
 import json, sys
 sys.path.insert(0, ".")
 try:
-    from driftpin import solvers
+    from ankusdrive import solvers
     s = solvers.fsi_stack_status()
 except Exception as e:                       # import/resolution blew up
     print("ERR " + str(e)); sys.exit(0)
@@ -208,12 +208,12 @@ PY
 
   # The CFD files gate on this exact predicate, so check it rather than infer it
   # from the overrides (config.toml shadowing, multipass off PATH, ...).
-  step "driftpin find_solver('openfoam') (the predicate the CFD files gate on)"
+  step "ankusdrive find_solver('openfoam') (the predicate the CFD files gate on)"
   foam=$(python3 - <<'FOAMPY' 2>&1
 import sys
 sys.path.insert(0, ".")
 try:
-    from driftpin import solvers
+    from ankusdrive import solvers
     info = solvers.find_solver("openfoam")
 except Exception as e:
     print("ERR " + str(e)); sys.exit(0)
@@ -243,7 +243,7 @@ if [ "$WANT_SU2" = 1 ]; then
 import sys
 sys.path.insert(0, ".")
 try:
-    from driftpin import solvers
+    from ankusdrive import solvers
     print(solvers.find_solver("su2").get("path") or "")
 except Exception as e:
     print("ERR " + str(e))

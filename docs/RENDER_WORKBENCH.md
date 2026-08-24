@@ -1,16 +1,16 @@
 # Photoreal rendering via the FreeCAD Render workbench
 
-DriftPin grows a *photorealistic* render path by stitching in the third-party
+AnkusDrive grows a *photorealistic* render path by stitching in the third-party
 [FreeCAD Render workbench](https://github.com/FreeCAD/FreeCAD-render) and exposing
 it as an MCP tool (`render_photoreal`) alongside the existing software-rasterized
-[`render_view`](../driftpin/render.py).
+[`render_view`](../ankusdrive/render.py).
 
 > This is the architecture / design record. For the user-facing **support matrix,
 > installation, verification, and limitations**, see [`RENDERING.md`](RENDERING.md).
 
 **Status: Phase 1 implemented.** `render_photoreal` is wired end-to-end through the
 worker and the MCP server, verified on Linux with FreeCAD 1.1.0 + POV-Ray 3.7.
-The addon and a renderer binary are still *optional at runtime* — DriftPin boots
+The addon and a renderer binary are still *optional at runtime* — AnkusDrive boots
 and runs without them, and the tool returns clear install guidance if they are
 absent (the renderer-gated tests skip rather than fail). It supports the Render
 addon's material library (the `material` argument — Gold, Glass, Aluminium, …), a
@@ -24,11 +24,11 @@ doc doubles as the design record and the operator's install guide for all three 
 
 ## 1. Why, and what we have today
 
-DriftPin's original render path is a deliberate "can the agent *see* what it just
+AnkusDrive's original render path is a deliberate "can the agent *see* what it just
 built?" tool, not a presentation tool:
 
 - `render_view` / `render_views` (MCP) → worker `tessellate` handler returns
-  vertices + triangles → host-side [`render.py`](../driftpin/render.py)
+  vertices + triangles → host-side [`render.py`](../ankusdrive/render.py)
   rasterizes in pure NumPy + Pillow.
 - Flat Lambertian shading, orthographic, fixed light, per-pixel z-buffer. No
   materials, no GI, no perspective. Fast, deterministic, zero external deps.
@@ -75,7 +75,7 @@ external renderer binary**:
 | pbrt-v4 | hand-fetched `pbrt` | **Supported** (`renderer="Pbrt"`, batch/headless). pbrt-v4 marked experimental upstream. |
 
 The workbench itself rasterizes nothing — **it's a scene exporter + process
-launcher.** That is exactly what makes it embeddable in DriftPin's worker, given
+launcher.** That is exactly what makes it embeddable in AnkusDrive's worker, given
 that we can drive it without the GUI.
 
 **Public Python API — as actually observed (the original proposal mis-stated
@@ -111,13 +111,13 @@ Corrections vs. the original proposal:
 
 ## 4. The headless question (resolved)
 
-DriftPin's worker runs inside `freecadcmd` — **no GUI, `App.GuiUp == False`**.
+AnkusDrive's worker runs inside `freecadcmd` — **no GUI, `App.GuiUp == False`**.
 Photoreal rendering works headless; the three GUI-coupled behaviors are handled by
 building scene state as `App` objects instead of borrowing it from a viewport:
 
-| Concern | With GUI | Headless — what DriftPin does |
+| Concern | With GUI | Headless — what AnkusDrive does |
 |---|---|---|
-| **Camera** | grabs `Gui.ActiveDocument.ActiveView.getCamera()` | No viewport → **adds an explicit `Camera` object and sets its `Placement`** via [`_placement_from_view`](../driftpin/worker.py) (pure `App.Vector` math mirroring `render.py`'s `_camera_basis`; see below). |
+| **Camera** | grabs `Gui.ActiveDocument.ActiveView.getCamera()` | No viewport → **adds an explicit `Camera` object and sets its `Placement`** via [`_placement_from_view`](../ankusdrive/worker.py) (pure `App.Vector` math mirroring `render.py`'s `_camera_basis`; see below). |
 | **Visibility filter** | renders only views with `ViewObject.Visibility` | Falls back to **all** views. No action needed. |
 | **Materials / colors** | reads `ViewObject.ShapeColor` etc. | No ViewObject colors → the optional `material` argument applies a real Render `Material` from the library (§5.1); omitted falls back to the **default material**. |
 
@@ -156,7 +156,7 @@ POV-Ray):
 (Regenerate with the gallery script; only POV-Ray is in the sandbox, so the other
 renderers in §3 would need their binaries.)
 
-### 5.1 Worker handler — [`driftpin/worker.py`](../driftpin/worker.py)
+### 5.1 Worker handler — [`ankusdrive/worker.py`](../ankusdrive/worker.py)
 
 `@handler("render_photoreal")` (plus helpers `_placement_from_view`,
 `_resolve_renderer_exec`, and the `_RENDER_VIEWS` / `_RENDERERS` tables). Key design
@@ -177,16 +177,16 @@ decisions beyond the API corrections in §3:
   default; an unknown name raises with the list of available cards. `_available_render_materials`
   enumerates them from the addon's `materials/` dir.
 - **Cross-platform renderer resolution.** `_resolve_renderer_exec` finds the binary
-  via, in order: `DRIFTPIN_<RENDERER>_PATH` env override → path already set in FreeCAD
+  via, in order: `ANKUSDRIVE_<RENDERER>_PATH` env override → path already set in FreeCAD
   prefs → `PATH` (`shutil.which`, which honors Windows `PATHEXT`) → common per-OS
   install dirs (`platform.system()`-keyed). It then writes the path into the FreeCAD
   param the plugin reads. **The param key is `PovRayPath` in group
   `User parameter:BaseApp/Preferences/Mod/Render`** — *not* `RenderExecPath` as the
-  proposal claimed, and the plugin does *not* fall back to `PATH`, so DriftPin must
+  proposal claimed, and the plugin does *not* fall back to `PATH`, so AnkusDrive must
   set it.
 - Returns `{png_base64, png_path, renderer, view, material, width, height}`.
 
-### 5.2 MCP tool — [`driftpin/mcp_server.py`](../driftpin/mcp_server.py)
+### 5.2 MCP tool — [`ankusdrive/mcp_server.py`](../ankusdrive/mcp_server.py)
 
 ```python
 @mcp.tool()
@@ -253,8 +253,8 @@ non-blocking job API runs alongside the blocking `render_photoreal`:
    ones (Appleseed, LuxCore) with pinned-checksum downloads + PATH wrappers; see
    [`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md) (OSPRay Studio, pbrt, Cycles
    need a source build).
-3. **Nothing else** — DriftPin resolves the binary and sets `PovRayPath` itself (§5.1).
-   Override with `DRIFTPIN_POVRAY_PATH=/full/path/to/povray` if it lives somewhere odd.
+3. **Nothing else** — AnkusDrive resolves the binary and sets `PovRayPath` itself (§5.1).
+   Override with `ANKUSDRIVE_POVRAY_PATH=/full/path/to/povray` if it lives somewhere odd.
    Call the `render_capabilities` MCP tool any time to see which renderers resolve right
    now (and whether the addon imports) without attempting a render.
 

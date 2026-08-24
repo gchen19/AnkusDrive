@@ -1,4 +1,4 @@
-"""Experiment-readiness gate (driftpin/experiment.py) — the free go/no-go that
+"""Experiment-readiness gate (ankusdrive/experiment.py) — the free go/no-go that
 decides whether a billed multi-agent run on an emergent property would measure
 anything. Each test isolates one failure mode so the gate can't silently wave a
 worthless experiment through to billing.
@@ -12,7 +12,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.experiment import readiness  # noqa: E402
+from ankusdrive.experiment import readiness  # noqa: E402
 
 # A clean emergent toy modelled as plain dicts: a config is {parts:[...], sum, target}.
 # The SYSTEM property is sum(parts) == target; each part is locally "valid" (>0).

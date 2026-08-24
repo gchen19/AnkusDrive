@@ -16,9 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import solvers  # noqa: E402
-from driftpin.analysis import materials  # noqa: E402
-from driftpin.analysis import molding_fill as mf  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
+from ankusdrive.analysis import materials  # noqa: E402
+from ankusdrive.analysis import molding_fill as mf  # noqa: E402
 
 
 # --- case structure (no solver) ----------------------------------------------
@@ -97,7 +97,7 @@ def test_fill_gate_short_shot_and_full():
 
 
 def test_screen_escalates_to_fill_when_fill_check_runs():
-    from driftpin.analysis.molding import molding_screen
+    from ankusdrive.analysis.molding import molding_screen
     cool_only = molding_screen(wall_thickness_mm=2.0, material="ABS")
     assert cool_only["escalate_to"] is None
     with_fill = molding_screen(wall_thickness_mm=2.0, material="ABS",

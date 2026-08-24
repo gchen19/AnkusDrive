@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 import gearbox_real as gb            # noqa: E402
-from driftpin import Worker          # noqa: E402
+from ankusdrive import Worker          # noqa: E402
 
 
 def _run(w, tmp, n, files, mode, name):

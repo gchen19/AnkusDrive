@@ -21,20 +21,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import cfd               # noqa: E402
-from driftpin.analysis import cht               # noqa: E402
-from driftpin.analysis import cost              # noqa: E402
-from driftpin.analysis import dfx               # noqa: E402
-from driftpin.analysis import durability as du  # noqa: E402
-from driftpin.analysis import em                # noqa: E402
-from driftpin.analysis import kinematics        # noqa: E402
-from driftpin.analysis import machine_elements as me  # noqa: E402
-from driftpin.analysis import materials as mat  # noqa: E402
-from driftpin.analysis import optics as op      # noqa: E402
-from driftpin.analysis import slicing as sl     # noqa: E402
-from driftpin.analysis import thermal as th     # noqa: E402
-from driftpin.analysis import tolerance as tol  # noqa: E402
-from driftpin.analysis import vibration as vib  # noqa: E402
+from ankusdrive.analysis import cfd               # noqa: E402
+from ankusdrive.analysis import cht               # noqa: E402
+from ankusdrive.analysis import cost              # noqa: E402
+from ankusdrive.analysis import dfx               # noqa: E402
+from ankusdrive.analysis import durability as du  # noqa: E402
+from ankusdrive.analysis import em                # noqa: E402
+from ankusdrive.analysis import kinematics        # noqa: E402
+from ankusdrive.analysis import machine_elements as me  # noqa: E402
+from ankusdrive.analysis import materials as mat  # noqa: E402
+from ankusdrive.analysis import optics as op      # noqa: E402
+from ankusdrive.analysis import slicing as sl     # noqa: E402
+from ankusdrive.analysis import thermal as th     # noqa: E402
+from ankusdrive.analysis import tolerance as tol  # noqa: E402
+from ankusdrive.analysis import vibration as vib  # noqa: E402
 
 _N_PMMA = 1.49062
 
@@ -191,7 +191,7 @@ def test_thin_3d_slab_reproduces_the_2d_plane_stress_cantilever():
     # hexes (free z faces ≈ plane stress) must land within a few percent — the
     # offset (~5% on this grid) is the element-formulation difference, and a
     # change much beyond that band means one of the two stiffness matrices broke.
-    from driftpin.analysis import topology as topo
+    from ankusdrive.analysis import topology as topo
     r2 = topo.simp_topology_2d(nelx=12, nely=4, keep_fraction=0.95, penal=1.0,
                                max_iter=1)
     r3 = topo.simp_topology_3d(nelx=12, nely=4, nelz=1, keep_fraction=0.95,
@@ -916,7 +916,7 @@ def test_simp_penalty_exponent_is_wired_into_the_initial_compliance():
     # ≈ kf^p, so the initial compliance c₀=FᵀK⁻¹F ∝ kf^(−p). At fixed keep_fraction kf,
     # raising the penalty from p₁→p₂ multiplies c₀ by exactly kf^(−(p₂−p₁)) — the gate
     # that the SIMP exponent actually penalizes intermediate density inside the solver.
-    from driftpin.analysis import topology as topo
+    from ankusdrive.analysis import topology as topo
     kf = 0.5
     p1 = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=kf, penal=1.0, max_iter=1)
     p2 = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=kf, penal=2.0, max_iter=1)
@@ -932,7 +932,7 @@ def test_initial_compliance_is_monotone_in_keep_fraction():
     # penal=1 the uniform start makes E linear in the density kf, so K ∝ kf and the
     # initial compliance c₀ ∝ 1/kf — c₀·kf is an exact invariant across keep_fractions
     # (doubling kf exactly halves c₀). max_iter=1, tiny grid: one solve each.
-    from driftpin.analysis import topology as topo
+    from ankusdrive.analysis import topology as topo
     lean = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=0.3, penal=1.0, max_iter=1)
     rich = topo.simp_topology_2d(nelx=8, nely=4, keep_fraction=0.6, penal=1.0, max_iter=1)
     assert rich["compliance_initial"] < lean["compliance_initial"], \
@@ -950,7 +950,7 @@ def test_oc_update_realizes_the_volume_fraction_exactly():
     # keep_fraction·N every step, so the reported mass_fraction (mean density) equals
     # keep_fraction to the OC bisection tolerance — grid- and keep_fraction-independent.
     # Observed |error| ≤ 2.3e-5 over the sweep; assert a safe 1e-3 (sharper than the basic).
-    from driftpin.analysis import topology as topo
+    from ankusdrive.analysis import topology as topo
     for nelx, nely, kf in ((8, 4, 0.3), (8, 4, 0.5), (6, 6, 0.4), (8, 4, 0.7)):
         r = topo.simp_topology_2d(nelx=nelx, nely=nely, keep_fraction=kf,
                                   penal=1.0, max_iter=1)

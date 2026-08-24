@@ -1,5 +1,5 @@
 """Validate the HEADLINE artifact — the 3-speed gearbox_multispeed box — against the
-§11.10 oracle (driftpin.realize). Does the as-built metal of EVERY collar and gear
+§11.10 oracle (ankusdrive.realize). Does the as-built metal of EVERY collar and gear
 realize its declaration?
 
 So far only the 2-part dog clutch (verify_dog_clutch_unit.py) was judged on real metal;
@@ -31,7 +31,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scratch"))
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 import gearbox_multispeed as gm  # noqa: E402
 
 ART = REPO / "artifacts"
@@ -56,7 +56,7 @@ NEUTRAL_PAIR = ("collar_high", "g_m002")    # NEUTRAL -> ~0 with nearest speed g
 
 # Second script: run the real oracle over the named objects already in the doc.
 INSPECT = r"""
-from driftpin import realize
+from ankusdrive import realize
 import FreeCAD as App
 doc = App.ActiveDocument
 

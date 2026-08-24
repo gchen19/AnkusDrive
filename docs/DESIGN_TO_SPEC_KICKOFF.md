@@ -4,16 +4,16 @@
 > workflow below runs end to end.** This doc is now a record rather than a handoff.
 > What did NOT get done is now only the loose threads at the bottom, which are still
 > untracked. Three gaps this doc once listed as open are now **built**:
-> [#260](https://github.com/gchen19/DriftPin/issues/260) — adaptive **shape**
+> [#260](https://github.com/gchen19/AnkusDrive/issues/260) — adaptive **shape**
 > optimization over a recipe, which needed the main-thread work queue described in the
 > boundary note under #228,
-> [#261](https://github.com/gchen19/DriftPin/issues/261) — nothing consulting a
+> [#261](https://github.com/gchen19/AnkusDrive/issues/261) — nothing consulting a
 > performance contract (#226's unbuilt integration section) — see below, and
-> [#262](https://github.com/gchen19/DriftPin/issues/262) — no verified oracle for RANS
+> [#262](https://github.com/gchen19/AnkusDrive/issues/262) — no verified oracle for RANS
 > external flow — see the loose-thread entry below for what that gate covers and where
 > it stops.
 
-Epic [#222](https://github.com/gchen19/DriftPin/issues/222) set a goal one step past "an
+Epic [#222](https://github.com/gchen19/AnkusDrive/issues/222) set a goal one step past "an
 agent can construct parts": **an agent designs to a quantitative performance spec and
 proves it hit the spec with a solver run.** Four of its six children are built. This doc
 hands off the remaining two, plus the operational knowledge that is expensive to
@@ -72,8 +72,8 @@ Multipass VM. Three exports and nothing else:
 
 ```bash
 export TMPDIR=$HOME/fsi-run                          # the multipass mount, same path both sides
-export DRIFTPIN_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
-export DRIFTPIN_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
+export ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+export ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
 export RUN_HEAVY_SOLVES=1                            # or every live gate SKIPs
 ```
 
@@ -96,7 +96,7 @@ flat-plate cases dominate).
 
 ## #227 — `study_submit`: DOE over recipe params × solver — **built (PR #258, merged)**
 
-Shipped as `driftpin/analysis/study.py` (pure sampling + table arithmetic) plus a
+Shipped as `ankusdrive/analysis/study.py` (pure sampling + table arithmetic) plus a
 `study_submit` worker handler that fans out and collects the way `verify_performance`
 does. Gates in `tests/test_study.py` (20, fast lane). What the notes below predicted
 correctly, and the two things they missed, are recorded after the original text.
@@ -154,7 +154,7 @@ solved Δp rides D⁻⁴ at exponent −3.9986, r² = 0.99999999, `hp_ratio` 1.0
 
 ## #228 — `optimize_submit`: vary params until the contract is met — **built (PR #259, merged)**
 
-Shipped as `driftpin/analysis/optimize.py` (pure bounded Nelder-Mead, no scipy) plus an
+Shipped as `ankusdrive/analysis/optimize.py` (pure bounded Nelder-Mead, no scipy) plus an
 `optimize_submit` handler. Gates in `tests/test_optimize.py` (15, fast lane). The
 predictions below all held; what they did not cover is recorded after the original text.
 
@@ -207,13 +207,13 @@ in a shape a surrogate could consume.
   problem sits against the envelope, not in the interior, and a search that rejects
   out-of-box trials stalls just short of the bound it should be riding.
 
-**The boundary this could not cross — since crossed by [#260](https://github.com/gchen19/DriftPin/issues/260).**
+**The boundary this could not cross — since crossed by [#260](https://github.com/gchen19/AnkusDrive/issues/260).**
 The search runs on a background thread (its budget is minutes, far past the client's
 per-call timeout) and the `jobs.py` threading contract forbids FreeCAD there, so
 optimizer responses had to be parameter-driven and one naming live geometry was refused
 at the door. Shape optimization over a recipe now exists: `optimize_submit` takes a
 `recipe` and rebuilds it per candidate, through the main-thread work queue in
-`driftpin/mainthread.py`.
+`ankusdrive/mainthread.py`.
 
 The part worth remembering is **why that queue needed no rewrite of the worker's request
 loop.** The loop is `for line in sys.stdin`, which blocks — so a queue serviced "when
@@ -273,7 +273,7 @@ Hagen–Poiseuille wall traction to ~1 %. It needs `writeInterval 1`: a converge
 stops at an arbitrary iteration, so a coarser interval often writes no file at all.
 
 **Registration checklist.** A new tool family touches seven places; the contract tests
-catch each omission far from the code you wrote. `driftpin/analysis/<name>.py` (pure
+catch each omission far from the code you wrote. `ankusdrive/analysis/<name>.py` (pure
 core) → `@handler` in `worker.py` → `@mcp.tool()` in `mcp_server.py` (docstring **must**
 document the return value) → `tests/determinism_registry.py` → **both** `tests/run_all.sh`
 *and* `run_all.ps1` → README capability row → `tests/test_worker.py` producer spec for
@@ -284,15 +284,15 @@ any `add_*` tool.
 ## Loose threads not tracked as issues
 
 - ~~**#226's integration section is unbuilt.**~~ Tracked as
-  [#261](https://github.com/gchen19/DriftPin/issues/261) and **built 2026-08-03**:
+  [#261](https://github.com/gchen19/AnkusDrive/issues/261) and **built 2026-08-03**:
   `merge_assembly`, `substitutability_check` and `component_contract_check` all consult
-  the contract now, through the pure `driftpin/gates/performance.py`. The design
+  the contract now, through the pure `ankusdrive/gates/performance.py`. The design
   decision worth remembering is the **async policy** — a gate reads the verdict
   `verify_performance` last *recorded* on the part and never measures, because
   verification may return a job and a gate must answer synchronously. Its corollary is
   that "no verdict" is its own outcome (`unverified` / `stale` / `indeterminate` →
   `skipped`), never a pass. See MULTI_AGENT.md §11.12.
-- ~~**The RANS wind-tunnel path ships `gated: false`.**~~ [#262](https://github.com/gchen19/DriftPin/issues/262),
+- ~~**The RANS wind-tunnel path ships `gated: false`.**~~ [#262](https://github.com/gchen19/AnkusDrive/issues/262),
   **closed**: `gated` is now decided per (turbulence model, case family) by
   `cfd.solve_gate`, and the turbulent body path is gated on a cube face-on vs the
   bluff-body Cd table over Re = 1e4–2e5 (live 1.0017 / 1.0035). A turbulent aero spec

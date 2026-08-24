@@ -3,7 +3,7 @@ Host-agnostic component-builder contract — a runnable, falsifiable proof (issu
 
 docs/MULTI_AGENT.md describes a partition-and-merge design loop any MCP host can
 drive: a coordinator decomposes a product into per-component *builder briefs*, each
-builder builds one `.FCStd` with the FULL DriftPin tool surface (not a bundled
+builder builds one `.FCStd` with the FULL AnkusDrive tool surface (not a bundled
 6-tool loop), self-gates with `component_contract_check`, and the coordinator merges
 + gates the integrated result. This script IS that loop, run end to end with real
 geometry and hard asserts, so "the contract works from any host" is a check, not a
@@ -11,7 +11,7 @@ claim.
 
 What it proves, concretely:
   1. DECOMPOSE — a plain-code coordinator turns one design into three standalone
-     `driftpin.builder_brief/1` briefs (base plate, spacer, cap). No LLM: the brief
+     `ankusdrive.builder_brief/1` briefs (base plate, spacer, cap). No LLM: the brief
      is data, so a host that is Claude Code, Cursor, a shell script, or this file
      produces it the same way.
   2. FAN OUT with ISOLATION — each builder runs in its OWN Worker (its own
@@ -39,8 +39,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin import builder_brief as bb  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import builder_brief as bb  # noqa: E402
 
 _FAIL = 0
 
@@ -132,7 +132,7 @@ def build_manifest(briefs, comp_files, root_path):
     WORLD envelopes here (assembly frame); the mates seat the parts by published
     frame and carry secondary `verify_align` pin datums for the alignment gate."""
     return {
-        "schema": "driftpin.manifest/1",
+        "schema": "ankusdrive.manifest/1",
         "name": "bracket_stack",
         "root": str(root_path),
         "components": {
@@ -164,7 +164,7 @@ def run(workdir):
     print("step 1 — decompose: 1 design -> 3 builder briefs "
           f"({sorted(briefs)})")
     for cid, brief in briefs.items():
-        _assert(f"brief {cid!r} is a valid driftpin.builder_brief/1",
+        _assert(f"brief {cid!r} is a valid ankusdrive.builder_brief/1",
                 not bb.validate_builder_brief(brief))
 
     print("\nstep 2/3 — fan out: each builder in its OWN worker, self-gates before save")

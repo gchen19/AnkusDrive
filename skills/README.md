@@ -1,12 +1,12 @@
 # skills/
 
 Agent **skills** — rules-as-data playbooks surfaced to whatever host drives the
-DriftPin agent. Each skill is a directory containing a `SKILL.md` with YAML
+AnkusDrive agent. Each skill is a directory containing a `SKILL.md` with YAML
 frontmatter (`name`, `description`) and a Markdown body. This is the host-agnostic
 Knowledge-Based-Engineering layer: guidance the agent reads *before* it acts,
 **never enforced by the worker** — the deterministic gates do the enforcing.
 
-A skill is the *inverse of a gate*: the gates (in `driftpin/` + `tests/`) are the
+A skill is the *inverse of a gate*: the gates (in `ankusdrive/` + `tests/`) are the
 test suite that catches a mistake after geometry is spent; a skill is the style
 guide / design review that avoids it beforehand.
 

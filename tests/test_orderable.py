@@ -1,6 +1,6 @@
 """Orderable standard parts (issue #234) — pure-core unit tests.
 
-No FreeCAD, no worker, no network: :mod:`driftpin.orderable` is string and table
+No FreeCAD, no worker, no network: :mod:`ankusdrive.orderable` is string and table
 arithmetic over plain dicts, so these run on the host interpreter in milliseconds.
 They prove the four things the layer promises:
 
@@ -29,8 +29,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import orderable as ord_  # noqa: E402
-from driftpin.analysis import standards as std  # noqa: E402
+from ankusdrive import orderable as ord_  # noqa: E402
+from ankusdrive.analysis import standards as std  # noqa: E402
 
 _PASS = _FAIL = 0
 

@@ -1,4 +1,4 @@
-"""Column-buckling toys — two-sided oracles for driftpin.analysis.buckling.
+"""Column-buckling toys — two-sided oracles for ankusdrive.analysis.buckling.
 
 Pure-Python, no FreeCAD. Pins Euler + Johnson against exact identities: the
 K-factor ratios, the Euler closed form, the sigma_y/2 continuity at the
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import buckling as bk  # noqa: E402
+from ankusdrive.analysis import buckling as bk  # noqa: E402
 
 
 def test_euler_closed_form_anchor():

@@ -5,11 +5,11 @@ name: Publish to PyPI
 # no long-lived API tokens stored in the repo.
 #
 # One-time setup (outside this workflow):
-#   1. Reserve the `driftpin` name on PyPI and TestPyPI by registering the
+#   1. Reserve the `ankusdrive` name on PyPI and TestPyPI by registering the
 #      project (https://pypi.org/manage/account/publishing/).
 #   2. Add a "Trusted publisher" entry on each, pointing at:
 #        owner: gchen19
-#        repo:  DriftPin
+#        repo:  AnkusDrive
 #        workflow filename: publish.yml
 #        environment: pypi  (and `testpypi` for the test repo)
 #   3. Create matching GitHub environments (`pypi`, `testpypi`) under
@@ -55,15 +55,15 @@ jobs:
         run: python -m pip install --upgrade build twine
 
       - name: Verify tag matches package version
-        # Version lives in driftpin/__init__.py (pyproject.toml reads it via
+        # Version lives in ankusdrive/__init__.py (pyproject.toml reads it via
         # setuptools dynamic). Grep the line directly so we don't need to
-        # import driftpin (which would require installing dependencies).
+        # import ankusdrive (which would require installing dependencies).
         if: github.event_name == 'push'
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          pkgver=$(grep -E '^__version__\s*=' driftpin/__init__.py | sed -E 's/.*"([^"]+)".*/\1/')
+          pkgver=$(grep -E '^__version__\s*=' ankusdrive/__init__.py | sed -E 's/.*"([^"]+)".*/\1/')
           if [ "$tag" != "$pkgver" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME (=> $tag) does not match driftpin/__init__.py __version__ $pkgver"
+            echo "::error::Tag $GITHUB_REF_NAME (=> $tag) does not match ankusdrive/__init__.py __version__ $pkgver"
             exit 1
           fi
 
@@ -80,7 +80,7 @@ jobs:
           /tmp/smoke/bin/pip install dist/*.whl
           # CLI parser builds and entry point resolves without importing
           # the MCP server or booting a worker.
-          /tmp/smoke/bin/driftpin --help > /dev/null
+          /tmp/smoke/bin/ankusdrive --help > /dev/null
 
       - uses: actions/upload-artifact@v7
         with:
@@ -95,7 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://test.pypi.org/project/driftpin/
+      url: https://test.pypi.org/project/ankusdrive/
     permissions:
       id-token: write
     steps:
@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/driftpin/
+      url: https://pypi.org/project/ankusdrive/
     permissions:
       id-token: write
     steps:

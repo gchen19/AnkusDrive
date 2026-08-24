@@ -1,6 +1,6 @@
 # Kickoff — Real 2D Mechanical Drawings: Headless DXF/SVG/PDF + Dimensions
 
-Written 2026-06-14. DriftPin could *build* a multi-view TechDraw page but not
+Written 2026-06-14. AnkusDrive could *build* a multi-view TechDraw page but not
 **deliver** one: no headless export, no dimensions. This kickoff scoped, then
 closed, both gaps.
 
@@ -20,7 +20,7 @@ closed, both gaps.
 > Build/env notes: the worker runs FreeCAD's bundled Python 3.11; `svglib`,
 > `reportlab`, and a matching `Pillow` were installed into *its* site-packages
 > (the host `.venv` is 3.12 — different ABI). `_prefer_self_site_packages()`
-> reorders sys.path so reportlab binds the 3.11 PIL. The `.venv` driftpin install
+> reorders sys.path so reportlab binds the 3.11 PIL. The `.venv` ankusdrive install
 > was stale (≈3000 lines behind source); it was refreshed to match HEAD.
 
 ## What works today vs. what's missing (confirmed by running it)
@@ -141,7 +141,7 @@ work, and it sits squarely on top of what's here:
   over-dimensioned (a minimal complete set). Today the agent (or `auto=True`)
   just stacks overall extents + whatever it's told.
 - **Datums & origin** — dimension *from* functional reference faces/edges, not
-  arbitrary corners. The `annotate_face` role system (`DP_FaceRoles`) is the
+  arbitrary corners. The `annotate_face` role system (`AD_FaceRoles`) is the
   natural hook for "this is the datum."
 - **Tolerances & GD&T** — fits, position, flatness. `DrawViewDimension`
   supports tolerance fields; `gdt_check`/`tolerance_stackup` already exist to
@@ -150,7 +150,7 @@ work, and it sits squarely on top of what's here:
   a sheet part wants hole pattern + edge distances. Different processes →
   different dimension schemes.
 - **Validate-the-artifact** — the displayed number already reads the real solid
-  (DP_TrueValue). The next gate: does the *set* of dimensions fully reconstruct
+  (AD_TrueValue). The next gate: does the *set* of dimensions fully reconstruct
   the part? A drawing that under-dimensions is as wrong as a green-but-wrong sim.
 
 The renderer is deliberately a thin, predictable primitive so this layer can
@@ -162,7 +162,7 @@ filled from BOM/metadata.
 ## Anchors
 
 - Implemented: `_h_export_drawing`, `_compose_page_svg`, `_dim_to_svg`,
-  `_h_add_dimension`, `_h_add_annotation` in `driftpin/worker.py`.
+  `_h_add_dimension`, `_h_add_annotation` in `ankusdrive/worker.py`.
 - Page/group builders: `worker.py:5819`, `5856`. Handler pattern: `@handler(name)` →
   `HANDLERS` (`worker.py:127`).
 - Export templates: `_h_export_shape` `worker.py:2547`, `_h_save_document` `worker.py:2495`.

@@ -1,7 +1,7 @@
-# DriftPin — Functional-invariant checks for enclosed-flow parts
+# AnkusDrive — Functional-invariant checks for enclosed-flow parts
 
 A fresh-session-executable plan for closing the gap reported in
-[issue #19](https://github.com/gchen19/DriftPin/issues/19): *"Agent loses
+[issue #19](https://github.com/gchen19/AnkusDrive/issues/19): *"Agent loses
 airtight-shell invariant across iterative geometry edits."* A new Claude Code
 session should be able to read this doc + the linked context and execute it
 without backstory.
@@ -12,9 +12,9 @@ without backstory.
 
 An external user (Matthew Petney, `@mpetne`) modeled a Makita-router →
 Dewalt-shop-vac adapter — an **enclosed-airflow** part — through an LLM agent on
-the DriftPin MCP server. Across three edit iterations the agent "fixed the last
+the AnkusDrive MCP server. Across three edit iterations the agent "fixed the last
 problem" while silently breaking a different geometric invariant, because
-DriftPin's tool surface measures *geometry* (volume, face counts, watertightness)
+AnkusDrive's tool surface measures *geometry* (volume, face counts, watertightness)
 but has no concept of **functional intent**:
 
 1. **v1 — interface oversimplified.** Router-side plug modeled as a flat
@@ -104,16 +104,16 @@ making it the primary path.
 
 | Need | Reuse | Location |
 |---|---|---|
-| Ray ∩ boundary distances | `_ray_hit_distances(shape, origin, dir, max_d)` | `driftpin/worker.py:2608` |
-| Point-in-solid | `shape.isInside(pt, tol, True)` (see usage) | `driftpin/worker.py:2648` |
-| Inward-nudge probe trick | `_first_wall_depth` nudge | `driftpin/worker.py:2642` |
-| Outward face normal | `_outward_normal(...)` | `driftpin/worker.py:935` |
-| Stable face tags + signature | `_face_signature` / `_face_descriptor`, `query_faces`/`resolve_face` | `driftpin/worker.py:348`, `:1904+`, `mcp_server.py:925+` |
-| Cross-section areas (slice sweep) | `section_view` slice/closed-wire-area pattern | `driftpin/worker.py:~1859` |
-| Watertight verdict + topology | `check_shape` | `driftpin/worker.py:1768` |
-| **Semantic property-bag persistence** | `publish_interface` → `DP_Interfaces` (`_IFACE_PROP`, `_read_interfaces`, `_shaped_top`) | `driftpin/worker.py:3756-3826` |
+| Ray ∩ boundary distances | `_ray_hit_distances(shape, origin, dir, max_d)` | `ankusdrive/worker.py:2608` |
+| Point-in-solid | `shape.isInside(pt, tol, True)` (see usage) | `ankusdrive/worker.py:2648` |
+| Inward-nudge probe trick | `_first_wall_depth` nudge | `ankusdrive/worker.py:2642` |
+| Outward face normal | `_outward_normal(...)` | `ankusdrive/worker.py:935` |
+| Stable face tags + signature | `_face_signature` / `_face_descriptor`, `query_faces`/`resolve_face` | `ankusdrive/worker.py:348`, `:1904+`, `mcp_server.py:925+` |
+| Cross-section areas (slice sweep) | `section_view` slice/closed-wire-area pattern | `ankusdrive/worker.py:~1859` |
+| Watertight verdict + topology | `check_shape` | `ankusdrive/worker.py:1768` |
+| **Semantic property-bag persistence** | `publish_interface` → `AD_Interfaces` (`_IFACE_PROP`, `_read_interfaces`, `_shaped_top`) | `ankusdrive/worker.py:3756-3826` |
 | Contract / re-runnable gate pattern | `assembly_lock` / `assembly_lock_check`, `verify_feature` | `mcp_server.py:1741-1762`, `:1491` |
-| Composing handlers from a handler | `merge_assembly` calls other handlers | `driftpin/worker.py:~4300` |
+| Composing handlers from a handler | `merge_assembly` calls other handlers | `ankusdrive/worker.py:~4300` |
 | Headless fixture construction in tests | `run_script` test pattern | `tests/test_worker.py:~1064` |
 
 Everything geometric runs **worker-side** (`@handler` in `worker.py`) — it needs
@@ -129,7 +129,7 @@ depth) — leave it out.
 
 All persistence mirrors the `publish_interface` idiom: a single
 `App::PropertyString` JSON bag on `_shaped_top(obj)`, persisted in the `.FCStd`.
-New keys: **`DP_FaceRoles`**, **`DP_Intent`** (add `_FACEROLE_PROP`,
+New keys: **`AD_FaceRoles`**, **`AD_Intent`** (add `_FACEROLE_PROP`,
 `_INTENT_PROP` constants + `_read_face_roles`/`_read_intent` helpers next to
 `_read_interfaces`).
 
@@ -142,7 +142,7 @@ check_airtight_path(handle, inlet, outlet,
 ```
 
 `inlet`/`outlet` accept an `f_*` tag, `"FaceN"`, an int index, **or** a role name
-resolved through `DP_FaceRoles` (so the agent can pass `inlet="inlet"`).
+resolved through `AD_FaceRoles` (so the agent can pass `inlet="inlet"`).
 
 **Algorithm:**
 1. Resolve inlet/outlet to faces (reuse the `_h_resolve_face` path used by
@@ -192,7 +192,7 @@ resolved through `DP_FaceRoles` (so the agent can pass `inlet="inlet"`).
 annotate_face(handle, face, role, name: str | None = None, **meta) -> dict
 ```
 `role ∈ {inlet, outlet, sealing, wetted, ambient, mating}` (extensible). Stores
-`{name: {role, tag, signature_snapshot, **meta}}` in `DP_FaceRoles`.
+`{name: {role, tag, signature_snapshot, **meta}}` in `AD_FaceRoles`.
 `signature_snapshot = _face_signature(face)` so `verify_intent` can detect a
 vanished/changed tagged face after edits. Returns `{handle, name, role, tag,
 roles:[...]}`. Mirrors `publish_interface` exactly.
@@ -210,7 +210,7 @@ suggest `wetted`. Returns `[{tag, index, side, suggested_role}]`. Answers the
 ### 4. `declare_intent` / `verify_intent` — the re-runnable regression gate
 
 ```
-declare_intent(handle, contract) -> dict      # writes DP_Intent
+declare_intent(handle, contract) -> dict      # writes AD_Intent
 verify_intent(handle) -> dict                  # re-runs every declared invariant
 ```
 `contract = {watertight: bool, airtight_path: {inlet, outlet, min_aperture_mm2},
@@ -232,10 +232,10 @@ must document a ≥40-char return value or `test_contracts.py` fails.)
 
 1. **`check_airtight_path`** (flagship, no persistence; face refs by tag/index).
    Highest value, self-contained, validates the BREP core. **Ship first.**
-2. **`annotate_face` + `DP_FaceRoles`** — lets `check_airtight_path` accept role
+2. **`annotate_face` + `AD_FaceRoles`** — lets `check_airtight_path` accept role
    names; adds the signature snapshot.
 3. **`classify_face_sides`** — inside/outside topology + wetted suggestions.
-4. **`declare_intent` / `verify_intent` + `DP_Intent`** — composes 1–3 into the
+4. **`declare_intent` / `verify_intent` + `AD_Intent`** — composes 1–3 into the
    regression gate.
 5. **Docstring caveats** — trivial; can land with slice 1.
 

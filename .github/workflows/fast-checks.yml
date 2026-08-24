@@ -43,13 +43,24 @@ jobs:
         run: pip install "ruff==0.15.15" build "setuptools>=68" wheel
 
       - name: Ruff (syntax + pyflakes, config in pyproject.toml)
-        run: ruff check driftpin tests
+        run: ruff check ankusdrive tests
 
       - name: Byte-compile every module (catches syntax/indent errors)
-        run: python -m compileall -q driftpin tests
+        run: python -m compileall -q ankusdrive tests
 
       - name: Registry parity + docstring contracts
         run: python tests/test_contracts.py
+
+      - name: Naming — the pre-rename name stays gone (#295)
+        # Sweeps every tracked file and path for the old project name against a
+        # self-validating allowlist, so a pre-rename branch cannot merge a second
+        # name for one thing back in unnoticed.
+        run: python tests/test_naming.py
+
+      - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
+        # Each shim keeps a <=0.4.x install working and each fails silently if it
+        # regresses. Delete this step with the shims in 0.6.
+        run: python tests/test_compat_rename.py
 
       - name: Packaging — built wheel/sdist carries every runtime corpus (#249)
         # Builds a real distribution into a temp dir, re-derives the expected data

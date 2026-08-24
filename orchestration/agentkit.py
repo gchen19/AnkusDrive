@@ -1,7 +1,7 @@
 """
-Host-side agent toolkit for DriftPin orchestration.
+Host-side agent toolkit for AnkusDrive orchestration.
 
-The reusable parts of an LLM-driven component builder: the DriftPin tool surface
+The reusable parts of an LLM-driven component builder: the AnkusDrive tool surface
 exposed to a model, a tool-use loop with prompt caching, cost accounting, and a
 scripted stub client so the whole orchestration can be exercised with no API.
 
@@ -12,7 +12,7 @@ the coordinator builds on. A future cleanup could dedupe M2 onto this.)
 import json
 import types
 
-from driftpin import Worker
+from ankusdrive import Worker
 
 
 MODELS = {

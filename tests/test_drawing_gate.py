@@ -1,6 +1,6 @@
 """Drawing-is-manufacturable gates (issue #85) — pure-core unit tests.
 
-No FreeCAD, no worker, no LLM: :mod:`driftpin.drawing_gate` is plain descriptor
+No FreeCAD, no worker, no LLM: :mod:`ankusdrive.drawing_gate` is plain descriptor
 arithmetic, so these run on the host interpreter in milliseconds. They prove the
 two gates measure the right thing:
 
@@ -20,7 +20,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import drawing_gate as dg  # noqa: E402
+from ankusdrive import drawing_gate as dg  # noqa: E402
 
 _PASS = _FAIL = 0
 

@@ -20,13 +20,13 @@ the animation is a sweep of real solves, not an interpolation. A second panel tr
 backscatter |f∞(π)| vs ka as the swept point climbs the Rayleigh→geometric curve.
 
 Bempp is MIT but needs meshio>=4 (clashing with solidspy's meshio==3 in the shared
-venv), so the solve runs OUT-OF-PROCESS via driftpin/bempp_runner.py under a dedicated
+venv), so the solve runs OUT-OF-PROCESS via ankusdrive/bempp_runner.py under a dedicated
 .venv-bempp; this script (shared .venv) only renders the result. Resolve that venv with
-DRIFTPIN_BEMPP_PYTHON, or it is auto-discovered beside the repo (.venv-bempp).
+ANKUSDRIVE_BEMPP_PYTHON, or it is auto-discovered beside the repo (.venv-bempp).
 
 Outputs (artifacts/): sphere_scattering_directivity.gif + sphere_scattering_directivity_filmstrip.png
 
-  DRIFTPIN_BEMPP_PYTHON=/path/.venv-bempp/bin/python \
+  ANKUSDRIVE_BEMPP_PYTHON=/path/.venv-bempp/bin/python \
       .venv/bin/python3 scratch/sphere_scattering_directivity.py
 """
 import io
@@ -46,10 +46,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt                             # noqa: E402
 from PIL import Image                                       # noqa: E402
 
-from driftpin.analysis import acoustics_bem as ab           # noqa: E402
+from ankusdrive.analysis import acoustics_bem as ab           # noqa: E402
 
 ART = REPO / "artifacts"
-RUNNER = str(REPO / "driftpin" / "bempp_runner.py")
+RUNNER = str(REPO / "ankusdrive" / "bempp_runner.py")
 A_M = 1.0                                                   # unit sphere
 KA_LIST = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]         # Rayleigh → geometric
 THETAS = list(np.arange(0.0, 360.1, 10.0))                 # full directivity ring (deg)
@@ -58,11 +58,11 @@ H_PER_WL = 12.0                                             # elements per wavel
 
 def _bempp_python():
     """Resolve the dedicated bempp venv interpreter (mirrors the worker/test):
-    DRIFTPIN_BEMPP_PYTHON → .venv-bempp beside the repo or one up → PATH."""
+    ANKUSDRIVE_BEMPP_PYTHON → .venv-bempp beside the repo or one up → PATH."""
     cands = []
-    if env := os.environ.get("DRIFTPIN_BEMPP_PYTHON"):
+    if env := os.environ.get("ANKUSDRIVE_BEMPP_PYTHON"):
         cands.append(env)
-    for base in (REPO, REPO.parent, Path.home() / "DriftPin"):
+    for base in (REPO, REPO.parent, Path.home() / "AnkusDrive"):
         cands += [str(base / ".venv-bempp" / "bin" / "python3"),
                   str(base / ".venv-bempp" / "bin" / "python")]
     if w := shutil.which("python3"):
@@ -168,7 +168,7 @@ def main():
     global back_mie_all, back_bem_all
     py = _bempp_python()
     if py is None:
-        raise SystemExit("no bempp venv resolves — set DRIFTPIN_BEMPP_PYTHON "
+        raise SystemExit("no bempp venv resolves — set ANKUSDRIVE_BEMPP_PYTHON "
                          "(scripts/install-solvers.sh acoustics_bem)")
     print(f"bempp python: {py}")
     print("running the REAL BEM scattering sweep out-of-process ...")

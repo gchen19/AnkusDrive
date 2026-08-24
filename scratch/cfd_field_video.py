@@ -43,7 +43,7 @@ from matplotlib.cm import ScalarMappable                    # noqa: E402
 from PIL import Image                                       # noqa: E402
 import meshio                                               # noqa: E402
 
-from driftpin import solvers                                # noqa: E402
+from ankusdrive import solvers                                # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
 ART = REPO / "artifacts"

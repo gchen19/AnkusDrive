@@ -2,7 +2,7 @@
 ray-bundle trace, plus the rayoptics solver gate.
 
 Two tiers, both runnable on the no-FreeCAD lane:
-  * **oracle** (always): the pure-Python core in ``driftpin/analysis/optics.py`` —
+  * **oracle** (always): the pure-Python core in ``ankusdrive/analysis/optics.py`` —
     Snell refraction (30° into PMMA → 19.60°, within 0.1°), Fresnel power
     reflectance (normal-incidence air/PMMA → 3.9%, within 0.2%), the critical
     angle / total internal reflection (PMMA→air → 42.16°; above it transmission is
@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import optics  # noqa: E402
+from ankusdrive.analysis import optics  # noqa: E402
 
 PMMA = 1.49062
 AIR = 1.0
@@ -209,7 +209,7 @@ def test_lambertian_favors_small_angles():
 
 def test_rayoptics_reproduces_snell():
     if not _has_rayoptics():
-        print("    SKIP — rayoptics not installed (pip install 'driftpin[optics]')")
+        print("    SKIP — rayoptics not installed (pip install 'ankusdrive[optics]')")
         return
     import numpy as np
     from rayoptics.environment import OpticalModel
@@ -244,7 +244,7 @@ def test_rayoptics_reproduces_snell():
 
 def test_thick_lens_oracle():
     # Pure analytic gate (no optiland): equiconvex BK7 singlet, R=±50, t=4.
-    from driftpin.analysis import optics_design as od
+    from ankusdrive.analysis import optics_design as od
     f = od.thick_lens_efl(1.5168, 50.0, -50.0, 4.0)
     assert abs(f - 49.043) < 0.01, f
 
@@ -252,7 +252,7 @@ def test_thick_lens_oracle():
 def test_optiland_design_gate():
     if not _has("optiland"):
         return                                        # SKIP: optics extra absent
-    from driftpin.analysis import optics_design as od
+    from ankusdrive.analysis import optics_design as od
     system = {"surfaces": [
         {"radius": 50.0, "thickness": 4.0, "material": "N-BK7", "stop": True},
         {"radius": -50.0, "thickness": 45.0, "material": "air"}],
@@ -266,7 +266,7 @@ def test_optiland_design_gate():
 def test_optiland_optimize_gate():
     if not _has("optiland"):
         return                                        # SKIP
-    from driftpin.analysis import optics_design as od
+    from ankusdrive.analysis import optics_design as od
     system = {"surfaces": [
         {"radius": 80.0, "thickness": 4.0, "material": "N-BK7", "stop": True},
         {"radius": -80.0, "thickness": 96.0, "material": "air"}],
@@ -289,7 +289,7 @@ def test_kraken_runner_subprocess_clean():
     import json as _json
     import subprocess
     runner = str(Path(__file__).resolve().parent.parent
-                 / "driftpin" / "optics_gpl_runner.py")
+                 / "ankusdrive" / "optics_gpl_runner.py")
     proc = subprocess.run([sys.executable, runner],
                           input=_json.dumps({"problem": "ping"}),
                           capture_output=True, text=True, timeout=60)
@@ -316,7 +316,7 @@ def test_kraken_prism_tir_gate():
         "rays": [{"origin": [dx, 7.0 + dy, -2.0], "dir": [0, 0, 1.0]}
                  for dx in (-4, 0, 4) for dy in (-3, 0, 3)]}
     runner = str(Path(__file__).resolve().parent.parent
-                 / "driftpin" / "optics_gpl_runner.py")
+                 / "ankusdrive" / "optics_gpl_runner.py")
     proc = subprocess.run([sys.executable, runner], input=_json.dumps(problem),
                           capture_output=True, text=True, timeout=120)
     body = proc.stdout.partition("@@JSON@@")[2].partition("@@END@@")[0]

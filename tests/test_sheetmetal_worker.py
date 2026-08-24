@@ -31,8 +31,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin import sheetmetal as sm  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import sheetmetal as sm  # noqa: E402
 
 _PASS = _FAIL = 0
 

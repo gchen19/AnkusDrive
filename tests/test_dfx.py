@@ -1,4 +1,4 @@
-"""Design-for-X toys — two-sided oracles for driftpin.analysis.dfx.
+"""Design-for-X toys — two-sided oracles for ankusdrive.analysis.dfx.
 
 Pure-Python, no FreeCAD. Each check pins a handbook / closed-form result against
 a hand calculation AND verifies a deliberately-bad input is caught (raises, or
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import dfx  # noqa: E402
+from ankusdrive.analysis import dfx  # noqa: E402
 
 
 def test_dfm_box_no_draft_fails():

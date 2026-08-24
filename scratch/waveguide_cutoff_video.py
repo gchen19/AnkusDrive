@@ -20,13 +20,13 @@ mode the FDTD actually carries above cutoff — fading to dark below it, so the 
 section visibly "lights up" as the sweep crosses f_c.
 
 openEMS is GPL-3.0, so the solve runs OUT-OF-PROCESS via
-driftpin/em_fullwave_gpl_runner.py under a dedicated openEMS venv; this script (shared
-.venv) only renders the result. Resolve that venv with DRIFTPIN_OPENEMS_PYTHON, or it
+ankusdrive/em_fullwave_gpl_runner.py under a dedicated openEMS venv; this script (shared
+.venv) only renders the result. Resolve that venv with ANKUSDRIVE_OPENEMS_PYTHON, or it
 is auto-discovered beside the repo (.venv-openems).
 
 Outputs (artifacts/): waveguide_cutoff.gif + waveguide_cutoff_filmstrip.png
 
-  DRIFTPIN_OPENEMS_PYTHON=/path/.venv-openems/bin/python \
+  ANKUSDRIVE_OPENEMS_PYTHON=/path/.venv-openems/bin/python \
       .venv/bin/python3 scratch/waveguide_cutoff_video.py
 """
 import io
@@ -46,19 +46,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt                             # noqa: E402
 from PIL import Image                                       # noqa: E402
 
-from driftpin.analysis import em_fullwave as ew             # noqa: E402
+from ankusdrive.analysis import em_fullwave as ew             # noqa: E402
 
 ART = REPO / "artifacts"
-RUNNER = str(REPO / "driftpin" / "em_fullwave_gpl_runner.py")
+RUNNER = str(REPO / "ankusdrive" / "em_fullwave_gpl_runner.py")
 A_MM, B_MM, LENGTH_MM = 22.86, 10.16, 60.0                  # WR-90-like X-band guide
 F_START, F_STOP, N_FREQ = 4.0, 10.0, 121                    # GHz, straddling f_c≈6.56
 
 
 def _openems_python():
     """Resolve the dedicated openEMS venv interpreter (mirrors the worker/test):
-    DRIFTPIN_OPENEMS_PYTHON → .venv-openems beside the repo or one up → PATH."""
+    ANKUSDRIVE_OPENEMS_PYTHON → .venv-openems beside the repo or one up → PATH."""
     cands = []
-    if env := os.environ.get("DRIFTPIN_OPENEMS_PYTHON"):
+    if env := os.environ.get("ANKUSDRIVE_OPENEMS_PYTHON"):
         cands.append(env)
     for base in (REPO, REPO.parent, Path.home()):
         cands += [str(base / ".venv-openems" / "bin" / "python3"),
@@ -162,7 +162,7 @@ def _frame(freq, normt, db, fc, fc_cross, ratio, k, span):
 def main():
     py = _openems_python()
     if py is None:
-        raise SystemExit("no openEMS venv resolves — set DRIFTPIN_OPENEMS_PYTHON "
+        raise SystemExit("no openEMS venv resolves — set ANKUSDRIVE_OPENEMS_PYTHON "
                          "(scripts/install-solvers.sh em_gpl)")
     print(f"openEMS python: {py}")
     print("running the REAL FDTD waveguide sweep out-of-process ...")

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Run the DriftPin test suite on Windows - the Windows-native analog of tests/run_all.sh.
+  Run the AnkusDrive test suite on Windows - the Windows-native analog of tests/run_all.sh.
 
 .DESCRIPTION
   This is NOT a line-for-line port of run_all.sh. Two structural differences make the
@@ -88,7 +88,7 @@ function Test-Module {
 Write-Host '== Lint (ruff E9,F - mirrors CI fast-checks) ==' -ForegroundColor Cyan
 $ruff = Join-Path $repo '.venv\Scripts\ruff.exe'
 if (Test-Path $ruff) {
-    & $ruff check driftpin tests
+    & $ruff check ankusdrive tests
     if ($LASTEXITCODE -ne 0) { $script:failures += 'ruff'; Write-Host '   FAILED (ruff)' -ForegroundColor Red }
     $script:ran++
 } else {
@@ -104,6 +104,8 @@ Test-Module 'Static contracts (registry parity + docstrings + determinism covera
 # Builds a wheel + sdist into a temp dir and asserts every runtime corpus is inside
 # (#234, #249). Cross-platform: it shells out to the SAME interpreter it runs under,
 # needs no FreeCAD, and SKIPs cleanly if that interpreter has no build backend.
+Test-Module 'Naming: the pre-rename name stays gone (#295)' 'test_naming.py'
+Test-Module 'Rename compatibility shims: env / config / DP_* props (#295)' 'test_compat_rename.py'
 Test-Module 'Packaging: built wheel/sdist carries its data corpora (#249)' 'test_package_data.py'
 Test-Module 'Typed units / quantity layer'          'test_units.py'
 Test-Module 'Materials DB toys'                      'test_materials.py'

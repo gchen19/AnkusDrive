@@ -8,9 +8,9 @@
 #   purpose-built, peer-reviewed open-source injection-molding fill/pack/cool solver
 #   (Krebelj et al., MDPI Fluids 5(2):84, 2020). It is a modified compressibleInterFoam
 #   (VOF melt+air) with Cross-WLF viscosity + Tait EOS — the HIGH-FIDELITY twin behind
-#   driftpin's molding_fill_submit. Until this build lands, molding_fill_submit runs the
+#   ankusdrive's molding_fill_submit. Until this build lands, molding_fill_submit runs the
 #   runnable FALLBACK: a 2-D interFoam VOF cavity fill on the existing OpenFOAM
-#   (.com/ESI) — see driftpin/analysis/molding_fill.py. That fallback answers the
+#   (.com/ESI) — see ankusdrive/analysis/molding_fill.py. That fallback answers the
 #   strongest gate (short-shot/fill) but loses the packing stage + the published IM
 #   validation; THIS path restores them.
 #
@@ -27,19 +27,19 @@
 #   runner.
 #
 # AFTER A SUCCESSFUL BUILD — how the worker switches to it
-#   driftpin/solvers.py resolves the binary side-effect-free:
-#     solvers.openinjmoldsim_bin()    -> DRIFTPIN_OPENINJMOLDSIM[_PATH] env
+#   ankusdrive/solvers.py resolves the binary side-effect-free:
+#     solvers.openinjmoldsim_bin()    -> ANKUSDRIVE_OPENINJMOLDSIM[_PATH] env
 #                                        -> PATH (which openInjMoldSim)
 #                                        -> ~/opt/openInjMoldSim/*/bin/openInjMoldSim
 #                                        -> ~/OpenFOAM/*/platforms/*/bin/openInjMoldSim
-#     solvers.openinjmoldsim_bashrc() -> DRIFTPIN_OPENINJMOLDSIM_BASHRC env
+#     solvers.openinjmoldsim_bashrc() -> ANKUSDRIVE_OPENINJMOLDSIM_BASHRC env
 #                                        -> ~/OpenFOAM/OpenFOAM-7/etc/bashrc (et al.)
 #   When openinjmoldsim_bin() resolves AND molding_fill_submit is called with a prepared
 #   OF7-org `case_dir`, the worker runs openInjMoldSim (GPL, subprocess boundary —
 #   never imported) instead of the interFoam fallback. Export, then verify:
-#     export DRIFTPIN_OPENINJMOLDSIM="$PREFIX/openInjMoldSim/.../bin/openInjMoldSim"
-#     export DRIFTPIN_OPENINJMOLDSIM_BASHRC="$OF7_DIR/etc/bashrc"
-#     python3 -c "from driftpin import solvers; print(solvers.openinjmoldsim_bin())"
+#     export ANKUSDRIVE_OPENINJMOLDSIM="$PREFIX/openInjMoldSim/.../bin/openInjMoldSim"
+#     export ANKUSDRIVE_OPENINJMOLDSIM_BASHRC="$OF7_DIR/etc/bashrc"
+#     python3 -c "from ankusdrive import solvers; print(solvers.openinjmoldsim_bin())"
 #
 # USAGE
 #   tools/build_openinjmoldsim.sh              # DRY RUN: print the plan + preconditions
@@ -157,11 +157,11 @@ plan "export WM_NCOMPPROCS=${JOBS}"
 plan "( cd ${PREFIX}/openInjMoldSim/applications/solvers/multiphase/openInjMoldSim && ./Allwmake > log.oims 2>&1 )"
 echo
 cat <<PLANEOF
-   3. Expose to driftpin (see solvers.openinjmoldsim_bin / _bashrc):
+   3. Expose to ankusdrive (see solvers.openinjmoldsim_bin / _bashrc):
 PLANEOF
-plan "export DRIFTPIN_OPENINJMOLDSIM=\$FOAM_USER_APPBIN/openInjMoldSim"
-plan "export DRIFTPIN_OPENINJMOLDSIM_BASHRC=${OF7_DIR}/etc/bashrc"
-plan "python3 -c 'from driftpin import solvers; print(solvers.openinjmoldsim_bin())'"
+plan "export ANKUSDRIVE_OPENINJMOLDSIM=\$FOAM_USER_APPBIN/openInjMoldSim"
+plan "export ANKUSDRIVE_OPENINJMOLDSIM_BASHRC=${OF7_DIR}/etc/bashrc"
+plan "python3 -c 'from ankusdrive import solvers; print(solvers.openinjmoldsim_bin())'"
 echo
 cat <<'PLANEOF'
    4. Validate (oracle-gated, per the solver-campaign discipline): reproduce the MDPI
@@ -221,4 +221,4 @@ fi
   && ./Allwmake )
 
 say "build done. Export the env vars (see step 3) and verify with:"
-plan "python3 -c 'from driftpin import solvers; print(solvers.openinjmoldsim_bin())'"
+plan "python3 -c 'from ankusdrive import solvers; print(solvers.openinjmoldsim_bin())'"

@@ -1,4 +1,4 @@
-"""Typed units / quantity layer — two-sided oracles for driftpin.units (issue #102).
+"""Typed units / quantity layer — two-sided oracles for ankusdrive.units (issue #102).
 
 Pure-Python, no FreeCAD: imports the units module directly and checks it against
 known answers. Every test is two-sided — the right answer passes AND a
@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import units  # noqa: E402
+from ankusdrive import units  # noqa: E402
 
 
 # --- parsing -----------------------------------------------------------------

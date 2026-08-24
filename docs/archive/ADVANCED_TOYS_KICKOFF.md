@@ -22,7 +22,7 @@ already in `tests/run_all.sh` under the venv lane). Run with
    restatement. If the basic test already pins it, use the *sharper sibling*
    (an invariant/independence/scaling law, not the dimensional point value).
 3. Group by family with a `# --- family: theme ---` banner; add the module import
-   (`from driftpin.analysis import X`) alphabetically in the import block.
+   (`from ankusdrive.analysis import X`) alphabetically in the import block.
 
 ## Discipline (cost real time if skipped)
 - **Verify every identity numerically in a throwaway `.venv/bin/python -` first**,
@@ -45,7 +45,7 @@ already in `tests/run_all.sh` under the venv lane). Run with
 ## Batch 2 — scaling laws (machine_elements · vibration · durability extras)
 
 The theme is "double an input → a *known* factor", plus pure invariants. APIs
-(`driftpin/analysis/machine_elements.py`, `vibration.py`, `durability.py`):
+(`ankusdrive/analysis/machine_elements.py`, `vibration.py`, `durability.py`):
 
 **machine_elements** (each returns a dict; read the file for exact keys):
 - `bearing_life(dynamic_load_c_n, equivalent_load_p_n, speed_rpm, kind)` — **ISO 281

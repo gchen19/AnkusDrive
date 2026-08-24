@@ -1,4 +1,4 @@
-"""Tolerance & GD&T toys — two-sided oracles for driftpin.analysis.tolerance.
+"""Tolerance & GD&T toys — two-sided oracles for ankusdrive.analysis.tolerance.
 
 Pure-Python, no FreeCAD. Each check pins a closed-form result against a hand
 calculation AND verifies a deliberately-bad input is caught, mirroring
@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import tolerance as tol  # noqa: E402
+from ankusdrive.analysis import tolerance as tol  # noqa: E402
 
 
 def test_worstcase_three_links():

@@ -26,8 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import solvers  # noqa: E402
-from driftpin.analysis import em  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
+from ankusdrive.analysis import em  # noqa: E402
 from tests.heavy_solve import skip_heavy  # noqa: E402
 
 
@@ -50,7 +50,7 @@ def test_conductors_come_from_materials_db():
     # of truth. Every conductor name em ships must resolve to a DB card whose
     # electrical_conductivity equals the handbook value (and the offline fallback
     # mirror must match it exactly, so the two can never drift).
-    from driftpin.analysis import materials as M
+    from ankusdrive.analysis import materials as M
     for name, sigma in em._FALLBACK_CONDUCTORS.items():
         card = M.get(name)                                   # alias -> card
         db = M.numeric(card, "electrical_conductivity_s_m")

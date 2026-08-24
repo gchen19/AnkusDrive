@@ -3,7 +3,7 @@ Modularity eval ladder — scripted reference builders (Layer M1, no LLM).
 
 See tests/MODULARITY_EVAL.md. The companion of tests/multiagent_toys.py: where
 that ladder proves a *team* can partition+merge a design, this one measures whether
-DriftPin's *modularity* abstractions — recipes (#136), design-table families
+AnkusDrive's *modularity* abstractions — recipes (#136), design-table families
 (#138), the Liskov substitutability gate (#147), the lockfile change detector
 (MULTI_AGENT.md §9) and the Form/Fit/Function predicate (#141) — make the design
 itself more modular: a family from one table, a swappable module, a part whose
@@ -26,13 +26,13 @@ deterministic, all free, all runnable in run_all.sh with no API key:
   4. interface_break  -> the F3 predicate (#141) rejects an F3-breaking change that
                          is not renumbered; an internal change is a clean revise.
 
-The builders take a live driftpin.client.Worker and a tmp dir (toys 1-3) or run in
+The builders take a live ankusdrive.client.Worker and a tmp dir (toys 1-3) or run in
 pure Python (toy 4); test_modularity_eval.py drives the two-sided assertions.
 """
 import json
 
-from driftpin import items as _items
-from driftpin import lifecycle as _lifecycle
+from ankusdrive import items as _items
+from ankusdrive import lifecycle as _lifecycle
 
 
 # =============================================================================
@@ -46,7 +46,7 @@ from driftpin import lifecycle as _lifecycle
 # (an internal ring gear). The TABLE is the only thing that varies per variant;
 # the build RULE is shared (the recipe). N variants, deterministic table order.
 GEAR_FAMILY = {
-    "schema": "driftpin.family/1",
+    "schema": "ankusdrive.family/1",
     "family": "spur_family",
     "recipe": "spur_gear",
     "mode": "instances",

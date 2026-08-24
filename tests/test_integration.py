@@ -25,10 +25,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker, WorkerError  # noqa: E402
+from ankusdrive import Worker, WorkerError  # noqa: E402
 
 try:
-    from driftpin import render as render_lib
+    from ankusdrive import render as render_lib
     import numpy as np
     from PIL import Image
     _RENDER_OK = True
@@ -175,7 +175,7 @@ def _run_fem(w, fillet_handle, bottom_tag, loaded_tag):
     w.call(
         "fem_run",
         analysis=analysis["handle"],
-        workdir="/tmp/driftpin_integration_fem",
+        workdir="/tmp/ankusdrive_integration_fem",
         _timeout=300.0,
     )
     results = w.call("fem_results", analysis=analysis["handle"], top_n=3)

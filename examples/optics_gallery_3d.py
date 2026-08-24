@@ -105,7 +105,7 @@ def fig_prism_3d():
     stl = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
     stl.close()
     V, tris = _prism_stl(stl.name)
-    runner = os.path.join(ROOT, "driftpin", "optics_gpl_runner.py")
+    runner = os.path.join(ROOT, "ankusdrive", "optics_gpl_runner.py")
     rays = [{"origin": [dx, 6.0 + dy, -5.0], "dir": [0, 0, 1.0]}
             for dx in (-6, -2, 2, 6) for dy in (-2, 2, 5)]
     problem = {"problem": "solid_trace", "stl_path": stl.name, "glass": "BK7",

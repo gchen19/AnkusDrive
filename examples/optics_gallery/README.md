@@ -30,7 +30,7 @@ visual check of one of the two optics engines wired into the MCP surface.
 - **Meshing is a trap.** A triangulated sphere only approximates the smooth surface. A naive lat-long (UV) sphere degenerates into slivers **at the poles — i.e. on the optical axis**, corrupting the most important rays; an icosphere keeps facets uniform. Either way coarse facets scatter rays, so meshed spheres are for illustration and **analytic spherical surfaces for precision** (the analytic ball-lens trace nails BFD to 0.04 mm; the meshed one shows why you'd reach for it). It's the "validate the artifact, not the model" theme in reverse: a faithful CAD mesh can still be *optically* wrong if under-tessellated.
 
 The prism and ball-lens figures are produced by calling the **production** GPL runner
-(`driftpin/optics_gpl_runner.py`) as a subprocess — KrakenOS is never imported into this
+(`ankusdrive/optics_gpl_runner.py`) as a subprocess — KrakenOS is never imported into this
 process — exactly as `optics_solid_trace` does in the worker.
 
 Regenerate: `.venv/bin/python examples/optics_gallery.py`

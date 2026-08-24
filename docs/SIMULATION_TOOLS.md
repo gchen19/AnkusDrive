@@ -1,6 +1,6 @@
-# DriftPin simulation & analysis tool families
+# AnkusDrive simulation & analysis tool families
 
-A menu of Python tool add-ons that turn DriftPin from "build the part" into
+A menu of Python tool add-ons that turn AnkusDrive from "build the part" into
 "build the part *and reason about whether it works*" — tolerance, materials,
 fatigue, thermal, fluids, optics, multibody, and Design-for-X. Expands
 [`ROADMAP.md`](ROADMAP.md) Slice 7 ("External simulation tools") into a full
@@ -15,7 +15,7 @@ catalog, a prioritized rollout, and a build-ready scaffold for the first family.
 (CalculiX + Elmer) covers mainstream structural / thermal / modal work, but
 everything past that envelope — fit, fatigue, flow, light, motion,
 manufacturability — is physics that *consumes* geometry. The right shape is a thin
-DriftPin tool that takes a handle (or its exported STEP/STL/mesh), runs the math
+AnkusDrive tool that takes a handle (or its exported STEP/STL/mesh), runs the math
 or an external solver, and hands back structured JSON the agent reasons over. This
 doc enumerates those tools and sequences them by build risk.
 
@@ -30,7 +30,7 @@ Two compute locations, with very different dependency and packaging stories:
    volume/bbox/mass — no external solver, no new heavy deps. These are days of
    work each and ship first.
 2. **External solver fed by exported geometry.** CFD, optics ray-tracing, slicing,
-   multibody dynamics. DriftPin exports STEP/STL/mesh, shells out to the solver,
+   multibody dynamics. AnkusDrive exports STEP/STL/mesh, shells out to the solver,
    parses results back. These carry install weight and long run-times; they ride
    behind optional extras and the async-solve work.
 
@@ -77,7 +77,7 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Result:** `{nominal, worstcase:{min,max}, rss:{sigma,min_3s,max_3s},
   montecarlo:{mean,std,cpk,pct_in_spec}}`; `fit_check` →
   `{fit_class, min_clearance, max_clearance, prob_interference}`.
-- **Status: shipped (P0)** in `driftpin/analysis/tolerance.py` —
+- **Status: shipped (P0)** in `ankusdrive/analysis/tolerance.py` —
   `tolerance_stackup`, `fit_check`, `fit_class`, `gdt_check`, with 16 two-sided
   toys in `tests/test_tolerance.py`. Signed-deviation convention
   (`plus`=upper, `minus`=lower, half-band = 3σ); stack links carry an optional
@@ -103,7 +103,7 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Integration:** lets `fem_set_material(..., material='Steel-A36')` take a *name*
   instead of a hand-typed property dict — and is the lookup table fatigue, fracture,
   and cost all read from.
-- **Status: shipped.** Lives in `driftpin/analysis/materials/` (`material_get` /
+- **Status: shipped.** Lives in `ankusdrive/analysis/materials/` (`material_get` /
   `material_select` / `material_list` tools). Mechanical/thermal cards are
   hand-seeded in `seed.json` and enriched at runtime from FreeCAD's installed
   `.FCMat` cards (`fcmat.py`).
@@ -132,7 +132,7 @@ Each family lists: the agent question it answers · backend · new-dependency we
   ```
 - **Result:** `{safety_factor, life_cycles, pass, governing_mode}` etc.
 - Turns a one-shot FEM stress number into a *durability* answer.
-- **Status: shipped (P0)** in `driftpin/analysis/durability.py` —
+- **Status: shipped (P0)** in `ankusdrive/analysis/durability.py` —
   `fatigue_check` (S-N Basquin + Goodman), `fracture_check` (LEFM K vs K_IC with
   critical-crack inversion), `wear_estimate` (Archard), `creep_flag`
   (service-temp screen), with 9 two-sided toys in `tests/test_durability.py`
@@ -227,7 +227,7 @@ Each family lists: the agent question it answers · backend · new-dependency we
   cantilever within the Euler-Bernoulli+Timoshenko band.
 - **Modal (P3 M6):** `beam_modal` is the exact Euler-Bernoulli natural-frequency oracle
   (f_n = (βL)_n²/(2π)·√(EI/ρAL⁴), cantilever / simply-supported / clamped-clamped /
-  free-free / clamped-pinned) in [`analysis/vibration.py`](../driftpin/analysis/vibration.py).
+  free-free / clamped-pinned) in [`analysis/vibration.py`](../ankusdrive/analysis/vibration.py).
   The existing CalculiX `fem_modal` eigen-solve is gated against it — within ~0.5% of the
   fundamental once `fem_mesh(element_order='2nd')` is used (linear C3D4 tets shear-lock
   and overshoot ~50%; quadratic C3D10 fix it). Acceptance: **Example H** + `modal.png`;
@@ -238,7 +238,7 @@ Each family lists: the agent question it answers · backend · new-dependency we
 
 - **Answers:** "What's the pressure drop through this manifold? Drag on this housing?"
 - **Backend:** OpenFOAM (`blockMesh`+`simpleFoam`, laminar) / SU2; the exact analytic
-  oracles are pure-Python in [`analysis/cfd.py`](../driftpin/analysis/cfd.py).
+  oracles are pure-Python in [`analysis/cfd.py`](../ankusdrive/analysis/cfd.py).
 - **Signatures (implemented):**
   ```
   cfd_pipe_flow(diameter_mm, length_mm, flow_rate_lpm|velocity_m_s, fluid, roughness_mm)
@@ -341,13 +341,13 @@ Each family lists: the agent question it answers · backend · new-dependency we
   the solved wall shear, next to the a-priori `y_plus_estimate` the RANS builders
   report. `trusted` is the AND of every check that could be run and `reasons` names each
   failure. The audit runs as a separate pass so it can never fail a good solve.
-  - This layer's first catch was in DriftPin's own flagship case: the axisymmetric wedge
+  - This layer's first catch was in AnkusDrive's own flagship case: the axisymmetric wedge
     pipe never satisfied `residualControl` and always ran to `endTime`, because the
     out-of-plane `Uz` residual is normalized by a near-zero field and floors at ~1.6e-5
     at ANY mesh density while `Ux` reaches 5.8e-16. Controlling on `p` alone converges it
     in 74 iterations to a pressure drop identical to the 3000-iteration one to six
     decimals — and the live pipe gates got ~5x faster as a side effect.
-- **Solution verification** — `grid_convergence` ([`analysis/verification.py`](../driftpin/analysis/verification.py))
+- **Solution verification** — `grid_convergence` ([`analysis/verification.py`](../ankusdrive/analysis/verification.py))
   is Roache's GCI as codified in ASME V&V 20: the same quantity on 2-3 refined meshes,
   finest first, gives the observed order of convergence, the Richardson extrapolation to
   h→0, and the percentage band around the finest value. It is family-agnostic on purpose
@@ -360,10 +360,10 @@ Each family lists: the agent question it answers · backend · new-dependency we
   order and limit (`tests/test_verification.py`), and live on the pipe, where the band
   computed with no reference must contain the analytic answer — measured order 2.01,
   extrapolation within 0.04 % of Hagen-Poiseuille, band 0.11 %.
-- **Performance contracts** (issue #226, [`analysis/performance.py`](../driftpin/analysis/performance.py)):
+- **Performance contracts** (issue #226, [`analysis/performance.py`](../ankusdrive/analysis/performance.py)):
   `declare_performance` persists a quantitative spec on the part the way `declare_intent`
   persists a geometric one, and `verify_performance` re-proves it. The contract layer is a
-  thin orchestrator — a requirement names the DriftPin tool that measures its metric, so
+  thin orchestrator — a requirement names the AnkusDrive tool that measures its metric, so
   Cd, Δp, first mode and ΔT are the same machinery. Three things make it more than a
   comparison: the verdict has a third state (`indeterminate`) for a measurement whose
   uncertainty band straddles the limit, evidence is laddered (`tier='auto'` screens first
@@ -375,9 +375,9 @@ Each family lists: the agent question it answers · backend · new-dependency we
   verdict whose measurement came from a real solve with its trust block attached.
 
   **The contract is consulted at the gates** (issue #261,
-  [`gates/performance.py`](../driftpin/gates/performance.py)). `merge_assembly`,
+  [`gates/performance.py`](../ankusdrive/gates/performance.py)). `merge_assembly`,
   `substitutability_check` and `component_contract_check` all read the verdict
-  `verify_performance` last RECORDED on the part (`DP_PerformanceVerdict`) — they never
+  `verify_performance` last RECORDED on the part (`AD_PerformanceVerdict`) — they never
   measure, because verification may be asynchronous and a gate has to answer now.
   Running a screen tier inline would silently substitute a weaker measurement than the
   contract declares; refusing to gate would throw away a verdict that exists. Reading
@@ -388,7 +388,7 @@ Each family lists: the agent question it answers · backend · new-dependency we
   passed nor failed: it comes back in `skipped`, the vocabulary #248 gave the modal
   gate, so "unverified" can never be actioned as "fine". A part that declares no
   contract produces no performance block at all. See MULTI_AGENT.md §11.12.
-- Long solves run async via [`jobs.py`](../driftpin/jobs.py) so a CFD run never blocks
+- Long solves run async via [`jobs.py`](../ankusdrive/jobs.py) so a CFD run never blocks
   the MCP channel.
 
 ### 7. Optics  ✅ shipped (P3 M1)
@@ -396,12 +396,12 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Answers:** "Where does the light land? Is this lens moldable?"
 - **Backend:** the exact closed-form core (Snell / Fresnel / TIR + an
   energy-conserving ray-bundle trace) is pure-Python in
-  [`analysis/optics.py`](../driftpin/analysis/optics.py) (stdlib `math`, no NumPy,
+  [`analysis/optics.py`](../ankusdrive/analysis/optics.py) (stdlib `math`, no NumPy,
   fast-lane). The full lens/diffuser trace rides on the **`rayoptics`** wheel (the
   `optics` extra) behind `_require_solver('rayoptics')`, degrading cleanly when
   absent. (`~/diffuser` is not present on the runner; `rayoptics` is the portable
   backend. Optical n vs wavelength comes from
-  [`materials/optical.json`](../driftpin/analysis/materials/optical.json).)
+  [`materials/optical.json`](../ankusdrive/analysis/materials/optical.json).)
 - **Exact anchors (the gate):** 30° air→PMMA (n=1.49062) → **19.60°**;
   normal-incidence Fresnel reflectance **3.88%**; PMMA→air critical angle
   **42.13°** (zero transmission above it); the bundle trace conserves energy
@@ -451,7 +451,7 @@ Each family lists: the agent question it answers · backend · new-dependency we
 ### 9. Design for X (DfX)
 
 A cluster of mostly-heuristic checks that grade a design against a downstream
-process. Several reuse existing DriftPin tools directly.
+process. Several reuse existing AnkusDrive tools directly.
 
 - **DfM / Manufacturing** — pure-Python + face-tagging. Generalizes the diffuser
   moldability scorer; reuses `draft`, `thickness`, `query_faces`.
@@ -484,7 +484,7 @@ process. Several reuse existing DriftPin tools directly.
   ```
 - **Status: shipped (P0, v1 explicit-input)** — `dfm_check` (draft/undercut/min-wall
   from explicit face descriptors), `dfa_check` (Boothroyd-lite), `pack_check`
-  (carton fit + dimensional weight) in `driftpin/analysis/dfx.py`; `cost_estimate`
+  (carton fit + dimensional weight) in `ankusdrive/analysis/dfx.py`; `cost_estimate`
   (exact `material_cost = volume·density·price` + a per-process machine-time model)
   in `cost.py`; `slice_estimate` (first-order FDM estimate) +
   `slice_gcode_submit` (the **shipped CLI upgrade**: the `prusaslicer` solver +
@@ -511,7 +511,7 @@ process. Several reuse existing DriftPin tools directly.
 
 ### 10. Machine-element rating  *(highest leverage on existing tools)*
 
-Closed-form ratings that pair **1:1 with DriftPin's existing component
+Closed-form ratings that pair **1:1 with AnkusDrive's existing component
 generators** — `add_fastener`/`add_thread`, `add_bearing`, `add_spring`,
 `add_gear`, `add_pulley`/`add_sprocket`, `oring_groove`. The generator already
 encodes the geometry; the rating tool consumes it (by handle or explicit dims) and
@@ -550,7 +550,7 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
   tools, exactly as Wear/Fatigue/Fracture (family 3) is to FEM stress.
   `belt_drive`↔`add_pulley`, `press_fit_stress`↔press-fit geometry,
   `seal_check`↔`oring_groove`.
-- **Status: shipped (P0)** in `driftpin/analysis/machine_elements.py` —
+- **Status: shipped (P0)** in `ankusdrive/analysis/machine_elements.py` —
   `bolted_joint_check`, `bearing_life`, `spring_check`, `gear_rating`,
   `belt_drive`, `press_fit_stress`, `seal_check`, `chain_drive` (ANSI roller-chain
   power rating, ASME B29.1) and `weld_group` (fillet-weld group, Blodgett
@@ -563,7 +563,7 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
   induction heating reach at this frequency?"
 - **Backend:** Elmer's `StatCurrentSolver` (DC) and `MagnetoDynamics2DHarmonic`
   (AC); exact closed forms in
-  [`analysis/em.py`](../driftpin/analysis/em.py). The conductor σ / µ_r values
+  [`analysis/em.py`](../ankusdrive/analysis/em.py). The conductor σ / µ_r values
   live in the **Materials DB electrical layer** (`electrical_conductivity` +
   `relative_permeability` with provenance, issue #175) — `em_*` and `material_get`
   share one source of truth; `em.py` keeps a handbook fallback only for offline use.
@@ -597,15 +597,15 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
 ## Cross-cutting concerns
 
 - **Dependencies / packaging.** Pure-Python families add nothing. External-solver
-  families ride behind optional extras (`pip install driftpin[cfd]`,
-  `driftpin[optics]`) and discover their CLI/solver at runtime, **degrading
+  families ride behind optional extras (`pip install ankusdrive[cfd]`,
+  `ankusdrive[optics]`) and discover their CLI/solver at runtime, **degrading
   gracefully** — a missing OpenFOAM yields a clear "solver not installed" result,
   not an import crash.
 - **Units discipline.** Everything SI-tagged with quantity strings, matching the
   FEM material convention (`"210000 MPa"`). Tolerances carry their unit; no bare floats.
 - **Caching.** Expensive solves are keyed on a geometry content-hash (the same
   hashing the multi-agent lockfile already uses) so an unchanged part isn't re-solved.
-- **Async / long solves. Shipped** in `driftpin/jobs.py` — a FreeCAD-free job
+- **Async / long solves. Shipped** in `ankusdrive/jobs.py` — a FreeCAD-free job
   registry + background-thread runner + content-hash cache, with a shared
   `job_status`/`job_result`/`job_list` poll surface (and `async_demo_submit` as the
   reference). Any `*_submit` tool runs its work off the MCP channel; the submitted
@@ -678,12 +678,12 @@ SIMULATION_NEXT Tier B ✅; **RF/wave EM** — openEMS full-wave, issue #93,
 The first family, concrete enough to implement without re-deriving the
 architecture. Establishes the pattern every other pure-Python family follows.
 
-**New home for non-FreeCAD physics.** Create a `driftpin/analysis/` subpackage —
+**New home for non-FreeCAD physics.** Create a `ankusdrive/analysis/` subpackage —
 pure-Python math importable both by worker handlers *and* standalone (so it's
 unit-testable without spawning FreeCAD). Tolerance is the first module.
 
 ```
-driftpin/
+ankusdrive/
   analysis/
     __init__.py
     tolerance.py        # stackup math, fit classes, ISO 286 table, gdt zones
@@ -695,14 +695,14 @@ tests/
 
 **Layering — identical to every existing tool:**
 
-1. **`driftpin/analysis/tolerance.py`** — the math. No FreeCAD import. Functions:
+1. **`ankusdrive/analysis/tolerance.py`** — the math. No FreeCAD import. Functions:
    `stackup(chain, method, samples)`, `fit(hole, shaft)`, `iso286(basic_size, code)`,
    `gdt_zone(feature, control, zone, datums)`.
 2. **`worker.py`** — handlers calling into the module:
    ```python
    @handler("tolerance_stackup")
    def _h_tolerance_stackup(p):
-       from driftpin.analysis import tolerance
+       from ankusdrive.analysis import tolerance
        return tolerance.stackup(p["chain"], p.get("method", "worstcase"),
                                 p.get("samples", 10000))
    ```

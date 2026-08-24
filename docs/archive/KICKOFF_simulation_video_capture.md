@@ -1,7 +1,7 @@
 # Kickoff — Simulations → Video Recordings for Human Review
 
 Written 2026-06-14, at the end of the validate-the-artifact arc. A *potential next
-kickoff*: make the simulations DriftPin already runs produce **video** a human can
+kickoff*: make the simulations AnkusDrive already runs produce **video** a human can
 watch, not just scalar tables and one-off scratch GIFs.
 
 > **Status (2026-06-14):** item **A** (motion → video on the real geometry) is **DONE**,
@@ -53,7 +53,7 @@ Two gaps, one principle.
    demo, living outside the worker, drawing *abstractions* of the parts.
 
 2. **No integrated video.** There is no path from a solver result to a recording. There
-   is a static still renderer (`driftpin/render.py` NumPy rasterizer; `render_photoreal`
+   is a static still renderer (`ankusdrive/render.py` NumPy rasterizer; `render_photoreal`
    via POV-Ray/LuxCore) but it has no temporal dimension — no camera-pose sequence, no
    frame stacking, no encoder hook.
 
@@ -70,12 +70,12 @@ verdict on the frame, so the reviewer sees the metal move *and* the gate agreein
 
 | Family | Computes | Visual today | Gap to video |
 |---|---|---|---|
-| **MBD** (`driftpin/analysis/mbd.py`, `mechanism_simulate_submit`) | trajectories, **orientations**, max torques, collisions-through-motion | **DONE** — `meshing_gears_video.py` renders real gears at each placement | ✓ real geometry along the trajectory → GIF |
+| **MBD** (`ankusdrive/analysis/mbd.py`, `mechanism_simulate_submit`) | trajectories, **orientations**, max torques, collisions-through-motion | **DONE** — `meshing_gears_video.py` renders real gears at each placement | ✓ real geometry along the trajectory → GIF |
 | **FEM modal** (`fem_modal_results`) | eigenfreqs + displacement vectors | none | scale eigenvector by sin(phase), deform mesh, sweep |
-| **FEM transient thermal** (`driftpin/analysis/elmer.py`) | centre/surface temp vs time | none | colour the part / a profile by T(t) |
+| **FEM transient thermal** (`ankusdrive/analysis/elmer.py`) | centre/surface temp vs time | none | colour the part / a profile by T(t) |
 | **FEM harmonic/buckling** | peak stress, freqs (no time domain) | none | single annotated still, not a video |
 | **CFD** (OpenFOAM, `cfd_*`) | ΔP, drag coeff (fields only as `.foam`) | none | parse field snapshots, contour per step (hard) |
-| **Rendering** (`driftpin/render.py`, `render_photoreal`) | one PNG per view | static only | accept a pose/parameter sequence |
+| **Rendering** (`ankusdrive/render.py`, `render_photoreal`) | one PNG per view | static only | accept a pose/parameter sequence |
 
 **Encoding landscape:** `Pillow` (GIF, in-tree, works today), `matplotlib` +
 `numpy` in the venv; **no `ffmpeg` on PATH and no `imageio`** → **MP4 is not available
@@ -142,7 +142,7 @@ vectors beside the centre-line-vs-Ghia panel. Runs in ~13 s on a 64×64 mesh.
 `artifacts/cfd_cavity_field.gif`.
 
 **Cross-cutting (after A proves out):** promote the pipeline from `scratch/sim_video.py`
-into `driftpin/render.py` and expose a `render_motion` / `*_animate` worker tool so a
+into `ankusdrive/render.py` and expose a `render_motion` / `*_animate` worker tool so a
 video is a first-class job result (like `render_photoreal_submit`), not a scratch script.
 
 ## Definition of done (per item)
@@ -157,9 +157,9 @@ video is a first-class job result (like `render_photoreal_submit`), not a scratc
 
 ## Pointers
 
-- Survey basis: `driftpin/analysis/mbd.py`, `driftpin/analysis/elmer.py`,
-  `driftpin/render.py`, `mechanism_simulate_submit`/`fem_modal_results` in
-  `driftpin/worker.py`; existing 2-D animators `scratch/gearbox_animate.py`,
+- Survey basis: `ankusdrive/analysis/mbd.py`, `ankusdrive/analysis/elmer.py`,
+  `ankusdrive/render.py`, `mechanism_simulate_submit`/`fem_modal_results` in
+  `ankusdrive/worker.py`; existing 2-D animators `scratch/gearbox_animate.py`,
   `scratch/gearbox_shift_animate.py`; still renderer `scratch/render_gearbox.py`.
 - Item A (done): `scratch/sim_video.py` (now with `place()` — apply an MBD (pos, quat)
   to a real mesh), `scratch/dog_clutch_slide_sim.py`, `scratch/meshing_gears_video.py`
@@ -173,10 +173,10 @@ video is a first-class job result (like `render_photoreal_submit`), not a scratc
 - Item C (done): `scratch/thermal_field_video.py` — real meshed plate coloured by the
   Heisler field, Elmer FEM (`thermal_transient_submit`) + lumped overlaid on the history
   curve (`artifacts/thermal_field.gif`). Field/solver: `thermal_transient_1d` (Heisler
-  oracle) + `driftpin/analysis/elmer.py` (slab `scalars.dat` = centre/surface history).
+  oracle) + `ankusdrive/analysis/elmer.py` (slab `scalars.dat` = centre/surface history).
 - Item D (done): `scratch/cfd_field_video.py` — transient OpenFOAM lid-driven cavity
   (`icoFoam`), `foamToVTK -legacy -ascii` → meshio (no lxml), Ghia 1982 benchmark overlaid
   (`artifacts/cfd_cavity_field.gif`). OpenFOAM env via `solvers.openfoam_bashrc()`; CFD
-  case-generation reference `driftpin/analysis/openfoam.py`, handlers `cfd_*_flow_submit`.
+  case-generation reference `ankusdrive/analysis/openfoam.py`, handlers `cfd_*_flow_submit`.
 - Lineage: validate-the-artifact arc (`docs/VALIDATE_THE_ARTIFACT.md`, RFC §11.10) — the
   geometry oracle whose verdicts these videos overlay.

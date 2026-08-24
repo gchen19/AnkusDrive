@@ -16,7 +16,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 OUT = REPO / "results" / "artifacts"
 OUT.mkdir(parents=True, exist_ok=True)

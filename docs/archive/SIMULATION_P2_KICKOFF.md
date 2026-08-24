@@ -1,6 +1,6 @@
 # Kickoff — standing up the P2 simulation families (external solvers)
 
-The async/long-solve infrastructure ([`driftpin/jobs.py`](../../driftpin/jobs.py),
+The async/long-solve infrastructure ([`ankusdrive/jobs.py`](../../ankusdrive/jobs.py),
 Sprint 6) is the last cross-cutting blocker, and it shipped. This doc kicks off the
 **P2 tier** — the heavy-solver families that ride on it: CFD, multibody dynamics,
 topology optimization, and transient/radiation thermal. It is the onboarding +
@@ -72,7 +72,7 @@ The renderers already solved "an external binary the agent must discover, instal
 and degrade around." Copy it verbatim for solvers:
 
 - **`solve_capabilities` (new MCP tool + handler)** — the `render_capabilities`
-  twin: for each solver, resolve the binary (`DRIFTPIN_<SOLVER>_PATH` env → PATH →
+  twin: for each solver, resolve the binary (`ANKUSDRIVE_<SOLVER>_PATH` env → PATH →
   per-OS install dirs) **without running it**, and report `{available, binaries,
   path|install_hint}`. The agent picks a working solver instead of trial-and-error.
 - **`_require_solver(name)` helper** — the `_require_render` twin: raise/return the
@@ -81,7 +81,7 @@ and degrade around." Copy it verbatim for solvers:
   checksum-verified, writes PATH wrappers; for solvers that are pip wheels
   (PyBullet, MuJoCo, topology libs) it's a thin `pip install` into the worker env.
 - **Optional extras** in `pyproject.toml` `[project.optional-dependencies]`:
-  `cfd`, `mbd`, `optics`, `topology` — so `pip install driftpin[mbd]` pulls the
+  `cfd`, `mbd`, `optics`, `topology` — so `pip install ankusdrive[mbd]` pulls the
   pip-installable solvers; the apt/conda ones (OpenFOAM, Elmer) are documented, not
   vendored.
 - **Sandbox note** (same as the renderers): install + wiring + discovery are
@@ -116,7 +116,7 @@ Ordered by ascending install weight — **do the no-new-dependency wins first.**
 
 ### 1. MBD — lightest external dep
 **PyBullet** (`pip install pybullet`) or **MuJoCo** (`pip install mujoco`, now
-open-source) — both pip wheels, so `driftpin[mbd]` is a clean install with no system
+open-source) — both pip wheels, so `ankusdrive[mbd]` is a clean install with no system
 package. `mechanism_simulate_submit(assembly, joints, drivers, duration_s)` exports
 the link geometry/inertias, runs the engine in the background job, returns
 `{trajectories, max_torques, collisions_through_motion, reachable_envelope,
@@ -144,7 +144,7 @@ OpenFOAM (apt/conda, or via the FreeCAD **CfdOF** workbench) or SU2.
 `cfd_internal_flow_submit` / `cfd_external_flow_submit`. The unambiguous gate is the
 **straight circular pipe**: laminar Δp = 128·μ·L·Q/(π·D⁴) (Hagen–Poiseuille) within
 10%, and the D⁴ scaling law (halving D → ~16× Δp) catches a mis-scaled solver. Long
-solves + large install → last, fully behind `driftpin[cfd]` and the async path.
+solves + large install → last, fully behind `ankusdrive[cfd]` and the async path.
 
 ---
 
@@ -152,7 +152,7 @@ solves + large install → last, fully behind `driftpin[cfd]` and the async path
 
 ```
 M0  Provisioning glue   ✅ solve_capabilities · _require_solver · install-solvers.sh
-                             skeleton · driftpin[mbd|cfd|topology|optics] extras ·
+                             skeleton · ankusdrive[mbd|cfd|topology|optics] extras ·
                              the degradation contract + its CI test (solver absent)
 M1  Structural (no new dep)   random_vibration (Miles) ✅ · contact_setup ✅
 M2  MBD                ✅ mechanism_simulate_submit (PyBullet) + mechanism_kinematics
@@ -165,21 +165,21 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 ```
 
 > **Status (branch `feat/sim-p2-provisioning`):** M0 landed —
-> [`driftpin/solvers.py`](../../driftpin/solvers.py) (FreeCAD-free registry +
+> [`ankusdrive/solvers.py`](../../ankusdrive/solvers.py) (FreeCAD-free registry +
 > env→PATH→per-OS resolution), `solve_capabilities` + `_require_solver` in the
 > worker/MCP surfaces, [`scripts/install-solvers.sh`](../../scripts/install-solvers.sh),
 > the `mbd/topology/optics/cfd` extras, and the gating degradation test
 > [`tests/test_solve_degradation.py`](../../tests/test_solve_degradation.py). M1
-> `random_vibration` landed — [`driftpin/analysis/vibration.py`](../../driftpin/analysis/vibration.py)
+> `random_vibration` landed — [`ankusdrive/analysis/vibration.py`](../../ankusdrive/analysis/vibration.py)
 > + [`tests/test_vibration.py`](../../tests/test_vibration.py) (Miles toy: f_n=312 Hz,
 > W=0.01, Q=10 → 7.0 g). Still open: `contact_setup`, then M2–M5.
 >
 > **Status (branch `feat/sim-p2-mbd`, stacked on the above):** M2 landed — the first
 > external family, proving the M0 provisioning glue end-to-end.
-> [`driftpin/analysis/kinematics.py`](../../driftpin/analysis/kinematics.py) is the
+> [`ankusdrive/analysis/kinematics.py`](../../ankusdrive/analysis/kinematics.py) is the
 > closed-form, solver-free gate (Grübler DOF, Grashof, slider-crank stroke = 2R,
 > four-bar sweep) behind the `mechanism_kinematics` tool;
-> [`driftpin/analysis/mbd.py`](../../driftpin/analysis/mbd.py) is the PyBullet executor
+> [`ankusdrive/analysis/mbd.py`](../../ankusdrive/analysis/mbd.py) is the PyBullet executor
 > behind `mechanism_simulate_submit` (async via `jobs.py`, `_require_solver('pybullet')`
 > degradation). Toys: [`tests/test_kinematics.py`](../../tests/test_kinematics.py) (exact,
 > fast lane) + [`tests/test_mbd.py`](../../tests/test_mbd.py) (pendulum torque = m·g·L/2,
@@ -188,7 +188,7 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 > **Status (branch `feat/sim-p2-remaining`, stacked on the above):** the rest of the
 > P2 tier landed — M1 `contact_setup` (CCX surface contact + nonlinear flag), M3
 > `topology_optimize_submit` (in-house NumPy SIMP — no new dep — in
-> [`driftpin/analysis/topology.py`](../../driftpin/analysis/topology.py)), M4
+> [`ankusdrive/analysis/topology.py`](../../ankusdrive/analysis/topology.py)), M4
 > `thermal_transient_1d` (analytic Heisler oracle) + `thermal_transient_submit`
 > (Elmer), M5 `cfd_pipe_flow` (Hagen–Poiseuille) + `cfd_{internal,external}_flow_submit`
 > (OpenFOAM/SU2). The pure-Python oracles (SIMP volume/compliance, 1-D transient vs
@@ -202,10 +202,10 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 > **Status (branch `feat/sim-p2-topo-solid`, stacked on the above):** the
 > topology→solid follow-on landed — `topology_to_solid` closes the loop back into
 > the modeller. The pure-Python core `density_to_rects`
-> ([`driftpin/analysis/topology.py`](../../driftpin/analysis/topology.py)) thresholds a
+> ([`ankusdrive/analysis/topology.py`](../../ankusdrive/analysis/topology.py)) thresholds a
 > `topology_optimize_submit` density grid and run-length-merges each row into maximal
 > solid spans (so the kernel fuses O(runs), not O(cells), boxes); the
-> `topology_to_solid` worker handler ([`driftpin/worker.py`](../../driftpin/worker.py))
+> `topology_to_solid` worker handler ([`ankusdrive/worker.py`](../../ankusdrive/worker.py))
 > tiles each span as a `cell_mm`×`thickness_mm` box, `multiFuse`+`removeSplitter`s
 > them into one static `Part::Feature`, and reports `{volume, mass_fraction, n_solids,
 > bbox_mm, …}`. It runs **synchronously** (it builds geometry — unlike the `*_submit`
@@ -223,7 +223,7 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 > heavy-solver case-build follow-on landed — with ElmerSolver/ElmerGrid (v26.2) and
 > OpenFOAM (1912) **provisioned on the runner**, both families now build their case
 > from physical parameters, run the real solver, and gate against the analytic oracle.
-> - **M4 Elmer** — [`driftpin/analysis/elmer.py`](../../driftpin/analysis/elmer.py)
+> - **M4 Elmer** — [`ankusdrive/analysis/elmer.py`](../../ankusdrive/analysis/elmer.py)
 >   generates the 1-D plane-wall transient case (native Elmer mesh + `.sif`, symmetry
 >   at the centre, convection at the surface, SaveScalars max/min → centre/surface
 >   temps). `thermal_transient_submit` now takes the slab params (or still a prepared
@@ -231,7 +231,7 @@ M5  CFD                ✅ cfd_pipe_flow (Hagen–Poiseuille) + cfd_{internal,ex
 >   matching `thermal_transient_1d` (Heisler) to **< 0.1 %** and the lumped limit at
 >   small Biot. Toys: [`test_elmer.py`](../../tests/test_elmer.py) (structure always;
 >   solver gate when ElmerSolver resolves).
-> - **M5 CFD** — [`driftpin/analysis/openfoam.py`](../../driftpin/analysis/openfoam.py)
+> - **M5 CFD** — [`ankusdrive/analysis/openfoam.py`](../../ankusdrive/analysis/openfoam.py)
 >   generates the **axisymmetric wedge pipe** (collapsed-axis blockMesh + simpleFoam,
 >   laminar); Δp is read straight from the converged `p` field (the `surfaceFieldValue`
 >   function object is broken in this build). `cfd_internal_flow_submit` now takes the
@@ -272,7 +272,7 @@ toy from `SIMULATION_EXAMPLES.md` promoted into the gate harness.
 1. `solve_capabilities` MCP tool + handler — resolve each solver binary/wheel
    without executing it; mirror `render_capabilities` (incl. `install_hint`).
 2. `_require_solver(name)` in `worker.py` — the structured-degradation helper, with
-   the `DRIFTPIN_<SOLVER>_PATH` env → PATH → per-OS-dir resolution order.
+   the `ANKUSDRIVE_<SOLVER>_PATH` env → PATH → per-OS-dir resolution order.
 3. `scripts/install-solvers.sh` skeleton — pip extras for MBD/topology now; documented
    apt/conda steps for OpenFOAM/Elmer; idempotent + checksum-verified like
    `install-renderers.sh`.

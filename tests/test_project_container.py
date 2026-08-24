@@ -27,8 +27,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import project  # noqa: E402
-from driftpin import items  # noqa: E402
+from ankusdrive import project  # noqa: E402
+from ankusdrive import items  # noqa: E402
 
 _PASS = _FAIL = 0
 
@@ -66,7 +66,7 @@ def test_scaffold_lays_out_wellformed_project():
         _check("components/ created", Path(layout["components_dir"]).is_dir(), True)
         _check(".dp_lib/ created", Path(layout["lib_dir"]).is_dir(), True)
         proj = project.load_project(layout["project_file"])
-        _check("schema stamp", proj["schema"], "driftpin.project/1")
+        _check("schema stamp", proj["schema"], "ankusdrive.project/1")
         _check("loads clean (validate_project)",
                project.validate_project(proj, td), [])
         reg = items.load_registry(layout["registry"])
@@ -102,7 +102,7 @@ def test_validate_project_catches_violations():
     bad_name = {"schema": project.SCHEMA, "name": "has space"}
     _flags("name violating convention flagged",
            project.validate_project(bad_name), "naming convention")
-    bad_schema = {"schema": "driftpin.project/9", "name": "ok"}
+    bad_schema = {"schema": "ankusdrive.project/9", "name": "ok"}
     _flags("unknown schema flagged",
            project.validate_project(bad_schema), "unknown schema")
     no_name = {"schema": project.SCHEMA, "name": ""}
@@ -161,7 +161,7 @@ def test_lower_item_refs_resolves_and_dangles_loud():
     reg = items.empty_registry()
     items.new_item(reg, "bracket",
                    files=["components/bracket.step", "components/bracket.FCStd"])
-    man = {"schema": "driftpin.manifest/1", "name": "a", "root": "a.FCStd",
+    man = {"schema": "ankusdrive.manifest/1", "name": "a", "root": "a.FCStd",
            "components": {"brk": {"item": "bracket", "envelope": {"min": [0, 0, 0],
                                                                   "max": [9, 9, 9]}}},
            "instances": [{"component": "brk", "placement": [0, 0, 0]}]}
@@ -185,7 +185,7 @@ def test_lower_item_refs_resolves_and_dangles_loud():
 # =============================================================================
 
 def _box(path, w_, d_, h_, name="part"):
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as w:
         w.call("new_document", name=name)
         w.call("add_primitive", kind="box", w=w_, d=d_, h=h_, name=name)
@@ -195,7 +195,7 @@ def _box(path, w_, d_, h_, name="part"):
 def _skeleton(path):
     """A lean master/skeleton: a thin plate carrying ONLY interface geometry — two
     published slot frames, offset above the plate so children mate in free air."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as w:
         w.call("new_document", name="skeleton")
         r = w.call("add_primitive", kind="box", w=100, d=40, h=4, name="plate")
@@ -210,7 +210,7 @@ def _skeleton(path):
 def _child(path, name):
     """A child component publishing a single `mount` frame at its base center, which
     subscribes (mates) to a master slot."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with Worker() as w:
         w.call("new_document", name=name)
         r = w.call("add_primitive", kind="box", w=10, d=10, h=10, name=name)
@@ -222,7 +222,7 @@ def _child(path, name):
 def test_scaffold_merges_unchanged():
     """scaffold_project lays out a project; merge_assembly consumes the scaffolded
     manifest UNCHANGED once the component files are built into components/."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         layout = project.scaffold(
             td, "stack",
@@ -242,7 +242,7 @@ def test_master_skeleton_publishes_children_subscribe():
     """A master/skeleton publishes interface geometry that two child components
     subscribe to and mate against — top-down / skeleton-driven design through the
     existing publish/subscribe machinery, given a home by the project container."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         layout = project.scaffold(
             td, "skeldrive", master="skeleton",
@@ -284,7 +284,7 @@ def test_item_ref_resolves_through_manifest_and_merges():
     """An item-ref component (the deferred #140 seam) resolves through the manifest:
     the worker's validate_manifest accepts the {item} source-kind, project_resolve_
     manifest lowers it to a file, and merge_assembly consumes the result green."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         layout = project.scaffold(
             td, "byid",
@@ -308,7 +308,7 @@ def test_reference_guard_catches_break_before_merge():
     """The pre-merge guard: a clean project passes its reference check and merges;
     moving the item's file makes the guard flag the broken reference BEFORE any
     merge is attempted (the chronic-PDM failure caught early)."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         layout = project.scaffold(
             td, "guarded",

@@ -1,10 +1,10 @@
-# Rendering in DriftPin — support, installation & limitations
+# Rendering in AnkusDrive — support, installation & limitations
 
-DriftPin has **two** render paths. This guide covers which renderers are supported,
+AnkusDrive has **two** render paths. This guide covers which renderers are supported,
 how to install them, how to confirm they work, and the known limitations.
 
 - **Fast preview** — `render_view` / `render_views`: a host-side software rasterizer
-  ([`driftpin/render.py`](../driftpin/render.py), NumPy + Pillow). Deterministic, no
+  ([`ankusdrive/render.py`](../ankusdrive/render.py), NumPy + Pillow). Deterministic, no
   external dependencies, flat shading. The right tool for "can the agent *see* what it
   built." Nothing to install beyond `Pillow`/`numpy` (regular pip deps).
 - **Photoreal** — `render_photoreal` (+ async `render_photoreal_submit` / `render_job`):
@@ -54,7 +54,7 @@ git -C "<Mod dir>/Render" checkout 08be2fe94b8a998323c8a5443f7f0afd0d05bed5   # 
 
 The addon is unmaintained (maintainer discontinued 2025-11-12), so we **pin a
 known-good commit** rather than tracking `master`. Bump deliberately and re-run the
-photoreal tests. DriftPin imports the addon lazily, so the worker boots fine without it.
+photoreal tests. AnkusDrive imports the addon lazily, so the worker boots fine without it.
 
 ---
 
@@ -64,7 +64,7 @@ photoreal tests. DriftPin imports the addon lazily, so the worker boots fine wit
 ```bash
 sudo apt install povray        # Linux ·  brew install povray (macOS) ·  installer (Windows)
 ```
-Nothing else — DriftPin finds it on `PATH` and sets the FreeCAD param itself.
+Nothing else — AnkusDrive finds it on `PATH` and sets the FreeCAD param itself.
 
 ### LuxCore + Appleseed (prebuilt, automated)
 ```bash
@@ -79,7 +79,7 @@ load. Idempotent; re-running skips what's already installed (`FORCE=1` to redo).
 Rootless: `PREFIX=~/r BINDIR=~/bin scripts/install-renderers.sh` (put `BINDIR` on `PATH`).
 
 > macOS/Windows are not automated yet — the script prints guidance. Install the binary
-> and put it on `PATH` under the registry name, or set `DRIFTPIN_<RENDERER>_PATH`.
+> and put it on `PATH` under the registry name, or set `ANKUSDRIVE_<RENDERER>_PATH`.
 
 ### Cycles / OSPRay Studio / pbrt-v4 (build from source, automated)
 No usable prebuilt CLI is published, so these are compiled:
@@ -96,12 +96,12 @@ checksum and the exact CMake flags are in
 [`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md) §7. Linux x86_64; needs git,
 cmake, ninja, a C++17 compiler, and apt for Cycles' system-library dependencies.
 
-### How DriftPin finds a binary (and how to override)
-`render_photoreal` resolves a renderer in this order: **`DRIFTPIN_<RENDERER>_PATH` env →
+### How AnkusDrive finds a binary (and how to override)
+`render_photoreal` resolves a renderer in this order: **`ANKUSDRIVE_<RENDERER>_PATH` env →
 FreeCAD prefs → `PATH` (`shutil.which`) → per-OS install dirs**, then writes the path
 into the FreeCAD param the plugin reads. The renderer subprocess inherits the worker's
 env, which inherits the **MCP server's** env — so do discovery in the environment that
-launches `python -m driftpin mcp` (a wrapper in a system `PATH` dir covers this; a value
+launches `python -m ankusdrive mcp` (a wrapper in a system `PATH` dir covers this; a value
 set only in an interactive shell does not).
 
 ---
@@ -182,7 +182,7 @@ Regenerate: `.venv/bin/python3 scripts/render-material-gallery.py` (all renderer
 - **The Render addon is unmaintained** (§2). We pin a commit and may fork/re-host. A
   harmless SSL traceback can appear on `import Render` from the same venv-bootstrap
   thread; it never reaches the protocol channel and is non-fatal.
-- **Long / orphaned renders.** Renderers run as worker child processes. DriftPin spawns
+- **Long / orphaned renders.** Renderers run as worker child processes. AnkusDrive spawns
   the worker in its own process group and group-kills it on shutdown, so a render in
   flight when the worker exits doesn't leak a runaway process. For long renders use the
   async API (`render_photoreal_submit` + `render_job`).

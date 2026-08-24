@@ -1,4 +1,4 @@
-# DriftPin Phase 2 — completing the core
+# AnkusDrive Phase 2 — completing the core
 
 A fresh-session-executable plan for finishing the "core mechanical design"
 surface area. Phase 1 (the original 5 slices + test scaffolding) shipped on
@@ -19,12 +19,12 @@ docs, and execute Phase 2 without backstory.
   six test tiers + how to run them.
 - **[`tests/RELIABILITY.md`](../../tests/RELIABILITY.md)** — the gated reliability
   harness (Layers A/B/C, all scaffolded but pending API key).
-- **Memory:** `~/.claude/projects/-Users-georgechen-DriftPin/memory/`
+- **Memory:** `~/.claude/projects/-Users-georgechen-AnkusDrive/memory/`
   - `project_freecad_api_drift.md` — **READ THIS** before adding any new
     handler. Lists 8 known wiki-vs-reality drifts in the FreeCAD API. The
     pattern of "introspect the live API via `dir()` + `getEnumerationsOfProperty()`
     before trusting docs" applies to every handler in this plan.
-  - `project_driftpin_reliability.md` — reliability suite is pending API key.
+  - `project_ankusdrive_reliability.md` — reliability suite is pending API key.
 
 ## What Phase 1 shipped (the 80%)
 
@@ -61,9 +61,9 @@ sketches that reference upstream geometry.
 **Effort:** ~2 days.
 
 **Files to edit:**
-- `driftpin/worker.py` — add handlers (paste in the `# --- PartDesign /
+- `ankusdrive/worker.py` — add handlers (paste in the `# --- PartDesign /
   Sketcher ---` block, near the existing `pad`/`pocket`/`partdesign_fillet`).
-- `driftpin/mcp_server.py` — add MCP wrappers right after the existing
+- `ankusdrive/mcp_server.py` — add MCP wrappers right after the existing
   `partdesign_chamfer` tool.
 - `tests/test_worker.py` — add tests after the existing
   `test_partdesign_*` tests.
@@ -180,9 +180,9 @@ trust results at stress concentrations.
 **Effort:** ~1.5 days.
 
 **Files to edit:**
-- `driftpin/worker.py` — extend `fem_set_solver` tunables; add new
+- `ankusdrive/worker.py` — extend `fem_set_solver` tunables; add new
   `fem_modal_results`, `fem_thermal_results`, `fem_mesh_refinement`.
-- `driftpin/mcp_server.py` — wrappers.
+- `ankusdrive/mcp_server.py` — wrappers.
 - `tests/test_worker.py` — new tests after the existing
   `test_fem_decomposed_cantilever`.
 
@@ -335,7 +335,7 @@ shifts the top edge by `height·tan(angle)`.
 This unblocks the `~/diffuser` project's moldability work — currently it
 runs heuristics on geometry imported from external `.FCStd` files; with
 `draft` exposed, the diffuser pipeline could *generate* draft-compliant
-candidates directly via DriftPin.
+candidates directly via AnkusDrive.
 
 ### C3. Multi-document support
 
@@ -397,25 +397,25 @@ entire history.
 ### Phase C acceptance
 
 Worker tests up another ~12 to ~53. The diffuser project's moldability
-pipeline could in principle now run end-to-end on DriftPin-generated
+pipeline could in principle now run end-to-end on AnkusDrive-generated
 geometry (a follow-up project, not a Phase 2 deliverable).
 
 ---
 
 ## After Phase 2
 
-When all three phases land, DriftPin has the full **core** mechanical-
+When all three phases land, AnkusDrive has the full **core** mechanical-
 design surface area. What remains is:
 
 1. **External integrations** — diffuser/optics, OpenFOAM CFD, MuJoCo
    dynamics. The roadmap pattern: each is a separate MCP tool that
-   consumes DriftPin geometry as STEP/STL.
+   consumes AnkusDrive geometry as STEP/STL.
 2. **TechDraw dimensions and annotations** — agent-friendly form
    (`add_dimension(page, kind, refs_with_tags)`).
 3. **Visual polish** — antialiasing, edge cleanup (silhouette/feature
    edges only, not all triangulation), FEM result colormap render.
 4. **Layer D reliability** — full agentic harness where the model uses
-   DriftPin tools via MCP, then self-evaluates.
+   AnkusDrive tools via MCP, then self-evaluates.
 5. **Operational** — async `fem_run` with progress streaming, session
    transcript export, expression-engine bindings.
 
@@ -482,7 +482,7 @@ These are real but each is independently scoped and not blocking the
 Total new MCP tools: ~24. Total tests: 58 → ~80. No new third-party
 dependencies; everything is FreeCAD's bundled API.
 
-End state: DriftPin exposes ~72 MCP tools covering the core of CAD design,
+End state: AnkusDrive exposes ~72 MCP tools covering the core of CAD design,
 parametric modeling, FEM (static/modal/buckling/thermal), assembly, and
 drawings — sufficient for an agent to drive end-to-end mechanical design
 of a typical part without falling back to the `run_script` escape hatch.

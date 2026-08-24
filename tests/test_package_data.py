@@ -18,7 +18,7 @@ What it asserts, and why the expected list is DERIVED rather than written down:
     walking each module's AST. A directory reference expands to every file under
     it. This is literally "what the code reads", so a corpus added tomorrow is
     covered the moment its loader is written — nobody has to remember this file.
-  * **tree sweep** — every file that lives under ``driftpin/`` and is not a
+  * **tree sweep** — every file that lives under ``ankusdrive/`` and is not a
     ``.pyc``/``__pycache__`` artifact must land in both the wheel and the sdist.
     A superset of the above, and the backstop for data a loader reaches by a
     computed name the AST scan cannot see.
@@ -29,7 +29,7 @@ the bug being prevented; that is why neither layer contains one.
 ``worker.py`` is included deliberately even though it is a ``.py`` file inside the
 package. It is never imported by the host interpreter — it opens with
 ``import FreeCAD``, which only resolves inside ``freecadcmd``'s bundled Python —
-so ``driftpin.client`` spawns it **by filesystem path** (``WORKER_SCRIPT``). It is
+so ``ankusdrive.client`` spawns it **by filesystem path** (``WORKER_SCRIPT``). It is
 data that happens to be Python, its presence is a path fact rather than an import
 fact, and the loader-derived layer picks it up from that path reference for free.
 
@@ -57,7 +57,7 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PKG = REPO / "driftpin"
+PKG = REPO / "ankusdrive"
 
 _PASS = _FAIL = 0
 
@@ -90,7 +90,7 @@ def _skip(reason, install):
 # --- deriving the expected file list ------------------------------------------
 #
 # Layer 1: recover the paths the code builds out of __file__. Three spellings are
-# in use across driftpin/ and all three reduce to "a filename literal sitting next
+# in use across ankusdrive/ and all three reduce to "a filename literal sitting next
 # to a __file__-derived directory":
 #
 #     Path(__file__).with_name("threads.json")
@@ -165,7 +165,7 @@ def loader_derived_paths(pkg=PKG):
 
 
 def tree_paths(pkg=PKG):
-    """Every file living under driftpin/ that a distribution ought to carry."""
+    """Every file living under ankusdrive/ that a distribution ought to carry."""
     return {
         p.relative_to(pkg.parent).as_posix()
         for p in pkg.rglob("*") if p.is_file() and _shippable(p)
@@ -259,7 +259,7 @@ def _collect(outdir):
 
 def wheel_members(path):
     with zipfile.ZipFile(path) as zf:
-        return {n for n in zf.namelist() if not n.startswith("driftpin-")}
+        return {n for n in zf.namelist() if not n.startswith("ankusdrive-")}
 
 
 def sdist_members(path):
@@ -267,7 +267,7 @@ def sdist_members(path):
     # the listing identical on a cp1252 Windows host (and satisfies issue #204's
     # contract check).
     with tarfile.open(path, "r:gz", encoding="utf-8") as tf:
-        # Strip the "driftpin-<version>/" prefix every sdist wraps its tree in.
+        # Strip the "ankusdrive-<version>/" prefix every sdist wraps its tree in.
         return {n.split("/", 1)[1] for n in tf.getnames() if "/" in n}
 
 
@@ -288,12 +288,12 @@ def check_derivation_is_not_empty(derived, swept):
     _ok("every loader-derived path is a real file in the source tree",
         all((PKG.parent / p).is_file() for p in derived))
     _ok("worker.py is claimed by the loader scan (spawned by path, never imported)",
-        "driftpin/worker.py" in derived)
+        "ankusdrive/worker.py" in derived)
     _ok("the standards corpus is claimed by the loader scan",
-        {"driftpin/analysis/standards/threads.json",
-         "driftpin/analysis/standards/bearings.json",
-         "driftpin/analysis/standards/stock.json",
-         "driftpin/analysis/standards/catalog.json"} <= derived)
+        {"ankusdrive/analysis/standards/threads.json",
+         "ankusdrive/analysis/standards/bearings.json",
+         "ankusdrive/analysis/standards/stock.json",
+         "ankusdrive/analysis/standards/catalog.json"} <= derived)
 
 
 def check_wheel_carries_runtime_data(derived, swept, members):
@@ -301,7 +301,7 @@ def check_wheel_carries_runtime_data(derived, swept, members):
     _ok("wheel carries every file the code loads from __file__", not gone,
         f"missing from wheel: {gone}")
     gone = missing_from(swept, members)
-    _ok("wheel carries every non-bytecode file under driftpin/", not gone,
+    _ok("wheel carries every non-bytecode file under ankusdrive/", not gone,
         f"missing from wheel: {gone}")
 
 
@@ -313,14 +313,14 @@ def check_sdist_carries_runtime_data(derived, swept, members):
     _ok("sdist carries every file the code loads from __file__", not gone,
         f"missing from sdist: {gone}")
     gone = missing_from(swept, members)
-    _ok("sdist carries every non-bytecode file under driftpin/", not gone,
+    _ok("sdist carries every non-bytecode file under ankusdrive/", not gone,
         f"missing from sdist: {gone}")
 
 
 def check_comparison_detects_a_drop(members):
     """Cheap always-on sanity check on the comparator itself: pull one corpus
     file out of the artifact listing and the same call must name it."""
-    victim = "driftpin/analysis/standards/threads.json"
+    victim = "ankusdrive/analysis/standards/threads.json"
     trimmed = set(members) - {victim}
     _ok("the comparison names a corpus file absent from the artifact",
         missing_from([victim], trimmed) == [victim])
@@ -330,7 +330,7 @@ def check_comparison_detects_a_drop(members):
 
 # --- negative control: a deliberately broken build must fail the suite ---------
 
-_PKG_DATA = re.compile(r"(?s)\[tool\.setuptools\.package-data\].*?(driftpin\s*=\s*)\[(.*?)\]")
+_PKG_DATA = re.compile(r"(?s)\[tool\.setuptools\.package-data\].*?(ankusdrive\s*=\s*)\[(.*?)\]")
 
 
 def _trim_package_data(pyproject_text, drop="standards"):
@@ -351,7 +351,7 @@ def _trim_package_data(pyproject_text, drop="standards"):
 
 def _copy_project(dest):
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(PKG, dest / "driftpin",
+    shutil.copytree(PKG, dest / "ankusdrive",
                     ignore=shutil.ignore_patterns(*_IGNORED_DIRS, "*.pyc"))
     for name in _PROJECT_FILES:
         shutil.copy2(REPO / name, dest / name)
@@ -382,7 +382,7 @@ def check_trimmed_config_fails(derived, tmp):
     _ok("and it fails naming the standards corpus specifically",
         any("analysis/standards/" in p for p in gone), f"reported: {gone}")
     _ok("while unrelated corpora still pass (the control is surgical)",
-        "driftpin/analysis/materials/fcmat.json" in members)
+        "ankusdrive/analysis/materials/fcmat.json" in members)
 
 
 def main():
@@ -396,7 +396,7 @@ def main():
     for path in sorted(derived):
         print(f"       loader-derived: {path}")
 
-    with tempfile.TemporaryDirectory(prefix="driftpin-pkg-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="ankusdrive-pkg-") as tmp:
         print("\n== Building the distribution (one build, reused by every check) ==")
         project = _copy_project(Path(tmp) / "src")
         built = build(project, Path(tmp) / "dist")

@@ -1,5 +1,5 @@
 """
-Toy problems for the DriftPin MCP server. Each test spins up the server as a
+Toy problems for the AnkusDrive MCP server. Each test spins up the server as a
 subprocess via the MCP client SDK, exercises one tool, verifies the response.
 
 Must run with the venv python (where `mcp` is installed):
@@ -25,7 +25,7 @@ from mcp.client.stdio import stdio_client  # noqa: E402
 
 SERVER_PARAMS = StdioServerParameters(
     command=VENV_PY,
-    args=["-m", "driftpin", "mcp"],
+    args=["-m", "ankusdrive", "mcp"],
     cwd=str(REPO),
 )
 
@@ -207,8 +207,8 @@ async def _test_setup_surface(session):
                    if hasattr(m.content, "text"))
     assert "setup_status" in text, text
     resources = await session.list_resources()
-    assert any(str(r.uri) == "driftpin://setup" for r in resources.resources), resources
-    read = await session.read_resource("driftpin://setup")
+    assert any(str(r.uri) == "ankusdrive://setup" for r in resources.resources), resources
+    read = await session.read_resource("ankusdrive://setup")
     body = "".join(c.text for c in read.contents if hasattr(c, "text"))
     assert "Solver families:" in body and "platform:" in body, body[:400]
 

@@ -56,7 +56,7 @@ RUN_RELIABILITY=1 M2_MODEL=haiku M2_TRIALS=20 M2_TOYS=tchainu,nslot4 \
 ```
 
 Each component is built by a fresh Anthropic API call (a cold model with only its
-contract slice + a small DriftPin tool surface). The run reports merge-pass rate per
+contract slice + a small AnkusDrive tool surface). The run reports merge-pass rate per
 toy for **partition** vs **single**, plus cost. Results write to the gitignored
 `tests/multiagent_cache/report_m2.json`. Launch long runs in the background and never
 report numbers before the run completes.
@@ -160,5 +160,5 @@ report numbers before the run completes.
 
 See [`MULTI_AGENT_EVAL.md`](MULTI_AGENT_EVAL.md) for the metrics, the partition-vs-
 single comparisons, recorded findings, and the gate-helper internals. Promotion of
-the FEM/measurement gate helpers into typed DriftPin tools is mapped in
+the FEM/measurement gate helpers into typed AnkusDrive tools is mapped in
 [`../docs/SIMULATION_TOOLS.md`](../docs/SIMULATION_TOOLS.md).

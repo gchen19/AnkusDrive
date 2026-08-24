@@ -1,6 +1,6 @@
 """
 Manifest schema formalization (RFC §11.7) — free, no LLM, no key. The manifest
-gains a version stamp ("driftpin.manifest/1"), a load-time validator that catches
+gains a version stamp ("ankusdrive.manifest/1"), a load-time validator that catches
 the cross-reference errors a JSON shape can't, and a content hash recorded in the
 lockfile so "built against a stale contract" is detectable as such (not only
 inferable from interface hashes). Proves: validate_manifest discriminates;
@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 _PASS = _FAIL = 0
 
@@ -47,7 +47,7 @@ def _block(path, name):
 def _valid_manifest(tmp):
     _block(tmp / "a.FCStd", "a")
     _block(tmp / "b.FCStd", "b")
-    return {"schema": "driftpin.manifest/1", "name": "ok", "root": "ok.FCStd",
+    return {"schema": "ankusdrive.manifest/1", "name": "ok", "root": "ok.FCStd",
             "components": {"a": {"file": "a.FCStd"}, "b": {"file": "b.FCStd"}},
             "instances": [{"component": "a", "name": "a", "placement": [0, 0, 0]},
                           {"component": "b", "name": "b", "placement": [40, 0, 0]}]}
@@ -67,7 +67,7 @@ def test_valid_manifest_passes():
         r = _validate(tmp, _valid_manifest(tmp))
         _check("valid manifest -> ok", r["ok"], True)
         _check("no problems", r["problems"], [])
-        _check("schema reported", r["schema"], "driftpin.manifest/1")
+        _check("schema reported", r["schema"], "ankusdrive.manifest/1")
         _check("manifest_hash present", bool(r["manifest_hash"]), True)
 
 
@@ -100,7 +100,7 @@ def test_cross_reference_errors_caught():
              _validate(tmp, m)["problems"], "unknown component 'ghost'")
         # bad schema version
         m = _valid_manifest(tmp)
-        m["schema"] = "driftpin.manifest/99"
+        m["schema"] = "ankusdrive.manifest/99"
         _has("bad schema version flagged", _validate(tmp, m)["problems"], "unknown schema")
         # library without a tool
         m = _valid_manifest(tmp)
@@ -143,7 +143,7 @@ def test_lockfile_records_and_detects_contract_drift():
             w.call("merge_assembly", manifest=str(mp))
             lock = w.call("assembly_lock", manifest=str(mp))
             clean = w.call("assembly_lock_check", manifest=str(mp))
-        _check("lock records schema", lock["schema"], "driftpin.manifest/1")
+        _check("lock records schema", lock["schema"], "ankusdrive.manifest/1")
         _check("lock records a manifest_hash", bool(lock["manifest_hash"]), True)
         _check("unchanged -> manifest_changed False", clean["manifest_changed"], False)
         _check("unchanged -> ok", clean["ok"], True)
@@ -169,7 +169,7 @@ def test_stamping_schema_is_not_a_contract_change():
         with Worker() as w:
             w.call("merge_assembly", manifest=str(mp))
             w.call("assembly_lock", manifest=str(mp))
-        man["schema"] = "driftpin.manifest/1"   # stamp it
+        man["schema"] = "ankusdrive.manifest/1"   # stamp it
         mp.write_text(json.dumps(man), encoding="utf-8")
         with Worker() as w:
             chk = w.call("assembly_lock_check", manifest=str(mp))

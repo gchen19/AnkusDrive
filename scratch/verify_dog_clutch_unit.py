@@ -4,7 +4,7 @@ The calibration finding (docs/VALIDATE_THE_ARTIFACT.md) caught a second instance
 the solid-face bug: dog_clutch_unit.py's collar sleeve was SOLID over the whole dog
 band, so the output gear's teeth jam into it regardless of dog phase — it cannot
 interlock, exactly the bug the arc is about. This probe builds the freewheeling output
-gear plus BOTH collar designs and runs the real driftpin.realize oracle (not an ad-hoc
+gear plus BOTH collar designs and runs the real ankusdrive.realize oracle (not an ad-hoc
 inline measurement) on each, so the bug and its fix are judged on the as-built metal:
 
   * BUG    — solid cylinder body across the dog band  -> dog-band fill ≈ 1.0, jam.
@@ -22,7 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 # geometry shared with scratch/dog_clutch_unit.py
 M = 2.0
@@ -37,7 +37,7 @@ BUILD = r"""
 import Part, math
 import FreeCAD as App
 from FreeCAD import Vector, Placement, Rotation
-from driftpin import realize
+from ankusdrive import realize
 doc = App.ActiveDocument
 SR, GH, DOG_H, ND, RDOG = %f, %f, %f, %d, %f
 og = doc.getObject(%r).Shape
@@ -96,7 +96,7 @@ __result__ = {
 STEP = REPO / "artifacts" / "dog_clutch_unit.step"
 CHECK_STEP = r"""
 import Part
-from driftpin import realize
+from ankusdrive import realize
 SR, GH, DOG_H, ND, RDOG = %f, %f, %f, %d, %f
 shape = Part.Shape(); shape.read(%r)
 sols = shape.Solids

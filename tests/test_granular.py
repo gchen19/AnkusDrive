@@ -4,7 +4,7 @@ Granular / powder discrete-element mechanics via YADE — oracle-gated (issue #9
 Two tiers, mirroring every other family in the suite:
 
   Pure-oracle toys (always run, no solver) — the closed-form correlation anchors
-  in driftpin/analysis/granular.py (these are CORRELATIONS, not exact theory, so
+  in ankusdrive/analysis/granular.py (these are CORRELATIONS, not exact theory, so
   the gate is a BAND, never a fake "exact"):
     - test_packing_oracle    : RCP φ≈0.637 in band 0.60–0.66, below crystalline
                                FCC/HCP 0.7405, above random-loose 0.555
@@ -18,12 +18,12 @@ Two tiers, mirroring every other family in the suite:
     - test_dem_pack_live     : a poured monodisperse pile settles to a random
                                close-packing fraction inside 0.58–0.68 (the honest
                                RCP band), well short of the crystalline 0.74
-    - test_dem_repose_monotone_live (optional, env DRIFTPIN_DEM_FULL=1): a higher-
+    - test_dem_repose_monotone_live (optional, env ANKUSDRIVE_DEM_FULL=1): a higher-
                                friction pile reposes steeper than a low-friction one
 
 YADE is GPL-3.0 and is driven ONLY out-of-process via the `yade` executable
-running driftpin/dem_gpl_runner.py (sentinel-JSON over stdin/stdout) — the test
-shells out exactly the way driftpin.worker._run_dem_gpl does, so it never imports
+running ankusdrive/dem_gpl_runner.py (sentinel-JSON over stdin/stdout) — the test
+shells out exactly the way ankusdrive.worker._run_dem_gpl does, so it never imports
 YADE in this process.
 
 Run:  python3 tests/test_granular.py   (host-side subprocess mgmt is stdlib)
@@ -39,18 +39,18 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import solvers  # noqa: E402
-from driftpin.analysis import granular as g  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
+from ankusdrive.analysis import granular as g  # noqa: E402
 from tests.heavy_solve import skip_heavy  # noqa: E402
 
-RUNNER = REPO / "driftpin" / "dem_gpl_runner.py"
+RUNNER = REPO / "ankusdrive" / "dem_gpl_runner.py"
 
 
 def _yade_exec():
-    """Resolve the `yade` executable the same way the worker does: DRIFTPIN_YADE /
-    DRIFTPIN_YADE_PATH → ~/opt/yade/bin/yade → the solver registry (PATH/dirs).
+    """Resolve the `yade` executable the same way the worker does: ANKUSDRIVE_YADE /
+    ANKUSDRIVE_YADE_PATH → ~/opt/yade/bin/yade → the solver registry (PATH/dirs).
     Returns the path or None."""
-    for env in ("DRIFTPIN_YADE", "DRIFTPIN_YADE_PATH"):
+    for env in ("ANKUSDRIVE_YADE", "ANKUSDRIVE_YADE_PATH"):
         if (v := os.environ.get(env)) and Path(v).is_file():
             return v
     cand = Path(os.path.expanduser("~/opt/yade/bin/yade"))
@@ -61,7 +61,7 @@ def _yade_exec():
 
 def _run_yade(problem, timeout=600):
     """Drive the GPL DEM runner out-of-process and parse the sentinel JSON —
-    the test twin of driftpin.worker._run_dem_gpl."""
+    the test twin of ankusdrive.worker._run_dem_gpl."""
     exe = _yade_exec()
     assert exe, "yade executable not resolvable"
     proc = subprocess.run([exe, "-x", "-n", str(RUNNER)],
@@ -182,7 +182,7 @@ def test_dem_pack_live():
     if skip_heavy("YADE DEM"):
         return
     if not _yade_available():
-        print("    SKIP — yade executable not found (set DRIFTPIN_YADE)")
+        print("    SKIP — yade executable not found (set ANKUSDRIVE_YADE)")
         return
     orc = g.packing_fraction("random_close")
     res = _run_yade({"problem": "pack", "n_spheres": 800, "radius_m": 0.004,
@@ -208,7 +208,7 @@ def test_dem_pack_live():
 
 
 def test_dem_repose_monotone_live():
-    """REAL YADE repose sweep (heavier — opt in with DRIFTPIN_DEM_FULL=1): pour two
+    """REAL YADE repose sweep (heavier — opt in with ANKUSDRIVE_DEM_FULL=1): pour two
     piles at low and high inter-particle friction; the high-μ pile must repose
     steeper. The monotone trend is the assumption-free granular gate; here it is
     approximated through the settled packing fraction's sensitivity to friction
@@ -218,8 +218,8 @@ def test_dem_repose_monotone_live():
     if not _yade_available():
         print("    SKIP — yade executable not found")
         return
-    if os.environ.get("DRIFTPIN_DEM_FULL") != "1":
-        print("    SKIP — set DRIFTPIN_DEM_FULL=1 to run the live repose sweep")
+    if os.environ.get("ANKUSDRIVE_DEM_FULL") != "1":
+        print("    SKIP — set ANKUSDRIVE_DEM_FULL=1 to run the live repose sweep")
         return
     common = {"problem": "pack", "n_spheres": 600, "radius_m": 0.004,
               "box_m": [0.05, 0.05], "steps": 40000}

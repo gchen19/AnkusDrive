@@ -30,7 +30,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import iface_registry as ir  # noqa: E402
+from ankusdrive import iface_registry as ir  # noqa: E402
 
 THK = 6.0  # plate thickness (mm)
 
@@ -39,7 +39,7 @@ THK = 6.0  # plate thickness (mm)
 
 def test_registry_directory_and_schema():
     d = ir.list_types()
-    assert d["schema"] == "driftpin.iface/1", d
+    assert d["schema"] == "ankusdrive.iface/1", d
     assert "bore_h7@1" in d["types"] and "nema17_face@1" in d["types"], d
     sch = ir.type_schema("nema17_face@1")
     assert sch["name"] == "nema17_face" and sch["version"] == 1, sch
@@ -152,7 +152,7 @@ def _nema17_holes():
 # --- merge harness (the real merge_assembly) ---------------------------------
 
 def _merge(tmp, components, instances, checks):
-    from driftpin import Worker
+    from ankusdrive import Worker
     man = {"name": "iface", "root": "iface.FCStd",
            "components": components, "instances": instances, "checks": checks}
     mpath = tmp / "manifest.json"
@@ -169,7 +169,7 @@ def _conf_violations(rep):
 # --- bore_h7@1 conformance (reference + negatives) ---------------------------
 
 def test_bore_h7_conformance():
-    from driftpin import Worker
+    from ankusdrive import Worker
     cases = [
         ("reference Ø8.008 H7 bore", 4.004, True, None),
         ("oversize Ø8.10 bore", 4.05, False, "H7 band"),
@@ -191,7 +191,7 @@ def test_bore_h7_conformance():
 # --- nema17_face@1 conformance (reference + negatives) -----------------------
 
 def test_nema17_face_conformance():
-    from driftpin import Worker
+    from ankusdrive import Worker
     cases = [
         ("reference NEMA17 face", 11.01, _nema17_holes(), True, None),
         ("undersize pilot Ø21", 10.5, _nema17_holes(), False, "pilot"),
@@ -215,7 +215,7 @@ def test_nema17_face_conformance():
 # --- unknown type is a loud violation at merge -------------------------------
 
 def test_unknown_type_fails_loudly_at_merge():
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         with Worker() as w:
@@ -238,7 +238,7 @@ def test_bus_two_parts_conform_to_one_entry():
     (bore_h7@1) referenced by TWO distinct parts. Both must gate green — and the
     ergonomic `implements` declaration is exercised end-to-end through the
     lowering seam, not hand-authored checks."""
-    from driftpin import Worker
+    from ankusdrive import Worker
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         with Worker() as w:                       # two DIFFERENT plates, same bore

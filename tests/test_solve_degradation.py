@@ -1,6 +1,6 @@
 """Solver graceful-degradation contract — the gate that needs no solver.
 
-Pure-Python, no FreeCAD (driftpin.solvers is FreeCAD-free), so this runs on the
+Pure-Python, no FreeCAD (ankusdrive.solvers is FreeCAD-free), so this runs on the
 fast/no-FreeCAD CI lane and gates every PR. It pins the M0 degradation contract
 from docs/archive/SIMULATION_P2_KICKOFF.md: with a solver ABSENT, the resolution path must
 return the clean {ok:false, reason, install} dict and never raise — that is what
@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import solvers  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
 
 # The families the P2 milestones (M2–M5 + optics) must each be able to degrade for.
 _EXPECTED_FAMILIES = {"mbd", "topology", "cfd", "thermal_transient", "optics"}
@@ -140,7 +140,7 @@ def test_module_probe_uses_find_spec():
     """The wheel probe reports importability via find_spec (no heavy import): a real
     dependency resolves, a nonsense name does not."""
     # use a stdlib module — the no-FreeCAD lane runs under system python3, which is
-    # not guaranteed to carry driftpin's wheel deps (numpy etc.)
+    # not guaranteed to carry ankusdrive's wheel deps (numpy etc.)
     assert solvers._module_available("json") is True
     assert solvers._module_available("nope_not_a_real_module_xyz") is False
 
@@ -151,7 +151,7 @@ def test_doctor_ready_via_names_the_resolved_package():
     "topopt" entry lists ("topopt", "solidspy")); if only solidspy is installed,
     reporting "ready via topopt" while topopt is absent is exactly the stale hint the
     doctor exists to avoid. Regression guard for the honest-label fix (issue #189)."""
-    from driftpin import doctor
+    from ankusdrive import doctor
 
     _mod, _bin, _unwired = (
         solvers._module_available, solvers._binary_path, solvers._unwired_found)
@@ -178,37 +178,37 @@ def test_doctor_ready_via_names_the_resolved_package():
 
 
 def test_binary_env_override_resolves_real_path():
-    """The binary resolution order honors DRIFTPIN_<SOLVER>_PATH first (the agent's
+    """The binary resolution order honors ANKUSDRIVE_<SOLVER>_PATH first (the agent's
     escape hatch), resolving to a real file without any solver installed."""
     with tempfile.NamedTemporaryFile(prefix="fake-elmer-", delete=False) as tf:
         fake = tf.name
-    prev = os.environ.get("DRIFTPIN_ELMER_PATH")
+    prev = os.environ.get("ANKUSDRIVE_ELMER_PATH")
     try:
-        os.environ["DRIFTPIN_ELMER_PATH"] = fake
+        os.environ["ANKUSDRIVE_ELMER_PATH"] = fake
         info = solvers.find_solver("elmer")
         assert info["available"] is True, info
         assert info["path"] == fake, info
     finally:
         if prev is None:
-            os.environ.pop("DRIFTPIN_ELMER_PATH", None)
+            os.environ.pop("ANKUSDRIVE_ELMER_PATH", None)
         else:
-            os.environ["DRIFTPIN_ELMER_PATH"] = prev
+            os.environ["ANKUSDRIVE_ELMER_PATH"] = prev
         os.unlink(fake)
 
 
 def test_windows_provisioner_dir_discovered_without_env():
     """On Windows, a solver the PowerShell provisioner extracted under
-    %LOCALAPPDATA%\\DriftPin\\solvers resolves with NO env var — the minimal-env
-    way an MCP host launches `driftpin mcp` (issues #205/#199). Skipped elsewhere
+    %LOCALAPPDATA%\\AnkusDrive\\solvers resolves with NO env var — the minimal-env
+    way an MCP host launches `ankusdrive mcp` (issues #205/#199). Skipped elsewhere
     (the provisioner layout is Windows-only)."""
     if os.name != "nt":
         print("    SKIP — Windows provisioner layout only exists on Windows")
         return
     prev_lad = os.environ.get("LOCALAPPDATA")
-    prev_env = os.environ.pop("DRIFTPIN_ELMER_PATH", None)
+    prev_env = os.environ.pop("ANKUSDRIVE_ELMER_PATH", None)
     tmp = tempfile.mkdtemp(prefix="fake_lad_")
     try:
-        bin_dir = os.path.join(tmp, "DriftPin", "solvers", "ElmerFake", "bin")
+        bin_dir = os.path.join(tmp, "AnkusDrive", "solvers", "ElmerFake", "bin")
         os.makedirs(bin_dir)
         fake = os.path.join(bin_dir, "ElmerSolver.exe")
         open(fake, "w", encoding="utf-8").close()
@@ -225,22 +225,22 @@ def test_windows_provisioner_dir_discovered_without_env():
         else:
             os.environ["LOCALAPPDATA"] = prev_lad
         if prev_env is not None:
-            os.environ["DRIFTPIN_ELMER_PATH"] = prev_env
+            os.environ["ANKUSDRIVE_ELMER_PATH"] = prev_env
 
 
 def test_darwin_provisioner_dir_discovered_without_env():
     """On macOS, a solver install-solvers.sh extracted under
-    ~/Library/Application Support/DriftPin/solvers resolves with NO env var —
-    the minimal-env way an MCP host launches `driftpin mcp` (issue #194, the
+    ~/Library/Application Support/AnkusDrive/solvers resolves with NO env var —
+    the minimal-env way an MCP host launches `ankusdrive mcp` (issue #194, the
     Darwin analog of the %LOCALAPPDATA% glob above). Skipped elsewhere."""
     if sys.platform != "darwin":
         print("    SKIP — Darwin provisioner layout only exists on macOS")
         return
     prev_home = os.environ.get("HOME")
-    prev_env = os.environ.pop("DRIFTPIN_SU2_PATH", None)
+    prev_env = os.environ.pop("ANKUSDRIVE_SU2_PATH", None)
     tmp = tempfile.mkdtemp(prefix="fake_home_")
     try:
-        bin_dir = os.path.join(tmp, "Library", "Application Support", "DriftPin",
+        bin_dir = os.path.join(tmp, "Library", "Application Support", "AnkusDrive",
                                "solvers", "SU2-8.5.0", "bin")
         os.makedirs(bin_dir)
         fake = os.path.join(bin_dir, "SU2_CFD")
@@ -258,7 +258,7 @@ def test_darwin_provisioner_dir_discovered_without_env():
         else:
             os.environ["HOME"] = prev_home
         if prev_env is not None:
-            os.environ["DRIFTPIN_SU2_PATH"] = prev_env
+            os.environ["ANKUSDRIVE_SU2_PATH"] = prev_env
 
 
 def test_sibling_bin_appends_exe_on_windows():
@@ -310,22 +310,22 @@ def _clear_env(*names):
 def test_openfoam_unwired_from_standard_bashrc():
     """#177: OpenFOAM's binary is only on PATH after sourcing etc/bashrc, so a bare
     shell can't resolve it — but a standard-location bashrc proves it's installed.
-    Fake one in a tmp dir via the DRIFTPIN_OPENFOAM_DIRS discovery override and assert
-    the third state `unwired` + the specific 'set DRIFTPIN_OPENFOAM_BASHRC=' hint."""
+    Fake one in a tmp dir via the ANKUSDRIVE_OPENFOAM_DIRS discovery override and assert
+    the third state `unwired` + the specific 'set ANKUSDRIVE_OPENFOAM_BASHRC=' hint."""
     tmp = tempfile.mkdtemp(prefix="fake-openfoam-")
     os.makedirs(os.path.join(tmp, "etc"))
     bashrc = os.path.join(tmp, "etc", "bashrc")
     with open(bashrc, "w", encoding="utf-8") as fh:
         fh.write("# fake OpenFOAM bashrc\n")
-    restore = _clear_env("DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_BASHRC")
-    os.environ["DRIFTPIN_OPENFOAM_DIRS"] = tmp
+    restore = _clear_env("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC")
+    os.environ["ANKUSDRIVE_OPENFOAM_DIRS"] = tmp
     try:
         with _absent_binaries_and_wheels():
             info = solvers.find_solver("openfoam")
             assert info["available"] is False, info
             assert info["status"] == "unwired", info
             assert info["found_at"] == bashrc, info
-            assert info["wire_hint"] == f"set DRIFTPIN_OPENFOAM_BASHRC={bashrc} (or source it)", info
+            assert info["wire_hint"] == f"set ANKUSDRIVE_OPENFOAM_BASHRC={bashrc} (or source it)", info
 
             r = solvers.require_solver("openfoam")
             assert r["ok"] is False and r["status"] == "unwired", r
@@ -338,7 +338,7 @@ def test_openfoam_unwired_from_standard_bashrc():
             assert "openfoam" not in caps["available"], caps["available"]
             assert "openfoam" in caps["families"]["cfd"]["unwired"], caps["families"]["cfd"]
     finally:
-        os.environ.pop("DRIFTPIN_OPENFOAM_DIRS", None)
+        os.environ.pop("ANKUSDRIVE_OPENFOAM_DIRS", None)
         restore()
         os.unlink(bashrc)
         os.rmdir(os.path.join(tmp, "etc"))
@@ -347,27 +347,27 @@ def test_openfoam_unwired_from_standard_bashrc():
 
 def test_openems_unwired_from_dedicated_venv():
     """#177: openEMS lives in a dedicated .venv-openems, not this interpreter, so
-    find_spec reports it absent. Fake the venv beside a tmp repo root (DRIFTPIN_REPO_ROOT
-    discovery override) and assert `unwired` + the 'set DRIFTPIN_OPENEMS_PYTHON=' hint."""
+    find_spec reports it absent. Fake the venv beside a tmp repo root (ANKUSDRIVE_REPO_ROOT
+    discovery override) and assert `unwired` + the 'set ANKUSDRIVE_OPENEMS_PYTHON=' hint."""
     tmp = tempfile.mkdtemp(prefix="fake-repo-")
     venv = os.path.join(tmp, ".venv-openems")
     os.makedirs(os.path.join(venv, "bin"))
     with open(os.path.join(venv, "bin", "python3"), "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\n")
-    restore = _clear_env("DRIFTPIN_OPENEMS_PYTHON")
-    os.environ["DRIFTPIN_REPO_ROOT"] = tmp
+    restore = _clear_env("ANKUSDRIVE_OPENEMS_PYTHON")
+    os.environ["ANKUSDRIVE_REPO_ROOT"] = tmp
     try:
         with _absent_binaries_and_wheels():
             info = solvers.find_solver("openems")
             assert info["status"] == "unwired", info
             assert info["found_at"] == venv, info
-            assert info["wire_hint"] == f"set DRIFTPIN_OPENEMS_PYTHON={venv}/bin/python3", info
+            assert info["wire_hint"] == f"set ANKUSDRIVE_OPENEMS_PYTHON={venv}/bin/python3", info
             # bempp (also a dedicated-venv solver) has no .venv-bempp here -> stays absent
             bempp = solvers.find_solver("bempp")
             assert bempp["status"] == "absent", bempp
             assert "found_at" not in bempp, bempp
     finally:
-        os.environ.pop("DRIFTPIN_REPO_ROOT", None)
+        os.environ.pop("ANKUSDRIVE_REPO_ROOT", None)
         restore()
         os.unlink(os.path.join(venv, "bin", "python3"))
         os.rmdir(os.path.join(venv, "bin"))
@@ -378,11 +378,11 @@ def test_openems_unwired_from_dedicated_venv():
 def test_truly_absent_solver_still_reports_absent_with_install_hint():
     """#177 guard: with NO unwired evidence on the box, an env-scoped solver still
     reports plain `absent` and hands back the full install hint (not a wire hint)."""
-    restore = _clear_env("DRIFTPIN_OPENFOAM_DIRS", "DRIFTPIN_REPO_ROOT",
-                         "DRIFTPIN_OPENFOAM_BASHRC", "DRIFTPIN_OPENFOAM_PATH")
+    restore = _clear_env("ANKUSDRIVE_OPENFOAM_DIRS", "ANKUSDRIVE_REPO_ROOT",
+                         "ANKUSDRIVE_OPENFOAM_BASHRC", "ANKUSDRIVE_OPENFOAM_PATH")
     # point the repo-root probe at an empty tmp dir so no real .venv-* is discovered
     empty = tempfile.mkdtemp(prefix="empty-repo-")
-    os.environ["DRIFTPIN_REPO_ROOT"] = empty
+    os.environ["ANKUSDRIVE_REPO_ROOT"] = empty
     try:
         with _absent_binaries_and_wheels():
             for name in ("openems", "bempp"):
@@ -393,7 +393,7 @@ def test_truly_absent_solver_still_reports_absent_with_install_hint():
                 assert r["status"] == "absent" and r["reason"] == "solver not installed", (name, r)
                 assert r["install"] == solvers._SOLVERS[name]["install_hint"], (name, r)
     finally:
-        os.environ.pop("DRIFTPIN_REPO_ROOT", None)
+        os.environ.pop("ANKUSDRIVE_REPO_ROOT", None)
         restore()
         os.rmdir(empty)
 
@@ -434,7 +434,7 @@ class _declares_prepared_case_only:
     make its family read available. So the tests inject the flag rather than leaning on
     a particular solver being the example."""
 
-    def __init__(self, name, reason="no DriftPin tool builds a case for it"):
+    def __init__(self, name, reason="no AnkusDrive tool builds a case for it"):
         self.name, self.reason = name, reason
 
     def __enter__(self):
@@ -495,7 +495,7 @@ def test_su2_alone_now_makes_the_cfd_family_available():
 def test_doctor_names_a_prepared_case_only_solver_it_did_not_count():
     """A family reported unwired next to a solver the user just installed is baffling
     unless the doctor says why it doesn't count. #237 item 2 consumer check."""
-    from driftpin import doctor
+    from ankusdrive import doctor
 
     with _only_available("su2"), _declares_prepared_case_only("su2"):
         caps = solvers.capabilities()
@@ -504,7 +504,7 @@ def test_doctor_names_a_prepared_case_only_solver_it_did_not_count():
         assert doctor._MARK["ok"] not in lines[idx], lines[idx]
         note = "\n".join(lines[idx:idx + 4])
         assert "su2 resolves" in note, note
-        assert "no DriftPin tool builds a case for it" in note, note
+        assert "no AnkusDrive tool builds a case for it" in note, note
 
     # and when the family IS ready, the "ready via" line names only what made it so —
     # "ready via su2, openfoam" would point back at the solver that cannot be driven
@@ -595,9 +595,9 @@ def test_multipass_info_read_degrades_instead_of_raising():
     instance (rc 2) and a read that outruns its timeout all return None rather than
     raising or blocking discovery. Read-only — `multipass info` on a name that does
     not exist touches nothing."""
-    assert solvers._multipass_info_exec("driftpin-no-such-vm-237", 10.0) is None
+    assert solvers._multipass_info_exec("ankusdrive-no-such-vm-237", 10.0) is None
     # a timeout that no real read can beat must also come back None, not raise
-    assert solvers._multipass_info_exec("driftpin-no-such-vm-237", 0.001) is None
+    assert solvers._multipass_info_exec("ankusdrive-no-such-vm-237", 0.001) is None
 
 
 def test_openfoam_unwired_hint_tracks_multipass_vm_state():
@@ -605,8 +605,8 @@ def test_openfoam_unwired_hint_tracks_multipass_vm_state():
     three DISTINGUISHABLE, correctly-hinted states. Before this, all three said
     "provision the VM" — the one instruction that is wrong for the most common
     post-setup state, a provisioned VM that is up with an unwired shell."""
-    restore = _clear_env("DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_BASHRC",
-                         "DRIFTPIN_OPENFOAM_DIRS")
+    restore = _clear_env("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC",
+                         "ANKUSDRIVE_OPENFOAM_DIRS")
     hints, founds = {}, {}
     try:
         for label, state in (("absent", None), ("stopped", "Stopped"),
@@ -637,7 +637,7 @@ def test_openfoam_unwired_hint_tracks_multipass_vm_state():
     run = hints["running"]
     assert not run.startswith("provision"), run
     assert "multipass start" not in run, run
-    for export in ("DRIFTPIN_OPENFOAM_BASHRC", "DRIFTPIN_OPENFOAM_PATH", "TMPDIR"):
+    for export in ("ANKUSDRIVE_OPENFOAM_BASHRC", "ANKUSDRIVE_OPENFOAM_PATH", "TMPDIR"):
         assert export in run, (export, run)
     assert "docs/MACOS.md" in run, run
     assert "(running)" in founds["running"], founds
@@ -658,15 +658,15 @@ def test_multipass_running_state_live_on_macos():
     if state != "running":
         print(f"    NOTE — VM is {state!r} here; live running-state check skipped")
         return
-    restore = _clear_env("DRIFTPIN_OPENFOAM_PATH", "DRIFTPIN_OPENFOAM_BASHRC",
-                         "DRIFTPIN_OPENFOAM_DIRS")
+    restore = _clear_env("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC",
+                         "ANKUSDRIVE_OPENFOAM_DIRS")
     try:
         with _absent_binaries_and_wheels():
             info = solvers.find_solver("openfoam")
             assert info["status"] == "unwired", info
             assert "(running)" in info["found_at"], info
             assert not info["wire_hint"].startswith("provision"), info["wire_hint"]
-            assert "DRIFTPIN_OPENFOAM_BASHRC" in info["wire_hint"], info["wire_hint"]
+            assert "ANKUSDRIVE_OPENFOAM_BASHRC" in info["wire_hint"], info["wire_hint"]
     finally:
         restore()
 

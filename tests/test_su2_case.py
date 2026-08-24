@@ -22,8 +22,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import solvers  # noqa: E402
-from driftpin.analysis import su2_case as su2  # noqa: E402
+from ankusdrive import solvers  # noqa: E402
+from ankusdrive.analysis import su2_case as su2  # noqa: E402
 
 
 def test_plane_poiseuille_is_the_closed_form():
@@ -120,7 +120,7 @@ def test_su2_counts_toward_the_cfd_family_now():
     marked prepared_case_only. If this flips back, `docs/MACOS.md`'s "CFD degrades to
     SU2" becomes a lie again."""
     assert "prepared_case_only" not in solvers._SOLVERS["su2"], solvers._SOLVERS["su2"]
-    from driftpin.analysis import cfd
+    from ankusdrive.analysis import cfd
     gate = cfd.solve_gate("laminar", "internal_channel", reynolds=50.0)
     assert gate["gated"] is True, gate
     assert "Poiseuille" in gate["oracle"], gate
@@ -143,7 +143,7 @@ def test_the_channel_solve_reproduces_plane_poiseuille():
     if not _su2_available():
         print("    SKIP — SU2 binary not installed")
         return
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     with Worker() as w:
         sub = w.call("cfd_internal_flow_submit", channel_height_mm=10.0)
@@ -179,7 +179,7 @@ def test_the_channel_gate_is_mesh_independent():
     if not _su2_available():
         print("    SKIP — SU2 binary not installed")
         return
-    from driftpin import Worker
+    from ankusdrive import Worker
 
     ratios = []
     with Worker() as w:

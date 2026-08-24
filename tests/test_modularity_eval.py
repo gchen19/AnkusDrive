@@ -31,9 +31,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin import items as _items  # noqa: E402
-from driftpin import lifecycle as _lifecycle  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive import items as _items  # noqa: E402
+from ankusdrive import lifecycle as _lifecycle  # noqa: E402
 import modularity_toys as toys  # noqa: E402
 
 
@@ -94,7 +94,7 @@ def test_family_regen_negative_bad_row_is_caught():
     """NEGATIVE CONTROL: a single bad row (teeth below the recipe minimum) is caught
     LOUDLY at the door, naming the row+column — the whole family refuses to
     materialize, so a broken variant can never silently ship."""
-    from driftpin import families
+    from ankusdrive import families
     bad = dict(toys.GEAR_FAMILY,
                rows=toys.GEAR_FAMILY["rows"] + [{"size": "Z2", "module_mm": 2.0,
                                                  "teeth": 2}])

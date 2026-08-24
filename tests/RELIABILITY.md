@@ -103,7 +103,7 @@ responses without paying again.
 
 ## When to run
 
-- After any change to `driftpin/render.py` or `driftpin/worker.py::_h_tessellate`.
+- After any change to `ankusdrive/render.py` or `ankusdrive/worker.py::_h_tessellate`.
 - After upgrading the model in the harness (top of `test_reliability.py`).
 - Before declaring "agent-eyes works" for any new shape category — add the
   shape to the library, run the suite, watch what Claude actually says.
@@ -164,11 +164,11 @@ from the spec, it can't fix mistakes.
 ### Layer D — full agent tool-use (`tests/test_reliability_tasks.py`)
 
 **Shipped.** Layer C tests *visual judgment under spec* — it doesn't let the
-model call DriftPin tools. Layer D tests the other half: *can the model DRIVE the
+model call AnkusDrive tools. Layer D tests the other half: *can the model DRIVE the
 tools to produce geometry that meets a goal.* The agent gets an English design
-goal and the DriftPin tool surface, runs a real tool-use loop against a real
+goal and the AnkusDrive tool surface, runs a real tool-use loop against a real
 FreeCAD worker (via `orchestration/agentkit.py`), then the resulting SOLID is
-graded with DriftPin's own Tier-3 inspection tools (`bounding_box` /
+graded with AnkusDrive's own Tier-3 inspection tools (`bounding_box` /
 `check_shape` / `min_clearance` / `mass_properties`) as the ground-truth oracle.
 We never assert *which* tools it called — only that the artifact is correct.
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Set up THIS machine to run the DriftPin test suite locally — the local
+# Set up THIS machine to run the AnkusDrive test suite locally — the local
 # replacement for the GitHub Actions test runner that used to live in
 # .github/workflows/test.yml.
 #
 # It REUSES an already-installed FreeCAD 1.1 AppImage instead of downloading
 # anything, mirroring what CI did with a cached conda env:
 #
-#   - freecadcmd : symlinked onto PATH (~/.local/bin) so driftpin's worker
+#   - freecadcmd : symlinked onto PATH (~/.local/bin) so ankusdrive's worker
 #                  resolves FreeCAD via shutil.which() — no env var needed.
 #   - .venv      : .venv/bin/python3 -> FreeCAD's *bundled* python, which already
 #                  ships numpy + Pillow. That feeds run_all.sh's two-interpreter
@@ -15,7 +15,7 @@
 #
 # Idempotent — safe to re-run. Overrides:
 #   FREECAD_HOME       an extracted .../squashfs-root/usr to use as-is
-#   DRIFTPIN_APPIMAGE  a specific FreeCAD*.AppImage to extract
+#   ANKUSDRIVE_APPIMAGE  a specific FreeCAD*.AppImage to extract
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
@@ -30,7 +30,7 @@ find_extracted() {
   return 1
 }
 find_appimage() {
-  for f in "${DRIFTPIN_APPIMAGE:-}" \
+  for f in "${ANKUSDRIVE_APPIMAGE:-}" \
            "$HOME"/Applications/FreeCAD*.AppImage \
            "$HOME"/Downloads/FreeCAD*.AppImage; do
     [ -n "$f" ] && [ -f "$f" ] && { echo "$f"; return 0; }
@@ -61,7 +61,7 @@ PYBUNDLE="$USR/bin/python"
 [ -x "$FREECADCMD" ] || { echo "ERROR: $FREECADCMD missing/not executable" >&2; exit 1; }
 [ -x "$PYBUNDLE" ]   || { echo "ERROR: $PYBUNDLE missing/not executable"   >&2; exit 1; }
 
-# --- 2. put freecadcmd on PATH (driftpin resolves it via shutil.which) ---
+# --- 2. put freecadcmd on PATH (ankusdrive resolves it via shutil.which) ---
 mkdir -p "$LOCALBIN"
 ln -sfn "$FREECADCMD" "$LOCALBIN/freecadcmd"
 echo "Linked $LOCALBIN/freecadcmd -> $FREECADCMD"
@@ -78,7 +78,7 @@ if command -v freecadcmd >/dev/null; then
   echo "  freecadcmd on PATH: $(command -v freecadcmd)"
 else
   echo "  WARN: freecadcmd not on PATH — add $LOCALBIN to PATH, or export"
-  echo "        DRIFTPIN_FREECADCMD=$FREECADCMD before running the suite."
+  echo "        ANKUSDRIVE_FREECADCMD=$FREECADCMD before running the suite."
 fi
 "$REPO/.venv/bin/python3" - <<'PY'
 import sys, numpy, PIL
@@ -86,7 +86,7 @@ print(f"  .venv python {sys.version.split()[0]}  numpy {numpy.__version__}  Pill
 PY
 python3 - <<'PY'
 import shutil
-print("  driftpin resolves freecadcmd ->", shutil.which("freecadcmd") or "NOT FOUND (check PATH)")
+print("  ankusdrive resolves freecadcmd ->", shutil.which("freecadcmd") or "NOT FOUND (check PATH)")
 PY
 echo
 echo "Setup complete. Run the suite with:  bash tests/run_all.sh"

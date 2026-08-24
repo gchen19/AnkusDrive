@@ -1,5 +1,5 @@
 """
-A REAL constant-mesh parallel-shaft gearbox as a DriftPin assembly — housing
+A REAL constant-mesh parallel-shaft gearbox as a AnkusDrive assembly — housing
 plates + two shafts + bearings (library parts) + bored gears, mated and gated with
 the typed interfaces (gear_mesh per pair, bore_fit shaft↔bearing) + a mass
 requirement. Scripted reference first (prove the design + the oracle), then the
@@ -19,7 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from driftpin import Worker  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
 
 M = 2.0                 # gear module
 C = 48.0                # shaft centre distance
@@ -184,7 +184,7 @@ def build_manifest(tmp, n, files, mechanism=None, manifest_name="manifest.json")
                        "ratio": teeth(RATIOS[s])[1] / teeth(RATIOS[s])[0],
                        "tol_mm": 0.6})
 
-    man = {"schema": "driftpin.manifest/1", "name": f"gearbox{n}",
+    man = {"schema": "ankusdrive.manifest/1", "name": f"gearbox{n}",
            "root": f"gearbox{n}.FCStd", "components": comps,
            "instances": insts, "checks": checks,
            "requirements": {"density_kg_mm3": 7.9e-6, "max_mass_g": 6000}}

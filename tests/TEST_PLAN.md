@@ -1,6 +1,6 @@
-# DriftPin test plan
+# AnkusDrive test plan
 
-How DriftPin is tested today, what's missing, and the order in which the
+How AnkusDrive is tested today, what's missing, and the order in which the
 remaining tests should land.
 
 The five slices each shipped with their own golden-path tests (face tagging,
@@ -396,7 +396,7 @@ The production test. Does the model's *visual judgment* match
 **Pattern:**
 1. Hand the model a written spec ("design a 30mm cube with a 6mm hole
    through the center").
-2. Let it call DriftPin tools (real agent loop, MCP transport).
+2. Let it call AnkusDrive tools (real agent loop, MCP transport).
 3. Render the result.
 4. Ask the model to self-evaluate: *"does this match the spec?"*.
 5. Independently check the geometry against the spec via `mass_properties`,
@@ -453,7 +453,7 @@ framework dependency without a real reason.
 to `main` and every PR — but on a **self-hosted** GitHub Actions runner, not a
 GitHub-hosted `ubuntu-latest` one. The runner machine already has FreeCAD 1.1
 installed, so CI reuses it instead of downloading FreeCAD via conda:
-`tests/setup_local.sh` symlinks `freecadcmd` onto PATH (so driftpin's worker
+`tests/setup_local.sh` symlinks `freecadcmd` onto PATH (so ankusdrive's worker
 resolves it via `shutil.which`) and points `.venv/bin/python3` at FreeCAD's
 bundled python, which already ships numpy + Pillow. That feeds `run_all.sh`'s
 two-interpreter split — system `python3` for the worker tests, `.venv` python3
@@ -471,5 +471,5 @@ what makes any machine a runner host; see it for the one-time wiring.
   precisely to avoid this.
 - **Fuzz testing of FreeCAD's API surface.** FreeCAD is a third-party
   dependency; we don't try to find bugs in it, only in our wrapper.
-- **Multi-machine / cross-platform CI.** DriftPin targets macOS today (per
+- **Multi-machine / cross-platform CI.** AnkusDrive targets macOS today (per
   README). Windows/Linux can wait until someone needs them.

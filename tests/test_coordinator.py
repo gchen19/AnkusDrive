@@ -60,7 +60,7 @@ def _housing_steps():
 
 
 def _is_review(task):
-    # the review slice is the rendered builder brief (driftpin.builder_brief/1),
+    # the review slice is the rendered builder brief (ankusdrive.builder_brief/1),
     # which opens "You are building component '<id>' ..."; a build task opens "Build".
     return task.startswith("You are building component '")
 

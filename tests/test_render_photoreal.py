@@ -6,7 +6,7 @@ a Render Project/Camera scene and shells out to an external renderer (POV-Ray by
 default). They require BOTH the Render addon and a renderer binary to be installed
 (see docs/RENDER_WORKBENCH.md). On a machine without them, each test SKIPs — the
 worker still boots (Render is imported lazily inside the handler), and the render
-call returns DriftPin's own install-guidance error, which we detect and treat as a
+call returns AnkusDrive's own install-guidance error, which we detect and treat as a
 skip so CI lanes that don't provision a renderer stay green.
 
 Like test_render.py, these assert invariants, never exact pixels — photoreal output
@@ -29,10 +29,10 @@ from PIL import Image
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import Worker  # noqa: E402
-from driftpin.client import WorkerError  # noqa: E402
+from ankusdrive import Worker  # noqa: E402
+from ankusdrive.client import WorkerError  # noqa: E402
 
-# Substrings of the worker's OWN guidance messages (driftpin/worker.py) when the
+# Substrings of the worker's OWN guidance messages (ankusdrive/worker.py) when the
 # addon or renderer binary is missing — stable because we author them.
 _UNAVAILABLE_MARKERS = ("not importable", "could not locate")
 

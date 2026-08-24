@@ -31,8 +31,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scratch"))
-from driftpin import Worker          # noqa: E402
-from driftpin.analysis import mbd    # noqa: E402
+from ankusdrive import Worker          # noqa: E402
+from ankusdrive.analysis import mbd    # noqa: E402
 import sim_video as sv               # noqa: E402
 import numpy as np                   # noqa: E402
 import matplotlib                    # noqa: E402

@@ -1,5 +1,5 @@
 """
-Unit tests for the resolve step (driftpin/manifest.py, RFC §11.1) — pure
+Unit tests for the resolve step (ankusdrive/manifest.py, RFC §11.1) — pure
 Python, no FreeCAD, no API. The grid case must reproduce the tchainu eval
 oracle exactly: that toy measured partition 2/20 / single 0/20 when agents
 were asked to reconcile, and the resolved values below are what a passing
@@ -14,7 +14,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.manifest import resolve_constraints  # noqa: E402
+from ankusdrive.manifest import resolve_constraints  # noqa: E402
 
 # the tchainu contract (tests/test_multiagent_m2.py): nominals sum to 100.0 but
 # every one rounds UP on a whole-mm grid -> unreconciled chains hit 102.

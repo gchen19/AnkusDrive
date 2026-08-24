@@ -1,66 +1,65 @@
-# DriftPin
+# AnkusDrive
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="logo/wordmark/driftpin-wordmark-dark-1280.png">
-  <img src="logo/wordmark/driftpin-wordmark-1280.png" alt="DriftPin" width="420">
-</picture>
+<!-- Wordmark intentionally omitted: the DriftPin mark (a drift pin threading a
+     reticle) is name-derived artwork, so the rename needs a redesign rather than
+     a re-export. The old assets stay in logo/ until then. -->
 
 A CLI + MCP server that drives [FreeCAD](https://www.freecad.org/) through its Python API so LLMs (and humans at a terminal) can design mechanical parts and run FEM simulations without clicking through the GUI.
 
 ## Why
 
-FreeCAD exposes almost everything it does through a Python API — create documents, build sketches, extrude solids, mesh them, run CalculiX/Elmer FEM solves, read back stress/displacement fields. But that API lives inside FreeCAD's embedded Python (`freecadcmd`), which is awkward to call from anywhere else. DriftPin wraps it behind two surfaces:
+FreeCAD exposes almost everything it does through a Python API — create documents, build sketches, extrude solids, mesh them, run CalculiX/Elmer FEM solves, read back stress/displacement fields. But that API lives inside FreeCAD's embedded Python (`freecadcmd`), which is awkward to call from anywhere else. AnkusDrive wraps it behind two surfaces:
 
-- **CLI** — one-shot commands (`driftpin run script.py`, `driftpin box --w 10 --d 20 --h 5 -o part.FCStd`) for scripts, CI, and quick iteration.
+- **CLI** — one-shot commands (`ankusdrive run script.py`, `ankusdrive box --w 10 --d 20 --h 5 -o part.FCStd`) for scripts, CI, and quick iteration.
 - **MCP server** — 240+ structured tools (`new_document`, `add_primitive`, `boolean_op`, `pad`, `add_gear`, `fem_new_analysis`, `fem_run`, `fem_results`) so an LLM agent can model, inspect, and simulate iteratively. Beyond core CAD/FEM this now spans a broad **simulation surface** (thermal, CFD/CHT, EM, acoustics, FSI, injection molding, granular/DEM, optics, multibody) and a **design-control layer** (item/part numbers, recipes, variant families, lifecycle/revision, ECO change orders, versioned interfaces).
 - **Multi-agent orchestration** — a host-side reference layer that lets a *team* of agents partition one product into components, build them in parallel, and merge the pieces back together with the joints actually fitting (see [Multi-agent design](#multi-agent-design)).
 
 ## Target environment
 
-- FreeCAD 1.1.x. The `freecadcmd` binary is auto-discovered per-OS (macOS `.app` bundle, Linux `/usr/bin` etc., **Windows** `C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe` — version-globbed); override via `$DRIFTPIN_FREECADCMD` or rely on PATH. Run `driftpin doctor` to see exactly what resolved.
+- FreeCAD 1.1.x. The `freecadcmd` binary is auto-discovered per-OS (macOS `.app` bundle, Linux `/usr/bin` etc., **Windows** `C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe` — version-globbed); override via `$ANKUSDRIVE_FREECADCMD` or rely on PATH. Run `ankusdrive doctor` to see exactly what resolved.
 - Bundled Python, `ccx` (CalculiX), and `gmsh` already ship **inside every FreeCAD install** — the macOS `.app`, the Linux package, and the Windows `bin\` — so core CAD + structural FEM work on all three with no extra install.
-- Host-side rendering needs `Pillow` and `numpy`; both are installed by DriftPin as regular pip deps.
+- Host-side rendering needs `Pillow` and `numpy`; both are installed by AnkusDrive as regular pip deps.
 - **One optional exception:** drawing **PDF/SVG** export (`export_drawing`) renders inside FreeCAD's *bundled* Python, so it needs `reportlab` + `svglib` installed **there** — see [Drawing export (PDF/SVG)](#drawing-export-pdfsvg). DXF export and everything else leave FreeCAD's Python untouched.
 
 ## Setup
 
-DriftPin is a `pip`-installable package; FreeCAD itself is the only thing you
+AnkusDrive is a `pip`-installable package; FreeCAD itself is the only thing you
 install separately. The host-side dependencies (`mcp`, `Pillow`, `numpy`) come
 along with the install. `freecadcmd` is launched as a subprocess and uses its
-own bundled Python — DriftPin doesn't touch it.
+own bundled Python — AnkusDrive doesn't touch it.
 
 ```bash
 # 1. Install FreeCAD 1.1.x from https://www.freecad.org/
 #    (macOS: drag to /Applications; Linux: distro package or AppImage;
 #     Windows: run the installer — default C:\Program Files\FreeCAD 1.1)
 
-# 2. Install DriftPin. Pick one:
-pipx install driftpin                                       # on release — from PyPI, `driftpin` on PATH
+# 2. Install AnkusDrive. Pick one:
+pipx install ankusdrive                                       # on release — from PyPI, `ankusdrive` on PATH
 # until the first PyPI upload (v0.4.0), install straight from the repo:
-pipx install git+https://github.com/gchen19/DriftPin.git    # isolated app, `driftpin` on PATH
+pipx install git+https://github.com/gchen19/AnkusDrive.git    # isolated app, `ankusdrive` on PATH
 # or for development from a clone:
-git clone https://github.com/gchen19/DriftPin.git && cd DriftPin
-python3 -m venv .venv && .venv/bin/pip install -e .         # `.venv/bin/driftpin`
+git clone https://github.com/gchen19/AnkusDrive.git && cd AnkusDrive
+python3 -m venv .venv && .venv/bin/pip install -e .         # `.venv/bin/ankusdrive`
 
 # 3. Smoke-test that the worker can reach FreeCAD, and see the full setup report
-driftpin ping        # → ping=pong freecad=1.1.1
-driftpin doctor      # per-item FreeCAD + solver checklist with the exact fix each
+ankusdrive ping        # → ping=pong freecad=1.1.1
+ankusdrive doctor      # per-item FreeCAD + solver checklist with the exact fix each
 ```
 
 > **Windows (PowerShell):** the clone path is `py -m venv .venv` then
 > `.venv\Scripts\pip install -e .`, and the resulting entry point is
-> `.venv\Scripts\driftpin.exe`. FreeCAD's own `freecadcmd.exe` needs nothing on
-> PATH — DriftPin globs `C:\Program Files\FreeCAD *\bin\` automatically. Everything
+> `.venv\Scripts\ankusdrive.exe`. FreeCAD's own `freecadcmd.exe` needs nothing on
+> PATH — AnkusDrive globs `C:\Program Files\FreeCAD *\bin\` automatically. Everything
 > in step 3 works from a stock FreeCAD 1.1 install (verified: core CAD + a
 > CalculiX cantilever solve via the bundled `ccx.exe`).
 
-The `pipx install driftpin` path lights up with the first PyPI release
+The `pipx install ankusdrive` path lights up with the first PyPI release
 (v0.4.0), tracked in [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md); until
 then use the `git+https://…` or clone paths above.
 
-### Telling DriftPin where FreeCAD lives
+### Telling AnkusDrive where FreeCAD lives
 
-DriftPin auto-discovers `freecadcmd` in this order: `$DRIFTPIN_FREECADCMD`,
+AnkusDrive auto-discovers `freecadcmd` in this order: `$ANKUSDRIVE_FREECADCMD`,
 then `shutil.which(...)` on PATH (trying `freecadcmd`, `FreeCADCmd`, and
 `freecad.cmd`), then a **per-OS** list of standard install locations:
 
@@ -71,16 +70,16 @@ then `shutil.which(...)` on PATH (trying `freecadcmd`, `FreeCADCmd`, and
 | Windows | `C:\Program Files\FreeCAD *\bin\freecadcmd.exe` (version-globbed), `C:\Program Files (x86)\…`, `%LOCALAPPDATA%\Programs\FreeCAD *\bin\…` |
 
 So a stock installer on any of the three needs **no configuration**. For a
-non-default install, point DriftPin at the binary directly:
+non-default install, point AnkusDrive at the binary directly:
 
 ```bash
-export DRIFTPIN_FREECADCMD=/path/to/freecadcmd            # macOS/Linux
+export ANKUSDRIVE_FREECADCMD=/path/to/freecadcmd            # macOS/Linux
 ```
 ```powershell
-$env:DRIFTPIN_FREECADCMD = "D:\Apps\FreeCAD\bin\freecadcmd.exe"   # Windows
+$env:ANKUSDRIVE_FREECADCMD = "D:\Apps\FreeCAD\bin\freecadcmd.exe"   # Windows
 ```
 
-`driftpin doctor` prints which of the three layers (env / PATH / auto) actually
+`ankusdrive doctor` prints which of the three layers (env / PATH / auto) actually
 resolved FreeCAD, plus every candidate it checked — the fastest way to debug a
 "FreeCAD not found" on a new box.
 
@@ -115,7 +114,7 @@ no separate install is required.
 
 ### Wiring it into an MCP host
 
-The MCP server speaks stdio. Point your host at the `driftpin` binary and
+The MCP server speaks stdio. Point your host at the `ankusdrive` binary and
 let it run the `mcp` subcommand.
 
 **Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -124,55 +123,55 @@ let it run the `mcp` subcommand.
 ```json
 {
   "mcpServers": {
-    "driftpin": {
-      "command": "driftpin",
+    "ankusdrive": {
+      "command": "ankusdrive",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-If `driftpin` isn't on the host process's PATH, use an absolute path —
-e.g. `/Users/<you>/.local/bin/driftpin` (pipx default) or
-`/absolute/path/to/DriftPin/.venv/bin/driftpin` (clone+venv).
+If `ankusdrive` isn't on the host process's PATH, use an absolute path —
+e.g. `/Users/<you>/.local/bin/ankusdrive` (pipx default) or
+`/absolute/path/to/AnkusDrive/.venv/bin/ankusdrive` (clone+venv).
 
 **Claude Code** — register once:
 
 ```bash
-claude mcp add driftpin -- driftpin mcp
+claude mcp add ankusdrive -- ankusdrive mcp
 ```
 
 **Other hosts (Cursor, Continue, custom MCP clients)** — same shape: stdio
-transport, command = `driftpin`, args = `["mcp"]`.
+transport, command = `ankusdrive`, args = `["mcp"]`.
 
-After restarting the host, you should see 240+ `driftpin__*` tools become
+After restarting the host, you should see 240+ `ankusdrive__*` tools become
 available. If startup hangs or the host reports a closed connection, run
-`driftpin ping` directly — that exercises the same worker boot path with
+`ankusdrive ping` directly — that exercises the same worker boot path with
 cleaner error messages.
 
 ## Simulation solvers & review-video demos
 
-The base install (FreeCAD + `pip install driftpin`) covers geometry, the analytic
+The base install (FreeCAD + `pip install ankusdrive`) covers geometry, the analytic
 oracles, and the MCP surface. The heavy simulation families each shell out to an
-**external solver**, discovered at runtime by [`driftpin/solvers.py`](driftpin/solvers.py)
-(`$DRIFTPIN_<SOLVER>_PATH` → `PATH` → standard install dirs). A family whose solver is
+**external solver**, discovered at runtime by [`ankusdrive/solvers.py`](ankusdrive/solvers.py)
+(`$ANKUSDRIVE_<SOLVER>_PATH` → `PATH` → standard install dirs). A family whose solver is
 absent degrades to a clean `{ok: false, reason, install}` dict instead of crashing — check
-what currently resolves with **`driftpin doctor`** (cross-platform, no server boot needed),
+what currently resolves with **`ankusdrive doctor`** (cross-platform, no server boot needed),
 the `solve_capabilities` MCP tool, or the install script's `list`. The install script
 installs the pip-wheel solvers and provisions the native ones —
 `scripts/install-solvers.sh` on Linux/macOS (apt/conda + source builds), and
 [`scripts/install-solvers.ps1`](scripts/install-solvers.ps1) on Windows (pip extras +
 portable SU2/Elmer/PrusaSlicer downloads; CalculiX auto-detected from FreeCAD's bundle).
 
-**Persistent config:** every `DRIFTPIN_*` path can instead live in
-`~/.config/driftpin/config.toml` (`%APPDATA%\driftpin\config.toml` on Windows;
-`DRIFTPIN_CONFIG` overrides): `freecadcmd = "..."` at top level, one lowercased key per
+**Persistent config:** every `ANKUSDRIVE_*` path can instead live in
+`~/.config/ankusdrive/config.toml` (`%APPDATA%\ankusdrive\config.toml` on Windows;
+`ANKUSDRIVE_CONFIG` overrides): `freecadcmd = "..."` at top level, one lowercased key per
 solver var under `[solvers]` (`su2_path`, `elmer_path`, `openfoam_bashrc`, ...). Env vars
 still win when set; the file is the layer that survives an MCP host's minimal launch
-environment. `driftpin doctor` reports the file and which layer resolved each value.
+environment. `ankusdrive doctor` reports the file and which layer resolved each value.
 
 **Platform note:** the solver *discovery* layer is fully cross-platform (per-OS install
-dirs, Windows `PATHEXT`/`.exe`, env overrides), so `driftpin doctor` gives an honest report
+dirs, Windows `PATHEXT`/`.exe`, env overrides), so `ankusdrive doctor` gives an honest report
 on macOS/Linux/Windows. The **pip-wheel** families (MBD, topology, optics, fluids) install
 identically everywhere. The **native-binary** families differ by OS — CalculiX ships inside
 every FreeCAD install; SU2 and PrusaSlicer have good Windows/macOS binaries; Elmer has a
@@ -193,11 +192,11 @@ pip install matplotlib meshio        # frame rendering + reading OpenFOAM's VTK 
 
 | Review-video demo (`scratch/…`) | Solver it drives | Install |
 |---|---|---|
-| `dog_clutch_cad_sim.py` — rigid-body contact via `p.vhacd` | **PyBullet** (pip wheel) | `pip install 'driftpin[mbd]'` |
-| `meshing_gears_video.py` — MBD gear train | **PyBullet** (pip wheel) | `pip install 'driftpin[mbd]'` |
+| `dog_clutch_cad_sim.py` — rigid-body contact via `p.vhacd` | **PyBullet** (pip wheel) | `pip install 'ankusdrive[mbd]'` |
+| `meshing_gears_video.py` — MBD gear train | **PyBullet** (pip wheel) | `pip install 'ankusdrive[mbd]'` |
 | `modal_shape_video.py` — FEM modal shapes | **CalculiX** `ccx` (FreeCAD FEM) | `apt install calculix-ccx` (Linux); FreeCAD finds `ccx` on `PATH` |
-| `thermal_field_video.py` — transient thermal field | **Elmer** | `apt install elmerfem-csc`; ensure `ElmerSolver` on `PATH` (or set `DRIFTPIN_ELMER_PATH`) |
-| `cfd_field_video.py` — CFD field (lid-driven cavity) | **OpenFOAM** + `meshio` | OpenFOAM via apt/conda, then `source <install>/etc/bashrc` (or set `DRIFTPIN_OPENFOAM_BASHRC`); `pip install meshio` |
+| `thermal_field_video.py` — transient thermal field | **Elmer** | `apt install elmerfem-csc`; ensure `ElmerSolver` on `PATH` (or set `ANKUSDRIVE_ELMER_PATH`) |
+| `cfd_field_video.py` — CFD field (lid-driven cavity) | **OpenFOAM** + `meshio` | OpenFOAM via apt/conda, then `source <install>/etc/bashrc` (or set `ANKUSDRIVE_OPENFOAM_BASHRC`); `pip install meshio` |
 
 All of them also use FreeCAD for the geometry/meshing, so run each with the same
 interpreter that launches the worker — e.g. `.venv/bin/python3 scratch/cfd_field_video.py`.
@@ -208,16 +207,16 @@ Two optics engines sit behind the MCP surface, in two licensing/runtime lanes:
 
 | Lane | Tools | Engine | Install |
 |---|---|---|---|
-| Sequential — lens design + optimization | `optics_lens_design`, `optics_lens_optimize`, `optics_raytrace` | **optiland** / rayoptics (MIT/BSD, in-process) | `pip install 'driftpin[optics]'` — or `scripts/install-solvers.sh optics` |
-| Non-sequential — tracing through STL solids | `optics_solid_trace` | **KrakenOS** (GPL-3.0, **out-of-process only**) | `pip install 'driftpin[optics_gpl]'` — or `scripts/install-solvers.sh optics_gpl` |
+| Sequential — lens design + optimization | `optics_lens_design`, `optics_lens_optimize`, `optics_raytrace` | **optiland** / rayoptics (MIT/BSD, in-process) | `pip install 'ankusdrive[optics]'` — or `scripts/install-solvers.sh optics` |
+| Non-sequential — tracing through STL solids | `optics_solid_trace` | **KrakenOS** (GPL-3.0, **out-of-process only**) | `pip install 'ankusdrive[optics_gpl]'` — or `scripts/install-solvers.sh optics_gpl` |
 
 The sequential engines import in-process, so install the `optics` extra into the **same
 interpreter that launches the worker** (like the other wheels). The non-sequential engine
-is GPL-3.0 and is therefore **never imported by DriftPin** — it runs in a separate
-subprocess ([`driftpin/optics_gpl_runner.py`](driftpin/optics_gpl_runner.py)), the same
+is GPL-3.0 and is therefore **never imported by AnkusDrive** — it runs in a separate
+subprocess ([`ankusdrive/optics_gpl_runner.py`](ankusdrive/optics_gpl_runner.py)), the same
 arm's-length boundary used for the GPL Elmer/OpenFOAM binaries. The worker locates a
 Python that can import KrakenOS automatically (from where the wheel is installed); override
-with `DRIFTPIN_OPTICS_GPL_PYTHON=/path/to/python`. Because of that isolation the GPL extra
+with `ANKUSDRIVE_OPTICS_GPL_PYTHON=/path/to/python`. Because of that isolation the GPL extra
 is **opt-in**: the no-argument `install-solvers.sh` run installs only the permissive
 extras and prints how to add `optics_gpl`. Rendered examples for both lanes (lens layout,
 spot diagram, optimization, prism TIR, and a ball-lens spherical-aberration study) live in
@@ -233,7 +232,7 @@ scripts/install-solvers.sh --optics-gallery
 
 ```
  ┌────────────┐      ┌────────────┐      ┌──────────────────────┐
- │  MCP host  │ ───► │ DriftPin   │ ───► │  freecadcmd worker   │
+ │  MCP host  │ ───► │ AnkusDrive   │ ───► │  freecadcmd worker   │
  │  (Claude)  │      │ (Python)   │ IPC  │  (long-lived Python) │
  └────────────┘      └────────────┘      └──────────────────────┘
        ▲                    ▲                        │
@@ -275,7 +274,7 @@ Notes gathered from the scripting docs and the FEM Python tutorial:
 
 ## How an agent reaches FreeCAD: three layers
 
-DriftPin exposes FreeCAD through three layers, each with a different audience
+AnkusDrive exposes FreeCAD through three layers, each with a different audience
 and a different cost-of-use. Knowing which layer a feature lives in tells you
 how to invoke it.
 
@@ -299,7 +298,7 @@ every day.
 | Generic property access | `get_object`, `set_property` |
 | Functional intent & invariants | `annotate_face`, `list_face_roles`, `classify_face_sides`, `check_airtight_path`, `declare_intent`, `verify_intent` |
 | Performance contracts | `declare_performance`, `verify_performance` — a quantitative spec ("Cd ≤ 0.30 at 30 m/s", "Δp ≤ 50 Pa", "first mode ≥ 200 Hz") persisted on the part and re-proved after every edit, with a three-state verdict: a measurement whose uncertainty band straddles the limit is `indeterminate` (escalate), never a pass. The contract is consulted at the gates (#261): `merge_assembly`, `substitutability_check` and `component_contract_check` read the last recorded verdict, so an unmet spec blocks a merge and an *unverified* one is reported as its own outcome rather than passing silently |
-| Design-space studies (DOE) | `study_submit` — sweep recipe/tool parameters over a full grid or a Latin hypercube and keep the WHOLE search as a table, not just the last point. A response is any DriftPin tool + a metric path (including a whole `verify_performance` verdict, so points stay comparable across fidelity tiers); screening responses evaluate inline, solver responses fan out concurrently behind one collector job. Sampling is deterministic from `seed`, so re-submitting a crashed or widened study re-runs only the new points and reports the rest as cache hits |
+| Design-space studies (DOE) | `study_submit` — sweep recipe/tool parameters over a full grid or a Latin hypercube and keep the WHOLE search as a table, not just the last point. A response is any AnkusDrive tool + a metric path (including a whole `verify_performance` verdict, so points stay comparable across fidelity tiers); screening responses evaluate inline, solver responses fan out concurrently behind one collector job. Sampling is deterministic from `seed`, so re-submitting a crashed or widened study re-runs only the new points and reports the rest as cache hits |
 | Optimize to a spec | `optimize_submit` — vary bounded parameters until every constraint passes, then report whether it was **proven**. A bounded Nelder-Mead (derivative-free; there is no adjoint through a CFD solve) over the same objective/constraint mapping the contract layer uses, with a screen→solver fidelity ladder. Two rules come from the contract layer: an `indeterminate` constraint is a measurement problem, not a failed step (it neither attracts nor repels the search), and convergence is not proof — a margin narrower than its own uncertainty band is reported unproven, however tidily the simplex converged |
 | Assembly & interfaces | `make_assembly`, `add_part`, `list_assembly_parts`, `merge_assembly`, `publish_interface`, `interface_align_check`, `assembly_lock`, `assembly_lock_check`, `bom_extract` |
 | Drawings (TechDraw, headless) | `make_drawing_page`, `add_projection_group`, `add_section_view`, `add_thumbnail`, `add_dimension`, `add_annotation`, `add_feature_note`, `add_gdt_callout` (feature control frames), `set_title_block`, `fit_page`, `export_drawing` (PDF/SVG/DXF), plus completeness/legibility gates `drawing_gate`, `drawing_legibility` |
@@ -342,7 +341,7 @@ Loft, internal tunables on a CCX solver).
 For features that have **no first-class MCP tool at all** — e.g. Path
 workbench (CAM toolpaths), Surface workbench, Arch/BIM, Spreadsheet,
 TechDraw dimensions, contact/spring FEM constraints, B-spline sketcher
-operations, expression-engine bindings, anything in a workbench DriftPin
+operations, expression-engine bindings, anything in a workbench AnkusDrive
 doesn't wrap.
 
 ```python
@@ -371,15 +370,15 @@ tool. Seven subcommands:
 
 | Command | Purpose |
 |---|---|
-| `driftpin ping` / `version` | Health check — boot a worker, prove FreeCAD is reachable |
-| `driftpin box` / `cylinder` | Single-shot primitive → .FCStd (manual smoke tests) |
-| `driftpin export <in.FCStd> -o <out.step>` | Headless format conversion |
-| `driftpin run <script.py>` | Execute arbitrary FreeCAD Python in a live worker (set `__result__` to return JSON) |
-| `driftpin mcp` | **Start the MCP server over stdio** — this is how an MCP host launches DriftPin |
-| `driftpin fem cantilever` | Run the built-in canned demo |
+| `ankusdrive ping` / `version` | Health check — boot a worker, prove FreeCAD is reachable |
+| `ankusdrive box` / `cylinder` | Single-shot primitive → .FCStd (manual smoke tests) |
+| `ankusdrive export <in.FCStd> -o <out.step>` | Headless format conversion |
+| `ankusdrive run <script.py>` | Execute arbitrary FreeCAD Python in a live worker (set `__result__` to return JSON) |
+| `ankusdrive mcp` | **Start the MCP server over stdio** — this is how an MCP host launches AnkusDrive |
+| `ankusdrive fem cantilever` | Run the built-in canned demo |
 
 Agents do not invoke the CLI. They speak MCP via stdio after the host has
-launched `driftpin mcp`. The CLI's job is (a) to start that server and
+launched `ankusdrive mcp`. The CLI's job is (a) to start that server and
 (b) to give a human a way to poke at the worker without writing an MCP
 client.
 
@@ -412,13 +411,13 @@ claims its own workspace with `use_workspace(name)` at the start of its session;
 `use_workspace` sees the historical single-worker behavior byte-for-byte
 (everything routes to the `default` workspace). `Worker.call()` is internally
 serialized so two threads can never interleave the stdin/stdout protocol on one
-process. The pool is capped (`DRIFTPIN_MAX_WORKSPACES`, default 4) and idle
-workspaces are reaped (`DRIFTPIN_WORKSPACE_IDLE_S`, default 900s) so abandoned
+process. The pool is capped (`ANKUSDRIVE_MAX_WORKSPACES`, default 4) and idle
+workspaces are reaped (`ANKUSDRIVE_WORKSPACE_IDLE_S`, default 900s) so abandoned
 sessions don't leak processes; `list_workspaces` / `close_workspace` manage it.
 
 The split of responsibilities is deliberate:
 
-- **DriftPin ships the thin, tool-agnostic primitives** that make a merge
+- **AnkusDrive ships the thin, tool-agnostic primitives** that make a merge
   verifiable — `publish_interface` (declare a component's mating frames),
   `merge_assembly` (combine component files into one assembly), and the
   **gates** that decide whether a merge is sound: `interface_align_check`
@@ -427,7 +426,7 @@ The split of responsibilities is deliberate:
   `assembly_lock` / `assembly_lock_check` contract lockfile. These are real
   MCP tools usable by any host.
 - **`orchestration/` is the host-side *reference* coordinator** — explicitly
-  **not** part of the `driftpin` package. Given a free-text brief it
+  **not** part of the `ankusdrive` package. Given a free-text brief it
   `decompose`s it into a validated manifest, fans out one builder agent per
   component, `merge_assembly`s them, reads the gates, and on failure
   **renegotiates** — re-dispatching only the components implicated by the
@@ -448,21 +447,21 @@ partition performing at or above the single-agent baseline on the harder toys.
 Multi-agent orchestration partitions *one* product across a team. A separate
 axis makes a *design* (not just a part) something you can parameterize, vary,
 and evolve under control — the mechanisms a PLM/PDM workflow expects, mapped
-onto DriftPin's deterministic, headless, git-diffable grain. The keystone
+onto AnkusDrive's deterministic, headless, git-diffable grain. The keystone
 insight: **the build recipe is the feature tree; the parameters are its inputs;
-regeneration is re-running the recipe** — so DriftPin gets parametric regen and
+regeneration is re-running the recipe** — so AnkusDrive gets parametric regen and
 family tables without a live in-file expression engine. The full scoping and
 rationale is in [`docs/DESIGN_HIERARCHY.md`](docs/DESIGN_HIERARCHY.md); the
 agent-facing judgment lives in the [`design-modularly`](skills/design-modularly)
 skill.
 
 - **Parametric hierarchy** — *recipes* (`recipe`, `recipe_validate`) are named,
-  declared-input build templates (DriftPin's PowerCopy/UDF *and* its intra-part
+  declared-input build templates (AnkusDrive's PowerCopy/UDF *and* its intra-part
   parametric model); a *relations* DAG drives driven dimensions from master
   parameters by formula (`pitch_d = module * teeth`, arithmetic only — no
   iterative solve, no double-driving); *feature templates* (`feature_instantiate`)
   graft reusable features onto reference geometry by name; the typed
-  [`units`](driftpin/units.py) layer rejects dimensionally-wrong inputs at the
+  [`units`](ankusdrive/units.py) layer rejects dimensionally-wrong inputs at the
   door (`"5 N"` for a length is an error, not a silent mis-scale).
 - **Variant families** — `family_materialize` expands a row × column design
   table into a set of variants deterministically, running the recipe per row and
@@ -504,11 +503,11 @@ versioned interfaces, projects).
 - **CLI** — `ping`, `version`, `box`, `cylinder`, `export`, `run`, `mcp`, `fem cantilever`, plus top-level `--version`.
 - **MCP server** — FastMCP over stdio, 240+ typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), direct-modeling feature ops, parametric components, metrology/inspection, generic property reflection, mass properties, assembly + interface gates, TechDraw (incl. headless PDF/SVG/DXF export, dimensions, gates), multi-view + photoreal rendering, FEM (static + modal + buckling + thermal + nonlinear + result-probe), the engineering-analysis oracles and external-solver simulation families (sync + async `*_submit`/`job_*`), the materials/fluids corpora, Design-for-X / manufacturing checks, the design-control (PLM) layer, and transactions.
 - **Command tiers 1–3** — 21 new tools: parametric components (`add_gear`, `add_rack`, `add_sprocket`, `add_pulley`, `add_spring`, `add_fastener`, `add_bearing`, `add_thread`), direct feature ops (`fillet_edges`, `chamfer_edges`, `shell_solid`, `add_rib`, `engrave_text`, `oring_groove`, `transform`, `scale_shape`, `copy_shape`), and metrology/inspection (`measure_distance`, `measure_angle`, `bounding_box`, `check_shape`, `section_view`, `min_clearance`).
-- **Multi-agent orchestration** — DriftPin ships the thin merge primitives + gates (`publish_interface`, `merge_assembly`, `interface_align_check`, `envelope_check`, `assembly_lock`/`_check`); the host-side reference coordinator (`orchestration/`) decomposes a brief, fans out per-component builders, merges, gates, and renegotiates. See [Multi-agent design](#multi-agent-design) and [`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md).
+- **Multi-agent orchestration** — AnkusDrive ships the thin merge primitives + gates (`publish_interface`, `merge_assembly`, `interface_align_check`, `envelope_check`, `assembly_lock`/`_check`); the host-side reference coordinator (`orchestration/`) decomposes a brief, fans out per-component builders, merges, gates, and renegotiates. See [Multi-agent design](#multi-agent-design) and [`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md).
 - **Phase 3 intent-encoding additions** — `direction='into_body'|'away_from_body'` and `through='wall'|'body'` on pocket/hole (ray-cast wall depth handles hollow shells correctly); `intended_for='print'|'machine'|'drawing'` on hole drives ModelThread; `verify_feature` diffs actual-vs-expected volume change to catch silent failures; visibility hygiene at save hides consumed inputs; `register_handle` + `run_script` auto_register close the escape-hatch one-way trapdoor; `list_thread_options` surfaces the coupled ThreadType/ThreadSize enums dynamically; revolve has an OCCT pre-check that flags axis-coincident edges with an actionable error.
 - **Selection layer** — `list_faces` / `list_edges` / `query_faces` / `resolve_*` produce stable geometric tags that survive edits; FEM constraints take tags directly.
-- **Rendering** — host-side software rasterizer (`driftpin/render.py`) with per-pixel z-buffer (`render_view` / `render_views` return PNGs as MCP `ImageContent`), plus photoreal `render_photoreal` via the FreeCAD Render addon + an external renderer (POV-Ray / LuxCore / Appleseed / Cycles / OSPRay / PBRT). Support matrix, install, and limitations: [`docs/RENDERING.md`](docs/RENDERING.md).
-- **Simulation surface** — engineering-analysis oracles (machine elements, structural, durability, thermal, tolerance/GD&T) plus external-solver families that shell out to OpenFOAM / Elmer / CalculiX / openEMS / YADE / KrakenOS, discovered at runtime by [`driftpin/solvers.py`](driftpin/solvers.py) and degrading cleanly when absent. Long solves use an async submit→poll job pattern (`*_submit` + `job_status`/`job_result`/`job_list`). Catalog and result schemas: [`docs/SIMULATION_TOOLS.md`](docs/SIMULATION_TOOLS.md); proof harness: [`docs/SIMULATION_EXAMPLES.md`](docs/SIMULATION_EXAMPLES.md). Materials/fluids back these via `material_*` and `fluid_props` (mechanical-property / molding / CoolProp corpora).
+- **Rendering** — host-side software rasterizer (`ankusdrive/render.py`) with per-pixel z-buffer (`render_view` / `render_views` return PNGs as MCP `ImageContent`), plus photoreal `render_photoreal` via the FreeCAD Render addon + an external renderer (POV-Ray / LuxCore / Appleseed / Cycles / OSPRay / PBRT). Support matrix, install, and limitations: [`docs/RENDERING.md`](docs/RENDERING.md).
+- **Simulation surface** — engineering-analysis oracles (machine elements, structural, durability, thermal, tolerance/GD&T) plus external-solver families that shell out to OpenFOAM / Elmer / CalculiX / openEMS / YADE / KrakenOS, discovered at runtime by [`ankusdrive/solvers.py`](ankusdrive/solvers.py) and degrading cleanly when absent. Long solves use an async submit→poll job pattern (`*_submit` + `job_status`/`job_result`/`job_list`). Catalog and result schemas: [`docs/SIMULATION_TOOLS.md`](docs/SIMULATION_TOOLS.md); proof harness: [`docs/SIMULATION_EXAMPLES.md`](docs/SIMULATION_EXAMPLES.md). Materials/fluids back these via `material_*` and `fluid_props` (mechanical-property / molding / CoolProp corpora).
 - **Design-control (PLM) layer** — recipes + a relations DAG (parametric regen), feature templates, variant families from a design table, item/part-number identity, a lifecycle/revision state machine, ECO change records with where-used/impact + baselines, a versioned interface registry + Liskov substitutability gate, and project containers with reference-integrity guards. Scoping + rationale: [`docs/DESIGN_HIERARCHY.md`](docs/DESIGN_HIERARCHY.md). See [Designs, not just parts](#designs-not-just-parts--the-design-control-layer).
 - **Tests** — ~980 test functions across ~90 files (worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent / simulation families / molding / PLM layer), runnable via `tests/run_all.sh` (Linux/macOS) or `tests/run_all.ps1` (Windows — single-interpreter, skips the Linux-only solver families; see [`docs/WINDOWS.md`](docs/WINDOWS.md)). Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](tests/RELIABILITY.md).
 

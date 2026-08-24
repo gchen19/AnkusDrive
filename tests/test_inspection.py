@@ -1,6 +1,6 @@
 """Inspection artifacts (issue #232) — pure-core unit tests.
 
-No FreeCAD, no worker, no LLM: :mod:`driftpin.inspection` is descriptor arithmetic
+No FreeCAD, no worker, no LLM: :mod:`ankusdrive.inspection` is descriptor arithmetic
 over the same dim descriptors the completeness gate consumes, so these run on the
 host interpreter in milliseconds. They prove the three things the layer promises:
 
@@ -22,7 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin import inspection as insp  # noqa: E402
+from ankusdrive import inspection as insp  # noqa: E402
 
 _PASS = _FAIL = 0
 

@@ -1,4 +1,4 @@
-"""Cross-platform FreeCAD resolution + `driftpin doctor` contract (issues #191, #198).
+"""Cross-platform FreeCAD resolution + `ankusdrive doctor` contract (issues #191, #198).
 
 Pure-Python, no FreeCAD boot (probe_version=False), so this runs on any CI lane and
 on any host OS: it monkeypatches ``platform.system`` / ``glob.glob`` / ``os.path.isfile``
@@ -7,7 +7,7 @@ box the test runs on. Pins:
 
   * #191 — the Windows ``freecadcmd.exe`` discovery candidates (Program Files version
     glob, ``.exe`` name variants, env/PATH precedence, overlap dedup).
-  * #198 — ``driftpin doctor`` builds a well-formed report (platform + FreeCAD + the
+  * #198 — ``ankusdrive doctor`` builds a well-formed report (platform + FreeCAD + the
     solver capabilities dict) and renders it without crashing, whether FreeCAD resolves
     or not.
 
@@ -21,12 +21,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin import client, doctor  # noqa: E402
+from ankusdrive import client, doctor  # noqa: E402
 
 
 class _patch:
     """Patch attributes on a module, restoring them on exit. Also clears
-    DRIFTPIN_FREECADCMD so the env override never leaks in from the real shell."""
+    ANKUSDRIVE_FREECADCMD so the env override never leaks in from the real shell."""
 
     def __init__(self, **targets):
         # targets: {"client.platform.system": fn, ...} — but simpler: pass explicit
@@ -45,14 +45,14 @@ class _patch:
         setattr(obj, attr, value)
 
     def __enter__(self):
-        self._env = os.environ.pop("DRIFTPIN_FREECADCMD", None)
+        self._env = os.environ.pop("ANKUSDRIVE_FREECADCMD", None)
         return self
 
     def __exit__(self, *exc):
         for obj, attr, val in self._saved.values():
             setattr(obj, attr, val)
         if self._env is not None:
-            os.environ["DRIFTPIN_FREECADCMD"] = self._env
+            os.environ["ANKUSDRIVE_FREECADCMD"] = self._env
         return False
 
 
@@ -97,16 +97,16 @@ def test_windows_picks_highest_version():
 
 
 def test_env_override_wins_on_every_os():
-    """DRIFTPIN_FREECADCMD is the top precedence layer, returned verbatim and
+    """ANKUSDRIVE_FREECADCMD is the top precedence layer, returned verbatim and
     unconditionally (even if it doesn't exist) so CI/one-off runs are honored."""
     for system in ("Windows", "Darwin", "Linux"):
         with _patch() as p:
             p.set(client, "platform", _fake_platform(system))
-            os.environ["DRIFTPIN_FREECADCMD"] = r"X:\custom\freecadcmd.exe"
+            os.environ["ANKUSDRIVE_FREECADCMD"] = r"X:\custom\freecadcmd.exe"
             try:
                 assert client._resolve_freecadcmd() == r"X:\custom\freecadcmd.exe"
             finally:
-                os.environ.pop("DRIFTPIN_FREECADCMD", None)
+                os.environ.pop("ANKUSDRIVE_FREECADCMD", None)
 
 
 def test_path_lookup_tries_both_names():

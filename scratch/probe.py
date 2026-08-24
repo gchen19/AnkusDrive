@@ -1,4 +1,4 @@
-"""Introspection helper — dump factory + property surface for types DriftPin cares about."""
+"""Introspection helper — dump factory + property surface for types AnkusDrive cares about."""
 import FreeCAD, Part, ObjectsFem
 
 d = FreeCAD.newDocument("probe")

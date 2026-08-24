@@ -1,4 +1,4 @@
-# DriftPin multi-agent collaboration
+# AnkusDrive multi-agent collaboration
 
 How a *team* of agents — Claude subagents, another AI coding tool's agents, or
 humans at terminals — can design one mechanical product together: splitting it
@@ -44,7 +44,7 @@ There are two things people mean by "agents working on a part together":
 **This design targets (b), and treats (a) as a non-goal** (revisited, narrowed, as
 the final deferred phase). The reason is structural, not incidental:
 
-DriftPin's worker is a single long-lived `freecadcmd` process with a single
+AnkusDrive's worker is a single long-lived `freecadcmd` process with a single
 synchronous dispatch loop (`worker.py:_main`): read one newline-JSON request, run
 one `HANDLERS[method]`, write one response. *All* mutable state is two process
 globals — `_handles` (handle-string → live FreeCAD object, in-memory, dies with
@@ -103,7 +103,7 @@ This maps 1:1 onto shipped machinery:
 - `assembly_lock` / `assembly_lock_check` (`worker.py:4533/4554`) detect drift and
   staleness across the team without reading geometry (§9).
 
-All of it **thin, tool-agnostic primitives**. No orchestration lives in DriftPin.
+All of it **thin, tool-agnostic primitives**. No orchestration lives in AnkusDrive.
 
 ---
 
@@ -163,7 +163,7 @@ Key properties: it is **declarative** (no geometry, just contracts), **tool-agno
 owner reads only its own slice plus `shared_parameters` and `mates` that touch it.
 
 **Formalized (§11.7, shipped 2026-06-12):** the manifest now carries a
-`"schema": "driftpin.manifest/1"` stamp, is validated on load (`merge_assembly` /
+`"schema": "ankusdrive.manifest/1"` stamp, is validated on load (`merge_assembly` /
 `assembly_lock` raise on a malformed contract; `validate_manifest` checks it
 without building), and its content hash is recorded in the lockfile so a stale
 contract is detectable. An absent schema is still accepted as unversioned for
@@ -175,14 +175,14 @@ back-compat.
 
 `add_part` can place a child by a raw `[x,y,z]` (or position/axis/angle), but raw
 placements are brittle across a team: a magic number in one agent's head, re-derived
-by hand in another's. DriftPin already lets agents select geometry by stable,
+by hand in another's. AnkusDrive already lets agents select geometry by stable,
 content-addressed tags rather than positional `Face2` indices (`list_faces` /
 `query_faces` / `resolve_face`, the `f_<hash>`/`e_<hash>` signatures). The same
 philosophy, extended from faces/edges to **published interface frames**:
 
 - **`publish_interface(handle, name, frame)`** — record a named datum frame
   (`{origin, z_axis?, x_axis?}`) on a component, persisted as a JSON property bag
-  (`DP_Interfaces`) inside the `.FCStd` itself. This is the component owner's act of
+  (`AD_Interfaces`) inside the `.FCStd` itself. This is the component owner's act of
   saying "*here* is where you bolt to me, and this is its orientation." Because the
   frames travel with the file, they survive process restarts and are readable by any
   worker that opens the file.
@@ -284,15 +284,15 @@ that machinery.
 builder" has two equivalent bindings, and a host picks by whether it can spawn
 processes:
 
-- **Own MCP server** — the classic model: each builder runs its own `driftpin mcp`
+- **Own MCP server** — the classic model: each builder runs its own `ankusdrive mcp`
   process, so it gets its own worker and file with true OS-level parallelism. This
   is what Appendix B assumes.
 - **Own named workspace on a shared server** — when a host runs a *single* MCP
   server for all its agents, each builder calls `use_workspace("<component-id>")`
   once up front to claim its own freecadcmd process inside that server. Handles and
   documents do **not** cross workspaces; `list_workspaces` shows the pool and
-  `close_workspace` frees a slot (cap `DRIFTPIN_MAX_WORKSPACES`, default 4; idle
-  reap `DRIFTPIN_WORKSPACE_IDLE_S`). A client that never calls `use_workspace` sees
+  `close_workspace` frees a slot (cap `ANKUSDRIVE_MAX_WORKSPACES`, default 4; idle
+  reap `ANKUSDRIVE_WORKSPACE_IDLE_S`). A client that never calls `use_workspace` sees
   the historical single-worker behavior unchanged.
 
 Either way the invariant is the same: **a handle from one builder is meaningless to
@@ -314,7 +314,7 @@ Two practical isolation rules for orchestration templates:
 
 ## 8. Orchestration responsibilities (host-agnostic — roles, not tools)
 
-DriftPin provides primitives; **the host provides orchestration.** Described as roles
+AnkusDrive provides primitives; **the host provides orchestration.** Described as roles
 so any host maps them to its own mechanism. The manifest + component files are the
 *only* interface between roles — roles never share process state.
 
@@ -469,7 +469,7 @@ gearbox, not just an enclosure. In priority order:
 ### 11.1 The resolve step — shared parameters become resolved slices *(shipped)*
 
 Highest-leverage change, directly at the measured #1 failure mode (§10.2).
-**Shipped 2026-06-12** (`driftpin/manifest.py:resolve_constraints`, wired into
+**Shipped 2026-06-12** (`ankusdrive/manifest.py:resolve_constraints`, wired into
 `orchestration/coordinator.py`; v0 supports sum-to-target on an optional grid).
 The manifest gains a `constraints` section for *global* relations — totals,
 chains, center distances, ratios, grids:
@@ -525,7 +525,7 @@ gate already exists as a tool or as an M2 gate helper waiting to be promoted int
 | `sliding` | shaft/bore, `min_clearance_mm` **or** running fit class | a MIN-clearance gate (not a band) for a pair meant to move — overlap or gap < min (incl. exact-touch) fails | ✅ shipped (#170) |
 | `bolt_circle` | count, pitch, thread | frame mate + alignment check (shipped) | future |
 
-**Shipped 2026-06-12** (`driftpin/worker.py`): the manifest gains a `checks` list,
+**Shipped 2026-06-12** (`ankusdrive/worker.py`): the manifest gains a `checks` list,
 and `merge_assembly` dispatches each entry to its `kind`'s gate, folding the
 violations into `gates["typed"]` and the merge `ok`. The gates return structured
 violations (empty == pass), same shape as the classic gates, and an *unknown*
@@ -595,7 +595,7 @@ never raises. The pieces exist separately — `envelope_check` is assembly-level
 them per-component turns the expensive loop (build → merge → gate fail → rebuild)
 into a cheap local one, which the rounds-to-converge metric directly rewards.
 
-**Shipped 2026-06-12** (`driftpin/worker.py:verify_contract`, exposed as an MCP
+**Shipped 2026-06-12** (`ankusdrive/worker.py:verify_contract`, exposed as an MCP
 tool). The contract slice carries any of `envelope`, `interfaces`
 (name → expected frame + tol; flags "forgot to publish" *and* "published in the
 wrong place/orientation"), `features` (`gear` / `bore` / `extent` self-checks,
@@ -639,7 +639,7 @@ entry may reference a child manifest instead of a file:
 }
 ```
 
-**Shipped 2026-06-12** (`driftpin/worker.py`). `merge_assembly` recurses (any
+**Shipped 2026-06-12** (`ankusdrive/worker.py`). `merge_assembly` recurses (any
 depth): a child-manifest component is merged + gated *first*, the parent links its
 merged root `.FCStd`, and BOM/interference/the typed gates flatten through the
 nested `App::Part` to leaves. **A failed child fails the parent** — surfaced as
@@ -673,7 +673,7 @@ library components — `spec` is the generator tool's own kwargs verbatim:
 }
 ```
 
-**Shipped 2026-06-12** (`driftpin/worker.py`). `merge_assembly` generates a
+**Shipped 2026-06-12** (`ankusdrive/worker.py`). `merge_assembly` generates a
 `library` component on the fly from `{tool, spec}` into a deterministic cache
 (`.dp_lib/`, keyed by a spec hash so identical specs share one file), links it,
 and reports it under `library` — **no builder agent, no owner, no file an agent
@@ -715,7 +715,7 @@ works." The manifest gains an optional `requirements` block gated at merge:
 }
 ```
 
-**Tier-1 shipped 2026-06-12** (`driftpin/worker.py`). The always-on, cheap tier —
+**Tier-1 shipped 2026-06-12** (`ankusdrive/worker.py`). The always-on, cheap tier —
 **total mass against a budget** and **centre-of-mass inside a window** — runs over
 the merged tree's world-space leaves at every merge (`mass_properties` math + the
 recursive leaf walk). It's tiered exactly because the doc warned: mass/CG always,
@@ -727,7 +727,7 @@ never a silent pass** — the same "don't drop a contract silently" discipline a
 typed gates.
 
 The **physics tier** (`min_first_mode_hz` via FEM modal on the merged tree) is
-**shipped 2026-07-02** (issue #172, `driftpin/worker.py`). The modelling questions a
+**shipped 2026-07-02** (issue #172, `ankusdrive/worker.py`). The modelling questions a
 modal gate on an *assembly* opens — how the parts are bonded, and where the product
 is fixed — aren't faked; the requirement must *declare* them, or it stays skipped:
 
@@ -756,7 +756,7 @@ statement about the *run*, not the part, so it is neither of the above. It comes
 `skipped` with `first_mode: {solve: "incomplete", cause, elapsed_s, skipped_reason}`:
 loud in the log, impossible to read as "requirement met", and it does not fail a merge
 for something the design didn't do. Consumers classify a report through the shared
-pure predicate `driftpin.gates.modal.classify` (`pass` / `fail` / `incomplete` /
+pure predicate `ankusdrive.gates.modal.classify` (`pass` / `fail` / `incomplete` /
 `not_declared` / `error` / `not_gated`, plus `has_verdict`) instead of reaching for
 `measured_first_mode_hz` and tripping over the hole — which is exactly how #248
 surfaced: a `KeyError` in the test that blocked an unrelated PR.
@@ -769,13 +769,13 @@ three-outcome classification run without a solver), in `run_all.sh`, no key.
 
 ### 11.7 Manifest formalization *(shipped)*
 
-Stamp `"schema": "driftpin.manifest/1"`, validate on load, and version the manifest
+Stamp `"schema": "ankusdrive.manifest/1"`, validate on load, and version the manifest
 content (a hash or counter in the lockfile) so "built against a stale contract" is
 detectable as such, not only inferable from interface hashes.
 
-**Shipped 2026-06-12** (`driftpin/worker.py`). Three pieces:
+**Shipped 2026-06-12** (`ankusdrive/worker.py`). Three pieces:
 
-- **A version stamp** — `"schema": "driftpin.manifest/1"`. A present schema must be
+- **A version stamp** — `"schema": "ankusdrive.manifest/1"`. A present schema must be
   the known version; an absent one is accepted as unversioned (back-compat).
 - **Load-time validation** — `_validate_manifest` catches the cross-reference
   errors a JSON shape can't: a component with not-exactly-one of
@@ -848,8 +848,8 @@ surface**, and gate it locally before merge.
 
 Two pieces, both shipped:
 
-- **The builder brief — contract as data** (`driftpin/builder_brief.py`,
-  `driftpin.builder_brief/1`). The slice a builder receives is now a standalone,
+- **The builder brief — contract as data** (`ankusdrive/builder_brief.py`,
+  `ankusdrive.builder_brief/1`). The slice a builder receives is now a standalone,
   versioned schema, not prose buried in the coordinator: `component` id, `assembly`,
   a self-contained NL `task`, an `output` path, a keep-out `envelope`, the
   `interfaces` it must publish (name → frame), plus optional `shared_parameters`,
@@ -857,7 +857,7 @@ Two pieces, both shipped:
   brief at the door; `builder_brief_text` renders the slice any host drops into a
   subagent prompt; `brief_from_slice` projects a coordinator brief onto the schema.
   The reference coordinator **converges onto it** — `coordinator._slice_text` now
-  emits a rendered `driftpin.builder_brief/1`, so the harness and any other host
+  emits a rendered `ankusdrive.builder_brief/1`, so the harness and any other host
   speak the same contract.
 
 - **`component_contract_check` — the builder-side half of the merge gate** (an MCP
@@ -891,19 +891,19 @@ own; #169 only converges it onto the shared brief schema, it does not replace it
 ### 11.12 Performance contracts at the gates *(shipped)*
 
 Issue #226 made a quantitative spec a first-class object: `declare_performance`
-persists it on the part (`DP_Performance`) and `verify_performance` re-proves it,
+persists it on the part (`AD_Performance`) and `verify_performance` re-proves it,
 with a three-state verdict where a measurement whose uncertainty band straddles the
 limit is `indeterminate`, never a pass. But **nothing consulted it**, so a component
 that was a perfect geometric fit and missed its Δp spec merged silently. Issue #261
 (shipped 2026-08-03) wires it into all three gates. All logic lives in the pure,
-FreeCAD-free `driftpin/gates/performance.py`, so the merge, the swap gate and the
+FreeCAD-free `ankusdrive/gates/performance.py`, so the merge, the swap gate and the
 builder self-check share one judgement.
 
 **The async policy — the design decision.** Verification may be asynchronous: a
 solver-tier requirement submits a job and `verify_performance` returns a `job_id`. A
 gate has to answer now. The policy chosen is: **a gate consults the last RECORDED
 verdict and never measures.** `verify_performance` stamps its verdict onto the part
-(`DP_PerformanceVerdict`), and every gate reads that record. The alternatives were
+(`AD_PerformanceVerdict`), and every gate reads that record. The alternatives were
 rejected deliberately — running a screen tier inline would silently substitute a
 weaker measurement than the contract declares (and cannot satisfy a requirement whose
 `fidelity_floor` is `solver` at all) while making a documented-deterministic
@@ -978,12 +978,12 @@ the swap gate in `tests/test_substitutability.py` and the builder half in
   (moved to §11.8).
 - **Phase 3 — advanced assemblies. ✅ COMPLETE (11.1–11.8 shipped 2026-06-12).**
   In priority order: the resolve step
-  (11.1) **✅ shipped 2026-06-12** (`driftpin/manifest.py`; validated `tchainu`
+  (11.1) **✅ shipped 2026-06-12** (`ankusdrive/manifest.py`; validated `tchainu`
   partition 2/20 → 20/20); typed interfaces + promoted gates (11.2) **✅ first
   three kinds shipped 2026-06-12** (`bore_fit`, `gear_mesh`, `frame_orientation`
   in `merge_assembly`; closes the exact-touch + orientation gate edges; gearbox
   now a manifest); `verify_contract` (11.3) **✅ shipped 2026-06-12**
-  (`driftpin/worker.py`; builder-side envelope/interface/feature/intent
+  (`ankusdrive/worker.py`; builder-side envelope/interface/feature/intent
   self-check); hierarchical manifests (11.4) **✅ shipped 2026-06-12**
   (`merge_assembly` recurses into child manifests, gates roll up, lockfile
   propagates staleness up the tree); standard parts (11.5) **✅ shipped
@@ -993,7 +993,7 @@ the swap gate in `tests/test_substitutability.py` and the builder half in
   2026-07-02** (#172: `min_first_mode_hz` via FEM modal on the fused merged tree,
   opt-in on a declared fixture + bonding; still skipped when undeclared); schema
   formalization (11.7) **✅ shipped 2026-06-12**
-  (`driftpin.manifest/1` stamp + load-time validation + `validate_manifest` tool +
+  (`ankusdrive.manifest/1` stamp + load-time validation + `validate_manifest` tool +
   lockfile `manifest_hash` for contract-drift detection); shipped, pipelined
   orchestration (11.8) **✅ shipped 2026-06-12** (`orchestration/` — round-0
   contract review, pipelined hierarchical fan-in, per-builder isolation; free
@@ -1058,8 +1058,8 @@ binding. `orchestration/coordinator.py` implements the same loop host-side.
    geometry is built.
 3. **Fan out.** One subagent per leaf component (the `Agent` tool, or a `Workflow`
    `pipeline` stage), each prompted with *only* its resolved slice — a standalone
-   `driftpin.builder_brief/1` (§11.11), rendered by `builder_brief_text`. Each runs
-   against its own DriftPin MCP server → its own worker → its own file (or its own
+   `ankusdrive.builder_brief/1` (§11.11), rendered by `builder_brief_text`. Each runs
+   against its own AnkusDrive MCP server → its own worker → its own file (or its own
    `use_workspace` on a shared server, §7), with the full tool surface.
 4. **Build & self-verify.** Each component agent builds to contract, calls
    `publish_interface` for its mating frames, then self-gates with
@@ -1099,13 +1099,13 @@ while (!root_report.ok) {                           // verify loop
 Nothing above is Claude-specific below the orchestration line. Any host can play the
 roles in §8 if it has three things:
 
-1. **Parallel sessions** — the ability to run N independent DriftPin MCP sessions at once
+1. **Parallel sessions** — the ability to run N independent AnkusDrive MCP sessions at once
    (one per component builder) plus a coordinating session. Cursor/Cline tasks, a CI
-   matrix, a shell script spawning N `driftpin mcp` processes, or even N humans all
+   matrix, a shell script spawning N `ankusdrive mcp` processes, or even N humans all
    qualify.
 2. **A shared filesystem** — for the manifest, the `.lock.json`, and the component
    `.FCStd` files. That filesystem *is* the coordination bus; there is no other channel.
-3. **The DriftPin primitives** — `publish_interface`, `merge_assembly`, the gates,
+3. **The AnkusDrive primitives** — `publish_interface`, `merge_assembly`, the gates,
    `assembly_lock`/`assembly_lock_check`. These are plain MCP tools; any MCP-capable
    host calls them identically.
 

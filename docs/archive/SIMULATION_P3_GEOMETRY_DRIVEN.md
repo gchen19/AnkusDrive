@@ -87,7 +87,7 @@ Two new cross-cutting tools fall straight out of it and unlock everything else:
 | **`rayoptics` / `optiland`** *(optional)* | general lenses beyond `~/diffuser` | `pip` | optics corpus already shipped |
 
 Net new heavy deps: **just Gmsh and meshio** (both pip), plus wiring snappyHexMesh
-which is already on the box. Add a `driftpin[mesh]` extra (`gmsh`, `meshio`) and a
+which is already on the box. Add a `ankusdrive[mesh]` extra (`gmsh`, `meshio`) and a
 `mesh` section to `scripts/install-solvers.sh`.
 
 ---
@@ -134,7 +134,7 @@ Ordered by leverage. Sprints 10–11 are the spine; everything after rides on it
   `optics_moldability_check`; the **optical corpus already shipped** (family 2,
   `refractive_index_at`). Gate: Snell 30°→19.6°, Fresnel 3.9%, energy closes ±1%,
   TIR above θc=42.2° (all already written in `SIMULATION_EXAMPLES.md` §7).
-- **Slicer:** real PrusaSlicer/OrcaSlicer CLI on exported STL behind `driftpin[slice]`,
+- **Slicer:** real PrusaSlicer/OrcaSlicer CLI on exported STL behind `ankusdrive[slice]`,
   gated *relative* to the shipped analytic `slice_estimate` (mass/volume must agree;
   CLI adds real supports + travel/accel). Missing CLI → graceful dict.
 
@@ -175,4 +175,4 @@ Ordered by leverage. Sprints 10–11 are the spine; everything after rides on it
 capability the whole phase pivots on (export → mesh → solve a *meshed* geometry), and
 its acceptance is free: the existing Hagen–Poiseuille gate must still pass when the
 pipe is reached through the snappyHexMesh path instead of the hand-built wedge. Land
-`meshio` + the `driftpin[mesh]` extra alongside it.
+`meshio` + the `ankusdrive[mesh]` extra alongside it.

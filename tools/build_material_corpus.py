@@ -3,11 +3,11 @@
 
 FreeCAD ships ~100+ engineering material cards (steels, aluminium alloys,
 thermoplastics, glasses, cast irons). They are LGPL/CC-BY and ship with
-FreeCAD, so we vendor them into ``driftpin/analysis/materials/fcmat.json`` —
+FreeCAD, so we vendor them into ``ankusdrive/analysis/materials/fcmat.json`` —
 making the corpus always-present rather than gated on a runtime FreeCAD path.
 
-The FCMat -> DriftPin-schema mapping lives in
-``driftpin/analysis/materials/fcmat.py`` (the source of truth); this builder
+The FCMat -> AnkusDrive-schema mapping lives in
+``ankusdrive/analysis/materials/fcmat.py`` (the source of truth); this builder
 just discovers + serialises. Run it after a FreeCAD upgrade:
 
     # explicit source (any FreeCAD install's Materials dir):
@@ -34,25 +34,25 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from driftpin.analysis.materials import fcmat  # noqa: E402
+from ankusdrive.analysis.materials import fcmat  # noqa: E402
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--source", default=None,
-        help="FreeCAD Materials dir to scan (default: $DRIFTPIN_FCMAT_DIR or "
+        help="FreeCAD Materials dir to scan (default: $ANKUSDRIVE_FCMAT_DIR or "
              "FreeCAD's resource dir if importable)")
     ap.add_argument(
         "--out",
-        default=str(_REPO_ROOT / "driftpin" / "analysis" / "materials" / "fcmat.json"))
+        default=str(_REPO_ROOT / "ankusdrive" / "analysis" / "materials" / "fcmat.json"))
     args = ap.parse_args()
 
     cards = fcmat.load_fcmat_cards(args.source)
     if not cards:
         raise SystemExit(
             "no FCMat cards found — pass --source <FreeCAD>/Mod/Material/"
-            "Resources/Materials/Standard, set $DRIFTPIN_FCMAT_DIR, or run "
+            "Resources/Materials/Standard, set $ANKUSDRIVE_FCMAT_DIR, or run "
             "under freecadcmd so FreeCAD is importable.")
 
     cards.sort(key=lambda c: (c.get("category", ""), c["name"]))
@@ -60,7 +60,7 @@ def main() -> None:
         "schema_version": 1,
         "note": (
             "FreeCAD bundled .FCMat material cards, vendored by "
-            "tools/build_material_corpus.py via driftpin.analysis.materials."
+            "tools/build_material_corpus.py via ankusdrive.analysis.materials."
             "fcmat (the FCMat->schema mapping source of truth). FreeCAD's "
             "material library is LGPL/CC-BY and ships with FreeCAD; each card "
             "records its FCMat filename + the card's own License/SourceURL in "

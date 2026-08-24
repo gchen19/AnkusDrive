@@ -1,4 +1,4 @@
-"""Acoustics screening toys — two-sided oracles for driftpin.analysis.acoustics.
+"""Acoustics screening toys — two-sided oracles for ankusdrive.analysis.acoustics.
 
 Pure-Python, no FreeCAD. Pins the rigid-cavity modes / Helmholtz resonator /
 mass law / duct cutoff against exact identities and hand anchors, plus the
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from driftpin.analysis import acoustics as ac  # noqa: E402
+from ankusdrive.analysis import acoustics as ac  # noqa: E402
 
 
 def test_cavity_fundamental_is_half_wavelength():

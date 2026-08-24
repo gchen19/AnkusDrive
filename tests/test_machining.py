@@ -1,6 +1,6 @@
 """CNC machinability + machining time (issue #231) — pure-core unit tests.
 
-No FreeCAD: :mod:`driftpin.analysis.machining` takes descriptors (which directions
+No FreeCAD: :mod:`ankusdrive.analysis.machining` takes descriptors (which directions
 reach which face, corner radii, wall samples, a volume and a bounding box), so the
 whole screen and the whole time model unit-test on the host interpreter. The live
 geometry that produces those descriptors is exercised separately in
@@ -29,7 +29,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from driftpin.analysis import cost, machining as mc  # noqa: E402
+from ankusdrive.analysis import cost, machining as mc  # noqa: E402
 
 _PASS = _FAIL = 0
 
