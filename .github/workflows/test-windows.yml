@@ -143,7 +143,18 @@ jobs:
           $help | Select-Object -First 3 | Write-Host
           # doctor exits nonzero here BY DESIGN (FreeCAD is unresolved on a hosted
           # runner), so gate on the report's shape, not the exit code.
-          $json = & "$venv\Scripts\python.exe" -m ankusdrive doctor --json 2>$null | Out-String
+          # Actions runs this shell with $ErrorActionPreference='Stop', which promotes
+          # ANY native-command stderr to a terminating NativeCommandError -- and a
+          # dependency deep under `mcp` (pydantic_settings) writes a warning there on
+          # import, so doctor "failed" while printing perfectly good JSON. Drop to
+          # 'Continue' across the call, the same guard install-core.ps1 already uses
+          # around its own native invocations, and gate on the JSON as intended.
+          $prevEAP = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          try {
+            $json = & "$venv\Scripts\python.exe" -m ankusdrive doctor --json 2>$null | Out-String
+          } finally { $ErrorActionPreference = $prevEAP }
+          if (-not $json.Trim()) { throw 'doctor --json produced no output' }
           $rep = $json | ConvertFrom-Json
           if ($rep.platform.system -ne 'Windows') { throw "doctor reports $($rep.platform.system)" }
           if ($rep.freecad.available) { throw 'unexpected: a hosted runner has no FreeCAD' }
