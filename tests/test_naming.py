@@ -55,9 +55,9 @@ ALLOWED = {
     "docs/PUBLISHING_PLAN.md":      "the old name is an unclaimed PyPI project to reserve",
     # NOTE: logo/ was exempt while the pre-rename artwork was still tracked — that
     # mark is a drift pin threading a reticle, so the picture and its filenames WERE
-    # the old name and could not be re-exported. The AnkusDrive redesign landed in
-    # logo/ankusdrive/ and the originals were deleted, so the exemption is gone and
-    # the whole directory is swept like anything else.
+    # the old name and could not be re-exported. Those originals are deleted and the
+    # AnkusDrive redesign holds logo/ outright, so the exemption is gone and the
+    # whole directory is swept like anything else.
 }
 
 

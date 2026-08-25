@@ -7,8 +7,8 @@
      GitHub a dark variant; PyPI strips <source> and falls through to <img>. -->
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gchen19/AnkusDrive/main/logo/ankusdrive/wordmark/ankusdrive-wordmark-dark-1280.png">
-    <img src="https://raw.githubusercontent.com/gchen19/AnkusDrive/main/logo/ankusdrive/wordmark/ankusdrive-wordmark-1280.png" alt="AnkusDrive — align generative intent with the CAD kernel" width="640">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gchen19/AnkusDrive/main/logo/wordmark/ankusdrive-wordmark-dark-1280.png">
+    <img src="https://raw.githubusercontent.com/gchen19/AnkusDrive/main/logo/wordmark/ankusdrive-wordmark-1280.png" alt="AnkusDrive — align generative intent with the CAD kernel" width="640">
   </picture>
 </p>
 
@@ -542,7 +542,7 @@ re-proprietize what they contributed.
 
 The *code* is Apache-2.0; the *name* is not. Apache-2.0 §6 grants no trademark
 rights, so the AnkusDrive word mark and the brand assets in
-[`logo/ankusdrive/`](https://github.com/gchen19/AnkusDrive/tree/main/logo/ankusdrive)
+[`logo/`](https://github.com/gchen19/AnkusDrive/tree/main/logo)
 are covered separately — see
 [`TRADEMARKS.md`](https://github.com/gchen19/AnkusDrive/blob/main/TRADEMARKS.md)
 for what you may do without asking (referring to the project, compatibility

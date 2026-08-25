@@ -72,10 +72,17 @@ A few things you might reach for first:
 
   ```html
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="logo/ankusdrive/wordmark/ankusdrive-wordmark-dark-1280.png">
-    <img src="logo/ankusdrive/wordmark/ankusdrive-wordmark-1280.png" alt="AnkusDrive" width="420">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gchen19/AnkusDrive/main/logo/wordmark/ankusdrive-wordmark-dark-1280.png">
+    <img src="https://raw.githubusercontent.com/gchen19/AnkusDrive/main/logo/wordmark/ankusdrive-wordmark-1280.png" alt="AnkusDrive" width="420">
   </picture>
   ```
+
+  Absolute `raw.githubusercontent` URLs, not repo-relative paths: the root README is
+  also the PyPI project page, and PyPI resolves relative links against pypi.org — a
+  relative `src` there is a broken image. PNG rather than SVG for the same surface,
+  because raw.githubusercontent serves SVG as `text/plain`, which browsers refuse to
+  render as an image. PyPI strips `<source>` and falls through to the `<img>`, so the
+  light variant is what shows there; GitHub honours both.
 
 - **Favicon / docs:** `favicon/favicon.ico` or the sized PNGs.
 - Prefer the **SVG** wherever possible — resolution-independent, and the wordmark text is

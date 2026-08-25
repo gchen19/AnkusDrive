@@ -17,7 +17,7 @@ prevent user confusion, not to restrict legitimate use of the software.
 current trademark application. Owned by **GC Technology Consulting LLC**.
 
 **The logo and wordmark artwork.** The slate line piercing two overlapping holes, in all color
-variants, as distributed in `logo/ankusdrive/`. These are **not** part of the current trademark
+variants, as distributed in `logo/`. These are **not** part of the current trademark
 application. They are project brand assets identifying the official project, and they are **not
 licensed under Apache-2.0** — the license grant over the code does not extend to them. Please
 don't use them to identify anything other than the official AnkusDrive project.
@@ -83,7 +83,7 @@ from everything else. Ask and we will almost certainly say yes.
 
 ## Logo usage
 
-- Use the files as distributed in `logo/ankusdrive/`; prefer the SVGs.
+- Use the files as distributed in `logo/`; prefer the SVGs.
 - Don't recolor the line away from slate, stretch or skew the mark, rotate it, add effects, or
   place it on a background that compromises contrast.
 - Keep clear space of at least one hole-radius on all sides.
