@@ -40,7 +40,7 @@ jobs:
         # setuptools is pinned above pyproject's build-system floor too: the runner
         # image ships an older one, and the packaging test refuses to build with a
         # backend too old to honour the config (it would report a false failure).
-        run: pip install "ruff==0.15.15" build "setuptools>=68" wheel
+        run: pip install "ruff==0.15.15" build "setuptools>=77" wheel
 
       - name: Ruff (syntax + pyflakes, config in pyproject.toml)
         run: ruff check ankusdrive tests

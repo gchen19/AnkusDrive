@@ -1,0 +1,56 @@
+AnkusDrive
+Copyright 2026 GC Technology Consulting LLC
+
+This product includes software developed by GC Technology Consulting LLC.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy of
+the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations under
+the License.
+
+-------------------------------------------------------------------------------
+TRADEMARKS
+-------------------------------------------------------------------------------
+
+"AnkusDrive" (the "Word Mark") is a trademark of GC Technology Consulting LLC.
+The Word Mark is NOT licensed under the Apache License, Version 2.0.
+
+The AnkusDrive logo and wordmark artwork, as distributed in logo/, are project
+brand assets of GC Technology Consulting LLC. They are not part of the Word Mark
+application, and they are NOT licensed under the Apache License, Version 2.0;
+the license grant over the code does not extend to them. Their use is governed
+by the trademark policy.
+
+Nothing in this notice limits any right granted under the Apache License,
+Version 2.0, or any right available under trademark law, including nominative
+and descriptive fair use.
+
+As stated in Section 6 of the License, the License does not grant permission to
+use the trade names, trademarks, service marks, or product names of the
+Licensor, except as required for reasonable and customary use in describing the
+origin of the Work and reproducing the content of this NOTICE file.
+
+For the trademark policy, including what uses are permitted without asking, see
+TRADEMARKS.md.
+
+-------------------------------------------------------------------------------
+THIRD-PARTY SOFTWARE
+-------------------------------------------------------------------------------
+
+AnkusDrive interoperates with FreeCAD (https://www.freecad.org), which is
+licensed under the GNU Lesser General Public License, version 2.0 or later
+(LGPL-2.0-or-later). FreeCAD is not distributed as part of this project unless
+expressly stated; where it is distributed, its own license terms and notices
+apply and are reproduced alongside it.
+
+AnkusDrive is an independent project. It is not affiliated with, endorsed by,
+or sponsored by the FreeCAD project or the FreeCAD Project Association. Any
+third-party names and marks referenced are the property of their respective
+owners and are used only to describe interoperability.

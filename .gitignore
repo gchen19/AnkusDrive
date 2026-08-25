@@ -10,3 +10,7 @@ tests/reliability_cache/
 tests/multiagent_cache/
 # generated CAD artifacts (scratch/gen_artifacts.py output)
 results/
+
+# `python -m build` output (release flow: build -> twine check -> clean-venv install)
+build/
+dist/
