@@ -53,11 +53,11 @@ ALLOWED = {
     "tests/test_compat_rename.py":  "asserts the compatibility shims still work",
     "MIGRATION.md":                 "tells users what changed and how to move",
     "docs/PUBLISHING_PLAN.md":      "the old name is an unclaimed PyPI project to reserve",
-    # Brand artwork. The DriftPin mark is a drift pin threading a reticle — the
-    # picture IS the old name, so it could not be re-exported. The AnkusDrive
-    # redesign now lives in logo/ankusdrive/; these are the superseded originals,
-    # kept under their original filenames as the pre-rename archive.
-    "logo/":                        "superseded pre-rename artwork, kept as archive",
+    # NOTE: logo/ was exempt while the pre-rename artwork was still tracked — that
+    # mark is a drift pin threading a reticle, so the picture and its filenames WERE
+    # the old name and could not be re-exported. The AnkusDrive redesign landed in
+    # logo/ankusdrive/ and the originals were deleted, so the exemption is gone and
+    # the whole directory is swept like anything else.
 }
 
 
