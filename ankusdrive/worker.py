@@ -1156,9 +1156,20 @@ def _h_chamfer_edges(p):
     tag (preferred, e_* from list_edges), 'EdgeN' string, or bare 1-based int.
     `size` is the symmetric chamfer leg distance in mm (applied as both
     dist1=dist2). Mirrors fillet_edges, swapping Part::Fillet for Part::Chamfer.
-    The base object is hidden (consumed into the chamfer feature). Returns the
-    new chamfer feature's handle plus name, resulting Shape volume (mm^3), and
-    the resolved 1-based edge indices."""
+    The base object is hidden (consumed into the chamfer feature).
+
+    Validated exactly like fillet_edges (#283) — isValid, unchanged solid count,
+    no bounding-box growth — because Part::Chamfer shares the kernel and the
+    exposure: an oversized chamfer here comes back as a NULL shape whose only
+    old symptom was a bare "shape is invalid" raised from reading .Volume, after
+    the handle had already been registered and with the dead feature left in the
+    document. Same `per_edge` / `allow_partial` opt-ins, same abort-by-default:
+    on failure the feature is rolled back out and BlendCheckFailed is raised
+    naming the offending edges and the subset that does chamfer cleanly.
+
+    Returns {handle, name, volume (mm^3), edges (1-based indices actually
+    chamfered), checks {valid, solids, envelope_ok, envelope_growth_mm,
+    envelope_tol_mm}, mode, partial} plus skipped_edges + warnings when partial."""
     doc = App.ActiveDocument
     if doc is None:
         raise RuntimeError("no active document; call new_document first")
@@ -1167,27 +1178,51 @@ def _h_chamfer_edges(p):
     if size <= 0:
         raise ValueError(f"size must be > 0 mm, got {size}")
 
-    edges = []
-    for ref in p.get("edges", []):
-        if isinstance(ref, str) and ref.startswith("e_"):
-            r = _h_resolve_edge({"handle": p["handle"], "tag": ref})
-            edges.append(int(r["index"][len("Edge"):]))
-        elif isinstance(ref, str) and ref.startswith("Edge"):
-            edges.append(int(ref[len("Edge"):]))
-        else:
-            edges.append(int(ref))
+    edges = _blend_edge_indices(p["handle"], p.get("edges", []))
     if not edges:
         raise ValueError("edges must be a non-empty list of edge tags/indices")
 
-    chamfer = doc.addObject("Part::Chamfer", p.get("name", "Chamfer"))
-    chamfer.Base = obj
-    # (edge_idx, dist1, dist2): symmetric chamfer -> both legs == size.
-    chamfer.Edges = [(i, size, size) for i in edges]
-    doc.recompute()
+    labels = [f"Edge{i}" for i in edges]
+    pre_bbox = _blend_envelope(shape)
+    ctx = {"op": "chamfer_edges", "subject": repr(p["handle"]),
+           "nominal": f"size={size:g} mm", "pre_bbox": pre_bbox,
+           "pre_solids": len(shape.Solids), "tol_mm": _blend_tolerance(pre_bbox)}
+
+    prev_vis = getattr(obj, "Visibility", None)
+    label = p.get("name", "Chamfer")
+
+    def make_feature(idx):
+        c = doc.addObject("Part::Chamfer", label)
+        c.Base = obj
+        # (edge_idx, dist1, dist2): symmetric chamfer -> both legs == size.
+        c.Edges = [(edges[i], size, size) for i in idx]
+        doc.recompute()
+        return c
+
+    try:
+        res = _blend_run(doc, make_feature, lambda f: _blend_drop(doc, f), labels,
+                         ctx, bool(p.get("per_edge")),
+                         bool(p.get("allow_partial")))
+    except BlendCheckFailed:
+        # Hiding the base is deferred until the chamfer is known good, so a
+        # rollback leaves a visible, intact part rather than an invisible one.
+        _blend_restore(doc, obj, prev_vis)
+        raise
+
+    chamfer, kept = res["feature"], res["kept"]
+    # Rejected attempts consume the name, so the survivor can end up as
+    # 'Chamfer007'; the caller asked for `label` and should see it.
+    chamfer.Label = label
     _set_visibility(obj, False)
     h = _register("chamfer", chamfer)
-    return {"handle": h, "name": chamfer.Name,
-            "volume": chamfer.Shape.Volume, "edges": edges}
+    out = {"handle": h, "name": chamfer.Name, "volume": chamfer.Shape.Volume,
+           "edges": [edges[i] for i in kept], "checks": res["checks"],
+           "mode": res["mode"], "partial": len(kept) != len(edges)}
+    if out["partial"]:
+        out["skipped_edges"] = [e for i, e in enumerate(edges) if i not in kept]
+    if res["warnings"]:
+        out["warnings"] = res["warnings"]
+    return out
 
 
 @handler("shell_solid")
@@ -2535,32 +2570,386 @@ def _h_resolve_edge(p):
     return {"index": f"Edge{hits[0]}", "handle": handle}
 
 
+# --- blend (fillet / chamfer) post-apply validation — issue #283 --------------
+#
+# WHY: this FreeCAD/OCC build's blend kernel is edge- and ORDER-sensitive enough
+# to hand back SILENTLY CORRUPT geometry. Measured here on FreeCAD 1.1.0:
+#   * 20 mm cube, all 12 edges at r=11 -> Shape.isValid() False, still exactly
+#     ONE solid, Volume 9017 mm^3 against 8000 mm^3 in (a fillet that ADDED
+#     material), tight bounding box 13 mm larger than the input's. No exception.
+#   * 40x40x1 plate, all 12 edges at r=0.6 -> isValid() False, one solid,
+#     Volume 2110 mm^3 against 1600 mm^3 in.
+#   * PartDesign::Fillet reproduces the second one exactly, State 'Up-to-date'.
+# Before #283 all three came back as a plain {handle, volume} and the build
+# carried on over a corpse. The field report that filed this (Spectra S1
+# flange-insert build) caught it only by independently checking the part's outer
+# envelope, then hand-rolled a one-edge-at-a-time apply-and-check loop in its
+# build script. That loop lives here now.
+#
+# The other failure shape is a NULL Shape (OCC refusing outright). It is not
+# silent, but it used to surface as a bare "RuntimeError: shape is invalid" from
+# reading .Volume — after the handle was registered and with the dead feature
+# still in the document. Both shapes are handled the same way below.
+
+class BlendCheckFailed(RuntimeError):
+    """A fillet/chamfer recompute produced geometry that failed post-apply
+    validation. Reaches the caller as error type 'BlendCheckFailed' (#283).
+    The offending feature is rolled out of the document before this is raised,
+    so no handle to corrupt geometry — and no corrupt object — ever survives."""
+
+
+# Envelope tolerance, measured against the TIGHT (optimalBoundingBox) envelope:
+# Shape.BoundBox is tessellation-inflated for curved faces, and a perfectly
+# valid filleted cylinder measures 0.82 mm of "growth" by that metric. Over a
+# 15-case clean sweep here the worst TIGHT growth was 1e-7 mm, while the corrupt
+# cases start at 9.8e-3 mm. The tolerance sits ~100x above the clean noise and
+# ~170x below the tightest corruption observed. (_blend_checks reaches the same
+# verdict more cheaply most of the time — see the two-stage note there.)
+_ENVELOPE_ABS_TOL_MM = 1e-5
+_ENVELOPE_REL_TOL = 1e-6            # x the input bounding-box diagonal
+
+# Cap on the AUTOMATIC per-edge diagnosis that runs after a failed batch apply.
+# Each step is a full recompute, so an unbounded retry on a 300-edge import
+# would hang the worker for minutes. An explicit per_edge/allow_partial request
+# is the caller's own choice and is NOT capped.
+_BLEND_DIAG_MAX_EDGES = 64
+
+
+def _blend_envelope(shape):
+    """Tight bounding box of `shape`. optimalBoundingBox where the build has it
+    (see _ENVELOPE_ABS_TOL_MM for why the inflated Shape.BoundBox will not do),
+    otherwise the plain BoundBox."""
+    try:
+        return shape.optimalBoundingBox(True, False)
+    except Exception:
+        return shape.BoundBox
+
+
+def _bbox_growth(pre, bb):
+    """How far `bb` reaches outside `pre`, in mm; 0.0 when it is contained."""
+    return max(pre.XMin - bb.XMin, pre.YMin - bb.YMin, pre.ZMin - bb.ZMin,
+               bb.XMax - pre.XMax, bb.YMax - pre.YMax, bb.ZMax - pre.ZMax, 0.0)
+
+
+def _blend_tolerance(pre_bbox):
+    """Envelope-growth tolerance in mm for an input of this size."""
+    try:
+        diag = float(pre_bbox.DiagonalLength)
+    except Exception:
+        diag = 0.0
+    return max(_ENVELOPE_ABS_TOL_MM, _ENVELOPE_REL_TOL * diag)
+
+
+def _blend_checks(feature, ctx):
+    """Validate a recomputed fillet/chamfer feature against the shape it was
+    applied to. Returns (checks, reasons): `checks` is the dict handed back to
+    the caller verbatim, `reasons` is empty when the result is sound and holds
+    human-readable failures otherwise."""
+    checks = {"valid": False, "solids": 0, "envelope_ok": False,
+              "envelope_growth_mm": None, "envelope_tol_mm": ctx["tol_mm"]}
+    try:
+        shape = feature.Shape
+        is_null = shape.isNull()
+    except Exception as e:
+        return checks, [f"the feature has no readable Shape "
+                        f"({type(e).__name__}: {e})"]
+    if is_null:
+        # Must be tested BEFORE isValid(): on a null shape isValid() raises an
+        # OCCError, so probing validity first kills the validation instead of
+        # reporting the failure.
+        return checks, ["the recompute produced a null shape "
+                        "(OCC refused the blend outright)"]
+
+    reasons = []
+    # A feature left 'Invalid' is serving a STALE Shape from an earlier
+    # recompute — see _blend_run for why that is not hypothetical. Reported
+    # first, because the isValid/solids/envelope numbers below then describe a
+    # shape that is not the one that was asked for.
+    state = list(getattr(feature, "State", None) or [])
+    if "Invalid" in state or "Error" in state:
+        reasons.append(f"the feature is in State {state}: its recompute failed "
+                       f"and the Shape it serves is stale")
+    try:
+        checks["valid"] = bool(shape.isValid())
+    except Exception as e:
+        reasons.append(f"Shape.isValid() raised {type(e).__name__}: {e}")
+    else:
+        if not checks["valid"]:
+            reasons.append("Shape.isValid() is False")
+
+    checks["solids"] = len(shape.Solids)
+    if checks["solids"] != ctx["pre_solids"]:
+        reasons.append(f"the result is {checks['solids']} solid(s) where the "
+                       f"input was {ctx['pre_solids']}")
+
+    # Two-stage on purpose. Shape.BoundBox is ~0.06 ms but tessellation-inflated
+    # for curved faces; optimalBoundingBox is exact but costs 5-21 ms on a
+    # freshly blended shape (it triangulates), which would more than double the
+    # cost of an ordinary fillet. The cheap box is an OUTER bound, so measuring
+    # it against the input's TIGHT box can only over-report — clearing that
+    # threshold is proof the envelope held, and only a trip is worth the tight
+    # re-measure. Reported growth is therefore an upper bound either way.
+    pre = ctx["pre_bbox"]
+    growth = _bbox_growth(pre, shape.BoundBox)
+    if growth > ctx["tol_mm"]:
+        growth = _bbox_growth(pre, _blend_envelope(shape))
+    checks["envelope_growth_mm"] = growth
+    checks["envelope_ok"] = growth <= ctx["tol_mm"]
+    if not checks["envelope_ok"]:
+        reasons.append(
+            f"the bounding box grew {growth:.4g} mm beyond the input's "
+            f"(tolerance {ctx['tol_mm']:.3g} mm) — a fillet or chamfer can only "
+            f"shrink or hold the envelope, so growth means a mangled shape")
+    return checks, reasons
+
+
+def _blend_failure_message(ctx, batch_reasons, kept, failed, labels, allow_partial):
+    """The structured-error text for a blend that could not be made sound. Names
+    the operation, the offending edges, and the subset that does work, so the
+    agent can act without re-deriving any of it (#283)."""
+    parts = [f"{ctx['op']} on {ctx['subject']} at {ctx['nominal']} produced "
+             f"corrupt geometry; no handle was returned and the document is "
+             f"unchanged."]
+    if batch_reasons:
+        parts.append(f"Applying all {len(labels)} edge(s) at once: "
+                     + "; ".join(batch_reasons) + ".")
+    if failed is None:
+        parts.append(f"The per-edge diagnosis was skipped: {len(labels)} edges "
+                     f"is over the {_BLEND_DIAG_MAX_EDGES}-edge automatic-retry "
+                     f"budget. Re-call with per_edge=true to have every edge "
+                     f"checked individually.")
+    else:
+        for i, why in failed:
+            parts.append(f"{labels[i]} at {ctx['nominal']} corrupts the result "
+                         f"when added: {why[0]}.")
+        if kept:
+            parts.append(f"These {len(kept)} edge(s) blend cleanly together: "
+                         + ", ".join(labels[i] for i in kept) + ".")
+        else:
+            parts.append("No edge survives even on its own.")
+    if kept and not allow_partial:
+        parts.append("Retry with only the clean edges, reduce the radius/size, "
+                     "or pass allow_partial=true to accept the partial result "
+                     "(it comes back marked partial=true with skipped_edges).")
+    else:
+        parts.append("Reduce the radius/size, or change the geometry the blend "
+                     "has to run across.")
+    return " ".join(parts)
+
+
+def _blend_run(doc, make_feature, drop_feature, labels, ctx, per_edge, allow_partial):
+    """Drive a fillet/chamfer to a VALIDATED result (#283).
+
+    `make_feature(indices)` builds, configures and recomputes a FRESH blend
+    feature over that subset of `labels`; `drop_feature(feature)` removes one
+    that was rejected. The caller owns both, because the edge spec differs
+    (Part::Fillet index tuples vs PartDesign 'EdgeN' LinkSub names). `ctx`
+    carries op/subject/nominal for the messages and pre_bbox/pre_solids/tol_mm
+    for the checks.
+
+    A FRESH feature per attempt is a correctness requirement, not tidiness: once
+    a Part::Fillet recompute produces a null Shape the object is stuck in State
+    ['Touched', 'Invalid'], and every later recompute of it is SKIPPED —
+    doc.recompute(None, True) included. Re-assigning .Edges on that object
+    therefore keeps serving the LAST GOOD shape: a 4-edge retry measured here
+    reported the 1-edge result, isValid() True and all. Building each attempt on
+    a new object is what makes the retry mean anything.
+
+    Returns {feature, kept, checks, warnings, mode}. Raises BlendCheckFailed
+    when no sound result is reachable, having dropped every feature it made."""
+    all_idx = list(range(len(labels)))
+    best = None                      # (feature, kept_indices, checks)
+
+    def attempt(idx):
+        feat = make_feature(idx)
+        checks, reasons = _blend_checks(feat, ctx)
+        return feat, checks, reasons
+
+    try:
+        batch_reasons = []
+        if not per_edge:
+            # Fast path, and the only path an ordinary fillet ever walks: one
+            # apply, one validation. The retry machinery below costs nothing
+            # until this comes back dirty.
+            feat, checks, reasons = attempt(all_idx)
+            if not reasons:
+                return {"feature": feat, "kept": all_idx, "checks": checks,
+                        "warnings": [], "mode": "batch"}
+            drop_feature(feat)
+            batch_reasons = reasons
+            if len(labels) > _BLEND_DIAG_MAX_EDGES and not allow_partial:
+                raise BlendCheckFailed(_blend_failure_message(
+                    ctx, batch_reasons, None, None, labels, allow_partial))
+
+        # Incremental: grow the edge set one edge at a time against the SAME
+        # base, so edge indices never shift under us, and keep only the edges
+        # the kernel survives. This is the field workaround, promoted into the
+        # tool.
+        kept, failed = [], []
+        for i in all_idx:
+            feat, checks, reasons = attempt(kept + [i])
+            if reasons:
+                failed.append((i, reasons))
+                drop_feature(feat)
+            else:
+                if best is not None:
+                    drop_feature(best[0])
+                kept = kept + [i]
+                best = (feat, list(kept), checks)
+
+        if not kept or (failed and not allow_partial):
+            raise BlendCheckFailed(_blend_failure_message(
+                ctx, batch_reasons, kept, failed, labels, allow_partial))
+
+        warnings = []
+        if batch_reasons and not failed:
+            warnings.append(
+                f"applying all {len(labels)} edge(s) at once failed validation "
+                f"({'; '.join(batch_reasons)}) but adding them one at a time "
+                f"succeeded — treat this shape as suspect")
+        if failed:
+            warnings.append(
+                f"PARTIAL RESULT: {len(failed)} of {len(labels)} edge(s) were "
+                f"SKIPPED because {ctx['op']} at {ctx['nominal']} corrupts the "
+                f"shape when they are included ("
+                + ", ".join(labels[i] for i, _ in failed)
+                + "). The returned solid is blended WITHOUT them; it is not the "
+                  "part that was asked for.")
+        return {"feature": best[0], "kept": best[1], "checks": best[2],
+                "warnings": warnings, "mode": "per_edge"}
+    except BaseException:
+        # Nothing this function built may outlive a failure — a corrupt (or
+        # merely orphaned) feature left in the document is exactly what #283 is
+        # about.
+        if best is not None:
+            drop_feature(best[0])
+        raise
+
+
+def _blend_drop(doc, feature, body=None, prev_tip=None):
+    """Remove a rejected blend feature. Best-effort throughout: a cleanup that
+    raises would mask the BlendCheckFailed that explains what actually went
+    wrong. For a PartDesign feature, plain removal leaves the Body with
+    Tip = None, so `prev_tip` is put back explicitly."""
+    try:
+        if body is not None:
+            body.removeObject(feature)
+        doc.removeObject(feature.Name)
+    except Exception:
+        pass
+    if body is not None and prev_tip is not None:
+        try:
+            body.Tip = prev_tip
+        except Exception:
+            pass
+
+
+def _blend_restore(doc, base, prev_visibility):
+    """Put the surroundings of a failed blend back the way they were (#283)."""
+    if prev_visibility is not None:
+        _set_visibility(base, prev_visibility)
+    try:
+        doc.recompute()
+    except Exception:
+        pass
+
+
+def _blend_edge_indices(handle, refs):
+    """Edge references (e_* tags / 'EdgeN' / bare ints) -> 1-based indices."""
+    out = []
+    for ref in refs:
+        if isinstance(ref, str) and ref.startswith("e_"):
+            r = _h_resolve_edge({"handle": handle, "tag": ref})
+            out.append(int(r["index"][len("Edge"):]))
+        elif isinstance(ref, str) and ref.startswith("Edge"):
+            out.append(int(ref[len("Edge"):]))
+        else:
+            out.append(int(ref))
+    return out
+
+
 @handler("fillet_edges")
 def _h_fillet_edges(p):
-    """Fillet specific edges of a shaped object. Edges referenced by tag (preferred)
-    or by FaceN-style index. Returns a new handle for the fillet feature."""
+    """Fillet specific edges of a shaped (Part) object. Edges referenced by tag
+    (preferred, e_* from list_edges), 'EdgeN' string, or bare 1-based int.
+    `radius` is the blend radius in mm (default 1.0, must be > 0).
+
+    EVERY result is validated before a handle is issued (#283), because this
+    OCC build's fillet is edge- and order-sensitive enough to return corrupt
+    geometry with no exception at all: a 20 mm cube filleted on all 12 edges at
+    r=11 comes back as one solid with a LARGER volume and a 13 mm larger
+    bounding box. The checks are: Shape.isValid(); the solid count still matches
+    the input's; and the bounding box did not GROW (a fillet can only remove or
+    hold the envelope). They cost ~2.0 ms on a 26-face filleted box against
+    ~7.0 ms for the fillet itself, and cannot be switched off.
+
+    On a clean result the checks come back in the payload so callers need not
+    re-derive them: {handle, name, volume (mm^3), edges (1-based indices
+    actually filleted), checks {valid, solids, envelope_ok, envelope_growth_mm,
+    envelope_tol_mm}, mode ('batch' | 'per_edge'), partial (False)}.
+
+    FAILURE SEMANTICS — the default is to ABORT, not to quietly under-deliver.
+    When the single-shot apply fails validation the handler retries the edges
+    one at a time (up to 64 edges) to find which ones the kernel cannot take,
+    then rolls the failed feature back out of the document and raises
+    BlendCheckFailed naming the offending edges AND the subset that does blend
+    cleanly. No handle is returned, and the document is left exactly as it was —
+    a part silently missing a fillet is its own defect (cf. #269, #282).
+
+    Two opt-ins change that:
+      per_edge (bool, default False) — go straight to the one-at-a-time apply,
+        skipping the batch attempt. Slower (one recompute per edge); use it on
+        geometry already known to be blend-hostile.
+      allow_partial (bool, default False) — accept a partial result instead of
+        aborting. The reply then carries partial=True, skipped_edges (the
+        1-based indices that were dropped) and a warnings entry spelling out
+        that the returned solid is NOT the part that was asked for. If no edge
+        survives at all it still raises."""
     doc = App.ActiveDocument
     if doc is None:
         raise RuntimeError("no active document")
     obj, shape = _shape_of(p["handle"])
     radius = float(p.get("radius", 1.0))
+    if radius <= 0:
+        raise ValueError(f"radius must be > 0 mm, got {radius}")
 
-    edges = []
-    for ref in p.get("edges", []):
-        if isinstance(ref, str) and ref.startswith("e_"):
-            r = _h_resolve_edge({"handle": p["handle"], "tag": ref})
-            edges.append(int(r["index"][len("Edge"):]))
-        elif isinstance(ref, str) and ref.startswith("Edge"):
-            edges.append(int(ref[len("Edge"):]))
-        else:
-            edges.append(int(ref))
+    edges = _blend_edge_indices(p["handle"], p.get("edges", []))
+    if not edges:
+        raise ValueError("edges must be a non-empty list of edge tags/indices")
 
-    fillet = doc.addObject("Part::Fillet", "Fillet")
-    fillet.Base = obj
-    fillet.Edges = [(i, radius, radius) for i in edges]
-    doc.recompute()
+    labels = [f"Edge{i}" for i in edges]
+    pre_bbox = _blend_envelope(shape)
+    ctx = {"op": "fillet_edges", "subject": repr(p["handle"]),
+           "nominal": f"r={radius:g} mm", "pre_bbox": pre_bbox,
+           "pre_solids": len(shape.Solids), "tol_mm": _blend_tolerance(pre_bbox)}
+
+    prev_vis = getattr(obj, "Visibility", None)
+
+    def make_feature(idx):
+        f = doc.addObject("Part::Fillet", "Fillet")
+        f.Base = obj
+        f.Edges = [(edges[i], radius, radius) for i in idx]
+        doc.recompute()
+        return f
+
+    try:
+        res = _blend_run(doc, make_feature, lambda f: _blend_drop(doc, f), labels,
+                         ctx, bool(p.get("per_edge")),
+                         bool(p.get("allow_partial")))
+    except BlendCheckFailed:
+        _blend_restore(doc, obj, prev_vis)
+        raise
+
+    fillet, kept = res["feature"], res["kept"]
     h = _register("fillet", fillet)
-    return {"handle": h, "volume": fillet.Shape.Volume, "edges": edges}
+    out = {"handle": h, "name": fillet.Name, "volume": fillet.Shape.Volume,
+           "edges": [edges[i] for i in kept], "checks": res["checks"],
+           "mode": res["mode"], "partial": len(kept) != len(edges)}
+    if out["partial"]:
+        out["skipped_edges"] = [e for i, e in enumerate(edges) if i not in kept]
+    if res["warnings"]:
+        out["warnings"] = res["warnings"]
+    return out
 
 
 # --- degenerate-subtraction detection (issue #282) ----------------------------
@@ -3535,10 +3924,9 @@ def _h_revolve(p):
     return {"handle": h, "name": rev.Name, "volume": rev.Shape.Volume}
 
 
-@handler("partdesign_fillet")
-def _h_partdesign_fillet(p):
-    """PartDesign Fillet on edges of the body's current tip. edges accepts tags
-    (resolved against the body tip) or 'EdgeN' index strings."""
+def _pd_blend_setup(p):
+    """Shared front half of partdesign_fillet / partdesign_chamfer: resolve the
+    feature, find its Body, and turn the edge refs into 'EdgeN' LinkSub names."""
     doc = _active_doc()
     feature_h = p["feature"]
     feature = _resolve(feature_h)
@@ -3559,46 +3947,114 @@ def _h_partdesign_fillet(p):
             edge_refs.append(ref)
         else:
             edge_refs.append(f"Edge{int(ref)}")
+    if not edge_refs:
+        raise ValueError("edges must be a non-empty list of edge tags/indices")
+    return doc, feature_h, feature, body, edge_refs
 
-    fillet = doc.addObject("PartDesign::Fillet", p.get("name", "PdFillet"))
-    fillet.Base = (feature, edge_refs)
-    fillet.Radius = float(p.get("radius", 1.0))
-    body.addObject(fillet)
-    doc.recompute()
-    h = _register("pd_fillet", fillet)
-    return {"handle": h, "name": fillet.Name, "volume": fillet.Shape.Volume}
+
+def _pd_blend(p, kind, op, nominal_prop, nominal_value, default_name, prefix):
+    """Build, validate and register a PartDesign::Fillet / ::Chamfer (#283).
+
+    PartDesign shares the exposure the Part workbench has: a PartDesign::Fillet
+    at r=0.6 on a 40x40x1 pad here returns State 'Up-to-date', one solid and
+    Volume 1835 mm^3 against 1600 mm^3 in — silently corrupt. Rolling one back
+    needs more care than a Part feature: doc.removeObject alone leaves the Body
+    with Tip = None, so the previous tip and its visibility are restored too."""
+    doc, feature_h, feature, body, edge_refs = _pd_blend_setup(p)
+    base_shape = feature.Shape
+    pre_bbox = _blend_envelope(base_shape)
+    ctx = {"op": op, "subject": f"feature {feature_h!r}",
+           "nominal": nominal_value[1], "pre_bbox": pre_bbox,
+           "pre_solids": len(base_shape.Solids),
+           "tol_mm": _blend_tolerance(pre_bbox)}
+
+    prev_tip = body.Tip
+    prev_vis = getattr(feature, "Visibility", None)
+    label = p.get("name", default_name)
+
+    def make_feature(idx):
+        b = doc.addObject(kind, label)
+        b.Base = (feature, [edge_refs[i] for i in idx])
+        setattr(b, nominal_prop, nominal_value[0])
+        body.addObject(b)
+        doc.recompute()
+        return b
+
+    def drop(f):
+        _blend_drop(doc, f, body=body, prev_tip=prev_tip)
+
+    try:
+        res = _blend_run(doc, make_feature, drop, edge_refs, ctx,
+                         bool(p.get("per_edge")), bool(p.get("allow_partial")))
+    except BlendCheckFailed:
+        _blend_restore(doc, feature, prev_vis)
+        raise
+
+    blend, kept = res["feature"], res["kept"]
+    blend.Label = label     # rejected attempts consume the name (see chamfer_edges)
+    h = _register(prefix, blend)
+    out = {"handle": h, "name": blend.Name, "volume": blend.Shape.Volume,
+           "edges": [edge_refs[i] for i in kept], "checks": res["checks"],
+           "mode": res["mode"], "partial": len(kept) != len(edge_refs)}
+    if out["partial"]:
+        out["skipped_edges"] = [e for i, e in enumerate(edge_refs) if i not in kept]
+    if res["warnings"]:
+        out["warnings"] = res["warnings"]
+    return out
+
+
+@handler("partdesign_fillet")
+def _h_partdesign_fillet(p):
+    """PartDesign Fillet on edges of a feature in a Body. `edges` accepts e_*
+    tags (resolved against that feature) or 'EdgeN' index strings; `radius` is
+    the blend radius in mm (default 1.0, must be > 0); `name` labels the feature.
+
+    Validated before a handle is issued, exactly like fillet_edges (#283) —
+    Shape.isValid(), unchanged solid count, and no growth of the tight bounding
+    box. This handler needs it as badly as the Part one: r=0.6 on a 40x40x1 pad
+    returns an 'Up-to-date' single solid whose volume is 15% LARGER than the pad
+    it was cut from.
+
+    Failure ABORTS by default: the failed feature is removed, the Body's Tip and
+    the base feature's visibility are restored, and BlendCheckFailed is raised
+    naming the offending edges and the subset that does fillet cleanly — a body
+    quietly missing a fillet is its own defect (cf. #269, #282). `per_edge=True`
+    goes straight to the one-at-a-time apply; `allow_partial=True` accepts the
+    partial result instead of aborting, marked partial=True with skipped_edges
+    and a warnings entry.
+
+    Returns {handle, name, volume (mm^3), edges ('EdgeN' names actually
+    filleted), checks {valid, solids, envelope_ok, envelope_growth_mm,
+    envelope_tol_mm}, mode ('batch' | 'per_edge'), partial} plus skipped_edges
+    and warnings when partial."""
+    radius = float(p.get("radius", 1.0))
+    if radius <= 0:
+        raise ValueError(f"radius must be > 0 mm, got {radius}")
+    return _pd_blend(p, "PartDesign::Fillet", "partdesign_fillet", "Radius",
+                     (radius, f"r={radius:g} mm"), "PdFillet", "pd_fillet")
 
 
 @handler("partdesign_chamfer")
 def _h_partdesign_chamfer(p):
-    doc = _active_doc()
-    feature_h = p["feature"]
-    feature = _resolve(feature_h)
-    body = None
-    for o in doc.Objects:
-        if o.isDerivedFrom("PartDesign::Body") and feature in o.Group:
-            body = o
-            break
-    if body is None:
-        raise RuntimeError(f"feature {feature_h!r} not in any Body")
+    """PartDesign Chamfer on edges of a feature in a Body. `edges` accepts e_*
+    tags or 'EdgeN' index strings; `size` is the chamfer leg in mm (default 1.0,
+    must be > 0); `name` labels the feature.
 
-    edge_refs = []
-    for ref in p.get("edges", []):
-        if isinstance(ref, str) and ref.startswith("e_"):
-            r = _h_resolve_edge({"handle": feature_h, "tag": ref})
-            edge_refs.append(r["index"])
-        elif isinstance(ref, str) and ref.startswith("Edge"):
-            edge_refs.append(ref)
-        else:
-            edge_refs.append(f"Edge{int(ref)}")
+    Validated and rolled back on failure exactly like partdesign_fillet (#283),
+    with the same `per_edge` / `allow_partial` opt-ins and the same abort-by-
+    default: an oversized chamfer here returns a NULL shape, which used to
+    surface only as a bare "shape is invalid" from reading .Volume — after the
+    handle was registered and with the dead feature left as the Body's tip.
 
-    chamfer = doc.addObject("PartDesign::Chamfer", p.get("name", "PdChamfer"))
-    chamfer.Base = (feature, edge_refs)
-    chamfer.Size = float(p.get("size", 1.0))
-    body.addObject(chamfer)
-    doc.recompute()
-    h = _register("pd_chamfer", chamfer)
-    return {"handle": h, "name": chamfer.Name, "volume": chamfer.Shape.Volume}
+    Returns {handle, name, volume (mm^3), edges ('EdgeN' names actually
+    chamfered), checks {valid, solids, envelope_ok, envelope_growth_mm,
+    envelope_tol_mm}, mode, partial} plus skipped_edges and warnings when
+    partial."""
+    size = float(p.get("size", 1.0))
+    if size <= 0:
+        raise ValueError(f"size must be > 0 mm, got {size}")
+    return _pd_blend(p, "PartDesign::Chamfer", "partdesign_chamfer", "Size",
+                     (size, f"size={size:g} mm"), "PdChamfer", "pd_chamfer")
 
 
 def _body_of(feature):

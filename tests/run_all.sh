@@ -340,6 +340,10 @@ echo "== Edit stability =="
 python3 tests/test_edit_stability.py
 
 echo
+echo "== Fillet/chamfer post-apply validation (issue #283: OCC's silent corruption) =="
+$VENV_PY tests/test_fillet_validation.py
+
+echo
 echo "== Negative paths =="
 $VENV_PY tests/test_negative_paths.py
 
