@@ -344,6 +344,10 @@ echo "== Negative paths =="
 $VENV_PY tests/test_negative_paths.py
 
 echo
+echo "== Degenerate subtractions (issue #282 — cut that ate the base / cut that missed; warnings + strict) =="
+python3 tests/test_boolean_degenerate.py
+
+echo
 echo "== Multi-agent partition+merge (Layer M1) =="
 $VENV_PY tests/test_multiagent_m1.py
 
