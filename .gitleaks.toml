@@ -1,0 +1,37 @@
+# gitleaks config for the "Secrets" job in .github/workflows/fast-checks.yml.
+#
+# Extends the bundled ruleset instead of replacing it — this file only ever
+# subtracts, so a new upstream rule still lands automatically.
+[extend]
+useDefault = true
+
+[allowlist]
+description = """
+The variant-family docstring, not a credential.
+
+`family_validate` (ankusdrive/mcp_server.py + ankusdrive/worker.py, issue #138)
+documents the checks it runs: "... the recipe, mode, key column,
+duplicate/missing size keys, and every per-row recipe-door value". The
+generic-api-key rule reads "key" + the run after it as an assignment and
+reports `duplicate/missing` as the secret.
+
+This is allowlisted on the SECRET, deliberately not as a .gitleaksignore
+fingerprint. Fingerprints are commit:file:rule:LINE — the line numbers here sit
+in two of the largest, most-edited files in the tree, so every commit that
+shifts them mints a fresh un-ignored fingerprint and the lane starts crying
+wolf within days. Matching the literal string is stable across edits, and it is
+narrow: `duplicate/missing` is not a plausible secret, so nothing real can hide
+behind it.
+
+Verified clean 2026-08-24 across all 337 non-merge commits on every ref.
+"""
+regexTarget = "secret"
+regexes = [
+    '''^duplicate/missing$''',
+]
+# Compiled bytecode carries copies of every docstring above and is gitignored, so
+# it can never reach history — but a local `gitleaks dir .` walks it and would
+# report the same finding three more times.
+paths = [
+    '''(^|/)__pycache__/''',
+]

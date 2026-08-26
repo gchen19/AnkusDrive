@@ -1,8 +1,16 @@
 # AnkusDrive
 
-<!-- Wordmark intentionally omitted: the DriftPin mark (a drift pin threading a
-     reticle) is name-derived artwork, so the rename needs a redesign rather than
-     a re-export. The old assets stay in logo/ until then. -->
+<!-- Absolute raw.githubusercontent URLs, not repo-relative paths: this README is
+     also the PyPI project page, which resolves relative links against pypi.org.
+     PNG rather than the SVG because raw.githubusercontent serves SVG as
+     text/plain, so browsers refuse to render it as an image. The <picture> gives
+     GitHub a dark variant; PyPI strips <source> and falls through to <img>. -->
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gchen19/AnkusDrive/main/logo/wordmark/ankusdrive-wordmark-dark-1280.png">
+    <img src="https://raw.githubusercontent.com/gchen19/AnkusDrive/main/logo/wordmark/ankusdrive-wordmark-1280.png" alt="AnkusDrive — align generative intent with the CAD kernel" width="640">
+  </picture>
+</p>
 
 A CLI + MCP server that drives [FreeCAD](https://www.freecad.org/) through its Python API so LLMs (and humans at a terminal) can design mechanical parts and run FEM simulations without clicking through the GUI.
 
@@ -11,7 +19,7 @@ A CLI + MCP server that drives [FreeCAD](https://www.freecad.org/) through its P
 FreeCAD exposes almost everything it does through a Python API — create documents, build sketches, extrude solids, mesh them, run CalculiX/Elmer FEM solves, read back stress/displacement fields. But that API lives inside FreeCAD's embedded Python (`freecadcmd`), which is awkward to call from anywhere else. AnkusDrive wraps it behind two surfaces:
 
 - **CLI** — one-shot commands (`ankusdrive run script.py`, `ankusdrive box --w 10 --d 20 --h 5 -o part.FCStd`) for scripts, CI, and quick iteration.
-- **MCP server** — 240+ structured tools (`new_document`, `add_primitive`, `boolean_op`, `pad`, `add_gear`, `fem_new_analysis`, `fem_run`, `fem_results`) so an LLM agent can model, inspect, and simulate iteratively. Beyond core CAD/FEM this now spans a broad **simulation surface** (thermal, CFD/CHT, EM, acoustics, FSI, injection molding, granular/DEM, optics, multibody) and a **design-control layer** (item/part numbers, recipes, variant families, lifecycle/revision, ECO change orders, versioned interfaces).
+- **MCP server** — 280+ structured tools (`new_document`, `add_primitive`, `boolean_op`, `pad`, `add_gear`, `fem_new_analysis`, `fem_run`, `fem_results`) so an LLM agent can model, inspect, and simulate iteratively. Beyond core CAD/FEM this now spans a broad **simulation surface** (thermal, CFD/CHT, EM, acoustics, FSI, injection molding, granular/DEM, optics, multibody) and a **design-control layer** (item/part numbers, recipes, variant families, lifecycle/revision, ECO change orders, versioned interfaces).
 - **Multi-agent orchestration** — a host-side reference layer that lets a *team* of agents partition one product into components, build them in parallel, and merge the pieces back together with the joints actually fitting (see [Multi-agent design](#multi-agent-design)).
 
 ## Target environment
@@ -34,10 +42,10 @@ own bundled Python — AnkusDrive doesn't touch it.
 #     Windows: run the installer — default C:\Program Files\FreeCAD 1.1)
 
 # 2. Install AnkusDrive. Pick one:
-pipx install ankusdrive                                       # on release — from PyPI, `ankusdrive` on PATH
-# until the first PyPI upload (v0.4.0), install straight from the repo:
-pipx install git+https://github.com/gchen19/AnkusDrive.git    # isolated app, `ankusdrive` on PATH
-# or for development from a clone:
+pipx install ankusdrive                                       # from PyPI — isolated app, `ankusdrive` on PATH
+pip install ankusdrive                                        # or into an env you manage yourself
+# unreleased main, or for development from a clone:
+pipx install git+https://github.com/gchen19/AnkusDrive.git
 git clone https://github.com/gchen19/AnkusDrive.git && cd AnkusDrive
 python3 -m venv .venv && .venv/bin/pip install -e .         # `.venv/bin/ankusdrive`
 
@@ -50,9 +58,10 @@ ankusdrive doctor      # per-item FreeCAD + solver checklist with the exact fix 
 > that does all of it including the MCP registration:
 > [Windows quickstart (PowerShell)](#windows-quickstart-powershell).
 
-The `pipx install ankusdrive` path lights up with the first PyPI release
-(v0.4.0), tracked in [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md); until
-then use the `git+https://…` or clone paths above.
+AnkusDrive is published on PyPI at
+[pypi.org/project/ankusdrive](https://pypi.org/project/ankusdrive/); the
+distribution roadmap beyond it (marketplace listings, hosted transport) is
+tracked in [`docs/PUBLISHING_PLAN.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/PUBLISHING_PLAN.md).
 
 ### Windows quickstart (PowerShell)
 
@@ -190,7 +199,7 @@ claude mcp add ankusdrive -- ankusdrive mcp
 **Other hosts (Cursor, Continue, custom MCP clients)** — same shape: stdio
 transport, command = `ankusdrive`, args = `["mcp"]`.
 
-After restarting the host, you should see 240+ `ankusdrive__*` tools become
+After restarting the host, you should see 280+ `ankusdrive__*` tools become
 available. If startup hangs or the host reports a closed connection, run
 `ankusdrive ping` directly — that exercises the same worker boot path with
 cleaner error messages.
@@ -199,14 +208,14 @@ cleaner error messages.
 
 The base install (FreeCAD + `pip install ankusdrive`) covers geometry, the analytic
 oracles, and the MCP surface. The heavy simulation families each shell out to an
-**external solver**, discovered at runtime by [`ankusdrive/solvers.py`](ankusdrive/solvers.py)
+**external solver**, discovered at runtime by [`ankusdrive/solvers.py`](https://github.com/gchen19/AnkusDrive/blob/main/ankusdrive/solvers.py)
 (`$ANKUSDRIVE_<SOLVER>_PATH` → `PATH` → standard install dirs). A family whose solver is
 absent degrades to a clean `{ok: false, reason, install}` dict instead of crashing — check
 what currently resolves with **`ankusdrive doctor`** (cross-platform, no server boot needed),
 the `solve_capabilities` MCP tool, or the install script's `list`. The install script
 installs the pip-wheel solvers and provisions the native ones —
 `scripts/install-solvers.sh` on Linux/macOS (apt/conda + source builds), and
-[`scripts/install-solvers.ps1`](scripts/install-solvers.ps1) on Windows (pip extras +
+[`scripts/install-solvers.ps1`](https://github.com/gchen19/AnkusDrive/blob/main/scripts/install-solvers.ps1) on Windows (pip extras +
 portable SU2/Elmer/PrusaSlicer downloads; CalculiX auto-detected from FreeCAD's bundle).
 
 **Persistent config:** every `ANKUSDRIVE_*` path can instead live in
@@ -224,10 +233,10 @@ every FreeCAD install; SU2 and PrusaSlicer have good Windows/macOS binaries; Elm
 portable Windows zip but no macOS binaries; the
 **OpenFOAM-backed** families (CFD, FSI, injection molding) still rely on a Linux shell +
 linker glue and are Linux/WSL/Docker for now. See
-[`docs/WINDOWS.md`](docs/WINDOWS.md) and [`docs/MACOS.md`](docs/MACOS.md) for the full
+[`docs/WINDOWS.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/WINDOWS.md) and [`docs/MACOS.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/MACOS.md) for the full
 per-solver reality and setup on each OS.
 
-The review-video demos under [`scratch/`](scratch/) turn a solver result into a GIF a human
+The review-video demos under [`scratch/`](https://github.com/gchen19/AnkusDrive/tree/main/scratch) turn a solver result into a GIF a human
 can watch — the **real exported geometry** in motion with the matching oracle overlaid on
 the frame (written to `artifacts/`). Each needs its family's solver plus `matplotlib`, and
 the CFD one needs `meshio` (on top of the base `numpy`/`Pillow`):
@@ -259,14 +268,14 @@ Two optics engines sit behind the MCP surface, in two licensing/runtime lanes:
 The sequential engines import in-process, so install the `optics` extra into the **same
 interpreter that launches the worker** (like the other wheels). The non-sequential engine
 is GPL-3.0 and is therefore **never imported by AnkusDrive** — it runs in a separate
-subprocess ([`ankusdrive/optics_gpl_runner.py`](ankusdrive/optics_gpl_runner.py)), the same
+subprocess ([`ankusdrive/optics_gpl_runner.py`](https://github.com/gchen19/AnkusDrive/blob/main/ankusdrive/optics_gpl_runner.py)), the same
 arm's-length boundary used for the GPL Elmer/OpenFOAM binaries. The worker locates a
 Python that can import KrakenOS automatically (from where the wheel is installed); override
 with `ANKUSDRIVE_OPTICS_GPL_PYTHON=/path/to/python`. Because of that isolation the GPL extra
 is **opt-in**: the no-argument `install-solvers.sh` run installs only the permissive
 extras and prints how to add `optics_gpl`. Rendered examples for both lanes (lens layout,
 spot diagram, optimization, prism TIR, and a ball-lens spherical-aberration study) live in
-[`examples/optics_gallery/`](examples/optics_gallery/) — regenerate with
+[`examples/optics_gallery/`](https://github.com/gchen19/AnkusDrive/tree/main/examples/optics_gallery) — regenerate with
 `.venv/bin/python examples/optics_gallery.py` (and `…_3d.py`, `optics_ball_lens.py`), or
 bootstrap everything in one shot (installs both lanes, then renders every figure):
 
@@ -326,7 +335,7 @@ how to invoke it.
 
 ### Layer 1 — typed MCP tools (the agent surface)
 
-240+ first-class MCP tools span the **core mechanical-design surface**, a broad
+280+ first-class MCP tools span the **core mechanical-design surface**, a broad
 **engineering-analysis / simulation surface**, and a **design-control (PLM)
 layer**. They have validated parameters, structured returns, and stable handles
 for chaining. This is the happy path — what an agent uses for things people do
@@ -440,11 +449,11 @@ client.
 ## Multi-agent design
 
 The roadmap above is about deepening what *one* agent can do. The
-[`orchestration/`](orchestration/) layer is about *many* agents sharing the
+[`orchestration/`](https://github.com/gchen19/AnkusDrive/tree/main/orchestration) layer is about *many* agents sharing the
 work: split a product into components and subassemblies, build those in
 parallel (each agent cold, seeing only its own contract slice), then merge the
 whole back up with the joints actually fitting. The design is written up in
-[`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md); it targets **partition + merge**,
+[`docs/MULTI_AGENT.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/MULTI_AGENT.md); it targets **partition + merge**,
 not shared co-editing of one live document (a single worker = one
 `App.ActiveDocument`, so concurrent mutation is a non-goal for now).
 
@@ -485,7 +494,7 @@ The split of responsibilities is deliberate:
 How well partition+merge holds up is measured by a dedicated eval ladder
 (`tests/test_multiagent_m1.py` / `_m2.py`, runnable in CI) with hard-oracle
 merge gates and a single-agent baseline — see
-[`tests/MULTI_AGENT_EVAL.md`](tests/MULTI_AGENT_EVAL.md). Early experiments have
+[`tests/MULTI_AGENT_EVAL.md`](https://github.com/gchen19/AnkusDrive/blob/main/tests/MULTI_AGENT_EVAL.md). Early experiments have
 partition performing at or above the single-agent baseline on the harder toys.
 
 ## Designs, not just parts — the design-control layer
@@ -497,8 +506,8 @@ onto AnkusDrive's deterministic, headless, git-diffable grain. The keystone
 insight: **the build recipe is the feature tree; the parameters are its inputs;
 regeneration is re-running the recipe** — so AnkusDrive gets parametric regen and
 family tables without a live in-file expression engine. The full scoping and
-rationale is in [`docs/DESIGN_HIERARCHY.md`](docs/DESIGN_HIERARCHY.md); the
-agent-facing judgment lives in the [`design-modularly`](skills/design-modularly)
+rationale is in [`docs/DESIGN_HIERARCHY.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/DESIGN_HIERARCHY.md); the
+agent-facing judgment lives in the [`design-modularly`](https://github.com/gchen19/AnkusDrive/tree/main/skills/design-modularly)
 skill.
 
 - **Parametric hierarchy** — *recipes* (`recipe`, `recipe_validate`) are named,
@@ -507,7 +516,7 @@ skill.
   parameters by formula (`pitch_d = module * teeth`, arithmetic only — no
   iterative solve, no double-driving); *feature templates* (`feature_instantiate`)
   graft reusable features onto reference geometry by name; the typed
-  [`units`](ankusdrive/units.py) layer rejects dimensionally-wrong inputs at the
+  [`units`](https://github.com/gchen19/AnkusDrive/blob/main/ankusdrive/units.py) layer rejects dimensionally-wrong inputs at the
   door (`"5 N"` for a length is an error, not a silent mis-scale).
 - **Variant families** — `family_materialize` expands a row × column design
   table into a set of variants deterministically, running the recipe per row and
@@ -537,7 +546,7 @@ primitives — the logic layers import and test without launching a worker.
 
 Phase 3 closed 2026-05-10 (v0.3.0). The core mechanical-design surface from
 Phase 2 (2026-04-25) is intact; Phase 3 layered intent-encoding APIs on top of
-it. Since then the tool surface has grown from ~100 to **240+ tools** across
+it. Since then the tool surface has grown from ~100 to **280+ tools** across
 several waves: a command-tier expansion (parametric components + direct feature
 ops + metrology), the **multi-agent orchestration** layer, a broad
 **engineering-analysis + external-solver simulation surface** (thermal/CFD/CHT/
@@ -547,17 +556,17 @@ versioned interfaces, projects).
 
 - **Worker + transport** — long-lived `freecadcmd` worker, newline-JSON over stdio with stdio hygiene (FreeCAD C++ chatter redirected off the protocol fd).
 - **CLI** — `ping`, `version`, `box`, `cylinder`, `export`, `run`, `mcp`, `fem cantilever`, plus top-level `--version`.
-- **MCP server** — FastMCP over stdio, 240+ typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), direct-modeling feature ops, parametric components, metrology/inspection, generic property reflection, mass properties, assembly + interface gates, TechDraw (incl. headless PDF/SVG/DXF export, dimensions, gates), multi-view + photoreal rendering, FEM (static + modal + buckling + thermal + nonlinear + result-probe), the engineering-analysis oracles and external-solver simulation families (sync + async `*_submit`/`job_*`), the materials/fluids corpora, Design-for-X / manufacturing checks, the design-control (PLM) layer, and transactions.
+- **MCP server** — FastMCP over stdio, 280+ typed tools across document lifecycle, primitives, selection (face/edge tags), full PartDesign (sketcher + pad/pocket/revolve/hole/loft/sweep/helix/fillet/chamfer/pattern/mirror/thickness/draft), direct-modeling feature ops, parametric components, metrology/inspection, generic property reflection, mass properties, assembly + interface gates, TechDraw (incl. headless PDF/SVG/DXF export, dimensions, gates), multi-view + photoreal rendering, FEM (static + modal + buckling + thermal + nonlinear + result-probe), the engineering-analysis oracles and external-solver simulation families (sync + async `*_submit`/`job_*`), the materials/fluids corpora, Design-for-X / manufacturing checks, the design-control (PLM) layer, and transactions.
 - **Command tiers 1–3** — 21 new tools: parametric components (`add_gear`, `add_rack`, `add_sprocket`, `add_pulley`, `add_spring`, `add_fastener`, `add_bearing`, `add_thread`), direct feature ops (`fillet_edges`, `chamfer_edges`, `shell_solid`, `add_rib`, `engrave_text`, `oring_groove`, `transform`, `scale_shape`, `copy_shape`), and metrology/inspection (`measure_distance`, `measure_angle`, `bounding_box`, `check_shape`, `section_view`, `min_clearance`).
-- **Multi-agent orchestration** — AnkusDrive ships the thin merge primitives + gates (`publish_interface`, `merge_assembly`, `interface_align_check`, `envelope_check`, `assembly_lock`/`_check`); the host-side reference coordinator (`orchestration/`) decomposes a brief, fans out per-component builders, merges, gates, and renegotiates. See [Multi-agent design](#multi-agent-design) and [`docs/MULTI_AGENT.md`](docs/MULTI_AGENT.md).
+- **Multi-agent orchestration** — AnkusDrive ships the thin merge primitives + gates (`publish_interface`, `merge_assembly`, `interface_align_check`, `envelope_check`, `assembly_lock`/`_check`); the host-side reference coordinator (`orchestration/`) decomposes a brief, fans out per-component builders, merges, gates, and renegotiates. See [Multi-agent design](#multi-agent-design) and [`docs/MULTI_AGENT.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/MULTI_AGENT.md).
 - **Phase 3 intent-encoding additions** — `direction='into_body'|'away_from_body'` and `through='wall'|'body'` on pocket/hole (ray-cast wall depth handles hollow shells correctly); `intended_for='print'|'machine'|'drawing'` on hole drives ModelThread; `verify_feature` diffs actual-vs-expected volume change to catch silent failures; visibility hygiene at save hides consumed inputs; `register_handle` + `run_script` auto_register close the escape-hatch one-way trapdoor; `list_thread_options` surfaces the coupled ThreadType/ThreadSize enums dynamically; revolve has an OCCT pre-check that flags axis-coincident edges with an actionable error.
 - **Selection layer** — `list_faces` / `list_edges` / `query_faces` / `resolve_*` produce stable geometric tags that survive edits; FEM constraints take tags directly.
-- **Rendering** — host-side software rasterizer (`ankusdrive/render.py`) with per-pixel z-buffer (`render_view` / `render_views` return PNGs as MCP `ImageContent`), plus photoreal `render_photoreal` via the FreeCAD Render addon + an external renderer (POV-Ray / LuxCore / Appleseed / Cycles / OSPRay / PBRT). Support matrix, install, and limitations: [`docs/RENDERING.md`](docs/RENDERING.md).
-- **Simulation surface** — engineering-analysis oracles (machine elements, structural, durability, thermal, tolerance/GD&T) plus external-solver families that shell out to OpenFOAM / Elmer / CalculiX / openEMS / YADE / KrakenOS, discovered at runtime by [`ankusdrive/solvers.py`](ankusdrive/solvers.py) and degrading cleanly when absent. Long solves use an async submit→poll job pattern (`*_submit` + `job_status`/`job_result`/`job_list`). Catalog and result schemas: [`docs/SIMULATION_TOOLS.md`](docs/SIMULATION_TOOLS.md); proof harness: [`docs/SIMULATION_EXAMPLES.md`](docs/SIMULATION_EXAMPLES.md). Materials/fluids back these via `material_*` and `fluid_props` (mechanical-property / molding / CoolProp corpora).
-- **Design-control (PLM) layer** — recipes + a relations DAG (parametric regen), feature templates, variant families from a design table, item/part-number identity, a lifecycle/revision state machine, ECO change records with where-used/impact + baselines, a versioned interface registry + Liskov substitutability gate, and project containers with reference-integrity guards. Scoping + rationale: [`docs/DESIGN_HIERARCHY.md`](docs/DESIGN_HIERARCHY.md). See [Designs, not just parts](#designs-not-just-parts--the-design-control-layer).
-- **Tests** — ~980 test functions across ~90 files (worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent / simulation families / molding / PLM layer), runnable via `tests/run_all.sh` (Linux/macOS) or `tests/run_all.ps1` (Windows — single-interpreter, skips the Linux-only solver families; see [`docs/WINDOWS.md`](docs/WINDOWS.md)). Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](tests/RELIABILITY.md).
+- **Rendering** — host-side software rasterizer (`ankusdrive/render.py`) with per-pixel z-buffer (`render_view` / `render_views` return PNGs as MCP `ImageContent`), plus photoreal `render_photoreal` via the FreeCAD Render addon + an external renderer (POV-Ray / LuxCore / Appleseed / Cycles / OSPRay / PBRT). Support matrix, install, and limitations: [`docs/RENDERING.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/RENDERING.md).
+- **Simulation surface** — engineering-analysis oracles (machine elements, structural, durability, thermal, tolerance/GD&T) plus external-solver families that shell out to OpenFOAM / Elmer / CalculiX / openEMS / YADE / KrakenOS, discovered at runtime by [`ankusdrive/solvers.py`](https://github.com/gchen19/AnkusDrive/blob/main/ankusdrive/solvers.py) and degrading cleanly when absent. Long solves use an async submit→poll job pattern (`*_submit` + `job_status`/`job_result`/`job_list`). Catalog and result schemas: [`docs/SIMULATION_TOOLS.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/SIMULATION_TOOLS.md); proof harness: [`docs/SIMULATION_EXAMPLES.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/SIMULATION_EXAMPLES.md). Materials/fluids back these via `material_*` and `fluid_props` (mechanical-property / molding / CoolProp corpora).
+- **Design-control (PLM) layer** — recipes + a relations DAG (parametric regen), feature templates, variant families from a design table, item/part-number identity, a lifecycle/revision state machine, ECO change records with where-used/impact + baselines, a versioned interface registry + Liskov substitutability gate, and project containers with reference-integrity guards. Scoping + rationale: [`docs/DESIGN_HIERARCHY.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/DESIGN_HIERARCHY.md). See [Designs, not just parts](#designs-not-just-parts--the-design-control-layer).
+- **Tests** — ~980 test functions across ~90 files (worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent / simulation families / molding / PLM layer), runnable via `tests/run_all.sh` (Linux/macOS) or `tests/run_all.ps1` (Windows — single-interpreter, skips the Linux-only solver families; see [`docs/WINDOWS.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/WINDOWS.md)). Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](https://github.com/gchen19/AnkusDrive/blob/main/tests/RELIABILITY.md).
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the per-slice changelog and remaining
+See [`docs/ROADMAP.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/ROADMAP.md) for the per-slice changelog and remaining
 backlog (FEM contact/spring/tie refinements, fully async `fem_run`,
 `feature_tree` introspection, deeper external-solver integrations).
 
@@ -569,13 +578,23 @@ backlog (FEM contact/spring/tie refinements, fully async `fem_run`,
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). Contributions
+Licensed under the [Apache License, Version 2.0](https://github.com/gchen19/AnkusDrive/blob/main/LICENSE). Contributions
 submitted to this project are licensed under the same terms (Apache 2.0
 §5: inbound = outbound), which means contributors retain copyright but
 grant the project — and everyone downstream — a perpetual, irrevocable
 license to use their work, including a patent grant. The intent is to keep
 the project welcoming to contributors while ensuring nobody can later
 re-proprietize what they contributed.
+
+The *code* is Apache-2.0; the *name* is not. Apache-2.0 §6 grants no trademark
+rights, so the AnkusDrive word mark and the brand assets in
+[`logo/`](https://github.com/gchen19/AnkusDrive/tree/main/logo)
+are covered separately — see
+[`TRADEMARKS.md`](https://github.com/gchen19/AnkusDrive/blob/main/TRADEMARKS.md)
+for what you may do without asking (referring to the project, compatibility
+claims, redistribution, packaging, and forking all qualify) and
+[`NOTICE`](https://github.com/gchen19/AnkusDrive/blob/main/NOTICE) for the
+attribution a redistributor must carry.
 
 ## References
 

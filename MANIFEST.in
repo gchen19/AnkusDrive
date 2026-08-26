@@ -1,0 +1,8 @@
+# The sdist should be a buildable, self-explanatory snapshot of the project.
+# setuptools already carries the package tree, README, and the PEP 639
+# `license-files` (LICENSE, NOTICE, TRADEMARKS.md). These are the pieces the
+# shipped code *points at* by name and would otherwise be absent:
+#   scripts/     — install-solvers.{sh,ps1}, named by every `doctor` fix hint
+#   MIGRATION.md — named by the deprecated pre-0.5 console-script shim
+include MIGRATION.md
+recursive-include scripts *

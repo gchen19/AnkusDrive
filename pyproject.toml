@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# setuptools>=77 is the floor for PEP 639 SPDX `license` / `license-files`
+# (see [project] below); older backends reject both keys.
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -24,7 +26,13 @@ readme = "README.md"
 # (does not refuse) above it, and tests/test_windows_support.py keeps the two in
 # sync.
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+# PEP 639: an SPDX expression, not the legacy table. The table form stuffed the
+# entire Apache-2.0 text into the `License:` core-metadata field; this emits
+# `License-Expression: Apache-2.0` instead and ships the files verbatim.
+# NOTICE is listed because Apache-2.0 s.4(d) requires downstream redistributors
+# to carry it — a wheel that omits it makes compliance impossible for them.
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "TRADEMARKS.md"]
 authors = [
     { name = "George Chen" },
 ]
@@ -42,7 +50,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     # Windows is a first-class target (docs/WINDOWS.md, the self-hosted CI lane in
