@@ -112,6 +112,30 @@ Optional solvers (SU2, Elmer, PrusaSlicer, WSL-backed OpenFOAM) come afterwards 
 `scripts\install-solvers.ps1`. Full per-solver reality, the test suite, and the WSL2
 route: [`docs/WINDOWS.md`](docs/WINDOWS.md).
 
+### Ubuntu 24.04+ / containers (apt has no FreeCAD)
+
+FreeCAD was **dropped from Ubuntu 24.04's `universe` repo**, so `apt install
+freecad` finds no candidate there, and upstream's snap/flatpak both fail in a
+container or sandboxed agent environment (no snapd session, no FUSE). The path
+that works everywhere is the official **AppImage, extracted**:
+
+```bash
+scripts/install-freecad-appimage.sh          # or: scripts/install-solvers.sh freecad
+```
+
+It downloads the pinned release AppImage, checks its SHA-256, unpacks it with
+`--appimage-extract` (a userspace squashfs unpack — **no FUSE, no root, no
+snapd**, which is why it works in a container), symlinks `freecadcmd`, `freecad`,
+`ccx` and `gmsh` into `/usr/local/bin`, and then **live-verifies** the result with
+`ankusdrive ping` plus a real CalculiX solve (`ankusdrive fem cantilever`). Without a
+writable `/opt` it installs to `~/.local/opt/freecad` instead; `--prefix` /
+`--bindir` override both, `--appimage FILE` reuses a download you already have.
+
+The symlink step is optional: AnkusDrive also probes
+`/opt/freecad/squashfs-root/usr/bin` (and `~/.local/opt/freecad*/…`) directly, so
+a hand-extracted AppImage in either prefix is auto-discovered. `ccx` and `gmsh`
+ride along inside the AppImage, so structural FEM works off this one download.
+
 ### Telling AnkusDrive where FreeCAD lives
 
 AnkusDrive auto-discovers `freecadcmd` in this order: `$ANKUSDRIVE_FREECADCMD`,
@@ -121,7 +145,7 @@ then `shutil.which(...)` on PATH (trying `freecadcmd`, `FreeCADCmd`, and
 | OS | Auto-discovered locations (newest version wins) |
 |---|---|
 | macOS | `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd` |
-| Linux | `/usr/bin`, `/usr/local/bin`, `/snap/bin/freecad.cmd`, `~/.local/bin` |
+| Linux | `/usr/bin`, `/usr/local/bin`, `/snap/bin/freecad.cmd`, extracted AppImage under `/opt/freecad*/squashfs-root/usr/bin` or `~/.local/opt/freecad*/…`, `~/.local/bin` |
 | Windows | `C:\Program Files\FreeCAD *\bin\freecadcmd.exe` (version-globbed), `C:\Program Files (x86)\…`, `%LOCALAPPDATA%\Programs\FreeCAD *\bin\…` |
 
 So a stock installer on any of the three needs **no configuration**. For a

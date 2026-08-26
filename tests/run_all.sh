@@ -167,6 +167,10 @@ echo "== WSL routing for the OpenFOAM families (#193; monkeypatched, runs anywhe
 python3 tests/test_wsl_routing.py
 
 echo
+echo "== Extracted-AppImage FreeCAD: discovery + installer script (#280; no network, no FreeCAD) =="
+python3 tests/test_freecad_appimage.py
+
+echo
 echo "== Persistent config layer (env -> config.toml -> auto; pure-Python; no FreeCAD) =="
 python3 tests/test_config.py
 
