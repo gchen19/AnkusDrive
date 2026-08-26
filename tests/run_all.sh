@@ -158,6 +158,13 @@ echo "== Persistent config layer (env -> config.toml -> auto; pure-Python; no Fr
 python3 tests/test_config.py
 
 echo
+echo "== doctor's MCP preflight (#278; injects the mcp-2.0.0 break, spawns the server) =="
+# The mcp-2.0.0 failure path is INJECTED (fake module + version), never installed —
+# this test must not touch the interpreter it runs in. The live half spawns
+# `ankusdrive mcp` over stdio for one initialize+ping, and self-skips without an mcp SDK.
+python3 tests/test_doctor_mcp.py
+
+echo
 echo "== Planar-kinematics toys (Grashof / stroke / DOF; pure-Python; no FreeCAD) =="
 python3 tests/test_kinematics.py
 

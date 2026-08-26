@@ -100,7 +100,8 @@ def cmd_setup(args):
 
 def cmd_doctor(args):
     """Resolve FreeCAD + every solver family and print a per-item health checklist.
-    Exits non-zero when FreeCAD is unresolved so it doubles as a CI/setup preflight."""
+    Exits non-zero when FreeCAD is unresolved or the MCP server cannot start, so it
+    doubles as a CI/setup preflight."""
     from . import doctor
     # Install hints carry non-ASCII (em-dashes, arrows); force UTF-8 so they render on
     # a Windows console (cp1252 default) instead of mojibake. Best-effort — older
@@ -109,12 +110,26 @@ def cmd_doctor(args):
         sys.stdout.reconfigure(encoding="utf-8")
     except (AttributeError, ValueError):
         pass
-    report = doctor.build_report(probe_version=not args.no_boot)
+    report = doctor.build_report(
+        probe_version=not args.no_boot,
+        # The deep MCP probe spawns a server process; --no-boot means "resolve only,
+        # start nothing", so it silences this too (issue #278).
+        mcp_serve=not (args.no_boot or args.no_mcp_serve),
+    )
     if args.json:
         print(json.dumps(report, indent=2))
     else:
         print(doctor.render(report))
-    if not report["freecad"]["available"]:
+    mcp = report["mcp"]
+    # A dead MCP server is a failed preflight, not a footnote: `ankusdrive doctor`
+    # exiting 0 while `ankusdrive mcp` cannot import is the exact field defect that
+    # issue #278 exists to close.
+    unusable = (
+        not report["freecad"]["available"]
+        or not mcp["import"]["available"]
+        or (mcp["serve"]["checked"] and not mcp["serve"]["ok"])
+    )
+    if unusable:
         sys.exit(1)
 
 
@@ -184,15 +199,22 @@ def build_parser():
 
     pd = sub.add_parser(
         "doctor",
-        help="Resolve FreeCAD + every solver family and print a setup/health "
-             "checklist with the exact fix per item. Exits non-zero if FreeCAD "
-             "is unresolved (usable as a CI/setup preflight).",
+        help="Resolve FreeCAD, the MCP server, and every solver family, and print "
+             "a setup/health checklist with the exact fix per item. Exits non-zero "
+             "if FreeCAD is unresolved or the MCP server cannot start (usable as a "
+             "CI/setup preflight).",
     )
     pd.add_argument("--json", action="store_true", help="emit the report as JSON")
     pd.add_argument(
         "--no-boot", action="store_true",
-        help="skip booting FreeCAD to read its version (resolve the path only; "
-             "faster, and the solver half never needs a boot)",
+        help="start nothing: skip booting FreeCAD to read its version and skip the "
+             "MCP serve round-trip (resolve/import only; the solver half never "
+             "needs a boot)",
+    )
+    pd.add_argument(
+        "--no-mcp-serve", action="store_true",
+        help="skip only the MCP serve round-trip (do not spawn `ankusdrive mcp` over "
+             "stdio); the mcp import check still runs",
     )
     pd.set_defaults(func=cmd_doctor)
 
