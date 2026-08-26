@@ -5,8 +5,9 @@ A field install had `ankusdrive ping` and `ankusdrive doctor` both passing while
 (issue #277) and no CLI path ever imported the `mcp` package. These tests pin the
 section that closes that hole:
 
-  * the interpreter window (pyproject's requires-python has no ceiling, so a 3.14
-    host installs cleanly and then breaks on a dependency with no wheels),
+  * the interpreter window (pyproject's requires-python has no ceiling, so a host
+    newer than the verified range installs cleanly and then breaks on a dependency
+    with no wheels),
   * the server import check, and that a broken `mcp` prints the pin VERBATIM,
   * the serve round-trip (spawn `ankusdrive mcp` over stdio, initialize + ping),
   * that the default report never spawns a server — the MCP server's own
@@ -80,16 +81,21 @@ def test_pin_fix_is_the_pyproject_pin_verbatim():
 
 
 def test_python_report_flags_an_untested_interpreter():
-    """requires-python (>=3.10) has no ceiling, so 3.14 installs and then finds no
-    wheels — the field reporter's box. Doctor must say so rather than stay silent."""
+    """requires-python (>=3.10) has no ceiling, so an interpreter above the verified
+    range installs and then finds no wheels — the field reporter's box. Doctor must
+    say so rather than stay silent. The out-of-window version is derived from the
+    window itself: 3.14 IS verified (#279 installed on it), and hardcoding a
+    then-untested version here is how this test would quietly stop testing anything."""
     ok = doctor.python_report((3, 12, 3), "3.12.3 (main) [GCC]")
     assert ok["supported"] is True, ok
     assert "warning" not in ok and "fix" not in ok, ok
     assert ok["version_short"] == "3.12.3", ok
 
-    new = doctor.python_report((3, 14, 0), "3.14.0 (main) [MSC v.1900 64 bit]")
+    window = "%d.%d-%d.%d" % (doctor._PY_MIN + doctor._PY_MAX_TESTED)
+    above = (doctor._PY_MAX_TESTED[0], doctor._PY_MAX_TESTED[1] + 1)
+    new = doctor.python_report(above + (0,), "%d.%d.0 (main) [MSC v.1900 64 bit]" % above)
     assert new["supported"] is False, new
-    assert "3.14.0" in new["warning"] and "3.10-3.13" in new["warning"], new
+    assert ("%d.%d.0" % above) in new["warning"] and window in new["warning"], new
     assert "wheels" in new["warning"], new
     assert new["fix"], new
 

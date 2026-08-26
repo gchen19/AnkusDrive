@@ -10,16 +10,23 @@ box the test runs on. Pins:
   * #198 — ``ankusdrive doctor`` builds a well-formed report (platform + FreeCAD + the
     solver capabilities dict) and renders it without crashing, whether FreeCAD resolves
     or not.
+  * #279 — the scripted Windows core install (``scripts/install-core.ps1``): it exists,
+    it stays PowerShell-5.1/cp1252 parseable, it carries the MCP registration step the
+    reporter got stuck on, and its declared Python range agrees with pyproject. Those
+    are STATIC checks on purpose, so the Linux fast lane catches the drift; the script
+    itself is exercised on the self-hosted Windows box.
 
 Run:  python3 tests/test_windows_support.py
 """
 import os
+import re
 import sys
 import time
 import traceback
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
 
 from ankusdrive import client, doctor  # noqa: E402
 
@@ -188,6 +195,144 @@ def test_doctor_build_and_render_never_crash():
             text = doctor.render(report)
             assert isinstance(text, str) and "Solver families:" in text, text
             assert "families ready" in text, text
+
+
+# --- the scripted Windows core install (#279) ---------------------------------
+
+INSTALL_CORE = REPO / "scripts" / "install-core.ps1"
+INSTALL_SOLVERS = REPO / "scripts" / "install-solvers.ps1"
+PYPROJECT = REPO / "pyproject.toml"
+
+
+def _pyproject_text():
+    return PYPROJECT.read_text(encoding="utf-8")
+
+
+def _classifier_pythons():
+    """The `Programming Language :: Python :: 3.x` versions pyproject claims."""
+    return sorted(
+        tuple(int(p) for p in m.split("."))
+        for m in re.findall(r'"Programming Language :: Python :: (3\.\d+)"', _pyproject_text())
+    )
+
+
+def test_install_core_script_exists():
+    """The core install (venv + pip + doctor + MCP wiring) is scripted on Windows, not
+    left as manual README steps — that gap is what #279's reporter hit."""
+    assert INSTALL_CORE.is_file(), f"{INSTALL_CORE} is missing"
+
+
+def test_install_core_script_is_powershell_51_safe():
+    """The self-hosted runner and a stock Windows box only guarantee Windows PowerShell
+    5.1 with a cp1252 console, so the script must be ASCII-only (a smart quote or an
+    em dash there is a parse error, not a cosmetic issue) and must not use PS 6+ syntax."""
+    raw = INSTALL_CORE.read_bytes()
+    bad = [(i, b) for i, b in enumerate(raw) if b > 0x7F]
+    assert not bad, f"non-ASCII byte(s) in install-core.ps1 at offsets {[i for i, _ in bad[:5]]}"
+    text = raw.decode("ascii")
+    for token in ("??", "&&", "||"):          # null-coalescing / PS7-only chaining
+        assert token not in text, f"install-core.ps1 uses PS 6+ operator {token!r}"
+
+
+def test_install_core_covers_the_mcp_registration_step():
+    """The step the reporter actually got stuck on. The block must come from
+    `ankusdrive setup --print-mcp-config` (ankusdrive/setup_cmd.py — the single source of
+    truth that resolves the launcher to an ABSOLUTE path, because a GUI MCP host does
+    not inherit the shell PATH) and must name the Windows config file location."""
+    text = INSTALL_CORE.read_text(encoding="ascii")
+    assert "setup --print-mcp-config" in text, "install-core.ps1 never prints the MCP block"
+    assert "claude_desktop_config.json" in text, "no Claude Desktop config path"
+    assert "APPDATA" in text, "the Claude Desktop config path must be DERIVED from %APPDATA%"
+    assert "ankusdrive.exe" in text, "no resolved Windows launcher path"
+
+
+def test_install_core_python_range_matches_pyproject():
+    """The script gates on a Python range; pyproject declares one. #279 is exactly what
+    happens when those two disagree and the user learns the answer from pip's resolver,
+    so pin the agreement: the floor is `requires-python`, the ceiling is the highest
+    `Programming Language :: Python :: 3.x` classifier (= newest version verified)."""
+    text = INSTALL_CORE.read_text(encoding="ascii")
+    py_min = re.search(r"\$PY_MIN\s*=\s*\[version\]'(\d+\.\d+)'", text)
+    py_max = re.search(r"\$PY_MAX_VERIFIED\s*=\s*\[version\]'(\d+\.\d+)'", text)
+    assert py_min and py_max, "install-core.ps1 must declare $PY_MIN and $PY_MAX_VERIFIED"
+
+    req = re.search(r'requires-python\s*=\s*">=(\d+\.\d+)"', _pyproject_text())
+    assert req, "pyproject requires-python must be a simple '>=X.Y' floor"
+    assert py_min.group(1) == req.group(1), (
+        f"install-core.ps1 floor {py_min.group(1)} != pyproject requires-python "
+        f">={req.group(1)}"
+    )
+
+    classifiers = _classifier_pythons()
+    assert classifiers, "pyproject declares no Python version classifiers"
+    newest = "%d.%d" % classifiers[-1]
+    assert py_max.group(1) == newest, (
+        f"install-core.ps1 verified ceiling {py_max.group(1)} != newest classifier {newest} "
+        "— bump both together, and only after actually installing on that interpreter"
+    )
+    # The floor must be claimed too, and the run must be contiguous (a gap would mean a
+    # version was dropped silently rather than deliberately).
+    floor = tuple(int(p) for p in req.group(1).split("."))
+    assert classifiers[0] == floor, f"classifiers start at {classifiers[0]}, floor is {floor}"
+    assert classifiers == [(3, m) for m in range(floor[1], classifiers[-1][1] + 1)], classifiers
+
+
+def test_doctor_python_window_matches_pyproject():
+    """`ankusdrive doctor` warns above its own verified ceiling (#278) and the installer
+    gates on the same range (#279) — two hardcoded copies of one fact. They drifted
+    the moment 3.14 was verified, so pin all three to pyproject: floor =
+    requires-python, ceiling = the newest Programming Language classifier."""
+    from ankusdrive import doctor
+
+    req = re.search(r'requires-python\s*=\s*">=(\d+\.\d+)"', _pyproject_text())
+    assert req, "pyproject requires-python must be a simple '>=X.Y' floor"
+    floor = tuple(int(p) for p in req.group(1).split("."))
+    assert doctor._PY_MIN == floor, (
+        f"doctor._PY_MIN {doctor._PY_MIN} != pyproject requires-python >={req.group(1)}"
+    )
+
+    newest = _classifier_pythons()[-1]
+    assert doctor._PY_MAX_TESTED == newest, (
+        f"doctor._PY_MAX_TESTED {doctor._PY_MAX_TESTED} != newest classifier {newest} "
+        "— bump doctor, install-core.ps1 and pyproject together, and only after "
+        "actually installing on that interpreter"
+    )
+
+
+def test_pyproject_declares_windows_and_no_python_ceiling():
+    """Honest metadata (#279): Windows is a supported OS — it has a docs page, an
+    install script and a CI lane — and `requires-python` deliberately carries NO upper
+    bound, because 3.14 was verified to work rather than guessed at."""
+    text = _pyproject_text()
+    assert '"Operating System :: Microsoft :: Windows"' in text, (
+        "Windows is supported but missing from the OS classifiers, so PyPI would "
+        "advertise AnkusDrive as Unix-only"
+    )
+    req = re.search(r'requires-python\s*=\s*"([^"]+)"', text)
+    assert req and "<" not in req.group(1), (
+        f"requires-python {req.group(1)!r} carries an upper bound — a hard ceiling "
+        "breaks the next CPython for no reason; the verified range lives in the "
+        "classifiers and install-core.ps1 instead"
+    )
+
+
+def test_install_solvers_ps1_forwards_a_core_target():
+    """`install-solvers.ps1` is the script Windows users find first; it must be able to
+    hand off to the core install rather than leaving them at 'No .venv'."""
+    text = INSTALL_SOLVERS.read_text(encoding="utf-8")
+    assert "install-core.ps1" in text, "install-solvers.ps1 never mentions the core install"
+    assert re.search(r"'core'\s*\{", text), "install-solvers.ps1 has no 'core' target"
+
+
+def test_readme_has_a_windows_quickstart_pointing_at_the_script():
+    """#279 fix 3: Windows is its own quickstart with PowerShell-native commands,
+    not a note block inside the Unix flow."""
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert re.search(r"^#+ .*Windows.*\(PowerShell\)", readme, re.M), (
+        "README has no Windows quickstart heading"
+    )
+    assert "scripts\\install-core.ps1" in readme, "README's Windows section doesn't run install-core.ps1"
+    assert "claude mcp add ankusdrive" in readme, "README never shows the MCP registration one-liner"
 
 
 # --- runner -------------------------------------------------------------------

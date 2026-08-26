@@ -9,7 +9,17 @@ Tracking epic: [#189](https://github.com/gchen19/AnkusDrive/issues/189).
 ## TL;DR — verified working on Windows 11 + FreeCAD 1.1.1
 
 ```powershell
-# from a clone (PowerShell)
+# 1. Install FreeCAD 1.1.x from https://www.freecad.org/  (nothing goes on PATH)
+# 2. From a clone — one script does venv + pinned pip install + doctor + MCP wiring:
+powershell -ExecutionPolicy Bypass -File scripts\install-core.ps1
+```
+
+It ends by printing the `claude mcp add` one-liner and the
+`claude_desktop_config.json` block with **your** absolute paths — see
+[The MCP step](#the-mcp-step-registering-the-server) below. Everything it does by
+hand, if you'd rather:
+
+```powershell
 py -m venv .venv
 .venv\Scripts\pip install -e .
 
@@ -36,6 +46,104 @@ py -m venv .venv
   portable no-GUI zip; `scripts\install-solvers.ps1 elmer` downloads + wires it. All five
   Elmer-backed suites verified live natively, including the ViewFactors radiation legs and
   the FreeCAD geometry bridge (#205). ✅
+
+## The core install script
+
+[`scripts/install-core.ps1`](../scripts/install-core.ps1) exists because of
+[#279](https://github.com/gchen19/AnkusDrive/issues/279): a user on Windows 11 followed the
+README by hand, got stuck at the MCP step, and abandoned the local install. Windows had a
+script for the *optional solvers* and none for the *core*. It runs, in order:
+
+1. **Interpreter check first** — states the supported range before pip can fail inside its
+   resolver with no attribution.
+2. **FreeCAD lookup** (report only; the client resolves it at runtime the same way).
+3. **venv + `pip install -e .`** with pyproject's pins, notably `mcp>=1.2,<2` (#277).
+4. **Dependency verification** — re-imports the resolved `mcp`/`numpy`/`Pillow` and proves
+   `mcp.server.fastmcp` is really there. `pip install` succeeding is not the same thing:
+   mcp 2.x installs cleanly, `ping`/`doctor` keep passing, and only `ankusdrive mcp` dies.
+5. **`ankusdrive doctor` + `ankusdrive ping`**, then a real **MCP stdio handshake**
+   (`tests/test_mcp_boot.py` — initialize + `tools/list`, no FreeCAD needed).
+6. **The MCP registration block**, with resolved absolute paths.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-core.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install-core.ps1 -Extras mbd,fluids -Persist
+powershell -ExecutionPolicy Bypass -File scripts\install-core.ps1 -Python 'C:\Program Files\Python313\python.exe'
+```
+
+| Switch | Effect |
+|---|---|
+| `-Python <path>` | interpreter to build the venv from (default: `py -3` / `python` / common install dirs, each validated by running it) |
+| `-VenvDir <path>` | where the venv goes (default `.venv` in the checkout) |
+| `-Extras a,b` | pip-wheel solver extras (`mbd`, `topology`, `optics`, `fluids`), installed best-effort and independently |
+| `-SkipDoctor` | skip the FreeCAD/MCP verification (offline or FreeCAD-less box) |
+| `-Persist` | write the resolved FreeCAD path to `%APPDATA%\ankusdrive\config.toml` via `ankusdrive setup --yes` |
+
+It is idempotent, needs no admin, and installs nothing system-wide.
+`scripts\install-solvers.ps1 core` forwards to it, for anyone who found the solver script
+first. Windows PowerShell 5.1 is enough (the script is 5.1-compatible and ASCII-only).
+
+## Supported Python versions
+
+**3.10 – 3.14.** `requires-python` is `>=3.10` with **no upper bound**, and that is a
+decision, not an oversight (#279): 3.14 was *run*, not guessed at. On Windows 11 with
+CPython **3.14.7**, `pip install -e .` resolves `mcp 1.29.0` (pure-Python wheel),
+`numpy 2.5.2` and `Pillow 12.3.0` (both ship `cp314-win_amd64` wheels), the MCP server
+completes a stdio handshake, and `ankusdrive ping` returns `freecad=1.1.1`. A hard `<3.15`
+ceiling would only break the next CPython for no reason, so the *verified* range lives in
+the `Programming Language :: Python :: 3.x` classifiers and in `install-core.ps1`'s
+`$PY_MAX_VERIFIED` instead — `tests/test_windows_support.py` keeps the two in step.
+
+Your host Python is independent of FreeCAD's: `freecadcmd.exe` runs as a subprocess with
+its own bundled interpreter, so a 3.14 host driving FreeCAD 1.1's Python 3.11 is normal.
+Above the verified ceiling the script **warns and continues** rather than refusing — the
+deps are wheels-or-pure-Python and usually catch up quickly.
+
+## The MCP step (registering the server)
+
+This is where #279's reporter stopped, so it gets its own section. The server speaks
+**stdio**; the host launches `ankusdrive mcp` itself. The one thing that trips people up:
+**a GUI MCP host does not inherit your shell's `PATH`**, and a venv install puts
+`ankusdrive.exe` somewhere that is not on the system PATH at all — so always register the
+**absolute** path. Print the exact block for this machine at any time:
+
+```powershell
+.venv\Scripts\ankusdrive setup --print-mcp-config
+```
+
+**Claude Code:**
+
+```powershell
+claude mcp add ankusdrive -- C:\Users\you\AnkusDrive\.venv\Scripts\ankusdrive.exe mcp
+claude mcp list                      # ankusdrive should report connected
+```
+
+**Claude Desktop / Cursor** — `%APPDATA%\Claude\claude_desktop_config.json` (create it if
+it doesn't exist), then restart the app. JSON needs escaped backslashes; forward slashes
+work too:
+
+```json
+{
+  "mcpServers": {
+    "ankusdrive": {
+      "command": "C:\\Users\\you\\AnkusDrive\\.venv\\Scripts\\ankusdrive.exe",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+If the host reports a closed connection:
+
+- Run `.venv\Scripts\ankusdrive ping` — same worker boot path, far better error messages.
+- Run `.venv\Scripts\python tests\test_mcp_boot.py` — proves the stdio handshake works
+  without FreeCAD, which separates "MCP is broken" from "FreeCAD isn't resolving".
+- Check the mcp version: `.venv\Scripts\pip show mcp`. It must be **1.x** — 2.0.0 dropped
+  `mcp.server.fastmcp` and breaks the server while `ping`/`doctor` still pass
+  ([#277](https://github.com/gchen19/AnkusDrive/issues/277)).
+- If FreeCAD resolves in your terminal but not under the host, that's the minimal-env
+  problem: persist the path with `install-core.ps1 -Persist` (writes
+  `%APPDATA%\ankusdrive\config.toml`), which survives a host launch where `$env:` does not.
 
 ## How AnkusDrive finds FreeCAD
 

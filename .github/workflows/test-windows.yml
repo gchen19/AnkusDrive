@@ -21,6 +21,16 @@ name: Tests (Windows)
 # `ankusdrive` label, so requiring it here leaves the job queued forever (that is exactly
 # how the first run of this lane died — 24 h in `queued`, then cancelled).
 # `[self-hosted, Windows]` uniquely selects the one Windows box in this repo.
+#
+# A SECOND job, `core-install`, runs on GitHub-HOSTED windows-latest across a matrix of
+# CPython versions (issue #279). It deliberately has no FreeCAD: its subject is the part
+# of the install that a fresh user hits first and that the self-hosted box — with its
+# one pre-provisioned interpreter and warm .venv — structurally cannot cover, namely
+# "does `pip install -e .` resolve a WORKING dependency set on this Python, and does the
+# MCP server then boot over stdio". That is exactly how #279 failed: a brand-new CPython
+# 3.14, a resolver error nobody could attribute, and the MCP step never reached.
+# Everything that needs real FreeCAD (`ankusdrive ping`, the solves) stays on the
+# self-hosted job above, which also runs the same scripted installer end to end.
 
 on:
   push:
@@ -61,3 +71,110 @@ jobs:
 
       - name: Run Windows test suite
         run: .\tests\run_all.ps1
+
+      # The user-facing installer, end to end, on a box that HAS FreeCAD (#279). Into a
+      # throwaway venv so the suite's own .venv above is untouched. It fails the step if
+      # the MCP stdio handshake doesn't complete — the acceptance criterion of #279.
+      - name: Scripted core install (scripts\install-core.ps1)
+        run: |
+          # Name the interpreter explicitly rather than leaning on the script's
+          # auto-discovery: the Actions service runs as NETWORK SERVICE, whose PATH has
+          # no per-user Python (that is how this lane first died). The suite's own venv
+          # was already built from a working one, so reuse its base.
+          # sys._base_executable, not base_prefix + '\python.exe': FreeCAD's bundled
+          # interpreter (setup_local.ps1's last-resort choice) lives in bin\, so the
+          # naive join would not exist.
+          $base = & .\.venv\Scripts\python.exe -c 'import sys; print(sys._base_executable)'
+          .\scripts\install-core.ps1 -Python "$base" -VenvDir "$env:RUNNER_TEMP\ankusdrive-core-venv"
+
+      - name: Remove the throwaway core-install venv
+        if: always()
+        run: |
+          Remove-Item -Recurse -Force "$env:RUNNER_TEMP\ankusdrive-core-venv" -ErrorAction SilentlyContinue
+          exit 0
+
+  core-install:
+    name: Core install (hosted Windows, Python ${{ matrix.python-version }})
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false          # a new CPython failing must not hide the others' status
+      matrix:
+        # Floor (pyproject's requires-python), the current stable, and the newest
+        # release — the three answers to "what is the Python ceiling?" (#279). Keep the
+        # top entry in step with the newest `Programming Language :: Python :: 3.x`
+        # classifier; tests/test_windows_support.py pins that classifier to
+        # install-core.ps1's $PY_MAX_VERIFIED.
+        python-version: ["3.10", "3.13", "3.14"]
+    defaults:
+      run:
+        # Windows PowerShell 5.1, not pwsh: that is what a stock Windows box has, so the
+        # scripts must parse there. (The hosted image has both.)
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        id: py
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # -Python pins the matrix interpreter explicitly; the script's own auto-discovery
+      # would otherwise pick whatever `py -3` resolves to on the image. No FreeCAD here,
+      # so the script warns on that item and continues — but it still runs `pip install
+      # -e .` with pyproject's pins, re-imports the resolved mcp/numpy/Pillow (catching a
+      # #277-shaped bad resolve), and completes a real MCP stdio initialize + tools/list.
+      - name: Scripted core install + MCP stdio boot
+        run: >
+          .\scripts\install-core.ps1
+          -Python "${{ steps.py.outputs.python-path }}"
+          -VenvDir "$env:RUNNER_TEMP\core-venv"
+
+      - name: Entry point + doctor --json are well-formed without FreeCAD
+        run: |
+          $venv = "$env:RUNNER_TEMP\core-venv"
+          # Collect the output FIRST, then test $LASTEXITCODE. Piping a native
+          # command straight into `Select-Object -First N` makes PowerShell tear the
+          # pipeline down as soon as N lines arrive, and the half-read process comes
+          # back with a nonzero exit code -- so the pretty one-liner reports a broken
+          # entry point on a `--help` that printed its usage perfectly well.
+          $help = & "$venv\Scripts\ankusdrive.exe" --help 2>&1
+          if ($LASTEXITCODE -ne 0) { throw 'the ankusdrive.exe entry point does not run' }
+          $help | Select-Object -First 3 | Write-Host
+          # doctor exits nonzero here BY DESIGN (FreeCAD is unresolved on a hosted
+          # runner), so gate on the report's shape, not the exit code.
+          # Actions runs this shell with $ErrorActionPreference='Stop', which promotes
+          # ANY native-command stderr to a terminating NativeCommandError -- and a
+          # dependency deep under `mcp` (pydantic_settings) writes a warning there on
+          # import, so doctor "failed" while printing perfectly good JSON. Drop to
+          # 'Continue' across the call, the same guard install-core.ps1 already uses
+          # around its own native invocations, and gate on the JSON as intended.
+          $prevEAP = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          try {
+            $json = & "$venv\Scripts\python.exe" -m ankusdrive doctor --json 2>$null | Out-String
+          } finally { $ErrorActionPreference = $prevEAP }
+          $doctorRc = $LASTEXITCODE
+          if (-not $json.Trim()) { throw 'doctor --json produced no output' }
+          if ($doctorRc -eq 0) { throw 'doctor exited 0 with no FreeCAD resolved - the exit code stopped meaning anything' }
+          $rep = $json | ConvertFrom-Json
+          if ($rep.platform.system -ne 'Windows') { throw "doctor reports $($rep.platform.system)" }
+          if ($rep.freecad.available) { throw 'unexpected: a hosted runner has no FreeCAD' }
+          # @() around the property collection: on PowerShell 5.1 a bare `.Count` on a
+          # PSCustomObject's Properties enumerates per-member instead of counting.
+          $families = @($rep.solvers.families.PSObject.Properties).Count
+          if ($families -lt 5) { throw "doctor reported only $families solver families" }
+          Write-Host "doctor --json OK - $families families reported (doctor exit $doctorRc, expected nonzero)"
+          # Actions ends a powershell step with `exit $LASTEXITCODE`, and the last native
+          # command here is the doctor call that is SUPPOSED to exit nonzero. Without
+          # this the step fails on the very exit code the assertions above just
+          # certified as correct. Any throw above still fails the step ahead of it.
+          exit 0
+
+      - name: FreeCAD-free contracts (registry parity + Windows discovery)
+        run: |
+          $venv = "$env:RUNNER_TEMP\core-venv"
+          & "$venv\Scripts\python.exe" tests\test_contracts.py
+          if ($LASTEXITCODE -ne 0) { throw 'test_contracts failed' }
+          & "$venv\Scripts\python.exe" tests\test_windows_support.py
+          if ($LASTEXITCODE -ne 0) { throw 'test_windows_support failed' }
