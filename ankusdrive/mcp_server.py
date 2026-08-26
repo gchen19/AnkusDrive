@@ -1016,29 +1016,67 @@ def measure_angle(a: str, a_ref: str, b: str, b_ref: str) -> dict:
 
 
 @mcp.tool()
-def bounding_box(handle: str, oriented: bool = False) -> dict:
+def bounding_box(handle: str, oriented: bool = False, tight: bool = False,
+                 deflection: float | None = None) -> dict:
     """Axis-aligned bounding box (AABB) of a shaped object. All lengths in mm,
     in world coordinates. This is a measurement — it returns numbers, not a new
     object, and does not modify the model.
 
-    handle:   the object to measure.
-    oriented: if True, also compute the tightest box at any orientation (the
-              oriented bounding box, OBB) and return it under "oriented"; if the
-              build can't compute it, "oriented" is null. Default False.
+    KNOWN QUIRK (issue #284): min/max/size are FreeCAD/OCC's ANALYTIC box, which
+    is an UPPER bound, not the true extent. OCC boxes a trimmed face using its
+    untrimmed carrier surface, so a planar cut through fillets, chamfers, lofts
+    or a sphere can report several mm of material that is not there — a real
+    case had a trim plane at X=-32.0 reported as X=-36.7. Before you conclude a
+    part is the wrong size, check "verified" (and pass tight=True): the analytic
+    box over-estimating a correct part looks exactly like a wrong part.
+
+    handle:     the object to measure.
+    oriented:   if True, also compute the tightest box at any orientation (the
+                oriented bounding box, OBB) and return it under "oriented"; if
+                the build can't compute it, "oriented" is null. Default False.
+                This is about ORIENTATION, not tightness — it comes from the same
+                analytic geometry and inherits the same over-estimate.
+    tight:      if True, also tessellate the shape and return the mesh-derived
+                box under "tight" — the trustworthy numbers when the analytic box
+                over-estimates. Opt-in because tessellation is not free (~1.4s on
+                a 200mm plate with 60 filleted holes). Default False.
+    deflection: mesh chord tolerance in mm for tight=True. Default diagonal/2000
+                (floor 0.001mm); larger is coarser and faster.
 
     Returns a dict:
-      min      [x,y,z] mm — lower corner of the AABB
-      max      [x,y,z] mm — upper corner of the AABB
+      min      [x,y,z] mm — lower corner of the analytic AABB (upper bound)
+      max      [x,y,z] mm — upper corner of the analytic AABB (upper bound)
       size     [x,y,z] mm — extents (max - min) along X, Y, Z
       center   [x,y,z] mm — AABB center point
       diagonal float  mm — space-diagonal length of the AABB
       oriented null, or {size:[x,y,z] mm, center:[x,y,z] mm, diagonal: mm} when
                oriented=True and supported — the minimum-volume box at the
                shape's best orientation (size is its three edge lengths).
+      verified how far min/max above can be trusted:
+               "exact"         — proven tight (the shape's own vertices reach all
+                                 six faces of the analytic box).
+               "mesh_agrees"   — tight=True found no disagreement beyond the mesh
+                                 tolerance.
+               "unverified"    — unproven, the usual verdict on a curved part.
+                                 Treat min/max/size as an upper bound only, and
+                                 re-run with tight=True to measure.
+               "over_estimate" — tight=True proved the analytic box overshoots.
+                                 Use "tight"; min/max/size are wrong-big.
+      tight    null unless tight=True, else {min, max, size, center, diagonal,
+               deflection, triangles} measured off the mesh. Accurate to about
+               `deflection`; the true box lies between "tight" and the analytic
+               box, never outside them.
+      warnings list of strings (empty when there is nothing to say): which face
+               over-estimates and by how many mm, or that an unverified box has
+               not been checked.
     """
     params = {"handle": handle}
     if oriented:
         params["oriented"] = True
+    if tight:
+        params["tight"] = True
+    if deflection is not None:
+        params["deflection"] = float(deflection)
     return _call("bounding_box", **params)
 
 

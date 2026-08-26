@@ -282,6 +282,10 @@ python3 tests/test_inspection.py
 python3 tests/test_inspection_worker.py
 
 echo
+echo "== Tight bounding box (issue #284 — the analytic BoundBox over-estimates a trimmed face) =="
+python3 tests/test_bbox_tight.py
+
+echo
 echo "== CNC machinability screen + tolerance-cost handle path (issue #231/#235 — worker) =="
 python3 tests/test_machining_worker.py
 echo "== Release packages (issue #233 — vendor/RFQ bundle, lifecycle/ECO/title-block gates, byte-identical re-release) =="

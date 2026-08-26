@@ -1933,24 +1933,112 @@ def _h_measure_angle(p):
     }
 
 
+# --- the analytic BoundBox is an UPPER bound (issue #284) ---------------------
+#
+# FreeCAD/OCC's shape.BoundBox comes from BRepBndLib, which boxes each face from
+# its UNTRIMMED carrier surface (the poles of a BSpline, the full circle of a
+# revolution) rather than from the trimmed patch actually present. A planar cut
+# through a filleted / lofted / spherical region therefore reads back as a
+# phantom extent: the field report behind #284 saw a trim plane at X=-32.0 come
+# back as X=-36.7, and an agent using the box as a dimensional check indicted a
+# correct part. Reproduced on FreeCAD 1.1 by tests/test_bbox_tight.py — a Ø40
+# cylinder with 4mm edge fillets, cut at X=-6, reports XMin -8.118 / XMax 21.648
+# against a true -6.000 / 20.000.
+#
+# Two LOWER bounds on the true box are available to catch it, and the difference
+# between them is the whole design of this handler:
+#
+#   * the shape's VERTICES are exact points on it, so
+#         vertex_box  ⊆  true_box  ⊆  analytic_box.
+#     When the vertex box FILLS the analytic box, the analytic box is PROVEN
+#     exact. That sweep is free (5ms on a 60-hole filleted plate) and certifies
+#     most machined parts. It can never prove the converse: a plain cylinder's
+#     two seam vertices sit 40mm inside a perfectly tight analytic box, so a
+#     vertex "disagreement" is evidence of nothing and must NOT raise the
+#     over-estimate flag on its own.
+#   * TESSELLATION (opt-in, tight=True) meshes the trimmed patch itself, so its
+#     box lands within ~deflection of the truth — that is what actually exposes
+#     the phantom. It is not free: the same 60-hole plate costs ~1.4s and a
+#     million triangles, which is why it stays opt-in.
+
+
+def _vertex_bbox(shape):
+    """([xmin,ymin,zmin], [xmax,ymax,zmax]) over a shape's vertices, or
+    (None, None) if it has none. Every vertex is an exact point ON the shape, so
+    this is a LOWER bound on the true AABB — useful as a tightness certificate,
+    never as a box in its own right (see the #284 note above)."""
+    lo = [math.inf] * 3
+    hi = [-math.inf] * 3
+    seen = False
+    for v in shape.Vertexes:
+        pt = v.Point
+        for i, c in enumerate((pt.x, pt.y, pt.z)):
+            if c < lo[i]:
+                lo[i] = c
+            if c > hi[i]:
+                hi[i] = c
+        seen = True
+    return (lo, hi) if seen else (None, None)
+
+
 @handler("bounding_box")
 def _h_bounding_box(p):
     """Axis-aligned bounding box (AABB) of a shaped object — a focused, cheap
     query (the same numbers mass_properties buries in its payload). All lengths
     in mm, in world coordinates.
 
+    QUIRK, and the reason `tight` exists (issue #284): min/max/size come from
+    FreeCAD/OCC's analytic BoundBox, which is an UPPER bound, not the true box.
+    OCC boxes a trimmed face by its untrimmed carrier surface, so a planar cut
+    through fillets/chamfers/lofts/spheres can report several mm of material
+    that is not there (a real case: a trim plane at X=-32.0 reported as -36.7).
+    `verified` says whether that happened here; when it did, believe `tight`.
+
+    Params:
+      handle     the object to measure (required)
+      oriented   also compute the minimum-volume box at any orientation
+      tight      also compute the mesh-derived box (tessellates a COPY of the
+                 shape). Costs real time on big parts — opt in when the numbers
+                 are being used as a dimensional check.
+      deflection tessellation chord tolerance in mm for `tight`; default
+                 diagonal/2000 (floor 0.001mm). Bigger = coarser and faster.
+
     Returns:
-      min      [x,y,z]  lower corner of the AABB
-      max      [x,y,z]  upper corner of the AABB
+      min      [x,y,z]  lower corner of the ANALYTIC AABB (upper bound)
+      max      [x,y,z]  upper corner of the ANALYTIC AABB (upper bound)
       size     [x,y,z]  extents = max - min  (XLength, YLength, ZLength)
       center   [x,y,z]  AABB center
       diagonal float    space-diagonal length of the AABB
       oriented null, or (when oriented=True and FreeCAD supports it)
                {size:[x,y,z], center:[x,y,z], diagonal:float} for the tightest
                box at any orientation (from shape.optimalBoundingBox()); null if
-               that computation is unavailable/failed.
+               that computation is unavailable/failed. This is about ORIENTATION,
+               not tightness — it is computed from the same analytic geometry.
+      verified how much the analytic min/max above can be trusted:
+               "exact"        — proven tight: the shape's own vertices reach
+                                every one of the six analytic faces.
+               "mesh_agrees"  — tight=True ran and found no disagreement beyond
+                                the mesh tolerance.
+               "unverified"   — nothing proved it (the default on curved parts).
+                                The numbers are an upper bound; they MAY be
+                                several mm too large. Re-run with tight=true
+                                before treating them as a measurement.
+               "over_estimate"— tight=True ran and the analytic box demonstrably
+                                overshoots. Use `tight`, not min/max/size.
+      tight    null unless tight=True, else {min, max, size, center, diagonal,
+               deflection, triangles} from the tessellated surface, unioned with
+               the exact vertices. These are the trustworthy numbers, accurate to
+               about `deflection` mm; because a mesh chord cuts INSIDE a convex
+               curve this box is itself a (very close) lower bound, so the truth
+               lies between `tight` and the analytic box — never outside them.
+      warnings list of strings, empty when there is nothing to say; carries the
+               over-estimate diagnosis (which face, by how many mm) or the
+               advisory that an unverified box has not been checked.
 
-    Does not mutate the input. No handle is returned (this is a measurement)."""
+    Does not mutate the input — `tight` tessellates a copy, because tessellating
+    a shape caches a triangulation that OCC then prefers, which would silently
+    change what every later bounding_box call reports. No handle is returned
+    (this is a measurement)."""
     _, shape = _shape_of(p["handle"])
     bb = shape.BoundBox
     out = {
@@ -1961,6 +2049,91 @@ def _h_bounding_box(p):
         "diagonal": _round(bb.DiagonalLength),
         "oriented": None,
     }
+    lo = [bb.XMin, bb.YMin, bb.ZMin]
+    hi = [bb.XMax, bb.YMax, bb.ZMax]
+    warnings = []
+    verified = "unverified"
+
+    # Free tightness certificate. The tolerance absorbs the small gap OCC leaves
+    # on a BoundBox and scales with the part so it stays meaningful at any size.
+    vlo, vhi = _vertex_bbox(shape)
+    vtol = max(1e-6, 1e-7 * bb.DiagonalLength)
+    if vlo is not None and all(
+        abs(a - b) <= vtol for a, b in zip(lo + hi, vlo + vhi)
+    ):
+        verified = "exact"
+
+    # `tessellated` is accepted as a synonym: issue #284 proposed both names, and
+    # an agent that guesses the other one should not silently get the old answer.
+    if p.get("tight") or p.get("tessellated"):
+        deflection = float(p.get("deflection") or 0.0)
+        if deflection <= 0.0:
+            deflection = max(bb.DiagonalLength / 2000.0, 1e-3)
+        # copy() first: tessellate() caches a triangulation on the TopoDS shape
+        # and BRepBndLib then PREFERS it over the surface algebra, so tessellating
+        # the LIVE shape would tighten (i.e. change) every later analytic reading
+        # of this object — measured -8.118 -> -6.000 on the #284 fixture.
+        try:
+            verts, tris = shape.copy().tessellate(deflection)
+        except Exception as e:
+            # a meshing failure must not cost the caller the analytic numbers too
+            verts, tris = None, None
+            warnings.append(f"tight=true requested but tessellation failed ({e}); "
+                            f"min/max/size remain an unverified upper bound (issue #284)")
+        if verts is not None:
+            mlo = [math.inf] * 3
+            mhi = [-math.inf] * 3
+            for pt in verts:
+                for i, c in enumerate((pt.x, pt.y, pt.z)):
+                    if c < mlo[i]:
+                        mlo[i] = c
+                    if c > mhi[i]:
+                        mhi[i] = c
+            if vlo is not None:
+                # vertices are exact; folding them in can only tighten a lower bound
+                mlo = [min(a, b) for a, b in zip(mlo, vlo)]
+                mhi = [max(a, b) for a, b in zip(mhi, vhi)]
+            out["tight"] = {
+                "min": [_round(c) for c in mlo],
+                "max": [_round(c) for c in mhi],
+                "size": [_round(b - a) for a, b in zip(mlo, mhi)],
+                "center": [_round((a + b) / 2.0) for a, b in zip(mlo, mhi)],
+                "diagonal": _round(math.dist(mlo, mhi)),
+                "deflection": _round(deflection, 6),
+                "triangles": len(tris),
+            }
+            # A mesh chord cuts inside a convex curve by up to ~deflection, so only a
+            # disagreement well past that is the trimmed-face quirk rather than mesh
+            # coarseness. 4x keeps the flag quiet on honest curvature.
+            tol = max(4.0 * deflection, 1e-6)
+            offenders = []
+            for i, axis in enumerate("XYZ"):
+                for over, label in ((mlo[i] - lo[i], axis + "min"), (hi[i] - mhi[i], axis + "max")):
+                    if over > tol:
+                        # every face that overshoots, not just the worst: a dimensional
+                        # check reads one axis at a time and needs to know which
+                        offenders.append(f"{label} by {_round(over)} mm")
+            if offenders:
+                verified = "over_estimate"
+                warnings.append(
+                    f"analytic box over-estimates on {', '.join(offenders)} — OCC boxes a "
+                    f"trimmed face by its untrimmed carrier surface (issue #284). Trust the "
+                    f"`tight` numbers (mesh-derived, accurate to ~{_round(deflection)} mm); "
+                    f"min/max/size are an upper bound."
+                )
+            elif verified != "exact":
+                verified = "mesh_agrees"
+    elif verified != "exact":
+        warnings.append(
+            "analytic box is an UPPER bound and the shape's vertices do not reach all "
+            "six faces, so it could not be certified — on trimmed/curved faces OCC "
+            "over-estimates (issue #284). Re-run with tight=true before using these "
+            "numbers as a dimensional check."
+        )
+
+    out["verified"] = verified
+    out.setdefault("tight", None)
+    out["warnings"] = warnings
     if p.get("oriented"):
         # optimalBoundingBox() (FreeCAD >= 0.20) returns a Base.BoundBox aligned
         # to the shape's tightest orientation; wrap in try/except since older
