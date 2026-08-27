@@ -1,17 +1,42 @@
-# Smithery listing config for AnkusDrive — https://smithery.ai/docs/config
+# Smithery listing config for AnkusDrive — https://smithery.ai/docs
 #
 # AnkusDrive is a LOCAL stdio MCP server: it drives a FreeCAD install on the
 # user's machine, so Smithery launches the `ankusdrive` command (installed via
 # `pipx install ankusdrive`, Phase B) rather than running it in Smithery's cloud.
 #
 # Submission is a human step: once this file is on the default branch and the
-# PyPI release is live, submit the repo at https://smithery.ai/new — their
-# crawler detects this file and renders the one-click install button.
+# PyPI release is live, submit at https://smithery.ai/new.
+#
+# It does NOT have to stay local. A remote box can serve this same tool surface
+# over HTTP to an agent that installed nothing — that is epic #296, and the
+# long comment at the bottom of this file records the shape, the three routes
+# to it, and what must be true before this file may ever point at a URL.
+#
+# ---------------------------------------------------------------------------
+# ⚠ FORMAT DRIFT — verify before submitting (Phase C, docs/PUBLISHING_PLAN.md)
+# ---------------------------------------------------------------------------
+# The `startCommand: {type: stdio, commandFunction: …}` schema below is
+# Smithery's older repo-scanned format, and the URL this header used to cite
+# (smithery.ai/docs/config) now 404s. As of 2026-08 their build docs describe
+# exactly two publish routes, and neither one reads this file:
+#
+#   * URL   — you host a public streamable-HTTP endpoint and the Smithery
+#             Gateway proxies to it. Session config is supplied at publish
+#             time (`smithery mcp publish <url> --config-schema '<json>'`).
+#   * Local — you upload a prebuilt `.mcpb` (MCPB) bundle that clients run
+#             on their own machine.
+#
+# So Phase C's real deliverable is probably an MCPB bundle wrapping this same
+# `ankusdrive mcp` invocation, with this file kept as the declarative record of
+# what that bundle must launch and which config it must collect. `build:`,
+# `homepage:` and `license:` below are likewise legacy top-level keys. Confirm
+# the current format at smithery.ai/new before cutting the release — do not
+# assume this file alone produces a listing.
 
 name: ankusdrive
 description: >-
   CLI + MCP server that drives FreeCAD's Python API for LLM-driven mechanical
-  design and FEM — 240+ tools spanning CAD modeling, drawings, and a broad
+  design and FEM — 280+ tools spanning CAD modeling, drawings, and a broad
   simulation surface (thermal, CFD/CHT, EM, acoustics, FSI, molding, optics,
   multibody) plus a design-control (PLM) layer.
 
@@ -49,3 +74,184 @@ build:
 
 homepage: https://github.com/gchen19/AnkusDrive
 license: Apache-2.0
+
+# ===========================================================================
+# Serving AnkusDrive from a remote computer — the hosted/SaaS shape (epic #296)
+# ===========================================================================
+#
+# Everything above assumes the FreeCAD install, the solvers and the agent live
+# on ONE machine. They do not have to. The install surface — FreeCAD 1.1, the
+# two-interpreter venv split, CalculiX, Gmsh, OpenFOAM (plus WSL2 on Windows /
+# Multipass on macOS), Elmer, SU2, openEMS, YADE, bempp-cl, KrakenOS, preCICE,
+# openInjMoldSim, six renderers — is this project's single largest source of
+# friction, and it is already installed and green on one machine: the
+# [self-hosted, ankusdrive, Linux] box behind .github/workflows/heavy-solves.yml.
+# That box is the prototype of the product #296 proposes.
+#
+# The shape, concretely:
+#
+#     agent (Claude, IDE, CI)  ── MCP over streamable HTTP + bearer/OAuth ──┐
+#                                                                          ▼
+#                                                       ┌──── AnkusDrive box ────┐
+#     Smithery Gateway ──proxies──► https://<host>/mcp ─┤ ankusdrive mcp         │
+#                                                       │   --transport          │
+#                                                       │   streamable-http      │
+#                                                       │ /work/<session>        │
+#                                                       │ freecadcmd workers     │
+#                                                       │ ccx · OpenFOAM ·       │
+#                                                       │ Elmer · SU2 · openEMS  │
+#                                                       └────────────────────────┘
+#
+# The agent installs nothing. It adds a URL and a token, and every tool in
+# ankusdrive/mcp_server.py resolves against solvers it never had to build.
+# That is the whole value proposition: the hard part of this project is the
+# install, and a hosted endpoint deletes it for the caller.
+#
+# ---------------------------------------------------------------------------
+# THREE ROUTES, in increasing order of lift
+# ---------------------------------------------------------------------------
+#
+# 1. UPLINK — zero code change, available today, proves the story cheaply.
+#    `smithery mcp add http://localhost:9090/mcp --id ankusdrive` (or with a
+#    trailing stdio command in place of the URL) opens a persistent WebSocket
+#    from the Smithery CLI on the box to the Smithery Gateway; the server then
+#    appears as an ordinary Smithery connection reachable by any agent. Run
+#    that on the heavy-solves box and a remote agent is driving the full solver
+#    stack through TODAY'S stdio server. Smithery is explicit that this is a
+#    development and personal-automation primitive, not hosting: one tunnel per
+#    connection, availability follows the host, every call round-trips to that
+#    machine, and the tunnel forwards arbitrary traffic to a local process — so
+#    it inherits every hazard in the blocker list below without solving any of
+#    them. Use it to demo and to measure latency, not to serve anyone else.
+#
+# 2. SELF-HOSTED IMAGE — "run this box yourself" (#296 M1).
+#    deploy/Dockerfile with a base tier (conda-forge FreeCAD 1.1 + CalculiX +
+#    Gmsh — the recipe .github/workflows/nightly-hosted-freecad.yml already
+#    validates on a stock clean runner) and a `-full` tier layering the
+#    venv-isolated and source-built solvers via scripts/install-solvers.sh.
+#    Single tenant, so the tenancy and quota problems mostly evaporate, and
+#    it is publishable to Smithery by URL the moment the operator has a public
+#    HTTPS endpoint. #296 argues this is the right FIRST product, with the
+#    multi-tenant service as the follow-on.
+#
+# 3. MULTI-TENANT SaaS — one endpoint, many customers.
+#    Everything in (2) plus real tenancy: per-tenant sandbox (own filesystem,
+#    no host mount, dropped capabilities, no egress — no solver or renderer
+#    needs it), CPU/memory/disk/wall-clock budgets, a queue in front of the
+#    heavy solve families rather than N concurrent solves, session TTL and
+#    eviction, audit log, durable /work with backups. This is the end state
+#    the question "could a SaaS let an agent HTTP-access the tooling?" is
+#    really asking about, and it is the one carrying the operational weight.
+#
+# ---------------------------------------------------------------------------
+# WHAT MUST BE TRUE BEFORE THIS FILE MAY POINT AT A URL
+# ---------------------------------------------------------------------------
+# These are not polish items. Two of them are defects that ONLY a network
+# boundary exposes, and both are live in the tree right now.
+#
+#   * TRANSPORT (#296 B1 / M0). cli.py's cmd_mcp calls mcp_server.run() with
+#     no options, and run() is stdio-only. FastMCP already speaks
+#     streamable-http under the mcp>=1.2,<2 pin (#277), so this is a flag and
+#     not a rewrite: `ankusdrive mcp --transport streamable-http --host --port
+#     --path`, with stdio remaining the default.
+#
+#   * SESSION ISOLATION (#296 B2) — a CROSS-TENANT DATA LEAK, not a race.
+#     `_current_workspace` (mcp_server.py:65) is a module-level global that
+#     use_workspace() mutates and _ensure_worker() reads on every call. One
+#     process serving one client is exactly right under stdio. One process
+#     serving many concurrent HTTP sessions is not: client B calling
+#     use_workspace("b") silently retargets client A's NEXT tool call at B's
+#     documents and handle registry. Fix by binding the current workspace to
+#     the MCP session id (FastMCP exposes the request context) and/or one
+#     server process per tenant. Testable today against the stdio server by
+#     driving two sessions concurrently and watching the assertion fail — M0
+#     ships that regression test before anything binds a port.
+#
+#   * AUTH, AND run_script (#296 B3). run_script (the @handler("run_script")
+#     entry in worker.py) exec()s caller-supplied Python with App / Part /
+#     ObjectsFem and the handle registry in scope, in globals that persist
+#     across calls. Locally that is a deliberate and much-used escape hatch.
+#     The moment a port is public it is full remote code execution plus
+#     arbitrary filesystem read/write, and open_document(path) /
+#     save_document(path) are a smaller version of the same. THE NETWORK
+#     BOUNDARY MUST NEVER BE THE SECURITY BOUNDARY. Required: bearer token
+#     (FastMCP `token_verifier`) or OAuth on the HTTP plane; refusal to bind a
+#     non-loopback interface when no auth is configured, failing closed and
+#     loudly; a policy switch (ANKUSDRIVE_ALLOW_RUN_SCRIPT=0) that disables
+#     run_script on shared deployments by returning the same structured
+#     refusal shape solvers.require_solver() already uses rather than raising;
+#     and an audit-log entry for every run_script body.
+#
+#   * FILE SHUTTLING (#296 B4). export_shape(path), save_document(path),
+#     open_document(path) and export_drawing(page, path) all assume the caller
+#     and the server share a filesystem. Remotely, "the path" names a file on
+#     a box the agent cannot read, and there is no way to get an input STEP
+#     *in*. Needs a per-session workspace directory (/work/<session>) that
+#     every path argument resolves inside, with traversal refused as a
+#     structured error rather than a traceback; plus upload / download /
+#     list_artifacts. Extend the png_base64 convention render_view already
+#     uses for small artifacts rather than inventing a second one, with a
+#     short-lived HTTPS URL above a size threshold — a meshed OpenFOAM case is
+#     not base64.
+#
+#   * LICENSING (#296 B6). Running the GPL-3.0 solvers strictly out-of-process
+#     keeps the copyleft boundary clean, and offering them over a network is
+#     not conveying under GPLv3 — so a hosted SERVICE is fine. Publishing a
+#     container IMAGE containing YADE / openEMS / KrakenOS / OpenFOAM binaries
+#     is distribution and pulls in their source-offer obligations. Decide per
+#     tier, and generate the license manifest at build time rather than
+#     hand-maintaining it.
+#
+#   * TOOL-LIST WEIGHT (#296 B8). Locally the tool list is free. Remotely it
+#     is context every session pays for, and it is also what Smithery's
+#     scanner renders on the server page. A curated default tool-set with
+#     opt-in families is worth having and is cheap given the family metadata
+#     already in solvers.py.
+#
+# ---------------------------------------------------------------------------
+# WHAT DOES NOT CHANGE
+# ---------------------------------------------------------------------------
+# The parts that look like they would block a remote deployment mostly already
+# do the right thing, which is why #296 is a smaller lift than it appears:
+#
+#   * jobs.py (submit → job_status / job_result, content-hash cache) and
+#     mainthread.py (#260) are transport-agnostic. A background job asks for
+#     main-thread FreeCAD time and THE CLIENT'S OWN POLL IS THE MAIN THREAD'S
+#     TURN — nothing about that is coupled to stdio. This was the most likely
+#     blocker and it is already solved.
+#   * render.py is a pure NumPy/Pillow software rasterizer — no GL context, no
+#     GPU, no display — and render_view/render_views already return
+#     png_base64 rather than a filesystem path. No GPU is needed anywhere in
+#     the stack today; keep it that way.
+#   * Degradation is already structured: require_solver() returns
+#     {ok: False, reason, install} and solve_capabilities / `ankusdrive doctor`
+#     (#198) report what actually resolves, so a hosted tier can advertise its
+#     own honest capability set and a tier without openEMS says so.
+#   * Per-workspace isolation already exists and is cheap: a worker cold-boots
+#     in ~0.30 s at ~66 MB RSS, so concurrency on a box is bounded by the
+#     solvers, not by FreeCAD.
+#
+# ---------------------------------------------------------------------------
+# NOTE FOR WHOEVER SHIPS #296
+# ---------------------------------------------------------------------------
+# docs/PUBLISHING_PLAN.md still lists a hosted server under "What we are
+# explicitly not doing" — "a different product, not a distribution channel."
+# That was the right call for a DISTRIBUTION plan; #296 opens that different
+# product deliberately. If it ships, that section and this file's header both
+# need updating. The local stdio path stays the default and the reference
+# implementation: a hosted endpoint is a SECOND listing, not a replacement.
+#
+# Sketch only — DO NOT UNCOMMENT until #296 M0's isolation test is green and
+# auth is enforced. A URL-published remote AnkusDrive is not declared in this
+# file at all; it is published against a live endpoint:
+#
+#   smithery mcp publish "https://ankusdrive.example/mcp" \
+#     -n <namespace>/ankusdrive-hosted \
+#     --config-schema '{"type":"object",
+#                       "properties":{"apiToken":{"type":"string"}},
+#                       "required":["apiToken"]}'
+#
+# Smithery scans the endpoint (User-Agent SmitheryBot/1.0, from Cloudflare
+# Workers) to extract the tool list. A server behind auth must return 401, not
+# 403, so OAuth discovery works per RFC 9728 — or serve a static card at
+# /.well-known/mcp/server-card.json and skip scanning entirely.
