@@ -1,0 +1,107 @@
+name: Hosted FreeCAD
+
+# The FreeCAD-backed lane that runs on a stock GitHub-hosted ubuntu runner:
+# installs FreeCAD 1.1 + CalculiX from conda-forge and runs the FreeCAD-side
+# worker tests. It exists so CI is not a single point of failure on the one
+# self-hosted FreeCAD box (test.yml), and it now gates pull requests for two
+# reasons the self-hosted lane cannot satisfy:
+#
+#   1. AVAILABILITY. A hosted runner is always there. A self-hosted one queues
+#      behind whatever else that machine is doing (observed: 30 minutes) or is
+#      simply off, so requiring it in branch protection would mean a dead box
+#      blocks every merge. This lane is the one that can safely be *required*.
+#   2. FORK PRs. Once this repo is public, the self-hosted lanes skip fork PRs
+#      on purpose — a bare `pull_request:` trigger runs the fork's code, and
+#      those runners are real machines with real home directories. Contributions
+#      from forks get their FreeCAD signal from here instead.
+#
+# Promoted from nightly-only after five consecutive green scheduled runs
+# (2026-08-24 .. 2026-08-28). The nightly schedule is kept: it catches drift in
+# conda-forge's FreeCAD build on days when nobody opens a PR.
+#
+# SCOPE — deliberately not the whole suite. `tests/run_all.sh` wires a
+# two-interpreter split (system python3 for FreeCAD, .venv python3 for the
+# Pillow/numpy render and integration tests) that this minimal conda env does
+# not provide, so those stay on the self-hosted suite. Broadening this lane
+# means provisioning that venv here, which is its own change with its own
+# verification — not a rename.
+#
+# CONSTRAINTS this lane depends on:
+#   1. FreeCAD VERSION. tests/test_worker.py asserts the worker reports 1.1.x
+#      AND runs under Python 3.11. conda-forge ships `freecad 1.1.0` with a
+#      linux-64 / py3.11 build, so installing `freecad>=1.1,<1.2` into this
+#      py3.11 env satisfies both. The bound is `<1.2` with no unversioned
+#      fallback, so a future minor surfaces as a clear unsatisfiable-solve error
+#      rather than a confusing version-assert failure.
+#   2. freecadcmd RESOLUTION. ankusdrive/client.py finds the binary via
+#      $ANKUSDRIVE_FREECADCMD -> shutil.which -> known paths. The conda binary's
+#      path is exported explicitly so resolution never depends on PATH
+#      activation surviving between steps.
+#   3. CalculiX. The FEM subset of test_worker shells out to `ccx`; conda-forge
+#      `calculix` puts it on PATH, which FreeCAD 1.1's femtools.ccxtools
+#      resolves via shutil.which — no preference wiring needed.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "0 7 * * *"   # 07:00 UTC daily — catches conda-forge build drift
+  workflow_dispatch: {}    # manual trigger to re-run on demand
+
+concurrency:
+  group: hosted-freecad-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-freecad:
+    name: Worker suite (hosted FreeCAD)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -el {0}   # login shell so the conda env stays activated
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Set up Miniforge (conda-forge)
+        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: ankusdrive
+          python-version: "3.11"
+
+      - name: Install FreeCAD 1.1 + CalculiX from conda-forge
+        run: |
+          # calculix provides the `ccx` FEM solver FreeCAD shells out to; without
+          # it the test_worker FEM cases fail with "CalculiX binary not found".
+          # conda-forge installs it as $CONDA_PREFIX/bin/ccx, and FreeCAD 1.1's
+          # femtools.ccxtools falls back to shutil.which("ccx") when no
+          # ccxBinaryPath pref is set — so PATH presence is enough.
+          conda install -y "freecad>=1.1,<1.2" calculix
+          echo "--- freecadcmd ---"
+          which freecadcmd
+          freecadcmd --version 2>&1 | head -3 || true
+          echo "--- ccx (CalculiX FEM solver) ---"
+          which ccx
+          ccx -v 2>&1 | head -2 || true
+          echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
+
+      # No "skip if absent" guard on these: #8 and #11 have long since merged and
+      # both files are tracked, so the guard could only ever hide a real deletion.
+      # A check that passes green on a missing test is exactly the silent-default
+      # failure this repo writes contract tests to prevent.
+      - name: Static contracts (FreeCAD-free baseline)
+        run: python tests/test_contracts.py
+
+      - name: Worker suite (FreeCAD-side)
+        run: python tests/test_worker.py
+
+      - name: Mating-dimension golden table
+        run: python tests/test_mating_dims.py

@@ -31,7 +31,7 @@ shippable — stop after any phase if the next one isn't worth the cost.
   `ankusdrive/worker.py` ships inside the wheel via `package-data`, and
   `ankusdrive ping` works from the wheel-installed location too.
 - [x] Smoke-test on Linux (CI runs the editable install + import on Linux
-  daily — `nightly-hosted-freecad.yml` is green; `freecadcmd` auto-discovery
+  daily — `hosted-freecad.yml` is green and now gates PRs; `freecadcmd` auto-discovery
   resolves the system binary via `shutil.which`).
 
 **Success criteria**

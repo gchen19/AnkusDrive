@@ -39,6 +39,16 @@ permissions:
 jobs:
   test:
     name: Test suite (FreeCAD 1.1, self-hosted)
+    # Fork guard (do not remove before this repo is public — see the header).
+    # A bare `pull_request:` trigger runs the FORK's code, and this job runs on a
+    # persistent machine that is somebody's actual computer: its $HOME, its keys,
+    # its network. On a public repo that is arbitrary code execution by anyone who
+    # can open a PR, which is why GitHub advises against self-hosted runners there.
+    # Same-repo PRs and pushes still run; a fork PR skips this lane and is covered
+    # by the hosted FreeCAD lane instead (.github/workflows/hosted-freecad.yml).
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     # Pin `Linux`: this box's Windows sibling shares the `ankusdrive` label, and this job's
     # steps are bash + AppImage + a Linux two-interpreter split. The Windows suite is a
     # separate lane (.github/workflows/test-windows.yml). The OS label is auto-applied.
