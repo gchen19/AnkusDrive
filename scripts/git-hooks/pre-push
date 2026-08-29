@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Refuse a direct push to main.
+#
+# GitHub gates branch protection AND rulesets behind Pro for private repos (both
+# endpoints answer 403: "Upgrade to GitHub Pro or make this repository public"),
+# so `main` is unprotected server-side for as long as this repo stays private.
+# This is the client-side stand-in for the one failure it can actually prevent:
+# the absent-minded `git push` from a branch you forgot you were not on.
+#
+# It is NOT security, and it is not a substitute for the server-side rule:
+#   * `git push --no-verify` walks straight past it;
+#   * it only exists on machines where someone installed it;
+#   * it cannot see what anyone else pushes.
+# Delete this hook once branch protection is live — a local guard that disagrees
+# with the server is worse than no local guard.
+#
+# Install (from the repo root):
+#     ln -sf ../../scripts/git-hooks/pre-push .git/hooks/pre-push
+#
+# git feeds pre-push one line per ref being pushed, on stdin:
+#     <local ref> <local sha> <remote ref> <remote sha>
+set -euo pipefail
+
+PROTECTED="refs/heads/main"
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    [ "$remote_ref" = "$PROTECTED" ] || continue
+    {
+        echo "pre-push: refusing to push directly to main."
+        echo
+        echo "Open a pull request instead — the fast lane, the secret scan and both"
+        echo "FreeCAD suites are the gate, and squash-merging keeps history linear:"
+        echo
+        echo "    git switch -c <branch>"
+        echo "    git push -u origin <branch>"
+        echo "    gh pr create"
+        echo
+        echo "Deliberate exception (release tags do not hit this path):"
+        echo "    git push --no-verify"
+    } >&2
+    exit 1
+done
+
+exit 0
