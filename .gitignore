@@ -14,3 +14,10 @@ results/
 # `python -m build` output (release flow: build -> twine check -> clean-venv install)
 build/
 dist/
+
+# Legal / trademark filing correspondence. These carry the applicant's name,
+# address and contact details, so they must not ride along into a repo that is
+# headed for public. Keep the files on disk, keep them out of the history — the
+# secret scan in CI does not look for PII, and history is forever once pushed.
+*Filing-Record*
+docs/*.docx
