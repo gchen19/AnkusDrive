@@ -178,5 +178,5 @@ video is a first-class job result (like `render_photoreal_submit`), not a scratc
   (`icoFoam`), `foamToVTK -legacy -ascii` → meshio (no lxml), Ghia 1982 benchmark overlaid
   (`artifacts/cfd_cavity_field.gif`). OpenFOAM env via `solvers.openfoam_bashrc()`; CFD
   case-generation reference `ankusdrive/analysis/openfoam.py`, handlers `cfd_*_flow_submit`.
-- Lineage: validate-the-artifact arc (`docs/VALIDATE_THE_ARTIFACT.md`, RFC §11.10) — the
+- Lineage: validate-the-artifact arc (`docs/archive/VALIDATE_THE_ARTIFACT.md`, RFC §11.10) — the
   geometry oracle whose verdicts these videos overlay.

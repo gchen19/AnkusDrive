@@ -32,7 +32,7 @@ Companion to the README. The README describes what *is*; this file describes wha
 Shipped a "declared intent + verify" layer so an agent can check a part against
 what it is *for*, not just measure raw geometry — closing the gap where a
 watertight solid can still have a blocked or leaky flow path. Plan:
-[`docs/AIRTIGHT_INVARIANTS_PLAN.md`](AIRTIGHT_INVARIANTS_PLAN.md).
+[`docs/archive/AIRTIGHT_INVARIANTS_PLAN.md`](archive/AIRTIGHT_INVARIANTS_PLAN.md).
 
 - `check_airtight_path(inlet, outlet, min_aperture_mm2?)` — pure-BREP void
   analysis (`padded_bbox.cut(part_with_ports_capped)` → `.Solids`): reports

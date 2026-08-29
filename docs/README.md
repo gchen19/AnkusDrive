@@ -25,10 +25,7 @@ Docs fall into two kinds:
 | [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) | The analysis-family catalog + result schemas (pure-Python oracle vs external-solver split). |
 | [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) | Per-family proof harness (toy problems with known answers). |
 | [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md) | Forward-looking assessment of the next simulation work. |
-| [`DESIGN_TO_SPEC_KICKOFF.md`](DESIGN_TO_SPEC_KICKOFF.md) | Epic #222 handoff: what shipped (wind tunnel, trust layer, performance contracts), what remains (`study_submit`, `optimize_submit`), and the CFD gotchas worth not rediscovering. |
 | [`MOLDING_FILL_SOLVER.md`](MOLDING_FILL_SOLVER.md) | Injection-molding fill/pack/cool/warp solver reference + gotchas. |
-| [`VALIDATE_THE_ARTIFACT.md`](VALIDATE_THE_ARTIFACT.md) | "Validate the artifact, not the model" — the geometry-realizes-declaration oracle. |
-| [`AIRTIGHT_INVARIANTS_PLAN.md`](AIRTIGHT_INVARIANTS_PLAN.md) | Functional-invariant checks for enclosed-flow parts (`declare_intent`/`verify_intent`). |
 | [`RENDERING.md`](RENDERING.md) | Render support matrix, install, limitations. |
 | [`RENDER_WORKBENCH.md`](RENDER_WORKBENCH.md) | Photoreal rendering architecture + operator guide. |
 | [`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md) | Per-renderer provisioning detail (6 backends). |
@@ -53,6 +50,9 @@ current gaps.
 | [`KICKOFF_validate_the_artifact.md`](archive/KICKOFF_validate_the_artifact.md) | The validate-the-artifact oracle + sim-from-CAD items. |
 | [`KICKOFF_simulation_video_capture.md`](archive/KICKOFF_simulation_video_capture.md) | Review-video capture (motion → GIF, modal/thermal/CFD fields). |
 | [`KICKOFF_molding_pack_cool_warp.md`](archive/KICKOFF_molding_pack_cool_warp.md) | Molding packing/cooling/warpage stages (see `MOLDING_FILL_SOLVER.md` for the live reference). |
+| [`DESIGN_TO_SPEC_KICKOFF.md`](archive/DESIGN_TO_SPEC_KICKOFF.md) | Epic #222, closed 2026-08-03 — wind tunnel, trust layer, performance contracts. Also carries the CFD gotchas worth not rediscovering. |
+| [`VALIDATE_THE_ARTIFACT.md`](archive/VALIDATE_THE_ARTIFACT.md) | RFC §11.10 geometry-realizes-declaration, delivered — the companion record to `KICKOFF_validate_the_artifact.md`. |
+| [`AIRTIGHT_INVARIANTS_PLAN.md`](archive/AIRTIGHT_INVARIANTS_PLAN.md) | Issue #19, closed — functional-invariant checks for enclosed-flow parts (`declare_intent`/`verify_intent`). |
 
 > **Note:** several of these are cited from source code and tests (e.g.
 > `ankusdrive/realize.py`, `ankusdrive/solvers.py`, `ankusdrive/worker.py`, `tests/`)

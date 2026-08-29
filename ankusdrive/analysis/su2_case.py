@@ -39,7 +39,7 @@ TWO THINGS THAT DECIDE WHETHER THIS CONVERGES, both learned the expensive way:
    drop is still climbing through 87 % of its final value — a run that looks converged
    and is not. ``CONV_FIELD= SURFACE_PRESSURE_DROP`` with a Cauchy window watches the
    quantity being reported. Same lesson the OpenFOAM pipe case learned about the
-   wedge ``Uz`` residual (see docs/DESIGN_TO_SPEC_KICKOFF.md); it generalizes.
+   wedge ``Uz`` residual (see docs/archive/DESIGN_TO_SPEC_KICKOFF.md); it generalizes.
 
 A viscous fluid is the default for the same conditioning reason: holding Re low with
 water means a velocity of millimetres per second, where SU2's incompressible
