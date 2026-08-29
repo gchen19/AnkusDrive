@@ -20,10 +20,10 @@ hands off the remaining two, plus the operational knowledge that is expensive to
 rediscover.
 
 Read alongside:
-- [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) — the CFD family, the trust layer, the
+- [`SIMULATION_TOOLS.md`](../SIMULATION_TOOLS.md) — the CFD family, the trust layer, the
   verification layer, and the performance contract, with their result schemas.
-- [`MACOS.md`](MACOS.md) — how OpenFOAM runs here at all (it lives in a Multipass VM).
-- [`DESIGN_HIERARCHY.md`](DESIGN_HIERARCHY.md) — where performance contracts sit next to
+- [`MACOS.md`](../MACOS.md) — how OpenFOAM runs here at all (it lives in a Multipass VM).
+- [`DESIGN_HIERARCHY.md`](../DESIGN_HIERARCHY.md) — where performance contracts sit next to
   the geometric contract layer.
 
 ---

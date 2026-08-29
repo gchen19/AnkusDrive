@@ -1,6 +1,6 @@
 """Validate the ARTIFACT of scratch/dog_clutch_unit.py against the §11.10 oracle.
 
-The calibration finding (docs/VALIDATE_THE_ARTIFACT.md) caught a second instance of
+The calibration finding (docs/archive/VALIDATE_THE_ARTIFACT.md) caught a second instance of
 the solid-face bug: dog_clutch_unit.py's collar sleeve was SOLID over the whole dog
 band, so the output gear's teeth jam into it regardless of dog phase — it cannot
 interlock, exactly the bug the arc is about. This probe builds the freewheeling output

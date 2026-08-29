@@ -42,13 +42,13 @@ sufficient. This plan adds the functional layer on top.
 
 ### Cold-start context (read these first)
 
-- **[`README.md`](../README.md)** — architecture; the three layers (typed tools
+- **[`README.md`](../../README.md)** — architecture; the three layers (typed tools
   / `get_object`+`set_property` / `run_script`); the Phase-3 "intent-encoding"
   framing this feature extends.
-- **[`docs/ROADMAP.md`](ROADMAP.md)** — slice changelog + deferred backlog.
-- **[`docs/MULTI_AGENT.md`](MULTI_AGENT.md)** §4 — the `publish_interface`
+- **[`docs/ROADMAP.md`](../ROADMAP.md)** — slice changelog + deferred backlog.
+- **[`docs/MULTI_AGENT.md`](../MULTI_AGENT.md)** §4 — the `publish_interface`
   named-frame property-bag pattern this feature mirrors for persistence.
-- **[`tests/TEST_PLAN.md`](../tests/TEST_PLAN.md)** + **`tests/run_all.sh`** —
+- **[`tests/TEST_PLAN.md`](../../tests/TEST_PLAN.md)** + **`tests/run_all.sh`** —
   test tiers and how to run them.
 - **Project memory** `project_freecad_api_drift.md` (if present) — **the FreeCAD
   wiki lies; introspect the live API** (`dir()`,

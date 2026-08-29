@@ -4,7 +4,7 @@ Scope of work for the next session, written 2026-06-14 at the end of the gearbox
 
 > **Status (2026-06-14):** ALL FIVE items are now done. Items #1 (anomaly gate) and #2
 > (geometry-realizes-declaration) shipped as **RFC §11.10** — see
-> `docs/VALIDATE_THE_ARTIFACT.md` for the writeup, `ankusdrive/realize.py` for the oracle,
+> `docs/archive/VALIDATE_THE_ARTIFACT.md` for the writeup, `ankusdrive/realize.py` for the oracle,
 > and `tests/test_realize.py` for the regression (a merge that FAILS the solid-face collar
 > at 249.5 mm³). Since extended: a **`interleave`** gate (relative half-pitch phase —
 > catches teeth-on-teeth that pass the per-part gap check), the whole **`gearbox_multispeed`**
