@@ -53,6 +53,11 @@ ALLOWED = {
     "tests/test_compat_rename.py":  "asserts the compatibility shims still work",
     "MIGRATION.md":                 "tells users what changed and how to move",
     "docs/PUBLISHING_PLAN.md":      "the old name is an unclaimed PyPI project to reserve",
+    # Migration aids. These do not keep anything working — they DETECT the
+    # pre-rename state and say how to move off it, so they must name it. Both go
+    # when the shims do, in 0.6.
+    "scripts/ci-macos-preflight.sh": "fails a runner whose .env is still on the legacy prefix",
+    "docs/MACOS.md":                 "documents the pre-0.5 runner .env + solver dir, and the migration",
     # NOTE: logo/ was exempt while the pre-rename artwork was still tracked — that
     # mark is a drift pin threading a reticle, so the picture and its filenames WERE
     # the old name and could not be re-exported. Those originals are deleted and the
