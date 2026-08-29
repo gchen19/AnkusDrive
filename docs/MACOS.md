@@ -339,7 +339,7 @@ bash tests/run_macos_heavy.sh tests/test_some_new_gate.py
    ./svc.sh install && ./svc.sh start      # run as a service so the cron lane fires unattended
    ```
 
-3. **Put the box-specific paths in the runner's own environment**, `~/actions-runner/.env`
+3. **Put the box-specific paths in the runner's own environment**, `<runner-dir>/.env`
    — *not* in the workflow, which must stay portable. The Actions runner applies this file
    to every job it runs:
 
@@ -360,7 +360,25 @@ bash tests/run_macos_heavy.sh tests/test_some_new_gate.py
    the built-in CFD builders resolve through `ANKUSDRIVE_OPENFOAM_*`, *not* the FSI pair
    above, so omitting them leaves `test_openfoam` / `test_meshbridge` / `test_wind_tunnel`
    skipping their live halves — which is exactly what the preflight refuses to let pass.
-   Restart the service after editing (`./svc.sh stop && ./svc.sh start`).
+   Restart the service after editing (`./svc.sh stop && ./svc.sh start`) — the runner
+   reads `.env` at service start, so an edit alone changes nothing.
+
+   > **If this box predates 0.5**, its `.env` still names these `DRIFTPIN_*`. The
+   > in-process shim (`config.adopt_legacy_env`) promotes them, so `doctor` and every
+   > Python-side probe look healthy — but the preflight, and everything else outside
+   > Python, reads the job environment directly and sees them as unset. That is what
+   > broke this lane on every run for the week after the rename. Fix it on the box and
+   > restart:
+   >
+   > ```bash
+   > sed -i '' 's/^DRIFTPIN_/ANKUSDRIVE_/' <runner-dir>/.env
+   > ./svc.sh stop && ./svc.sh start
+   > ```
+   >
+   > Solvers provisioned before 0.5 also sit under
+   > `~/Library/Application Support/DriftPin/solvers`. `find_solver` still probes that
+   > directory, but only until 0.6 — move it to `.../AnkusDrive/solvers` now rather than
+   > discover it when the fallback is deleted.
 4. **Keep the Mac awake** — `sudo pmset -a sleep 0 disablesleep 1`, or the 06:00 UTC cron
    lane finds the VM suspended.
 
