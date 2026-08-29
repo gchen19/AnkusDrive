@@ -55,10 +55,10 @@ jobs:
       run:
         shell: bash -el {0}   # login shell so the conda env stays activated
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Miniforge (conda-forge)
-        uses: conda-incubator/setup-miniconda@v4
+        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
         with:
           miniforge-version: latest
           channels: conda-forge
