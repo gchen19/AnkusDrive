@@ -14,7 +14,7 @@ both-occupied fraction — to tell a clean CATCH from a JAM:
   * BAD   (in-phase collar, real gaps): teeth-on-teeth — overlap spikes into the 100s of
           mm³ and both-occupied jumps to ≈0.46. It jams; it cannot slide home.
 
-Outputs (artifacts/): dog_clutch_slide.gif (the GOOD slide-and-catch on the real metal),
+Outputs (artifacts/dog_clutch/): dog_clutch_slide.gif (the GOOD slide-and-catch on the real metal),
 dog_clutch_slide_filmstrip.png, dog_clutch_catch_vs_jam.png (the discriminating curves).
 
   .venv/bin/python3 scratch/dog_clutch_slide_sim.py
@@ -33,7 +33,7 @@ import matplotlib                    # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt      # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "dog_clutch"
 M = 2.0
 SR, GH, ND, RDOG = 5.0, 6.0, 6, 7.5     # shaft r, gear face, dogs, dog pitch radius
 N = 18                                    # frames / slide samples (each = 2 booleans)

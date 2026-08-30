@@ -11,7 +11,7 @@ inline measurement) on each, so the bug and its fix are judged on the as-built m
   * FIXED  — sleeve raised ABOVE the band (mirrors gearbox_multispeed.collar) so only
              interleaving dog teeth occupy it -> fill ≈ 0.5, in-family overlap.
 
-It then reads the EXPORTED artifacts/dog_clutch_unit.step back (the real handoff file,
+It then reads the EXPORTED artifacts/dog_clutch/dog_clutch_unit.step back (the real handoff file,
 not a re-build) and asserts the as-shipped collar realizes the declaration — closing
 the loop on the actual artifact, which is the whole point of the §11.10 arc.
 
@@ -93,7 +93,7 @@ __result__ = {
 
 
 # --- read the EXPORTED STEP back and validate the as-shipped collar -----------
-STEP = REPO / "artifacts" / "dog_clutch_unit.step"
+STEP = REPO / "artifacts" / "dog_clutch" / "dog_clutch_unit.step"
 CHECK_STEP = r"""
 import Part
 from ankusdrive import realize

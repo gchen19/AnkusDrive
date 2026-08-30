@@ -19,7 +19,7 @@ Scope of work for the next session, written 2026-06-14 at the end of the gearbox
 > and the selector emerges from contact with no constraint imposing it: engaged transmits
 > (~96%), disengaged freewheels (0%). It also surfaced a lesson the static checks can't —
 > the idealised CAD has zero running clearance, so a real dog clutch needs a slip fit
-> (`artifacts/dog_clutch_cad_sim.gif`).
+> (`artifacts/dog_clutch/dog_clutch_cad_sim.gif`).
 
 ## Why this exists
 
@@ -103,9 +103,9 @@ feasible. Candidate RFC slot: **§11.10 — geometry-realizes-declaration**.
   `scratch/dog_clutch_sim.py`, `scratch/gearbox_multispeed_sim.py`.
 - Sim-from-CAD (#3, CAD-coupled rigid body): `scratch/dog_clutch_cad_sim.py` — vhacd
   decomposition of the real exported parts driven in PyBullet; faithfulness gate +
-  emergent selector; `artifacts/dog_clutch_cad_sim.gif`.
+  emergent selector; `artifacts/dog_clutch/dog_clutch_cad_sim.gif`.
 - Renders: `scratch/render_dogclutch.py` (the two-colour interleave),
-  `artifacts/dogclutch_engaged.png`, `artifacts/gearbox_multispeed.{step,stl}`.
+  `artifacts/dog_clutch/dogclutch_engaged.png`, `artifacts/gearbox/gearbox_multispeed.{step,stl}`.
 - Motion oracle: `ankusdrive/mechanism.py` + the `merge_assembly` mobility/typed gates
   in `ankusdrive/worker.py`.
 - The interference-magnitude signal: the pairwise common-volume scan run this session

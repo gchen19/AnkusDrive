@@ -66,11 +66,11 @@ def assemble_and_gate(tmp, n, files):
     return rep, meas
 
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "gearbox"
 
 
 def export_assembly(root_path, stem):
-    """Export the merged gearbox's STEP + STL into artifacts/ (exports the assembly's
+    """Export the merged gearbox's STEP + STL into artifacts/gearbox/ (exports the assembly's
     own Shape directly — Part.export drops linked-child geometry)."""
     ART.mkdir(parents=True, exist_ok=True)
     step, stl = ART / f"{stem}.step", ART / f"{stem}.stl"
@@ -212,7 +212,7 @@ def run_trial(client, model, n, mode, tmp):
 
 def export_agent_gearbox(n=3):
     """Rebuild the gearbox from the AGENTS' derived teeth (measured in the billed run)
-    and export its STEP/STL + render to artifacts/. The agents derived the standard
+    and export its STEP/STL + render to artifacts/gearbox/. The agents derived the standard
     constant-mesh teeth, so the scripted rebuild is geometrically identical to what
     they produced; this regenerates the CAD without re-billing."""
     pairs = [gb.teeth(gb.RATIOS[s]) for s in range(n)]   # = the agents' measured teeth

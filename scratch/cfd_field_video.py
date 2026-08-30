@@ -16,7 +16,7 @@ solve's convergence), the mesh is tiny, and it has a *published benchmark* — s
 backs its claim the §11.10 way: the simulated vertical-centre-line u-velocity is overlaid
 on Ghia, Ghia & Shin (1982) Re=100, and you watch it land on the dots.
 
-Outputs (artifacts/): cfd_cavity_field.gif + cfd_cavity_field_filmstrip.png.
+Outputs (artifacts/cfd/): cfd_cavity_field.gif + cfd_cavity_field_filmstrip.png.
 
   .venv/bin/python3 scratch/cfd_field_video.py
 """
@@ -46,7 +46,7 @@ import meshio                                               # noqa: E402
 from ankusdrive import solvers                                # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "cfd"
 N = 64                       # cells per side (64×64 — smooth field, tight Ghia match)
 RE = 100.0                   # Reynolds number U·L/nu
 U_LID, L = 1.0, 1.0          # lid speed, cavity side

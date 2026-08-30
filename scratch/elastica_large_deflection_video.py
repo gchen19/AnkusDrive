@@ -20,7 +20,7 @@ an interpolation. The tet-mesh surface (faces on exactly one element) is the def
 skin; a node's deformed position is ``coord + solved_displacement`` and its colour is the
 displacement magnitude, so the colour reads where the beam flexes hardest (the tip).
 
-Outputs (artifacts/): elastica_large_deflection.gif + elastica_large_deflection_filmstrip.png
+Outputs (artifacts/fem/): elastica_large_deflection.gif + elastica_large_deflection_filmstrip.png
 
   .venv/bin/python3 scratch/elastica_large_deflection_video.py
 """
@@ -44,7 +44,7 @@ from ankusdrive import Worker                                 # noqa: E402
 from ankusdrive.analysis import nonlinear as nl               # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "fem"
 L, WIDTH, HEIGHT = 300.0, 24.0, 8.0           # slender steel cantilever (mm), L/h=37.5
 MESH = 4.0                                     # char length (mm): 2 elements through the
 #                                                8 mm thickness (2nd-order tets) — coarser

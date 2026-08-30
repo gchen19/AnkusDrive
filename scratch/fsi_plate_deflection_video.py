@@ -19,7 +19,7 @@ The solve is the REAL one: write_fsi_case + run_coupled_fsi launch pimpleFoam (F
 writes Force) and ccx_preCICE (Solid, writes Displacement) coupled over preCICE sockets;
 the watch-point log gives the tip displacement at each of the four time windows.
 
-Outputs (artifacts/): fsi_plate_deflection.gif + fsi_plate_deflection_filmstrip.png
+Outputs (artifacts/fsi/): fsi_plate_deflection.gif + fsi_plate_deflection_filmstrip.png
 
   .venv/bin/python3 scratch/fsi_plate_deflection_video.py
 """
@@ -41,7 +41,7 @@ from PIL import Image                                       # noqa: E402
 from ankusdrive import solvers                                # noqa: E402
 from ankusdrive.analysis import fsi, fsi_case                 # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "fsi"
 ART.mkdir(exist_ok=True)
 
 # flap geometry (the validated perpendicular-flap template, SI metres): the flap is

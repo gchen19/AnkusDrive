@@ -22,7 +22,7 @@ the FEM surface and not a flat plate: a box tessellates to flat faces, so the th
 thickness gradient on its edges has nowhere to show; the tet-mesh surface is a fine skin
 whose edge nodes span the thickness and carry the gradient.
 
-Outputs (artifacts/): thermal_field.gif + thermal_field_filmstrip.png.
+Outputs (artifacts/thermal/): thermal_field.gif + thermal_field_filmstrip.png.
 
   .venv/bin/python3 scratch/thermal_field_video.py
 """
@@ -49,7 +49,7 @@ from PIL import Image                                       # noqa: E402
 from ankusdrive import Worker                                 # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "thermal"
 # Real 304-stainless plate, 30 mm thick (half-thickness L=15), quenched 200°C -> 25°C.
 # h gives Bi≈1.5 — a real through-thickness gradient the lumped model can't see.
 WIDE, DEEP, THICK = 100.0, 70.0, 30.0

@@ -18,7 +18,7 @@ The whole settle is ONE real DEM solve (YADE, GPL-3.0, run out-of-process via
 ankusdrive/dem_gpl_runner.py — this script never imports YADE); the animation is its
 position snapshots, not an interpolation.
 
-Outputs (artifacts/): granular_pack_settling.gif + granular_pack_settling_filmstrip.png
+Outputs (artifacts/granular/): granular_pack_settling.gif + granular_pack_settling_filmstrip.png
 
   .venv/bin/python3 scratch/granular_pack_video.py
 """
@@ -43,7 +43,7 @@ from PIL import Image                                       # noqa: E402
 from ankusdrive.analysis import granular as g                 # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "granular"
 RUNNER = REPO / "ankusdrive" / "dem_gpl_runner.py"
 
 # pour config (mm shown to the viewer; the solve is in SI metres)

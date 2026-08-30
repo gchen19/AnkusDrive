@@ -590,9 +590,15 @@ versioned interfaces, projects).
 - **Design-control (PLM) layer** — recipes + a relations DAG (parametric regen), feature templates, variant families from a design table, item/part-number identity, a lifecycle/revision state machine, ECO change records with where-used/impact + baselines, a versioned interface registry + Liskov substitutability gate, and project containers with reference-integrity guards. Scoping + rationale: [`docs/DESIGN_HIERARCHY.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/DESIGN_HIERARCHY.md). See [Designs, not just parts](#designs-not-just-parts--the-design-control-layer).
 - **Tests** — ~980 test functions across ~90 files (worker / MCP / CLI / render / determinism / edit stability / negative paths / perf / multi-agent / simulation families / molding / PLM layer), runnable via `tests/run_all.sh` (Linux/macOS) or `tests/run_all.ps1` (Windows — single-interpreter, skips the Linux-only solver families; see [`docs/WINDOWS.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/WINDOWS.md)). Reliability harness (Layer A classification, B diff-detection, C agent-loop closure) is gated behind `RUN_RELIABILITY=1`; see [`tests/RELIABILITY.md`](https://github.com/gchen19/AnkusDrive/blob/main/tests/RELIABILITY.md).
 
-See [`docs/ROADMAP.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/ROADMAP.md) for the per-slice changelog and remaining
-backlog (FEM contact/spring/tie refinements, fully async `fem_run`,
-`feature_tree` introspection, deeper external-solver integrations).
+See [`docs/ROADMAP.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/ROADMAP.md) for the Phase 1/2 per-slice record — a
+changelog of how the surface above was built, frozen at the close of Phase 2. Open
+work (FEM contact/spring/tie refinements, fully async `fem_run`, `feature_tree`
+introspection, deeper external-solver integrations) lives on the
+[issue tracker](https://github.com/gchen19/AnkusDrive/issues), not in that file.
+
+The committed showcase — every GIF, render, drawing and exported solid the docs point
+at, with the script that regenerates each one — is indexed in
+[`artifacts/README.md`](https://github.com/gchen19/AnkusDrive/blob/main/artifacts/README.md).
 
 ## Open questions
 

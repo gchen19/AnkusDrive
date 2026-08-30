@@ -134,12 +134,12 @@ The library rendered through each working renderer (one grid per renderer):
 
 | Renderer | Gallery | Cards |
 |---|---|---|
-| POV-Ray   | [`render_gallery_povray.png`](render_gallery_povray.png)       | 14/14 |
-| LuxCore   | [`render_gallery_luxcore.png`](render_gallery_luxcore.png)     | 14/14 |
-| Appleseed | [`render_gallery_appleseed.png`](render_gallery_appleseed.png) | 13/14 (§6) |
-| Cycles    | [`render_gallery_cycles.png`](render_gallery_cycles.png)       | 14/14 |
-| OSPRay    | [`render_gallery_ospray.png`](render_gallery_ospray.png)       | 14/14 (dim — §6) |
-| pbrt      | [`render_gallery_pbrt.png`](render_gallery_pbrt.png)           | 14/14 |
+| POV-Ray   | [`render_gallery_povray.png`](../artifacts/rendering/render_gallery_povray.png)       | 14/14 |
+| LuxCore   | [`render_gallery_luxcore.png`](../artifacts/rendering/render_gallery_luxcore.png)     | 14/14 |
+| Appleseed | [`render_gallery_appleseed.png`](../artifacts/rendering/render_gallery_appleseed.png) | 13/14 (§6) |
+| Cycles    | [`render_gallery_cycles.png`](../artifacts/rendering/render_gallery_cycles.png)       | 14/14 |
+| OSPRay    | [`render_gallery_ospray.png`](../artifacts/rendering/render_gallery_ospray.png)       | 14/14 (dim — §6) |
+| pbrt      | [`render_gallery_pbrt.png`](../artifacts/rendering/render_gallery_pbrt.png)           | 14/14 |
 
 Regenerate: `.venv/bin/python3 scripts/render-material-gallery.py` (all renderers) or
 `scripts/render-gallery.py` (one part across renderers). Both adapt to what's installed.

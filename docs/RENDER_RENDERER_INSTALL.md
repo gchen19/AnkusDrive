@@ -51,7 +51,7 @@ All six renderers, same part + view + material, rendered through `render_photore
 a fully provisioned box (POV-Ray via apt; LuxCore + Appleseed via
 `scripts/install-renderers.sh`; Cycles + OSPRay + pbrt via `scripts/build-renderers.sh`):
 
-![render_photoreal across renderers — the same box ∪ cylinder in Gold, rendered by POV-Ray, LuxCore, Appleseed, Cycles, OSPRay and pbrt](render_renderers_gallery.png)
+![render_photoreal across renderers — the same box ∪ cylinder in Gold, rendered by POV-Ray, LuxCore, Appleseed, Cycles, OSPRay and pbrt](../artifacts/rendering/render_renderers_gallery.png)
 
 OSPRay's panel is visibly darker than the others — its stock template lights the scene
 with only a dim ambient light (see §4 and `RENDERING.md` known limitations); the geometry
@@ -60,7 +60,7 @@ it renders whatever `render_capabilities` reports available.
 
 ### The full material library, per renderer
 
-The original `docs/render_gallery.png` rendered every Render material card under POV-Ray
+The original `artifacts/rendering/render_gallery.png` rendered every Render material card under POV-Ray
 only. `scripts/render-material-gallery.py` does that grid for *each* available renderer
 (one image per renderer), so the library can be compared across systems. A card that
 fails on a renderer is shown as a marked cell, so the grid honestly reflects support.
@@ -74,12 +74,12 @@ fails on a renderer is shown as a marked cell, so the grid honestly reflects sup
 | OSPRay    | `render_gallery_ospray.png`    | 14 / 14 (all render, but dim — see the §4 note) |
 | pbrt      | `render_gallery_pbrt.png`      | 14 / 14 |
 
-![POV-Ray material library](render_gallery_povray.png)
-![LuxCore material library](render_gallery_luxcore.png)
-![Appleseed material library](render_gallery_appleseed.png)
-![Cycles material library](render_gallery_cycles.png)
-![OSPRay material library](render_gallery_ospray.png)
-![pbrt material library](render_gallery_pbrt.png)
+![POV-Ray material library](../artifacts/rendering/render_gallery_povray.png)
+![LuxCore material library](../artifacts/rendering/render_gallery_luxcore.png)
+![Appleseed material library](../artifacts/rendering/render_gallery_appleseed.png)
+![Cycles material library](../artifacts/rendering/render_gallery_cycles.png)
+![OSPRay material library](../artifacts/rendering/render_gallery_ospray.png)
+![pbrt material library](../artifacts/rendering/render_gallery_pbrt.png)
 
 Regenerate all: `.venv/bin/python3 scripts/render-material-gallery.py`
 (or `--renderer Luxcore` for one).
@@ -191,7 +191,7 @@ Pick one and apply it to the **MCP server launch env**:
   Each renderer's gated test flips **SKIP → PASS** once its binary resolves
   (`test_photoreal_{luxcore,appleseed,cycles,ospray,pbrt}_renders`).
 - **Agent check:** `render_photoreal(handle, renderer="X")` returns a PNG instead of
-  "could not locate". A montage like `docs/render_gallery.png` can be regenerated to
+  "could not locate". A montage like `artifacts/rendering/render_gallery.png` can be regenerated to
   compare renderers side by side.
 
 ## 7. Work items
@@ -288,9 +288,9 @@ Pinned source revisions (hardcoded in `scripts/build-renderers.sh`):
 - ✅ `scripts/build-renderers.sh` (new) — the *source-built* trio (pbrt-v4, Cycles,
   OSPRay Studio). Same `$PREFIX`/`$BINDIR` wrapper contract; `--list`, `--deps-only`,
   pinned revisions + the OSPRay SDK checksum. Item 3, above.
-- ✅ `scripts/render-gallery.py` + `docs/render_renderers_gallery.png` — the example
+- ✅ `scripts/render-gallery.py` + `artifacts/rendering/render_renderers_gallery.png` — the example
   montage above, regenerated across all six available renderers.
-- ✅ `scripts/render-material-gallery.py` + `docs/render_gallery_{povray,luxcore,appleseed,cycles,ospray,pbrt}.png`
+- ✅ `scripts/render-material-gallery.py` + `artifacts/rendering/render_gallery_{povray,luxcore,appleseed,cycles,ospray,pbrt}.png`
   — the material library rendered as a grid per renderer (now all six).
 - ✅ `ankusdrive/worker.py` — added `@handler("render_capabilities")`; refactored
   `_resolve_renderer_exec` to share a side-effect-free `_find_renderer_exec` the probe

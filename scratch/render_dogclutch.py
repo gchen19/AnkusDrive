@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO / "scratch"))
 from ankusdrive import Worker                                  # noqa: E402
 from render_gearbox import read_binary_stl                   # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "dog_clutch"
 
 BUILD = r"""
 import Part, math, Mesh

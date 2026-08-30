@@ -9,7 +9,7 @@ closed, both gaps.
 > values read from the real geometry) and `add_annotation` are wired through the
 > worker and MCP. Page composition (template + per-view fragments + dimension
 > graphics) + svglib/reportlab rasterise to PDF — pure-Python, no native deps.
-> Examples: `artifacts/{lbracket,plate}_demo.{pdf,svg,dxf}`, regenerate with
+> Examples: `artifacts/drawings/{lbracket,plate}_demo.{pdf,svg,dxf}`, regenerate with
 > `.venv/bin/python scratch/drawing_demo.py`. Tests in `tests/test_worker.py`
 > (`test_export_drawing_three_formats`, `test_auto_and_manual_dimensions`, …).
 > **This is scaffolding** — the dimension *palette* a manufacturer needs. The

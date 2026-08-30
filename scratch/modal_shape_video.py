@@ -16,7 +16,7 @@ renders a bending mode. Each surface node carries the eigenvector; a frame is
 ``node + amp·sin(2π·phase)·eigenvector`` and the face colour is the (fixed) modal
 amplitude, so the colour reads where the mode flexes while the metal swings through it.
 
-Outputs (artifacts/): modal_mode{1,2,3}.gif (one per mode) + modal_shapes_filmstrip.png.
+Outputs (artifacts/fem/): modal_mode{1,2,3}.gif (one per mode) + modal_shapes_filmstrip.png.
 
   .venv/bin/python3 scratch/modal_shape_video.py
 """
@@ -38,7 +38,7 @@ from PIL import Image                                       # noqa: E402
 from ankusdrive import Worker                                 # noqa: E402
 import sim_video as sv                                      # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "fem"
 L, WIDTH, HEIGHT = 300.0, 30.0, 10.0          # slender steel cantilever (mm), L/h=30
 MESH = 6.0                                     # char length (mm); 2nd-order tets for modal
 N_MODES = 6                                    # eigenmodes to solve

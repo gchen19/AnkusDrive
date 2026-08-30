@@ -10,7 +10,7 @@ Side view along the mainshaft. The output dial (top-right) shows the shaft's spe
 stepping through the ratios as the collar engages each gear.
 
   .venv/bin/python3 scratch/gearbox_shift_animate.py
-Outputs: artifacts/gearbox_shift.gif + artifacts/gearbox_shift_filmstrip.png
+Outputs: artifacts/gearbox/gearbox_shift.gif + artifacts/gearbox/gearbox_shift_filmstrip.png
 """
 import math
 from pathlib import Path
@@ -23,7 +23,7 @@ import io  # noqa: E402
 from PIL import Image  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "gearbox"
 
 # speed gears on the mainshaft (x position, radius ~ tooth count, ratio, label)
 GEARS = [

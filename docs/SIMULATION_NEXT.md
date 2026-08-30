@@ -1,10 +1,15 @@
-# Simulation — what's next after the completed sprint plan
+# Simulation — the fidelity contract, and the tier assessment behind it
 
-[`SIMULATION_SPRINTS.md`](archive/SIMULATION_SPRINTS.md) and the
-[P3 kickoff](archive/SIMULATION_P3_KICKOFF.md) are **fully executed**: eleven families,
-oracle-gated, from closed-form tolerance math to geometry-driven Elmer/OpenFOAM
-solves. This doc assesses what's worth building next. It is an *assessment*, not
-a committed plan — promote items into a kickoff when one is picked up.
+**This doc is live reference, not a plan.** It began as an assessment of what to
+build after [`SIMULATION_SPRINTS.md`](archive/SIMULATION_SPRINTS.md) and the
+[P3 kickoff](archive/SIMULATION_P3_KICKOFF.md), and **that assessment is now fully
+executed** — see the closing note below. What keeps it alive is §"Contract additions":
+the `fidelity` / `band_pct` labels and the escalation pair are **normative**, cited by
+name from ~30 handler and tool docstrings across `ankusdrive/worker.py`,
+`ankusdrive/mcp_server.py` and `ankusdrive/analysis/`, and asserted directly by
+`tests/test_cost.py`, `tests/test_dfx.py` and `tests/test_convection.py`. The Tier A/B
+tables below are kept as the record of *why* each family was built and what oracle it
+was gated against; `SIMULATION_TOOLS.md` is the authoritative catalog.
 
 The existing problems are deliberately contained and testable. The two gaps that
 framing leaves, and the two tiers this doc proposes to fill them:
@@ -78,10 +83,9 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
 | ✅ **Flow-coupled CHT** (`cht_graetz_submit`) | Elmer `FlowSolve`+Heat (**installed**) | Graetz–Nusselt developed Nu=3.66 / 7.54 (exact eigenvalue results) — upgrades M6's plug flow to a *true Nusselt validation*, closing the loop with `h_estimate` | M/L, medium |
 | ✅ **Coupled induction heating** (`em_induction_heating_submit`) | Elmer `MagnetoDynamics` + HeatSolver (**installed**) | total Joule power = R_s·|H|²/2 over the face (from the shipped `em_skin_depth`) + adiabatic ΔT energy balance | M, medium — completes `em_induction_submit` into a thermal answer |
 | ✅ **Nonlinear structural** (`fem_set_nonlinear_material`) | CCX 2.21 (**installed**) | plastic-hinge collapse M_p=σ_y·Z + large-deflection elastica (both exact). **Shipped:** elastoplastic `*PLASTIC` hardening curves + `*NLGEOM` ride the existing FEM plumbing (no new solver); `plastic_collapse` / `elastica_deflection` / `hertz_contact` closed-form twins. ccx gates: uniaxial `*PLASTIC` caps von Mises at the σ_y plateau (4.6× below the elastic E·ε), `*NLGEOM` cantilever tracks the Bisshopp–Drucker tip to 0.2%. Fixed a latent App::PropertyForce/Pressure mN/kPa unit bug (loads were 1000× low) + multi-increment `.frd` import via final-frame output. | M/L, medium |
-| ✅ **Exterior acoustics BEM** (`acoustic_radiation_submit`) | Bempp-cl (**MIT, dedicated venv**) | pulsating-sphere radiated power W=(ρc/2)\|U\|²(4πa²)(ka)²/(1+(ka)²) + far-field (**exact**) and rigid-sphere plane-wave scattering vs the **Mie series** form function (**exact** modal sum). **Shipped:** `monopole_sphere` / `rigid_sphere_scattering` closed-form twins + MCP tools; bempp solves the exterior-Helmholtz Neumann problem out-of-process (`ankusdrive/bempp_runner.py`) under a dedicated `.venv-bempp` — the subprocess is a meshio>=4 dependency clash with solidspy's meshio==3, NOT a license boundary (bempp is MIT). Live gates: a pulsating sphere's BEM radiated power AND far-field land on the monopole oracle within ~1% (ratios 0.99/1.00); a rigid sphere's BEM backscatter lands on the Mie form function within ~1.5% (ka=2→0.99, ka=4→1.01). Artifact: `artifacts/sphere_scattering_directivity.gif`. | M/L, medium — opt-in extra `acoustics_bem` |
-| Free-surface flow (`interFoam`), RF/wave EM (`EMWaveSolver` — waveguide cutoff f_c=c/2a is exact), explicit impact dynamics | installed / partial | exact anchors exist for the first two | L — horizon; pick up only on a concrete need |
-| ✅ **Full-wave EM** (`em_fullwave_submit`) | openEMS FDTD (**source-built, GPL-3.0**) | rectangular-waveguide cutoff f_c=c/2a (**exact**) + half-wave dipole resonance (banded). **Shipped:** `waveguide_cutoff` / `dipole_resonance` closed-form twins + MCP tools; openEMS runs out-of-process (`ankusdrive/em_fullwave_gpl_runner.py`, same copyleft boundary as KrakenOS) under a dedicated venv. Live gate: a WR-90 guide driven across its cutoff — FDTD transmission collapses (evanescent ≈0) below f_c, plateaus (≈1) above, half-power crossing lands on the exact c/2a within 0.3 %. Artifact: `artifacts/waveguide_cutoff.gif`. | M/L, medium — GPL opt-in extra `em_gpl` |
-| Free-surface flow (`interFoam`), explicit impact dynamics | installed / partial | exact anchors exist | L — horizon; pick up only on a concrete need |
+| ✅ **Exterior acoustics BEM** (`acoustic_radiation_submit`) | Bempp-cl (**MIT, dedicated venv**) | pulsating-sphere radiated power W=(ρc/2)\|U\|²(4πa²)(ka)²/(1+(ka)²) + far-field (**exact**) and rigid-sphere plane-wave scattering vs the **Mie series** form function (**exact** modal sum). **Shipped:** `monopole_sphere` / `rigid_sphere_scattering` closed-form twins + MCP tools; bempp solves the exterior-Helmholtz Neumann problem out-of-process (`ankusdrive/bempp_runner.py`) under a dedicated `.venv-bempp` — the subprocess is a meshio>=4 dependency clash with solidspy's meshio==3, NOT a license boundary (bempp is MIT). Live gates: a pulsating sphere's BEM radiated power AND far-field land on the monopole oracle within ~1% (ratios 0.99/1.00); a rigid sphere's BEM backscatter lands on the Mie form function within ~1.5% (ka=2→0.99, ka=4→1.01). Artifact: `artifacts/acoustics/sphere_scattering_directivity.gif`. | M/L, medium — opt-in extra `acoustics_bem` |
+| ✅ **Full-wave EM** (`em_fullwave_submit`) | openEMS FDTD (**source-built, GPL-3.0**) | rectangular-waveguide cutoff f_c=c/2a (**exact**) + half-wave dipole resonance (banded). **Shipped:** `waveguide_cutoff` / `dipole_resonance` closed-form twins + MCP tools; openEMS runs out-of-process (`ankusdrive/em_fullwave_gpl_runner.py`, same copyleft boundary as KrakenOS) under a dedicated venv. Live gate: a WR-90 guide driven across its cutoff — FDTD transmission collapses (evanescent ≈0) below f_c, plateaus (≈1) above, half-power crossing lands on the exact c/2a within 0.3 %. Artifact: `artifacts/electromagnetics/waveguide_cutoff.gif`. | M/L, medium — GPL opt-in extra `em_gpl` |
+| Explicit impact dynamics | partial | an exact anchor exists | L — horizon; pick up only on a concrete need. **The only unbuilt item left in this table.** Free-surface flow (`interFoam`) has since shipped as the fallback backend of `molding_fill_submit` (`worker.py`, VOF melt+air cavity fill) — see [`MOLDING_FILL_SOLVER.md`](MOLDING_FILL_SOLVER.md); RF/wave EM shipped as full-wave openEMS, the row above. |
 
 ## Recommended sequence (when picked up)
 
@@ -112,7 +116,8 @@ Each follows the proven milestone shape: pure oracle → case builder → `*_sub
    balance ΔT = P·t/(m·cₚ) at 1.005).*
 
 **With item 5 the recommended sequence is fully executed** — both tiers of this
-assessment are shipped, every gate on the verification discipline below.
+assessment are shipped, every gate on the verification discipline below. Nothing in
+this document is outstanding work except the explicit-impact-dynamics horizon row.
 
 The verification discipline is unchanged: exact anchors where physics is exact,
 **banded** anchors where the literature itself is a correlation (a turbulent gate

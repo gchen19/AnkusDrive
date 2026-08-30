@@ -13,7 +13,7 @@ Self-contained: a structured C3D8I hex mesh is generated in pure Python (no Free
 so the toy runs anywhere ``ccx`` is on PATH. The GPL solver is held at the subprocess
 boundary (never imported). Usage::
 
-    python3 tools/warpage_toy.py                  # writes artifacts/molding_warpage_bow.png
+    python3 tools/warpage_toy.py                  # writes artifacts/molding/molding_warpage_bow.png
     python3 tools/warpage_toy.py --dT 150 --span 80
 
 The plot needs ``matplotlib``. Requires ``ccx`` (``apt install calculix-ccx``).
@@ -118,7 +118,7 @@ def main():
     ap.add_argument("--cte", type=float, default=7e-5, help="resin CTE, 1/K")
     ap.add_argument("--youngs-mpa", type=float, default=3200.0)
     ap.add_argument("--poisson", type=float, default=0.35)
-    ap.add_argument("--out", default=None, help="output PNG (default artifacts/...)")
+    ap.add_argument("--out", default=None, help="output PNG (default artifacts/molding/...)")
     args = ap.parse_args()
 
     if solvers.ccx_bin() is None:
@@ -194,7 +194,7 @@ def main():
     out = args.out
     if out is None:
         adir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "artifacts")
+                            "artifacts", "molding")
         os.makedirs(adir, exist_ok=True)
         out = os.path.join(adir, "molding_warpage_bow.png")
     fig.savefig(out, dpi=110)

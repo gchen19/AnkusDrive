@@ -18,7 +18,7 @@ gear-train ratio: the measured ω_out/ω_in must realise the declared −Na/Nb.
 
   GOOD: 12T drives 24T -> output turns at −1/2 input, opposite sense. Measured ≈ −0.500.
 
-Outputs (artifacts/): meshing_gears_spin.gif (real metal turning at the declared ratio),
+Outputs (artifacts/gear_mesh/): meshing_gears_spin.gif (real metal turning at the declared ratio),
 meshing_gears_filmstrip.png, meshing_gears_ratio.png (recovered angle-vs-time, slopes =
 the ratio).
 
@@ -39,7 +39,7 @@ import matplotlib                    # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt      # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "gear_mesh"
 M = 2.0
 NA, NB = 12, 24                       # pinion (driver) / gear (driven) tooth counts
 H = 6.0                               # gear face width (mm)

@@ -16,7 +16,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "results" / "gearbox_real"   # generated STL input (gitignored)
-ART = REPO / "artifacts"                  # committed PNG renders
+ART = REPO / "artifacts" / "gearbox"                  # committed PNG renders
 
 
 def read_binary_stl(path):

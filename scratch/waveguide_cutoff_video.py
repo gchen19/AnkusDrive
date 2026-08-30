@@ -24,7 +24,7 @@ ankusdrive/em_fullwave_gpl_runner.py under a dedicated openEMS venv; this script
 .venv) only renders the result. Resolve that venv with ANKUSDRIVE_OPENEMS_PYTHON, or it
 is auto-discovered beside the repo (.venv-openems).
 
-Outputs (artifacts/): waveguide_cutoff.gif + waveguide_cutoff_filmstrip.png
+Outputs (artifacts/electromagnetics/): waveguide_cutoff.gif + waveguide_cutoff_filmstrip.png
 
   ANKUSDRIVE_OPENEMS_PYTHON=/path/.venv-openems/bin/python \
       .venv/bin/python3 scratch/waveguide_cutoff_video.py
@@ -48,7 +48,7 @@ from PIL import Image                                       # noqa: E402
 
 from ankusdrive.analysis import em_fullwave as ew             # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "electromagnetics"
 RUNNER = str(REPO / "ankusdrive" / "em_fullwave_gpl_runner.py")
 A_MM, B_MM, LENGTH_MM = 22.86, 10.16, 60.0                  # WR-90-like X-band guide
 F_START, F_STOP, N_FREQ = 4.0, 10.0, 121                    # GHz, straddling f_c≈6.56

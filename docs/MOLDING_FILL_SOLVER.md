@@ -147,9 +147,9 @@ A PS, 20 mm × 1 mm plaque (60×8 cells) **filled to 0.98005 and terminated**
 (`-fillEnd 0.98`, ~3 min serial); the gate returns `pass=True, fidelity="solve"`,
 `front_x_frac=1.0`, peak ≈ the 2 MPa inlet. The melt front advancing gate→far-end:
 
-![openInjMoldSim fill](../artifacts/openinjmoldsim_fill.gif)
+![openInjMoldSim fill](../artifacts/molding/openinjmoldsim_fill.gif)
 
-(filmstrip: `artifacts/openinjmoldsim_fill_filmstrip.png` — 3.3 % → 27 % → 61 % →
+(filmstrip: `artifacts/molding/openinjmoldsim_fill_filmstrip.png` — 3.3 % → 27 % → 61 % →
 86 % → 98 %.) The same generate-and-run path is covered by
 `tests/test_molding_fill.py::test_openinjmoldsim_generated_case_fills` (skips unless
 the OF7 build is present).
@@ -196,7 +196,7 @@ then heat is extracted during the hold), `close_outlet_cmds` (seal: `p_rgh`→
 python3 tools/openinjmoldsim_toy.py --pack --cool-window-s 1.2   # → pack_cool.gif
 ```
 
-![openInjMoldSim cooling](../artifacts/openinjmoldsim_pack_cool.gif)
+![openInjMoldSim cooling](../artifacts/molding/openinjmoldsim_pack_cool.gif)
 
 **Two pack-specific gotchas** (beyond the five fill ones):
 
@@ -285,7 +285,7 @@ while leaving the part free to expand and warp), `*STATIC`, `*NODE FILE U` — a
 plate result: a linear through-thickness ΔT bends a plate to uniform curvature
 `κ = α·ΔT/h`, sagitta `δ = κ·L²/8`. The solve is gated against it (`warp_faithful`): a
 thin-plate idealisation, so a few-percent-to-~50 % spread is expected; an order-of-
-magnitude miss flags a bad mesh/field. Validated `artifacts/molding_warpage_bow.png`
+magnitude miss flags a bad mesh/field. Validated `artifacts/molding/molding_warpage_bow.png`
 (`tools/warpage_toy.py`): a 60×12×1.2 mm plate at ΔT=120 K bows to **3.07 mm vs the
 3.15 mm twin** and tracks the curve along the whole span, while ΔT=0 stays **dead flat
 (0.000 mm)**.

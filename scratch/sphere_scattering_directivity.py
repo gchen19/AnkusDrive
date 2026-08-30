@@ -24,7 +24,7 @@ venv), so the solve runs OUT-OF-PROCESS via ankusdrive/bempp_runner.py under a d
 .venv-bempp; this script (shared .venv) only renders the result. Resolve that venv with
 ANKUSDRIVE_BEMPP_PYTHON, or it is auto-discovered beside the repo (.venv-bempp).
 
-Outputs (artifacts/): sphere_scattering_directivity.gif + sphere_scattering_directivity_filmstrip.png
+Outputs (artifacts/acoustics/): sphere_scattering_directivity.gif + sphere_scattering_directivity_filmstrip.png
 
   ANKUSDRIVE_BEMPP_PYTHON=/path/.venv-bempp/bin/python \
       .venv/bin/python3 scratch/sphere_scattering_directivity.py
@@ -48,7 +48,7 @@ from PIL import Image                                       # noqa: E402
 
 from ankusdrive.analysis import acoustics_bem as ab           # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "acoustics"
 RUNNER = str(REPO / "ankusdrive" / "bempp_runner.py")
 A_M = 1.0                                                   # unit sphere
 KA_LIST = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]         # Rayleigh → geometric

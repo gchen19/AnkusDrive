@@ -151,7 +151,7 @@ and the `Render` package), so it is a worker handler, not a change to `render.py
 The whole material library rendered through `render_photoreal` (one part, iso view,
 POV-Ray):
 
-![render_photoreal material library — the same box ∪ cylinder rendered with each Render material card under POV-Ray](render_gallery.png)
+![render_photoreal material library — the same box ∪ cylinder rendered with each Render material card under POV-Ray](../artifacts/rendering/render_gallery.png)
 
 (Regenerate with the gallery script; only POV-Ray is in the sandbox, so the other
 renderers in §3 would need their binaries.)
