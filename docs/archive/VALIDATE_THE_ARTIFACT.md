@@ -105,7 +105,7 @@ declaration never would.
 `GH+DOG_H` (above the dog band), mirroring `gearbox_multispeed.collar`, so only
 interleaving teeth occupy the band. The fix is verified *on the artifact*, not the source:
 `scratch/verify_dog_clutch_unit.py` builds the old and new collars through the §11.10
-oracle (`realize`) and then reads the **exported `artifacts/dog_clutch_unit.step`** back
+oracle (`realize`) and then reads the **exported `artifacts/dog_clutch/dog_clutch_unit.step`** back
 and re-checks the as-shipped collar:
 
 ```
@@ -183,7 +183,7 @@ convexified mesh — keeps the six teeth distinct (both-occupied 0.000 engaged v
 in phase, fill/sectors matching the oracle). So "engaged ≠ disengaged" *is* representable
 in rigid-body contact on the real part. That refutes the specific worry the kickoff
 raised, measured on the actual exported metal. The run records the engaged/disengaged
-trajectories into `artifacts/dog_clutch_cad_sim.gif` (real STLs rendered along the
+trajectories into `artifacts/dog_clutch/dog_clutch_cad_sim.gif` (real STLs rendered along the
 simulated joint angles — collar tracks the gear, then freewheels when lifted).
 
 **Two findings the rigid-body sim surfaced that the static checks could not** — itself the
@@ -215,9 +215,9 @@ the rotational selector above is the artifact-consuming dynamic result #3 was af
 - Regression: `tests/test_realize.py` (solid-face, keyed-to-nothing, in-phase jam).
   Calibration: `scratch/calibrate_realize.py` (all four signals on real CAD).
 - Demo-artifact fix + as-exported check: `scratch/verify_dog_clutch_unit.py` (reads
-  `artifacts/dog_clutch_unit.step` back); fixed geometry in `scratch/dog_clutch_unit.py`.
+  `artifacts/dog_clutch/dog_clutch_unit.step` back); fixed geometry in `scratch/dog_clutch_unit.py`.
 - Whole-box artifact check: `scratch/verify_gearbox_box.py` (every collar/gear of
   `gearbox_multispeed`). Shift animation: `scratch/gearbox_shift_animate.py`.
 - Sim-from-CAD (#3): `scratch/dog_clutch_cad_sim.py` (vhacd-decomposed real metal driven
-  in PyBullet; faithfulness gate + emergent selector; `artifacts/dog_clutch_cad_sim.gif`).
+  in PyBullet; faithfulness gate + emergent selector; `artifacts/dog_clutch/dog_clutch_cad_sim.gif`).
 - Lineage: §11.9 motion oracle (`ankusdrive/mechanism.py`, `tests/test_mechanism.py`).

@@ -34,7 +34,7 @@ sys.path.insert(0, str(REPO / "scratch"))
 from ankusdrive import Worker  # noqa: E402
 import gearbox_multispeed as gm  # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "gearbox"
 
 # realize declarations derived from the box params (no new thresholds invented)
 SR = gm.SR

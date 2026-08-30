@@ -8,7 +8,7 @@ mesh, the countershaft turns slower and reversed, and the mainshaft gear crawls 
 ratio was imposed.
 
   .venv/bin/python3 scratch/gearbox_animate.py
-Outputs: artifacts/gearbox_spin.gif  +  artifacts/gearbox_spin_filmstrip.png
+Outputs: artifacts/gearbox/gearbox_spin.gif  +  artifacts/gearbox/gearbox_spin_filmstrip.png
 """
 import math
 import sys
@@ -23,7 +23,8 @@ from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scratch"))
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "gearbox"
+ART_MESH = REPO / "artifacts" / "gear_mesh"
 
 MOD = 0.02
 FACE = 0.04
@@ -184,7 +185,8 @@ def clean_mesh_gif():
         return []
 
     anim = FuncAnimation(fig, frame, frames=len(ta), interval=55, blit=False)
-    gif = ART / "gear_mesh_spin.gif"
+    ART_MESH.mkdir(parents=True, exist_ok=True)
+    gif = ART_MESH / "gear_mesh_spin.gif"
     anim.save(str(gif), writer=PillowWriter(fps=20))
     print(f"  clean single-mesh GIF -> {gif}  (measured {ratio:+.3f} vs ideal {-na/nb:+.3f})")
 

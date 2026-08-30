@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 from ankusdrive import Worker  # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "dog_clutch"
 M = 2.0          # module
 NIN, NOUT = 12, 24
 C = M * (NIN + NOUT) / 2     # centre distance = 36

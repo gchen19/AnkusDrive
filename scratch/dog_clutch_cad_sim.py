@@ -37,7 +37,7 @@ still holds on the part as-exported — but the rigid-body sim is the thing that
 "a real dog clutch needs clearance," which neither the declaration nor a clean PyBullet
 rig ever would. That is the validate-the-artifact lesson, one level down.
 
-Outputs (artifacts/): dog_clutch_cad_sim.gif + _filmstrip.png (the real decomposed parts
+Outputs (artifacts/dog_clutch/): dog_clutch_cad_sim.gif + _filmstrip.png (the real decomposed parts
 coupling when engaged, freewheeling when lifted), and a printed result table.
 
   .venv/bin/python3 scratch/dog_clutch_cad_sim.py
@@ -57,7 +57,7 @@ import numpy as np                   # noqa: E402
 from ankusdrive import Worker          # noqa: E402
 import sim_video as sv               # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "dog_clutch"
 M = 2.0
 SR, GH, ND, RDOG = 5.0, 6.0, 6, 7.5          # shaft r, gear face, dog count, dog radius
 DOG_H = 4.0                                   # dog tooth height

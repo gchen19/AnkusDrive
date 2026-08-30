@@ -136,7 +136,7 @@ Incremental, each step independently testable. **[x] = done (branch `feat/moldin
       Tait-EOS faithfulness (`tait_density`/`tait_densification_pct`). Validated on real
       run (solved 3.70% vs EOS 4.03%, faithful, pass). See findings above.
 - [x] **Toy validation + artifact** — `tools/openinjmoldsim_toy.py --pack` runs fill+pack
-      and renders an air-masked cooling-T GIF. `artifacts/openinjmoldsim_pack_cool.gif`
+      and renders an air-masked cooling-T GIF. `artifacts/molding/openinjmoldsim_pack_cool.gif`
       (+ filmstrip) shows the textbook frozen-skin/molten-core profile (walls cool first).
 - [x] **Structural tests** — controlDict latestTime, close_outlet cmds, time_extend/plan/
       walls_h, Tait density, pack_gate sink+faithfulness, elastic toggle (all pass).
@@ -176,7 +176,7 @@ stays disabled — it was never needed for warpage).
   cte_per_k?, ref_temp_c?, char_length_mm?, thickness_axis?, flatness_tol_mm?/_frac?)`.
 - **Validated:** worker end-to-end on a real FreeCAD-meshed 40×10×1 plate → warp 1.488 mm
   vs analytic 1.4 mm (`warp_faithful`); balanced ΔT=0 → exactly 0. Toy
-  `tools/warpage_toy.py` → `artifacts/molding_warpage_bow.png` (asym bow tracks the twin,
+  `tools/warpage_toy.py` → `artifacts/molding/molding_warpage_bow.png` (asym bow tracks the twin,
   balanced flat). Tests `tests/test_warpage.py` (pure + ccx-backed, skip-guarded).
   Contracts 10/10.
 - **3 gotchas:** (1) `writeABAQUS(path, elemParam=2, groupParam=False)` — needs the

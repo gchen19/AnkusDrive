@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-render-material-gallery.py — the material-library gallery (docs/render_gallery.png),
+render-material-gallery.py — the material-library gallery (artifacts/rendering/render_gallery.png),
 but one per renderer.
 
 For each renderer requested (default: every renderer render_capabilities reports
 available), render the same box ∪ cylinder with every Render material card from the
 same iso view and montage them into a labeled grid. Writes one image per renderer:
-docs/render_gallery_<renderer>.png.
+artifacts/rendering/render_gallery_<renderer>.png.
 
-This generalizes the original POV-Ray-only docs/render_gallery.png so the material
+This generalizes the original POV-Ray-only artifacts/rendering/render_gallery.png so the material
 library can be compared across POV-Ray / LuxCore / Appleseed (and Cycles/OSPRay/pbrt
 once built). A material that fails on a given renderer is shown as a marked
 placeholder cell, so the grid honestly reflects per-renderer support.
@@ -148,7 +148,7 @@ def main():
                 else:
                     cells.append((m, _placeholder(args.width, args.height, m, err), False))
                     print(f"  {m:14s} FAILED — {err}")
-            out = REPO / "docs" / f"render_gallery_{renderer.lower()}.png"
+            out = REPO / "artifacts" / "rendering" / f"render_gallery_{renderer.lower()}.png"
             W, H, ok_n = _grid(renderer, cells, args.cols, out)
             print(f"  wrote {out.name} ({W}x{H}), {ok_n}/{len(materials)} ok, "
                   f"{time.time() - t0:.1f}s")

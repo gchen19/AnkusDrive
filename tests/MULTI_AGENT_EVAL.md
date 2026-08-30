@@ -785,7 +785,7 @@ by whether the shared quantity must be *reconciled*:
 each agent applies independently does not break them, even at 12 components; a
 shared **reconciliation** — a value that must be made consistent *across* agents —
 does, and is precisely what the resolve step (§11.1) exists to remove. A render of
-the assembled gearbox is in `artifacts/gearbox{3,6}_render.png`
+the assembled gearbox is in `artifacts/gearbox/gearbox{3,6}_render.png`
 (`scratch/render_gearbox.py`, matplotlib from the exported STL).
 
 ## The motion oracle — the gearbox passes every static gate and cannot move (2026-06-13, RFC §11.9, free)
@@ -955,7 +955,7 @@ The honest follow-up (no imposed constraints anywhere):
 - `scratch/dog_clutch_unit.py` — the geometry that *implements* them: a single-stage
   unit with the input gear D-keyed to its shaft, the output gear freewheeling (round
   bore) with dog teeth, and a dog collar D-keyed to the output shaft shown engaged →
-  `artifacts/dog_clutch_unit.{step,stl}` + render.
+  `artifacts/dog_clutch/dog_clutch_unit.{step,stl}` + render.
 
 That single unit is genuinely functional and selectable. Scaling it to the full
 multi-speed box (a countershaft, a sliding collar between speed gears, and a contact
@@ -966,7 +966,7 @@ not claimed done.
 
 The full countershaft transmission, with all the hardware.
 
-**Geometry** (`scratch/gearbox_multispeed.py` → `artifacts/gearbox_multispeed.{step,stl}`
+**Geometry** (`scratch/gearbox_multispeed.py` → `artifacts/gearbox/gearbox_multispeed.{step,stl}`
 + render): a real 3-speed constant-mesh box. INPUT shaft carries one gear, keyed,
 constant-meshing the COUNTERSHAFT; the countershaft carries the constant-mesh gear +
 one keyed gear per speed; the MAINSHAFT (coaxial with the input) carries the speed

@@ -25,7 +25,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 from ankusdrive import Worker  # noqa: E402
 
-ART = REPO / "artifacts"
+ART = REPO / "artifacts" / "gearbox"
 M = 2.0
 AX_A, AX_B = 0.0, 40.0          # mainshaft/input axis, countershaft axis; C = 40
 GH = 6.0                        # gear face width

@@ -1,11 +1,19 @@
-# AnkusDrive roadmap
+# AnkusDrive roadmap — the Phase 1/2 slice record
 
-Living plan for getting AnkusDrive from "CSG primitives + one FEM demo" to a substrate
-an LLM agent can use to drive end-to-end mechanical design: parametric geometry,
-robust selection, simulation, assembly, and manufacturing outputs.
+The plan that took AnkusDrive from "CSG primitives + one FEM demo" to a substrate an
+LLM agent can use to drive end-to-end mechanical design: parametric geometry, robust
+selection, simulation, assembly, and manufacturing outputs.
 
-Companion to the README. The README describes what *is*; this file describes what
-*should be next* and why.
+> **Read this as a changelog, not as a to-do list.** Slices 1–6 are all shipped, and
+> the per-slice **Status** sections below are dated **2026-04-25** — they record what
+> landed at the close of Phase 2 and are deliberately not updated as the surface grows.
+> Everything after Phase 2 — the Phase 3 intent-encoding work, the simulation families,
+> the design-control layer, multi-agent partition/merge, and the production-readiness
+> and design-to-spec epics — landed outside this document. For **current state** read
+> the [top-level `README.md`](../README.md); for **what is actually next**, read the
+> open issues and epics on the tracker. The slice vocabulary ("Slice 1 tags", "Slice 3
+> FEM") survives in code and test docstrings, which is the main reason this file is
+> still here.
 
 **Related docs:**
 - [`docs/README.md`](README.md) — **index of the whole `docs/` tree** (living
@@ -547,13 +555,14 @@ FreeCAD's bundled FEM (CalculiX + Elmer) covers mainstream **structural**,
 mechanical design needs day-to-day: stress, deflection, natural frequencies,
 steady-state heat, contact.
 
-Outside that envelope, FreeCAD is a *geometry source*, not a solver. The
-canonical example in this house is the `~/diffuser` project: FreeCAD held the
-`.FCStd` files, but the actual physics — 2D Snell/TIR ray tracing, moldability
-scoring, BSpline parameter sweep — lived in a separate Python pipeline that
-*imported* FreeCAD just for geometry extraction. That's the right pattern for
-any domain FreeCAD doesn't natively cover: a thin MCP tool that takes a AnkusDrive
-handle (or its exported STEP/STL/mesh) and returns structured results.
+Outside that envelope, FreeCAD is a *geometry source*, not a solver. The pattern
+this slice was written around: FreeCAD holds the `.FCStd` files, while the actual
+physics — 2-D Snell/TIR ray tracing, moldability scoring, BSpline parameter sweep —
+lives in a separate Python pipeline that *imports* FreeCAD only for geometry
+extraction. That is the right shape for any domain FreeCAD doesn't natively cover:
+a thin MCP tool that takes an AnkusDrive handle (or its exported STEP/STL/mesh) and
+returns structured results. The optics family shipped exactly this way — see
+`optics_lens_design` / `optics_solid_trace` and [`RENDERING.md`](RENDERING.md).
 
 **Expanded into [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md)** — the full tool-family
 catalog (tolerance/GD&T, materials, wear/fatigue/fracture, thermal, fluids, optics,
@@ -571,7 +580,7 @@ Slice 2 (PartDesign)     ─┘                          │
                                                      ├─► Slice 5 (assembly/drawings/mfg)
 Slice 4 (visual feedback) ───────────────────────────┤
                                                      │
-External integrations (start with diffuser/optics) ──┘
+External integrations (start with optics)         ──┘
 
 Slice 6 (operational polish) — parallel, pull in items as they bite.
 ```

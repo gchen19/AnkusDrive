@@ -19,12 +19,12 @@ Docs fall into two kinds:
 
 | Doc | What it covers |
 |---|---|
-| [`ROADMAP.md`](ROADMAP.md) | Per-slice changelog + remaining backlog. Companion to the README. |
+| [`ROADMAP.md`](ROADMAP.md) | The Phase 1/2 slice record (Slices 1–6, all shipped; Status sections frozen at 2026-04-25). Read as a changelog — current state is the top-level README, and what's next is the issue tracker. Kept because the slice vocabulary is cited from code and tests. |
 | [`DESIGN_HIERARCHY.md`](DESIGN_HIERARCHY.md) | The design-control / PLM layer — recipes, relations, families, items, lifecycle, ECO/change, interface registry, projects. Scoping + rationale. |
 | [`MULTI_AGENT.md`](MULTI_AGENT.md) | Agent-team partition + merge architecture; the merge primitives and gates. |
 | [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) | The analysis-family catalog + result schemas (pure-Python oracle vs external-solver split). |
-| [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) | Per-family proof harness (toy problems with known answers). |
-| [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md) | Forward-looking assessment of the next simulation work. |
+| [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) | Per-family proof harness (toy problems with known answers). Every family in it has shipped; the tier tags now record build cost, not status. |
+| [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md) | The normative `fidelity`/`band_pct` + escalation contract (asserted by `tests/test_cost.py`, `test_dfx.py`, `test_convection.py`), plus the Tier A/B record of why each family was built. Its own sequence is fully executed. |
 | [`MOLDING_FILL_SOLVER.md`](MOLDING_FILL_SOLVER.md) | Injection-molding fill/pack/cool/warp solver reference + gotchas. |
 | [`RENDERING.md`](RENDERING.md) | Render support matrix, install, limitations. |
 | [`RENDER_WORKBENCH.md`](RENDER_WORKBENCH.md) | Photoreal rendering architecture + operator guide. |
@@ -61,5 +61,7 @@ current gaps.
 
 ## Galleries
 
-`render_gallery*.png` / `render_renderers_gallery.png` are referenced by the
-`RENDER*` docs above as inline examples.
+The render galleries live in [`../artifacts/rendering/`](../artifacts/rendering/)
+alongside the rest of the showcase — `render_gallery*.png` (the material library,
+one grid per renderer) and `render_renderers_gallery.png` (the same part in Gold
+across all six backends). The `RENDER*` docs above embed them inline.

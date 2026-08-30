@@ -5,7 +5,7 @@ straight from CAD, headless — the deliverable for the TechDraw export kickoff
 Run:
     .venv/bin/python scratch/drawing_demo.py
 
-Writes artifacts/{lbracket,plate}_demo.{pdf,svg,dxf}. Every printed value is
+Writes artifacts/drawings/{lbracket,plate,fc_bracket,cbblock}_demo.{pdf,svg,dxf}. Every printed value is
 measured from the real solid (validate-the-artifact): overall extents come from
 the projected geometry, feature dims from the model edges/holes.
 """
@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from ankusdrive import Worker  # noqa: E402
 
-ART = ROOT / "artifacts"
+ART = ROOT / "artifacts" / "drawings"
 ART.mkdir(exist_ok=True)
 
 

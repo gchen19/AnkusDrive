@@ -10,7 +10,7 @@ without backstory.
 
 ## Context — why this exists
 
-An external user (Matthew Petney, `@mpetne`) modeled a Makita-router →
+An external user modeled a Makita-router →
 Dewalt-shop-vac adapter — an **enclosed-airflow** part — through an LLM agent on
 the AnkusDrive MCP server. Across three edit iterations the agent "fixed the last
 problem" while silently breaking a different geometric invariant, because

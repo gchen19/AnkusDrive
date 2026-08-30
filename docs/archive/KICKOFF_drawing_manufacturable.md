@@ -85,7 +85,7 @@ placed graphics.
   2π bore) and **chamfers** (off-axis narrow planar bevels) are enumerated to DISTINCT
   sizes (a drawing calls out "R3" once, not per edge); a fillet is matched by an R
   dimension (a bare R is never credited to a hole Ø), a chamfer by a linear size.
-  Threads are still future. Example: `artifacts/fc_bracket_demo.*`
+  Threads are still future. Example: `artifacts/drawings/fc_bracket_demo.*`
   (`scratch/drawing_demo.py:fillet_chamfer`).
 * **Tolerances (DONE 2026-06-15).** `add_dimension` takes a `tolerance`:
   `{"sym": 0.1}` (±0.1), `{"plus": .., "minus": ..}` (asymmetric), or
@@ -131,7 +131,7 @@ The gate (A1) is the prerequisite; it makes "legible" a regression assertion.
   date / project supplied via `set_title_block` (stamped `AD_TitleBlock` JSON, MCP
   tool). Opt-in (rendered only once `set_title_block` is called). Its box is a
   keep-out in the legibility gate, so a dim line crossing it is flagged. Demo
-  artifacts (`artifacts/{plate,lbracket}_demo.pdf`) now carry it. Test:
+  artifacts (`artifacts/drawings/{plate,lbracket}_demo.pdf`) now carry it. Test:
   `test_title_block_renders_fields`.
 
 * **A2+ — leaders (DONE 2026-06-15).** Ø/R dimensions now render as leader callouts
@@ -182,7 +182,7 @@ the rest of the path uses (so both stay vector line drawings, decided automatica
   advisory-only as `section_recommended` on the gate report), a `DrawViewSection` is
   cut lengthwise through the feature (normal ⊥ the feature axis, origin at its
   centre) and placed in genuinely clear space (grid scan via `_region_is_clear`,
-  nearest the base view). `auto=False` forces one. Golden: `artifacts/cbblock_demo.*`
+  nearest the base view). `auto=False` forces one. Golden: `artifacts/drawings/cbblock_demo.*`
   (Front + Top + auto Section showing the bore profile + iso thumbnail). Tests:
   `tests/test_drawing_thumbnail_section.py` (e2e) + `needs_section` cases in
   `tests/test_drawing_gate.py`.

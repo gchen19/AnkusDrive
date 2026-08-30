@@ -12,7 +12,7 @@ Usage:
     .venv/bin/python3 scripts/render-gallery.py [--out PATH] [--material NAME]
                                                 [--width W] [--height H]
 
-Defaults: --out docs/render_renderers_gallery.png, --material Gold, 480x360 panels.
+Defaults: --out artifacts/rendering/render_renderers_gallery.png, --material Gold, 480x360 panels.
 Photoreal output is presentation-only / not bit-reproducible (sampler noise), so
 this lives in scripts/, not the test suite.
 """
@@ -116,7 +116,7 @@ def _montage(panels, material, out_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(REPO / "docs" / "render_renderers_gallery.png"))
+    ap.add_argument("--out", default=str(REPO / "artifacts" / "rendering" / "render_renderers_gallery.png"))
     ap.add_argument("--material", default="Gold", help="material card, or '' for default")
     ap.add_argument("--width", type=int, default=480)
     ap.add_argument("--height", type=int, default=360)

@@ -436,9 +436,14 @@ Each family lists: the agent question it answers · backend · new-dependency we
 - **Backend:** MuJoCo / PyBullet / pinocchio. **Weight: medium-heavy.**
 - **Signatures:**
   ```
-  mechanism_simulate(assembly, joints, drivers, duration_s)
-    -> {trajectories, max_torques, collisions_through_motion, reachable_envelope}
+  mechanism_kinematics(...)                     # closed-form planar, synchronous
+  mechanism_simulate_submit(links, drivers, duration_s, dt_s, gravity,
+                            obstacles, base, loop_closures, gears)
+    -> job; job_result -> {trajectories, max_torques,
+                           collisions_through_motion, reachable_envelope}
   ```
+  *(The original scoping sketched this as one `mechanism_simulate(assembly, joints,
+  …)` call; it shipped split in two, and takes `links` rather than assembly+joints.)*
 - Assembly carries constraints but no dynamics today — this is the only family that
   reasons about *time-varying* geometry.
 - **Status: shipped.** `mechanism_kinematics` (exact closed-form planar gates —
@@ -504,7 +509,8 @@ process. Several reuse existing AnkusDrive tools directly.
   pattern (`test_worker.py::test_tolerance_stackup_handle_matches_hand_built_chain`).
 - **Tier A screens (SIMULATION_NEXT):** `molding_screen`
   (`analysis/molding.py` — exact one-term cooling time t ∝ s² + the ±30 %
-  spiral-flow fill check, per-polymer defaults, feeding dfm/cost) and
+  spiral-flow fill check, per-polymer defaults, feeding dfm/cost; escalates to
+  `molding_fill_submit` — see [`MOLDING_FILL_SOLVER.md`](MOLDING_FILL_SOLVER.md)) and
   `drop_impact` (`analysis/impact.py` — exact energy-balance G = h/d with
   pulse-shape bounds, fragility ↔ crush-stroke inversion for packaging). Toys in
   `tests/test_molding.py` / `tests/test_impact.py`.
@@ -590,7 +596,7 @@ returns life / safety-factor, turning "I drew a gear" into "this gear survives."
 |---|---|---|
 | Acoustics | Elmer, pyfar, acoular | **shipped, both tiers** — `acoustic_screen` (Tier A: exact cavity modes / duct cutoff + Helmholtz ±10 % + mass law ±3 dB) + `acoustic_fem_submit` (Tier B1: Elmer `HelmholtzSolve`, async — driven duct gated machine-tight on the exact 1/cos(kL) standing wave; flux-driven cavity sweep localizes the exact eigenfrequencies to <0.1 % via the in-phase sign flip). Both in `analysis/acoustics.py`; gates in `tests/test_acoustic_fem.py` |
 | Electromagnetics (RF/wave) | OpenEMS / FEniCSx (RF), FEMM (2D motors) | **shipped** — full-wave via openEMS (issue #93, `analysis/em_fullwave.py`) |
-| Machining toolpaths | FreeCAD Path, pycam, kiri:moto | low |
+| Machining toolpaths | FreeCAD Path, pycam, kiri:moto | low — **no toolpath engine, by design** (`analysis/machining.py`: no toolpath is computed, no gouge check is run). The *screening* tier did ship (issue #231): `cnc_machinability_check` + `cnc_time_estimate` |
 
 ---
 
