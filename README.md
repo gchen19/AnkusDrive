@@ -61,7 +61,9 @@ ankusdrive doctor      # per-item FreeCAD + solver checklist with the exact fix 
 AnkusDrive is published on PyPI at
 [pypi.org/project/ankusdrive](https://pypi.org/project/ankusdrive/); the
 distribution roadmap beyond it (marketplace listings, hosted transport) is
-tracked in [`docs/PUBLISHING_PLAN.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/PUBLISHING_PLAN.md).
+tracked in [epic #303](https://github.com/gchen19/AnkusDrive/issues/303); the
+original phase plan is kept as a design record at
+[`docs/archive/PUBLISHING_PLAN.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/archive/PUBLISHING_PLAN.md).
 
 ### Windows quickstart (PowerShell)
 
@@ -604,7 +606,7 @@ at, with the script that regenerates each one — is indexed in
 
 - **Error model**: FreeCAD raises plain Python exceptions from C++; worker catches and serializes them, but stack context across the JSON boundary is still lossy.
 - **Async / concurrency**: multi-doc shipped (`list_documents` / `set_active_document` / `close_document`), and the long-running external solvers run off the channel via the `*_submit` + `job_*` pattern, but the in-worker `fem_run` itself is still synchronous and blocks the MCP channel for the duration of a CalculiX/Elmer solve.
-- **macOS Gatekeeper / sandboxing**: `freecadcmd` launched from a non-interactive context may hit quarantine issues — still worth verifying under MCP-host launch paths.
+- **macOS Gatekeeper / sandboxing**: `freecadcmd` launched from a non-interactive context may hit quarantine issues. This has never been confirmed either way — tracked in [#310](https://github.com/gchen19/AnkusDrive/issues/310), which will either document the fix or delete this caveat.
 
 ## License
 

@@ -1,5 +1,14 @@
 # Publishing plan: from clone-and-edit to MCP marketplace
 
+> **Archived 2026-08-30 — this plan's remaining work is tracked in [#303](https://github.com/gchen19/AnkusDrive/issues/303).**
+> Phases A and B are done: `ankusdrive 0.5.0` is on PyPI via OIDC trusted publishing,
+> installable with `pipx install ankusdrive`. Phases C (Smithery) and D (the PR into
+> `modelcontextprotocol/servers`) were already restated inside epic #303, which is
+> where the open checkboxes below actually live — including the finding that the
+> repo-scanned `smithery.yaml` format appears to be gone and the real deliverable is
+> likely an MCPB bundle. Kept for the sequencing rationale and the per-phase scope,
+> not as a to-do list.
+
 Goal: turn AnkusDrive into something a stranger can install and wire into
 Claude Desktop / Claude Code / Cursor without reading the source. Today
 setup requires a clone, a venv, and editing a hardcoded path in
