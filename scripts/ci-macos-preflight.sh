@@ -39,7 +39,7 @@
 #   bash scripts/ci-macos-preflight.sh --su2    # SU2/Rosetta only (skip the VM)
 #
 # Runner setup lives in docs/MACOS.md ("Self-hosted CI runner"). The env vars are
-# expected from the runner's own environment (~/actions-runner/.env), NOT from the
+# expected from the runner's own environment (<runner-dir>/.env), NOT from the
 # workflow — they are box-specific absolute paths.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -75,6 +75,21 @@ if [ "$(uname -s)" != "Darwin" ]; then
   printf '\nPreflight FAILED.\n' >&2; exit 1
 fi
 ok "macOS $(sw_vers -productVersion 2>/dev/null || echo '?') on $(uname -m)"
+
+# --- 1b. legacy env var names (deprecated with the shim: delete in 0.6) -------
+# The 0.5 rename (#295) moved every override to ANKUSDRIVE_*. ankusdrive's own
+# import-time shim still promotes a DRIFTPIN_* var in-process, so Python-side
+# resolution keeps working and `doctor` looks healthy -- but this script reads the
+# job environment DIRECTLY, and so does everything else outside Python. A runner
+# whose .env was never renamed therefore fails below as six separate "is unset"
+# errors that each name the wrong fix. Say the real one, once, up front.
+step "Environment naming"
+legacy=$(env | sed -n 's/^\(DRIFTPIN_[A-Za-z0-9_]*\)=.*/\1/p' | sort | tr '\n' ' ')
+if [ -n "$legacy" ]; then
+  fail "legacy DRIFTPIN_* vars are set in the runner environment: ${legacy% }. They were renamed to ANKUSDRIVE_* in 0.5 (#295) and this script reads only the new names, so the overrides below will report as unset. Fix, on the runner box:  sed -i '' 's/^DRIFTPIN_/ANKUSDRIVE_/' <runner-dir>/.env  then restart it:  ./svc.sh stop && ./svc.sh start"
+else
+  ok "no legacy DRIFTPIN_* vars in the environment"
+fi
 
 # --- 2/3/4/5. the Multipass substrate ----------------------------------------
 VM_UP=0
@@ -189,7 +204,7 @@ if [ "$WANT_FSI" = 1 ]; then
   # is the exact predicate tests/test_fsi.py gates the live solve on, so check it
   # rather than infer it.
   step "ankusdrive fsi_stack_status() (the predicate test_fsi.py gates on)"
-  status=$(python3 - <<'PY' 2>&1
+  status_raw=$(python3 - <<'PY' 2>&1
 import json, sys
 sys.path.insert(0, ".")
 try:
@@ -200,16 +215,23 @@ except Exception as e:                       # import/resolution blew up
 print(("OK " if s["ok"] else "MISSING ") + json.dumps(s.get("missing") or []))
 PY
 )
+  # The probe prints its verdict as the LAST line. Keep 2>&1 -- a traceback on
+  # stderr is worth having in the log -- but read only that last line: any
+  # chatter before it (deprecation warnings, FreeCAD/numpy noise) is NOT the
+  # verdict. Folding it in turned a healthy substrate into "could not evaluate",
+  # and in the SU2 case below it did worse: non-empty stderr read as a resolved
+  # path, passing the lane green with SU2 unverified.
+  status=$(printf '%s\n' "$status_raw" | tail -n 1)
   case "$status" in
     "OK "*)      ok "fsi_stack_status().ok — the live FSI test will run, not skip" ;;
     "MISSING "*) fail "fsi_stack_status() reports missing: ${status#MISSING } — test_fsi.py's live solve would SKIP silently, so the lane would pass without testing anything" ;;
-    *)           fail "could not evaluate fsi_stack_status(): ${status#ERR }" ;;
+    *)           fail "could not evaluate fsi_stack_status(): ${status#ERR }"; printf '%s\n' "$status_raw" >&2 ;;
   esac
 
   # The CFD files gate on this exact predicate, so check it rather than infer it
   # from the overrides (config.toml shadowing, multipass off PATH, ...).
   step "ankusdrive find_solver('openfoam') (the predicate the CFD files gate on)"
-  foam=$(python3 - <<'FOAMPY' 2>&1
+  foam_raw=$(python3 - <<'FOAMPY' 2>&1
 import sys
 sys.path.insert(0, ".")
 try:
@@ -220,10 +242,11 @@ except Exception as e:
 print(("OK " + info.get("path", "")) if info["available"] else "MISSING " + info["status"])
 FOAMPY
 )
+  foam=$(printf '%s\n' "$foam_raw" | tail -n 1)   # last line only -- see above
   case "$foam" in
     "OK "*)      ok "openfoam resolves -> ${foam#OK }" ;;
     "MISSING "*) fail "openfoam does not resolve (status: ${foam#MISSING }) — the live CFD / mesh-bridge / wind-tunnel gates would SKIP silently. See docs/MACOS.md, 'Plain CFD ... in the VM'" ;;
-    *)           fail "could not evaluate find_solver('openfoam'): ${foam#ERR }" ;;
+    *)           fail "could not evaluate find_solver('openfoam'): ${foam#ERR }"; printf '%s\n' "$foam_raw" >&2 ;;
   esac
 fi
 
@@ -239,19 +262,28 @@ if [ "$WANT_SU2" = 1 ]; then
   else
     ok "x86_64 host — no Rosetta needed"
   fi
-  su2=$(python3 - <<'PY' 2>&1
+  # Prints an explicit "OK "/"MISSING " sentinel rather than the bare path. The
+  # bare form could not be read safely: its not-found verdict was the EMPTY
+  # string, which command substitution strips along with the trailing newline, so
+  # a single line of stderr (the DRIFTPIN_* deprecation warning, a numpy notice)
+  # became the whole captured value and matched the catch-all -- reporting
+  # "SU2_CFD -> <warning text>" and passing the lane green with SU2 unverified.
+  # With a sentinel, anything unrecognised is a failure instead of a pass.
+  su2_raw=$(python3 - <<'PY' 2>&1
 import sys
 sys.path.insert(0, ".")
 try:
     from ankusdrive import solvers
-    print(solvers.find_solver("su2").get("path") or "")
+    path = solvers.find_solver("su2").get("path") or ""
 except Exception as e:
-    print("ERR " + str(e))
+    print("ERR " + str(e)); sys.exit(0)
+print(("OK " + path) if path else "MISSING")
 PY
 )
+  su2=$(printf '%s\n' "$su2_raw" | tail -n 1)     # last line only -- see above
   case "$su2" in
-    ERR*|"") fail "SU2_CFD does not resolve — install it:  scripts/install-solvers.sh su2  (without it test_su2_native.py's live solve SKIPs and the lane tests nothing)" ;;
-    *)       ok "SU2_CFD -> $su2" ;;
+    "OK "*) ok "SU2_CFD -> ${su2#OK }" ;;
+    *)      fail "SU2_CFD does not resolve — install it:  scripts/install-solvers.sh su2  (without it test_su2_native.py's live solve SKIPs and the lane tests nothing)"; printf '%s\n' "$su2_raw" >&2 ;;
   esac
 fi
 
