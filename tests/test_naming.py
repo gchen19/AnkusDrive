@@ -52,6 +52,7 @@ ALLOWED = {
     "tests/test_naming.py":         "this file — it has to name what it forbids",
     "tests/test_compat_rename.py":  "asserts the compatibility shims still work",
     "MIGRATION.md":                 "tells users what changed and how to move",
+    "CHANGELOG.md":                 "0.5.0 IS the rename — the entry and its deprecation list must name what was renamed",
     "docs/PUBLISHING_PLAN.md":      "the old name is an unclaimed PyPI project to reserve",
     # Migration aids. These do not keep anything working — they DETECT the
     # pre-rename state and say how to move off it, so they must name it. Both go
