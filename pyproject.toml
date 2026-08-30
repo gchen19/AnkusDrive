@@ -33,8 +33,11 @@ requires-python = ">=3.10"
 # to carry it — a wheel that omits it makes compliance impossible for them.
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "TRADEMARKS.md"]
+# The address is the LLC's: GC Technology Consulting LLC holds the copyright
+# (NOTICE) and the word mark (TRADEMARKS.md), and it is the fallback route
+# SECURITY.md gives when private vulnerability reporting is not an option.
 authors = [
-    { name = "George Chen" },
+    { name = "George Chen", email = "george@gctechnologyconsulting.com" },
 ]
 keywords = [
     "freecad",

@@ -10,6 +10,11 @@ button under this repository's **Security** tab. That opens a private advisory
 visible only to the maintainer, where a fix can be prepared and a patched release cut
 before anything becomes public.
 
+If that button is not there, or you would rather not go through GitHub at all, email
+**george@gctechnologyconsulting.com** with `AnkusDrive security` in the subject line.
+Send the report itself rather than a request to talk — that starts the clock on the
+problem instead of on scheduling.
+
 Please include enough to reproduce: the AnkusDrive version (`ankusdrive --version`),
 the FreeCAD version (`ankusdrive doctor`), your OS, and the smallest input or tool
 call sequence that triggers it.
