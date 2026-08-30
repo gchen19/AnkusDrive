@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from ankusdrive import config as adconfig  # noqa: E402
 from ankusdrive import solvers  # noqa: E402
 
 # The families the P2 milestones (M2–M5 + optics) must each be able to degrade for.
@@ -294,11 +295,29 @@ class _absent_binaries_and_wheels:
         return False
 
 
-def _clear_env(*names):
-    """Temporarily clear env vars; returns a restorer callable."""
+def _clear_declared(*names):
+    """Temporarily clear a declaration from BOTH layers; returns a restorer callable.
+
+    A solver path can be declared two ways, and `config.lookup` reads them in order:
+    the environment variable first, then the on-disk config file that `ankusdrive setup`
+    writes (`~/.config/ankusdrive/config.toml`). Clearing only the env vars therefore
+    leaves the FILE still answering, so a test asserting the *undeclared* state reads
+    whatever the machine it happens to run on has declared.
+
+    That is not hypothetical: it turned this suite red on the Linux self-hosted runner
+    the moment that box grew a config.toml naming an OpenFOAM path (#313). The suite
+    looked hermetic because it cleared env vars, and was hermetic against exactly one
+    of the two layers.
+
+    Blinding `config.load` — rather than deleting keys — keeps the env layer's real
+    behaviour intact, so a test that WANTS to assert env precedence still can.
+    """
     saved = {n: os.environ.pop(n, None) for n in names}
+    real_load = adconfig.load
+    adconfig.load = lambda: {}
 
     def restore():
+        adconfig.load = real_load
         for n, v in saved.items():
             if v is None:
                 os.environ.pop(n, None)
@@ -317,7 +336,7 @@ def test_openfoam_unwired_from_standard_bashrc():
     bashrc = os.path.join(tmp, "etc", "bashrc")
     with open(bashrc, "w", encoding="utf-8") as fh:
         fh.write("# fake OpenFOAM bashrc\n")
-    restore = _clear_env("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC")
+    restore = _clear_declared("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC")
     os.environ["ANKUSDRIVE_OPENFOAM_DIRS"] = tmp
     try:
         with _absent_binaries_and_wheels():
@@ -354,7 +373,7 @@ def test_openems_unwired_from_dedicated_venv():
     os.makedirs(os.path.join(venv, "bin"))
     with open(os.path.join(venv, "bin", "python3"), "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\n")
-    restore = _clear_env("ANKUSDRIVE_OPENEMS_PYTHON")
+    restore = _clear_declared("ANKUSDRIVE_OPENEMS_PYTHON")
     os.environ["ANKUSDRIVE_REPO_ROOT"] = tmp
     try:
         with _absent_binaries_and_wheels():
@@ -378,7 +397,7 @@ def test_openems_unwired_from_dedicated_venv():
 def test_truly_absent_solver_still_reports_absent_with_install_hint():
     """#177 guard: with NO unwired evidence on the box, an env-scoped solver still
     reports plain `absent` and hands back the full install hint (not a wire hint)."""
-    restore = _clear_env("ANKUSDRIVE_OPENFOAM_DIRS", "ANKUSDRIVE_REPO_ROOT",
+    restore = _clear_declared("ANKUSDRIVE_OPENFOAM_DIRS", "ANKUSDRIVE_REPO_ROOT",
                          "ANKUSDRIVE_OPENFOAM_BASHRC", "ANKUSDRIVE_OPENFOAM_PATH")
     # point the repo-root probe at an empty tmp dir so no real .venv-* is discovered
     empty = tempfile.mkdtemp(prefix="empty-repo-")
@@ -605,7 +624,7 @@ def test_openfoam_unwired_hint_tracks_multipass_vm_state():
     three DISTINGUISHABLE, correctly-hinted states. Before this, all three said
     "provision the VM" — the one instruction that is wrong for the most common
     post-setup state, a provisioned VM that is up with an unwired shell."""
-    restore = _clear_env("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC",
+    restore = _clear_declared("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC",
                          "ANKUSDRIVE_OPENFOAM_DIRS")
     hints, founds = {}, {}
     try:
@@ -658,7 +677,7 @@ def test_multipass_running_state_live_on_macos():
     if state != "running":
         print(f"    NOTE — VM is {state!r} here; live running-state check skipped")
         return
-    restore = _clear_env("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC",
+    restore = _clear_declared("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC",
                          "ANKUSDRIVE_OPENFOAM_DIRS")
     try:
         with _absent_binaries_and_wheels():
@@ -672,6 +691,66 @@ def test_multipass_running_state_live_on_macos():
 
 
 # --- runner -------------------------------------------------------------------
+
+def test_clear_declared_blinds_the_config_file_not_just_the_env():
+    """#313, this suite's own isolation gate: the "solver is not declared" state must
+    be reachable on a machine that HAS declared one.
+
+    Every test here that asserts an undeclared state does it through _clear_declared.
+    That helper used to clear only the environment variable, while `config.lookup`
+    resolves env *then* the on-disk config file — so on a box whose config.toml names
+    an OpenFOAM path, the "absent" case silently read that path and the suite went red
+    on unmodified main. A helper that isolates one of two layers is worse than none,
+    because it looks hermetic.
+
+    So assert the isolation itself, both ways: with a config that declares a path,
+    the harness must not see it — AND the control must prove the fake config would
+    otherwise be seen, or this test could pass while asserting nothing.
+    """
+    declared = "/nonexistent/openfoam/platforms/bin/simpleFoam"
+    real_load = adconfig.load
+    adconfig.load = lambda: {"solvers": {"openfoam_path": declared}}
+    try:
+        # Control: unblinded, the declaration IS honoured — the fake has real teeth.
+        seen = adconfig.get("ANKUSDRIVE_OPENFOAM_PATH")
+        assert seen == declared, ("control: config layer not consulted", seen)
+
+        # The gate: under the helper, neither layer answers.
+        restore = _clear_declared("ANKUSDRIVE_OPENFOAM_PATH")
+        try:
+            blind = adconfig.get("ANKUSDRIVE_OPENFOAM_PATH")
+            assert blind is None, ("config file still answering through the helper", blind)
+        finally:
+            restore()
+
+        # And the helper restores what it borrowed — a leaked patch would silently
+        # disarm every later test in the file.
+        assert adconfig.get("ANKUSDRIVE_OPENFOAM_PATH") == declared, "helper did not restore"
+    finally:
+        adconfig.load = real_load
+
+
+def test_clear_declared_leaves_the_env_layer_working():
+    """The fix must blind the FILE, not flatten both layers — a test that wants to
+    assert env precedence still has to be able to."""
+    real_load = adconfig.load
+    adconfig.load = lambda: {"solvers": {"openfoam_path": "/from/config/simpleFoam"}}
+    saved = os.environ.get("ANKUSDRIVE_OPENFOAM_PATH")
+    os.environ["ANKUSDRIVE_OPENFOAM_PATH"] = "/from/env/simpleFoam"
+    try:
+        restore = _clear_declared("ANKUSDRIVE_SOME_OTHER_KEY")   # a DIFFERENT key
+        try:
+            # config blinded, but this key's env value is untouched and still wins
+            assert adconfig.get("ANKUSDRIVE_OPENFOAM_PATH") == "/from/env/simpleFoam"
+        finally:
+            restore()
+    finally:
+        adconfig.load = real_load
+        if saved is None:
+            os.environ.pop("ANKUSDRIVE_OPENFOAM_PATH", None)
+        else:
+            os.environ["ANKUSDRIVE_OPENFOAM_PATH"] = saved
+
 
 def _discover():
     return [
