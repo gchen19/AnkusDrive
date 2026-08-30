@@ -19,17 +19,23 @@ freecadcmd:
 
   1. if THIS interpreter has ``mcp``, the server runs under it — true whether that
      is a venv, a conda env, a worktree, or a plain ``pip install -e .``;
-  2. else, if the repo venv has it, re-exec there (per-platform layout, so
-     ``Scripts\\python.exe`` on Windows and ``bin/python3`` elsewhere) — a bare
-     ``python3 tests/test_mcp.py`` should not silently drop the suite when the deps
-     are one directory away;
-  3. else SKIP, naming both interpreters it tried.
+  2. else re-exec into the first candidate that does: the repo venv (per-platform
+     layout, so ``Scripts\\python.exe`` on Windows and ``bin/python3`` elsewhere),
+     then ``python3``/``python`` from PATH. A list, not just the venv — on the
+     self-hosted Linux runner ``tests/setup_local.sh`` points ``.venv/bin/python3``
+     at FreeCAD's bundled python, which has numpy and Pillow but never ``mcp``, so
+     stopping at the venv would skip on a box whose system python serves MCP fine;
+  3. else SKIP, listing every interpreter it asked.
+
+Each candidate is PROBED (``-c "import mcp"``), never judged by its path — the same
+reason ``ankusdrive/solvers.py`` probes solvers instead of trusting a directory.
 
 Run:  python3 tests/test_mcp.py        (any interpreter with `mcp` importable)
 """
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -50,8 +56,33 @@ def _venv_python(root: Path) -> Path:
     return root / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
 
 
+def _candidate_pythons():
+    """Every interpreter worth asking, best first, de-duplicated.
+
+    The repo venv is a candidate, not THE answer. On the self-hosted Linux runner
+    ``tests/setup_local.sh`` makes ``.venv/bin/python3`` a symlink to FreeCAD's
+    *bundled* python — which carries numpy and Pillow but never `mcp` — so a
+    resolver that stopped at the venv would skip on a machine where the system
+    python3 can serve MCP perfectly well.
+    """
+    # De-duplicate on the LITERAL path, never on Path.resolve(): a venv's
+    # bin/python3 is a symlink to the base interpreter, so resolving collapses
+    # every venv on the machine onto the same target and throws away the only
+    # thing that distinguishes them — which packages they can import.
+    seen, out = set(), []
+    for cand in (Path(sys.executable),
+                 _venv_python(REPO / ".venv"),
+                 *(Path(p) for p in (shutil.which("python3"), shutil.which("python")) if p)):
+        key = os.path.abspath(str(cand))
+        if key in seen or not cand.is_file():
+            continue
+        seen.add(key)
+        out.append(cand)
+    return out
+
+
 def _imports_mcp(python: Path) -> bool:
-    """Ask an interpreter, rather than assuming from its path."""
+    """Ask an interpreter, rather than inferring from its path."""
     try:
         return subprocess.run(
             [str(python), "-c", "import mcp"],
@@ -65,14 +96,16 @@ try:
     from mcp import ClientSession, StdioServerParameters  # noqa: E402
     from mcp.client.stdio import stdio_client  # noqa: E402
 except ImportError:
-    _venv_py = _venv_python(REPO / ".venv")
-    if not os.environ.get(_REEXEC_FLAG) and _venv_py.is_file() and _imports_mcp(_venv_py):
-        os.environ[_REEXEC_FLAG] = "1"
-        os.execv(str(_venv_py), [str(_venv_py), str(Path(__file__).resolve()), *sys.argv[1:]])
-    _where = f"{sys.executable}"
-    _where += f" nor {_venv_py}" if _venv_py.is_file() else " and no repo venv was found"
-    print(f"SKIP tests/test_mcp.py — the `mcp` client SDK is not importable in {_where}. "
-          "Install the host deps (pip install -e .) to run this suite.")
+    _tried = _candidate_pythons()
+    if not os.environ.get(_REEXEC_FLAG):
+        for _cand in _tried:
+            if (os.path.abspath(str(_cand)) != os.path.abspath(sys.executable)
+                    and _imports_mcp(_cand)):
+                os.environ[_REEXEC_FLAG] = "1"
+                os.execv(str(_cand), [str(_cand), str(Path(__file__).resolve()), *sys.argv[1:]])
+    print("SKIP tests/test_mcp.py — the `mcp` client SDK is not importable in any "
+          "interpreter here. Tried: " + ", ".join(str(c) for c in _tried) +
+          ". Install the host deps (pip install -e .) to run this suite.")
     raise SystemExit(0)
 
 
