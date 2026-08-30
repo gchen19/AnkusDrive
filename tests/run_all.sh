@@ -71,6 +71,15 @@ echo "== MCP server boots over stdio with FreeCAD unresolved (#279) =="
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_mcp_boot.py; else python3 tests/test_mcp_boot.py; fi
 
 echo
+echo "== MCP tool suite over stdio, driving the real worker (#288) =="
+# The other half of the MCP surface: test_mcp_boot proves the server SPEAKS, this
+# proves the tools WORK — documents, primitives, restart-clears-state, a CalculiX
+# cantilever through the MCP layer. Needs FreeCAD as well as the `mcp` SDK, which
+# is why it is here and not in the hosted core-install lane. It resolves its own
+# interpreter (#288) and SKIPs, saying so, when `mcp` is importable nowhere.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_mcp.py; else python3 tests/test_mcp.py; fi
+
+echo
 echo "== Typed units / quantity layer (pure-Python; no FreeCAD) =="
 python3 tests/test_units.py
 

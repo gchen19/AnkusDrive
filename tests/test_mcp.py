@@ -2,12 +2,35 @@
 Toy problems for the AnkusDrive MCP server. Each test spins up the server as a
 subprocess via the MCP client SDK, exercises one tool, verifies the response.
 
-Must run with the venv python (where `mcp` is installed):
-    .venv/bin/python3 tests/test_mcp.py
+Needs an interpreter carrying the `mcp` client SDK AND a working FreeCAD: these
+tools drive the real worker — documents, primitives, a restart that must clear
+state, a CalculiX cantilever solve. The FreeCAD-free "can this interpreter serve
+MCP at all" check is a different file, tests/test_mcp_boot.py, which is what the
+hosted Windows core-install lane runs on a machine with no FreeCAD. Two files, two
+questions; neither replaces the other.
+
+INTERPRETER RESOLUTION (#288). This used to hardcode ``.venv/bin/python3``, which
+was wrong three ways: POSIX-only, so Windows could not run the file at all even
+though the MCP surface is fully supported there; dependent on a ``.venv`` existing
+inside the repo, which is false for a pip/pipx install and for any git worktree;
+and free to disagree with the interpreter actually running the test. Now it
+derives instead of hardcoding, the same rule ``ankusdrive/client.py`` follows for
+freecadcmd:
+
+  1. if THIS interpreter has ``mcp``, the server runs under it — true whether that
+     is a venv, a conda env, a worktree, or a plain ``pip install -e .``;
+  2. else, if the repo venv has it, re-exec there (per-platform layout, so
+     ``Scripts\\python.exe`` on Windows and ``bin/python3`` elsewhere) — a bare
+     ``python3 tests/test_mcp.py`` should not silently drop the suite when the deps
+     are one directory away;
+  3. else SKIP, naming both interpreters it tried.
+
+Run:  python3 tests/test_mcp.py        (any interpreter with `mcp` importable)
 """
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -17,14 +40,47 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-VENV_PY = str(REPO / ".venv" / "bin" / "python3")
+# Guards the step-2 re-exec against looping if the venv python also lacks `mcp`
+# in some way the probe did not catch.
+_REEXEC_FLAG = "ANKUSDRIVE_TEST_MCP_REEXEC"
 
-from mcp import ClientSession, StdioServerParameters  # noqa: E402
-from mcp.client.stdio import stdio_client  # noqa: E402
 
+def _venv_python(root: Path) -> Path:
+    """The interpreter a venv rooted at *root* exposes, per platform."""
+    return root / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
+
+
+def _imports_mcp(python: Path) -> bool:
+    """Ask an interpreter, rather than assuming from its path."""
+    try:
+        return subprocess.run(
+            [str(python), "-c", "import mcp"],
+            capture_output=True, timeout=120,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+try:
+    from mcp import ClientSession, StdioServerParameters  # noqa: E402
+    from mcp.client.stdio import stdio_client  # noqa: E402
+except ImportError:
+    _venv_py = _venv_python(REPO / ".venv")
+    if not os.environ.get(_REEXEC_FLAG) and _venv_py.is_file() and _imports_mcp(_venv_py):
+        os.environ[_REEXEC_FLAG] = "1"
+        os.execv(str(_venv_py), [str(_venv_py), str(Path(__file__).resolve()), *sys.argv[1:]])
+    _where = f"{sys.executable}"
+    _where += f" nor {_venv_py}" if _venv_py.is_file() else " and no repo venv was found"
+    print(f"SKIP tests/test_mcp.py — the `mcp` client SDK is not importable in {_where}. "
+          "Install the host deps (pip install -e .) to run this suite.")
+    raise SystemExit(0)
+
+
+# Whatever interpreter got here has `mcp`, so it can serve as well as call.
+SERVER_PYTHON = sys.executable
 
 SERVER_PARAMS = StdioServerParameters(
-    command=VENV_PY,
+    command=SERVER_PYTHON,
     args=["-m", "ankusdrive", "mcp"],
     cwd=str(REPO),
 )
