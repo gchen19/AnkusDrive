@@ -4,8 +4,15 @@ __pycache__/
 *.egg-info/
 scratch/out/
 .venv/
-.venv-bempp/                 # dedicated bempp-cl venv (meshio>=5 clash isolation)
-.venv-openems/               # dedicated openEMS venv (GPL, source-built)
+# A trailing comment is NOT a comment in .gitignore — the whole line is the
+# pattern, spaces and '#' included, so `.venv-bempp/   # note` matched nothing and
+# both of these venvs were tracked-able for their whole life. A `git add -A` duly
+# swept 5,249 files and 2.1M lines of .venv-bempp into a commit. Comments go on
+# their own line.
+# dedicated bempp-cl venv (meshio>=5 clash isolation)
+.venv-bempp/
+# dedicated openEMS venv (GPL, source-built)
+.venv-openems/
 tests/reliability_cache/
 tests/multiagent_cache/
 # generated CAD artifacts (scratch/gen_artifacts.py output)

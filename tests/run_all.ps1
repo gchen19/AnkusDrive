@@ -102,6 +102,10 @@ Test-Module 'WSL routing for OpenFOAM families (#193)' 'test_wsl_routing.py'
 # tools with FreeCAD deliberately unresolved, so "MCP is broken" is distinguishable from
 # "FreeCAD isn't found" - the confusion that ended #279's install.
 Test-Module 'MCP stdio boot without FreeCAD (#279)' 'test_mcp_boot.py'
+# The other half: the tools actually work over MCP, driving the real worker. Needs
+# FreeCAD, so it belongs to THIS lane and not the hosted core-install one. Could not
+# run on Windows at all until #288 stopped it hardcoding .venv/bin/python3.
+Test-Module 'MCP tool suite driving the worker (#288)' 'test_mcp.py'
 
 # --- static contracts + pure-Python toys (all cross-platform, no FreeCAD) -------
 Test-Module 'Static contracts (registry parity + docstrings + determinism coverage)' 'test_contracts.py'

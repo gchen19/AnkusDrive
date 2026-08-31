@@ -2,12 +2,41 @@
 Toy problems for the AnkusDrive MCP server. Each test spins up the server as a
 subprocess via the MCP client SDK, exercises one tool, verifies the response.
 
-Must run with the venv python (where `mcp` is installed):
-    .venv/bin/python3 tests/test_mcp.py
+Needs an interpreter carrying the `mcp` client SDK AND a working FreeCAD: these
+tools drive the real worker — documents, primitives, a restart that must clear
+state, a CalculiX cantilever solve. The FreeCAD-free "can this interpreter serve
+MCP at all" check is a different file, tests/test_mcp_boot.py, which is what the
+hosted Windows core-install lane runs on a machine with no FreeCAD. Two files, two
+questions; neither replaces the other.
+
+INTERPRETER RESOLUTION (#288). This used to hardcode ``.venv/bin/python3``, which
+was wrong three ways: POSIX-only, so Windows could not run the file at all even
+though the MCP surface is fully supported there; dependent on a ``.venv`` existing
+inside the repo, which is false for a pip/pipx install and for any git worktree;
+and free to disagree with the interpreter actually running the test. Now it
+derives instead of hardcoding, the same rule ``ankusdrive/client.py`` follows for
+freecadcmd:
+
+  1. if THIS interpreter has ``mcp``, the server runs under it — true whether that
+     is a venv, a conda env, a worktree, or a plain ``pip install -e .``;
+  2. else re-exec into the first candidate that does: the repo venv (per-platform
+     layout, so ``Scripts\\python.exe`` on Windows and ``bin/python3`` elsewhere),
+     then ``python3``/``python`` from PATH. A list, not just the venv — on the
+     self-hosted Linux runner ``tests/setup_local.sh`` points ``.venv/bin/python3``
+     at FreeCAD's bundled python, which has numpy and Pillow but never ``mcp``, so
+     stopping at the venv would skip on a box whose system python serves MCP fine;
+  3. else SKIP, listing every interpreter it asked.
+
+Each candidate is PROBED (``-c "import mcp"``), never judged by its path — the same
+reason ``ankusdrive/solvers.py`` probes solvers instead of trusting a directory.
+
+Run:  python3 tests/test_mcp.py        (any interpreter with `mcp` importable)
 """
 import asyncio
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -17,14 +46,74 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-VENV_PY = str(REPO / ".venv" / "bin" / "python3")
+# Guards the step-2 re-exec against looping if the venv python also lacks `mcp`
+# in some way the probe did not catch.
+_REEXEC_FLAG = "ANKUSDRIVE_TEST_MCP_REEXEC"
 
-from mcp import ClientSession, StdioServerParameters  # noqa: E402
-from mcp.client.stdio import stdio_client  # noqa: E402
 
+def _venv_python(root: Path) -> Path:
+    """The interpreter a venv rooted at *root* exposes, per platform."""
+    return root / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
+
+
+def _candidate_pythons():
+    """Every interpreter worth asking, best first, de-duplicated.
+
+    The repo venv is a candidate, not THE answer. On the self-hosted Linux runner
+    ``tests/setup_local.sh`` makes ``.venv/bin/python3`` a symlink to FreeCAD's
+    *bundled* python — which carries numpy and Pillow but never `mcp` — so a
+    resolver that stopped at the venv would skip on a machine where the system
+    python3 can serve MCP perfectly well.
+    """
+    # De-duplicate on the LITERAL path, never on Path.resolve(): a venv's
+    # bin/python3 is a symlink to the base interpreter, so resolving collapses
+    # every venv on the machine onto the same target and throws away the only
+    # thing that distinguishes them — which packages they can import.
+    seen, out = set(), []
+    for cand in (Path(sys.executable),
+                 _venv_python(REPO / ".venv"),
+                 *(Path(p) for p in (shutil.which("python3"), shutil.which("python")) if p)):
+        key = os.path.abspath(str(cand))
+        if key in seen or not cand.is_file():
+            continue
+        seen.add(key)
+        out.append(cand)
+    return out
+
+
+def _imports_mcp(python: Path) -> bool:
+    """Ask an interpreter, rather than inferring from its path."""
+    try:
+        return subprocess.run(
+            [str(python), "-c", "import mcp"],
+            capture_output=True, timeout=120,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+try:
+    from mcp import ClientSession, StdioServerParameters  # noqa: E402
+    from mcp.client.stdio import stdio_client  # noqa: E402
+except ImportError:
+    _tried = _candidate_pythons()
+    if not os.environ.get(_REEXEC_FLAG):
+        for _cand in _tried:
+            if (os.path.abspath(str(_cand)) != os.path.abspath(sys.executable)
+                    and _imports_mcp(_cand)):
+                os.environ[_REEXEC_FLAG] = "1"
+                os.execv(str(_cand), [str(_cand), str(Path(__file__).resolve()), *sys.argv[1:]])
+    print("SKIP tests/test_mcp.py — the `mcp` client SDK is not importable in any "
+          "interpreter here. Tried: " + ", ".join(str(c) for c in _tried) +
+          ". Install the host deps (pip install -e .) to run this suite.")
+    raise SystemExit(0)
+
+
+# Whatever interpreter got here has `mcp`, so it can serve as well as call.
+SERVER_PYTHON = sys.executable
 
 SERVER_PARAMS = StdioServerParameters(
-    command=VENV_PY,
+    command=SERVER_PYTHON,
     args=["-m", "ankusdrive", "mcp"],
     cwd=str(REPO),
 )
