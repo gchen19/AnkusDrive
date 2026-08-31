@@ -19,7 +19,7 @@ docs, and execute Phase 2 without backstory.
   six test tiers + how to run them.
 - **[`tests/RELIABILITY.md`](../../tests/RELIABILITY.md)** — the gated reliability
   harness (Layers A/B/C, all scaffolded but pending API key).
-- **Memory:** `~/.claude/projects/-Users-georgechen-AnkusDrive/memory/`
+- **Memory:** `~/.claude/projects/<project-dir-slug>/memory/`
   - `project_freecad_api_drift.md` — **READ THIS** before adding any new
     handler. Lists 8 known wiki-vs-reality drifts in the FreeCAD API. The
     pattern of "introspect the live API via `dir()` + `getEnumerationsOfProperty()`
