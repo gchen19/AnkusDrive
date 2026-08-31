@@ -1,0 +1,13 @@
+# The template chooser is the only place the blank-issue route can be
+# intercepted, and the blank-issue route is how a vulnerability gets disclosed
+# in public by accident — the exact thing SECURITY.md exists to prevent (#303).
+# Blank issues stay enabled: the project has no issue templates yet, and forcing
+# a form would cost more reports than it shapes.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability (privately)
+    url: https://github.com/gchen19/AnkusDrive/security/advisories/new
+    about: >-
+      Please do not open a public issue for a suspected vulnerability — a
+      public issue is a disclosure. Report it privately here instead; see
+      SECURITY.md for scope and response expectations.
