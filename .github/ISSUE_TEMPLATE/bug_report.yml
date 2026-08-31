@@ -1,0 +1,94 @@
+name: Bug report
+description: Something behaves differently than documented, or breaks.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. The two fields that decide how fast this gets fixed are
+        **`ankusdrive doctor`** and the **smallest thing that reproduces it** — a
+        wrong FreeCAD version or an unwired solver explains a large share of
+        reports, and `doctor` answers both without any back-and-forth.
+
+        If this is a **security** problem, close this form and use the private
+        route: <https://github.com/gchen19/AnkusDrive/security/policy>.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead. Paste the error and traceback if there is one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest reproduction
+      description: >-
+        The shortest CLI command, script, or MCP tool call sequence that triggers it.
+        A tool call is most useful as the name plus the arguments you passed.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`ankusdrive doctor` output"
+      description: Paste it whole. Redact any path you would rather not make public — it is a normal thing to do and does not make the report less useful.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: AnkusDrive version
+      description: "`ankusdrive --version`, or the commit SHA if you are on a clone."
+      placeholder: "0.5.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Linux
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - A container or CI runner
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface
+      description: The CLI and the MCP server reach the same worker by different routes, and that route is often where the bug is.
+      options:
+        - MCP server (an agent called a tool)
+        - CLI
+        - Imported as a Python library
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: host
+    attributes:
+      label: MCP host, if any
+      description: Claude Desktop, Claude Code, Cursor, something else — and its version if you have it.
+      placeholder: "Claude Code 2.x"
+
+  - type: textarea
+    id: solver
+    attributes:
+      label: Solver, if this is a simulation family
+      description: >-
+        Which solver, how it was installed, and what `solve_capabilities` or
+        `doctor` says about it. A family whose solver is absent is meant to return
+        `{ok: false, reason, install}` rather than crash — if it crashed, say so
+        here, because that is its own bug.

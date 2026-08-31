@@ -1,0 +1,20 @@
+# The chooser is the only place a vulnerability report can be intercepted before
+# it becomes a public disclosure, so blank issues are OFF: every route into the
+# tracker passes this page first. The cost of that is a form standing between
+# someone and a quick question, which is what "Question or anything else" is for
+# — one box, nothing required.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Report a security vulnerability
+    # Deliberately the policy page rather than /security/advisories/new: the
+    # advisory form 404s until private vulnerability reporting is enabled, and a
+    # dead link here sends the reporter straight back to the public tracker —
+    # the exact outcome this entry exists to prevent. SECURITY.md always renders,
+    # and it routes onward to the Report button or to email.
+    url: https://github.com/gchen19/AnkusDrive/security/policy
+    about: Do not open an issue. A public issue is a disclosure from the moment you file it — use the private route instead.
+
+  - name: Setup and install problems — try `ankusdrive doctor` first
+    url: https://github.com/gchen19/AnkusDrive#setup
+    about: doctor gives a per-item FreeCAD and solver checklist with the exact fix for each. If it names your problem, you may not need an issue at all.

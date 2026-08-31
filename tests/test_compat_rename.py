@@ -188,7 +188,13 @@ def test_doctor_reports_what_is_still_on_a_shim():
     a startup warning alone is scrolled past."""
     from ankusdrive import doctor
     saved = os.environ.get("DRIFTPIN_SU2_PATH")
+    # An explicitly-set NEW name suppresses promotion by design, so a box that
+    # already exports ANKUSDRIVE_SU2_PATH (the self-hosted Windows runner does)
+    # would leave legacy_env empty and fail the assert below. Clear it for the
+    # duration; the finally block already restores this pair.
+    saved_new = os.environ.get("ANKUSDRIVE_SU2_PATH")
     try:
+        os.environ.pop("ANKUSDRIVE_SU2_PATH", None)
         os.environ["DRIFTPIN_SU2_PATH"] = "/opt/su2/SU2_CFD"
         config.adopt_legacy_env(warn=False)
         report = doctor.config_report()
@@ -205,6 +211,8 @@ def test_doctor_reports_what_is_still_on_a_shim():
         os.environ.pop("ANKUSDRIVE_SU2_PATH", None)
         if saved is not None:
             os.environ["DRIFTPIN_SU2_PATH"] = saved
+        if saved_new is not None:
+            os.environ["ANKUSDRIVE_SU2_PATH"] = saved_new
         config.adopt_legacy_env(warn=False)
 
 

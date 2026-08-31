@@ -1,0 +1,52 @@
+name: Tool or capability request
+description: A tool that should exist, a parameter that should be reachable, or a family that should go further.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the README's **Layer 1** domain table first — with 280+ tools the
+        thing you want may already have a name you did not guess.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to design or analyze
+      description: >-
+        The engineering task, not the API you imagine for it. The most useful
+        requests here have been the ones that described a part someone was stuck
+        on; the tool shape usually falls out of that, and often differs from the
+        one the reporter had in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: The workaround, the `run_script` escape hatch you wrote, or the point where you gave up. This is what says how much the gap costs.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of gap is it
+      options:
+        - No tool for this at all
+        - A tool exists but a parameter is not reachable through it
+        - A tool exists but degrades or refuses where it should work
+        - An analysis exists but not at the fidelity I need
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: oracle
+    attributes:
+      label: How would a correct answer be checked?
+      description: >-
+        Optional, and the single most valuable thing you can add. Every analysis
+        family here is gated against something — a closed-form oracle, a handbook
+        correlation with an honest error band, a standard's worked example. If you
+        know the reference case, name it; that is most of the work of adding one.
