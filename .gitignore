@@ -28,3 +28,11 @@ dist/
 # secret scan in CI does not look for PII, and history is forever once pushed.
 *Filing-Record*
 docs/*.docx
+
+# Agent tool state. `.claude/settings.local.json` is covered by most people's
+# global ignore, but its rotated backups (`.bak-<timestamp>`) are not, and those
+# are the risky half: a permission allowlist is a list of commands with absolute
+# paths in them, so the file is a transcript of this machine's home directory.
+# Ignore the directory outright, repo-local so it holds on every clone rather
+# than only where a global ignore happens to be configured.
+.claude/
