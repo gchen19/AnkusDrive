@@ -26,7 +26,12 @@ python3 -m venv .venv
   harness needed: the FreeCAD-loading tests drive `freecadcmd` as a subprocess, so the
   driver interpreter never imports FreeCAD. ✅
 - **pip-wheel solvers** — `mbd` (mujoco on macOS — see below), `topology`, `optics`,
-  `fluids` all install into the `.venv` on arm64 (verified on Python 3.14). ✅
+  `fluids` all install on arm64. ⚠️ **They must go into FreeCAD's bundled Python, NOT the
+  `.venv`** — `solve_capabilities` is a worker handler, so its `find_spec` probe runs
+  under `freecadcmd` (Python 3.11), where a 3.14 venv wheel is invisible and cannot be
+  bridged with `PYTHONPATH`. Use
+  `PY=/Applications/FreeCAD.app/Contents/Resources/bin/python`. Full recipe:
+  [`docs/SOLVERS_MACOS.md`](SOLVERS_MACOS.md).
 - **Slicing (PrusaSlicer)** — `brew install --cask prusaslicer`; the app bundle is
   auto-discovered, live slice verified. ✅
 - **CFD (SU2)** — `scripts/install-solvers.sh su2` downloads the official binary into the
