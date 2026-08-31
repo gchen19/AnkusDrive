@@ -114,7 +114,7 @@ family stayed `false` until `openfoam_path` was set to the actual solver binary.
 [solvers]
 openfoam_path = "/usr/lib/openfoam/openfoam2606/platforms/linux64GccDPInt32Opt/bin/simpleFoam"
 openfoam_bashrc = "/usr/lib/openfoam/openfoam2606/etc/bashrc"
-openems_python = "/home/george/.venv-openems/bin/python3"
+openems_python = "/home/you/.venv-openems/bin/python3"
 ```
 
 Keys map `ANKUSDRIVE_FOO_BAR` → `[solvers] foo_bar` (`ankusdrive/config.py:166`). Use the

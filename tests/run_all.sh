@@ -42,6 +42,13 @@ echo "== Naming: the pre-rename name stays gone (#295; no FreeCAD) =="
 python3 tests/test_naming.py
 
 echo
+echo "== PII: nobody's machine gets into the tree (#303; no FreeCAD) =="
+# gitleaks hunts credentials, so a home directory or runner hostname sails
+# through it (#320 did). Structural rules catch ANY contributor's shared local
+# paths and tailnet hosts; SHA-256 fingerprints catch the known identifiers.
+python3 tests/test_pii.py
+
+echo
 echo "== Rename compatibility shims: legacy env / config / DP_* props (#295) =="
 # The shims that keep a <=0.4.x install working. Every one of them fails SILENTLY
 # if it regresses (an unset override auto-discovers; an unread property reads as
