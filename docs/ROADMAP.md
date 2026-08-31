@@ -538,11 +538,15 @@ Smaller items, parallelizable:
   (`check_shape` reports validity/closed/watertight + solid/shell/face/edge
   counts). Unit sanity checks remain — a typed units/quantity layer is tracked
   in issue #102.
-- "Session transcript" tool: dump the call history as a re-runnable Python
-  script — important for reproducibility and human audit.
-- Worker pool or async `fem_run` so long solves don't block the MCP channel.
-- Verify macOS Gatekeeper / quarantine path under non-interactive launch
-  (still flagged open in README).
+The three items below were the only open work left in this document. They are now
+tracked as issues, because a backlog buried at the end of a shipped-slice record is
+a backlog nobody reads:
+
+- **"Session transcript" tool** — dump the call history as a re-runnable Python
+  script, for reproducibility and human audit. → **#309**
+- **Async `fem_run`** so long solves don't block the MCP channel. → **#308**
+- **Verify the macOS Gatekeeper / quarantine path** under non-interactive launch.
+  → **#310**
 - ~~`mass_properties`, `bounding_box` — useful enough to pull in earlier than
   Slice 5; cheap.~~ ✓ both shipped.
 

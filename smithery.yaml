@@ -13,7 +13,7 @@
 # to it, and what must be true before this file may ever point at a URL.
 #
 # ---------------------------------------------------------------------------
-# ⚠ FORMAT DRIFT — verify before submitting (Phase C, docs/PUBLISHING_PLAN.md)
+# ⚠ FORMAT DRIFT — verify before submitting (Phase C; tracked in epic #303)
 # ---------------------------------------------------------------------------
 # The `startCommand: {type: stdio, commandFunction: …}` schema below is
 # Smithery's older repo-scanned format, and the URL this header used to cite
@@ -234,7 +234,7 @@ license: Apache-2.0
 # ---------------------------------------------------------------------------
 # NOTE FOR WHOEVER SHIPS #296
 # ---------------------------------------------------------------------------
-# docs/PUBLISHING_PLAN.md still lists a hosted server under "What we are
+# docs/archive/PUBLISHING_PLAN.md lists a hosted server under "What we are
 # explicitly not doing" — "a different product, not a distribution channel."
 # That was the right call for a DISTRIBUTION plan; #296 opens that different
 # product deliberately. If it ships, that section and this file's header both

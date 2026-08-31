@@ -30,7 +30,6 @@ Docs fall into two kinds:
 | [`RENDER_WORKBENCH.md`](RENDER_WORKBENCH.md) | Photoreal rendering architecture + operator guide. |
 | [`RENDER_RENDERER_INSTALL.md`](RENDER_RENDERER_INSTALL.md) | Per-renderer provisioning detail (6 backends). |
 | [`RENDER_TEXTURE_CHECK.md`](RENDER_TEXTURE_CHECK.md) | Manual QA runbook for POV-Ray textures. |
-| [`PUBLISHING_PLAN.md`](PUBLISHING_PLAN.md) | PyPI publishing plan (Phase A done; B/C optional). |
 
 ## Design records (work shipped)
 
@@ -53,6 +52,7 @@ current gaps.
 | [`DESIGN_TO_SPEC_KICKOFF.md`](archive/DESIGN_TO_SPEC_KICKOFF.md) | Epic #222, closed 2026-08-03 — wind tunnel, trust layer, performance contracts. Also carries the CFD gotchas worth not rediscovering. |
 | [`VALIDATE_THE_ARTIFACT.md`](archive/VALIDATE_THE_ARTIFACT.md) | RFC §11.10 geometry-realizes-declaration, delivered — the companion record to `KICKOFF_validate_the_artifact.md`. |
 | [`AIRTIGHT_INVARIANTS_PLAN.md`](archive/AIRTIGHT_INVARIANTS_PLAN.md) | Issue #19, closed — functional-invariant checks for enclosed-flow parts (`declare_intent`/`verify_intent`). |
+| [`PUBLISHING_PLAN.md`](archive/PUBLISHING_PLAN.md) | Getting to a pip-installable package and an MCP listing. Phases A/B shipped (`ankusdrive` on PyPI); C/D are tracked in epic #303, not here. |
 
 > **Note:** several of these are cited from source code and tests (e.g.
 > `ankusdrive/realize.py`, `ankusdrive/solvers.py`, `ankusdrive/worker.py`, `tests/`)
