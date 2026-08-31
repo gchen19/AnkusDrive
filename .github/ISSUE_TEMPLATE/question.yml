@@ -1,0 +1,17 @@
+name: Question or anything else
+description: Anything that is not a bug report or a capability request.
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Blank issues are turned off so that the chooser can catch security reports
+        before they become public — not to make you fill in a form. This one is a
+        single box on purpose.
+
+  - type: textarea
+    id: body
+    attributes:
+      label: What's on your mind
+    validations:
+      required: true
