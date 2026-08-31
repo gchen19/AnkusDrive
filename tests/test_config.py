@@ -75,7 +75,11 @@ def test_lookup_precedence_env_beats_config():
                         "[solvers]\n"
                         'su2_path = "/from/config/SU2_CFD"\n')
     try:
-        with _env(ANKUSDRIVE_CONFIG=cfg, ANKUSDRIVE_FREECADCMD=None, ANKUSDRIVE_SU2_PATH=None):
+        # ELMER_PATH is asserted ABSENT below, so it has to be cleared like the
+        # other two -- a real box may export it (the self-hosted Windows runner
+        # does), and the assert then reads that ambient value instead of nothing.
+        with _env(ANKUSDRIVE_CONFIG=cfg, ANKUSDRIVE_FREECADCMD=None,
+                  ANKUSDRIVE_SU2_PATH=None, ANKUSDRIVE_ELMER_PATH=None):
             assert config.lookup("ANKUSDRIVE_FREECADCMD") == ("/from/config/freecadcmd", "config")
             assert config.lookup("ANKUSDRIVE_SU2_PATH") == ("/from/config/SU2_CFD", "config")
             assert config.lookup("ANKUSDRIVE_ELMER_PATH") == (None, None)
