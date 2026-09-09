@@ -13,7 +13,13 @@
 set -e
 cd "$(dirname "$0")/.."
 
+# The repo .venv when present (the AppImage two-interpreter split), else the
+# running python3 — a machine where ONE env satisfies every import (hosted CI's
+# conda env, a dev box with global deps) runs the whole suite under it. Without
+# the fallback, every unguarded $VENV_PY line dies with exit 127 on a tree that
+# simply has no .venv.
 VENV_PY=".venv/bin/python3"
+[ -x "$VENV_PY" ] || VENV_PY="python3"
 
 # Lint first — mirrors the CI "Fast checks" workflow (.github/workflows/fast-checks.yml)
 # so a ruff E9/pyflakes error (unused name, bad import, syntax) is caught locally

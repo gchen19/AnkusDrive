@@ -1,34 +1,40 @@
 name: Tests
 
-# Run the AnkusDrive test suite on every push to main and every PR — on a
-# SELF-HOSTED runner. This project's test CI does NOT use GitHub-hosted
-# runners; it runs on a machine that already has FreeCAD 1.1 installed.
+# The full AnkusDrive suite on a GitHub-HOSTED runner — every push to main and
+# every PR, fork PRs included. Converted from the self-hosted Linux box ahead of
+# the public flip (#303): a hosted runner is always available, holds no home
+# directory or keys, and makes the fork-PR arbitrary-code-execution class
+# structurally impossible instead of trigger-guarded — no fork-skip `if`, no
+# log masking, nothing for a future edit to get wrong. The provisioned live
+# solver stack (OpenFOAM, openEMS, Bempp, YADE, preCICE FSI, ...) stays on the
+# self-hosted boxes in heavy-solves.yml, which is schedule/dispatch-only and
+# never runs anyone else's code.
 #
-# Because FreeCAD is already present, we don't download it via conda. Instead
-# tests/setup_local.sh reuses the installed AppImage: it puts `freecadcmd` on
-# PATH (so ankusdrive's worker resolves it via shutil.which) and points
-# .venv/bin/python3 at FreeCAD's bundled python, which already ships numpy +
-# Pillow. That feeds run_all.sh's two-interpreter split (system python3 for
-# the worker tests, .venv python3 for the numpy/Pillow tests).
+# Provisioning mirrors hosted-freecad.yml — FreeCAD 1.1 + CalculiX from
+# conda-forge on py3.11 (tests/test_worker.py asserts both; see that workflow's
+# header for the version-bound rationale) — plus the suite's driver deps in the
+# same env: `pip install -e .` brings mcp/numpy/Pillow, ruff is pinned to the
+# fast-checks version, `build` feeds the packaging test.
 #
-# Perf and reliability suites are gated behind env vars in run_all.sh and
-# intentionally NOT run here (perf is noisy, reliability costs Anthropic
-# API credits). The CPU-intensive LIVE external-solver solves (OpenFOAM,
-# standalone Elmer, openEMS, Bempp, YADE, preCICE FSI, CalculiX warpage,
-# openInjMoldSim molding — minutes each, some flaky under load) are likewise
-# gated OFF here behind RUN_HEAVY_SOLVES (tests/heavy_solve.py) — they would blow
-# the 20-min cap below — and run in the dedicated heavy-solves.yml only when a
-# change touches solver/analysis code, on demand, or nightly. The cheap
-# analytic-oracle / case-structure halves of those test files still run here.
+# run_all.sh's two-interpreter split collapses here BY DESIGN: with no .venv in
+# the tree it falls back to `python3` for everything, and this one conda env
+# satisfies every suite's imports (the split exists for the AppImage layout,
+# where the FreeCAD-bundled python and the system one each lack half the deps).
+#
+# Live external solves stay gated off (RUN_HEAVY_SOLVES unset). Solver families
+# with no binary on this image SKIP their solve halves and still run their
+# analytic-oracle / case-generation halves — the same contract as any partly
+# provisioned machine (see CONTRIBUTING.md). Their real solves run nightly in
+# heavy-solves.yml; Windows-native SU2/Elmer solves run in test-windows.yml,
+# which provisions both via scripts/install-solvers.ps1.
 
 on:
   push:
     branches:
       - main
   pull_request:
+  workflow_dispatch: {}    # manual trigger to re-run on demand
 
-# Only one run per ref needs the single self-hosted FreeCAD box — a new push to
-# a branch cancels the superseded run instead of queueing behind it.
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
@@ -38,47 +44,38 @@ permissions:
 
 jobs:
   test:
-    name: Test suite (FreeCAD 1.1, self-hosted)
-    # Fork guard (do not remove before this repo is public — see the header).
-    # A bare `pull_request:` trigger runs the FORK's code, and this job runs on a
-    # persistent machine that is somebody's actual computer: its $HOME, its keys,
-    # its network. On a public repo that is arbitrary code execution by anyone who
-    # can open a PR, which is why GitHub advises against self-hosted runners there.
-    # Same-repo PRs and pushes still run; a fork PR skips this lane and is covered
-    # by the hosted FreeCAD lane instead (.github/workflows/hosted-freecad.yml).
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    # Pin `Linux`: this box's Windows sibling shares the `ankusdrive` label, and this job's
-    # steps are bash + AppImage + a Linux two-interpreter split. The Windows suite is a
-    # separate lane (.github/workflows/test-windows.yml). The OS label is auto-applied.
-    runs-on: [self-hosted, ankusdrive, Linux]
-    # The suite is ~1 min; this only bounds a wedged freecadcmd worker so it
-    # can't hold the self-hosted runner indefinitely.
-    timeout-minutes: 20
+    name: Test suite (hosted FreeCAD 1.1)
+    runs-on: ubuntu-latest
+    # Conda solve + FreeCAD download is the long pole (~5 min observed on the
+    # worker-suite lane); the suite itself is a few minutes. 30 bounds a wedged
+    # freecadcmd worker without cutting a slow-mirror day.
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -el {0}   # login shell so the conda env stays activated
     steps:
-      # A self-hosted job's logs go public with the repo, and tool paths under the
-      # service user's home print into them (FreeCAD's Mod loader, checkout's
-      # .gitconfig copy, solver discovery). Masking $HOME and the username FIRST —
-      # before checkout, which is the first printer — redacts every later
-      # occurrence to *** (#303).
-      - name: Mask runner-local identity in logs
-        run: |
-          echo "::add-mask::$HOME"
-          echo "::add-mask::$(whoami)"
-
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - name: Wire local FreeCAD (no download; reuses installed AppImage)
-        run: |
-          bash tests/setup_local.sh
-          # expose freecadcmd to subsequent steps
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Set up Miniforge (conda-forge)
+        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: ankusdrive
+          python-version: "3.11"
 
-      - name: Sanity check — freecadcmd reachable
+      - name: Install FreeCAD 1.1 + CalculiX + suite deps
         run: |
+          # Same install as hosted-freecad.yml (see its header for why the
+          # freecad bound is `<1.2` and how ccx resolves), plus the driver deps
+          # the full suite needs beyond the worker subset.
+          conda install -y "freecad>=1.1,<1.2" calculix
+          python -m pip install -e . "ruff==0.15.15" build
+          echo "--- freecadcmd ---"
           which freecadcmd
-          freecadcmd --version 2>&1 | head -1 || true
+          freecadcmd --version 2>&1 | head -3 || true
+          echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
 
       - name: Run test suite
         run: bash tests/run_all.sh
