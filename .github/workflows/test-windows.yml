@@ -1,36 +1,30 @@
 name: Tests (Windows)
 
-# Windows counterpart of test.yml. It runs the AnkusDrive suite on a SELF-HOSTED
-# Windows runner that already has FreeCAD 1.1 installed (bundling ccx.exe + gmsh.exe,
-# so structural FEM solves for real). This lane is deliberately its own thing rather
-# than a reuse of test.yml because the Linux lane is bash + AppImage + a two-interpreter
-# split that has no Windows meaning:
+# Windows counterpart of test.yml, on a GitHub-HOSTED windows-latest runner —
+# converted from the self-hosted Windows box ahead of the public flip (#303),
+# for the same reasons as the Linux lane: always available, no home directory
+# or keys, and fork PRs run the full suite instead of skipping it. See
+# test.yml's header for the structural-security rationale.
 #
-#   - Setup is tests/setup_local.ps1 (PowerShell): one .venv from `pip install -e .`,
-#     no AppImage extraction, no PATH symlinks. FreeCAD is discovered by
-#     ankusdrive/client.py under 'C:\Program Files\FreeCAD *\bin\freecadcmd.exe' and run
-#     as a subprocess, so the driver interpreter never imports FreeCAD.
-#   - The suite is tests/run_all.ps1, which skips the Linux-only external-solver
-#     families (OpenFOAM / YADE / openEMS / bempp / preCICE — no native Windows build)
-#     and runs the Windows-native FreeCAD-resolution contract (test_windows_support.py).
+# Unlike Linux there is no conda FreeCAD for Windows, so provisioning is the
+# project's own user-facing paths end to end: the FreeCAD portable 7z (which
+# bundles ccx.exe + gmsh.exe, so structural FEM solves for real), then
+# scripts/install-solvers.ps1 for SU2 + Elmer — the exact commands
+# docs/SOLVERS_WINDOWS.md gives a user, landing where ankusdrive/solvers.py
+# discovers them natively. A green run here certifies the documented Windows
+# install path, not just the code.
 #
-# This workflow pins `Windows` and test.yml/heavy-solves.yml pin `Linux` — otherwise a
-# job could land on the wrong OS and run the other OS's shell scripts. The
-# `Windows`/`Linux` labels are applied automatically by the Actions runner from the host
-# OS. NOTE: unlike the Linux box, the Windows runner is registered WITHOUT the custom
-# `ankusdrive` label, so requiring it here leaves the job queued forever (that is exactly
-# how the first run of this lane died — 24 h in `queued`, then cancelled).
-# `[self-hosted, Windows]` uniquely selects the one Windows box in this repo.
+# The suite is tests/run_all.ps1, which skips the Linux-only external-solver
+# families (OpenFOAM / YADE / openEMS / bempp / preCICE — no native Windows
+# build) and runs the Windows-native FreeCAD-resolution contract
+# (test_windows_support.py).
 #
-# A SECOND job, `core-install`, runs on GitHub-HOSTED windows-latest across a matrix of
-# CPython versions (issue #279). It deliberately has no FreeCAD: its subject is the part
-# of the install that a fresh user hits first and that the self-hosted box — with its
-# one pre-provisioned interpreter and warm .venv — structurally cannot cover, namely
-# "does `pip install -e .` resolve a WORKING dependency set on this Python, and does the
-# MCP server then boot over stdio". That is exactly how #279 failed: a brand-new CPython
-# 3.14, a resolver error nobody could attribute, and the MCP step never reached.
-# Everything that needs real FreeCAD (`ankusdrive ping`, the solves) stays on the
-# self-hosted job above, which also runs the same scripted installer end to end.
+# A SECOND job, `core-install`, runs across a matrix of CPython versions
+# (issue #279). It deliberately has no FreeCAD: its subject is the part of the
+# install a fresh user hits first — "does `pip install -e .` resolve a WORKING
+# dependency set on this Python, and does the MCP server then boot over
+# stdio". That is exactly how #279 failed: a brand-new CPython 3.14, a
+# resolver error nobody could attribute, and the MCP step never reached.
 
 on:
   push:
@@ -38,7 +32,7 @@ on:
       - main
   pull_request:
 
-# One run per ref needs the single self-hosted Windows box — supersede, don't queue.
+# A superseded push's run is dead weight — cancel it rather than queue behind it.
 concurrency:
   group: tests-windows-${{ github.ref }}
   cancel-in-progress: true
@@ -48,41 +42,58 @@ permissions:
 
 jobs:
   test-windows:
-    name: Test suite (FreeCAD 1.1, self-hosted Windows)
-    # Fork guard (do not remove before this repo is public — see the header).
-    # A bare `pull_request:` trigger runs the FORK's code, and this job runs on a
-    # persistent machine that is somebody's actual computer: its $HOME, its keys,
-    # its network. On a public repo that is arbitrary code execution by anyone who
-    # can open a PR, which is why GitHub advises against self-hosted runners there.
-    # Same-repo PRs and pushes still run; a fork PR skips this lane and is covered
-    # by the hosted FreeCAD lane instead (.github/workflows/hosted-freecad.yml).
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Windows]
-    # The Windows suite (no live external solves) is a few minutes; this only bounds a
-    # wedged freecadcmd.exe worker so it can't hold the runner indefinitely.
-    timeout-minutes: 30
+    name: Test suite (hosted Windows, FreeCAD 1.1)
+    runs-on: windows-latest
+    # FreeCAD portable is a 418 MB download + 7z extraction and the SU2/Elmer
+    # zips add ~200 MB more, so provisioning is the long pole (~6-8 min); the
+    # suite itself is a few minutes. 45 bounds a wedged freecadcmd.exe worker
+    # without cutting a slow-mirror day.
+    timeout-minutes: 45
     defaults:
       run:
-        # Only Windows PowerShell 5.1 is guaranteed on the box (pwsh/Core is not
-        # installed), so use `powershell`. The scripts are 5.1-compatible.
+        # Windows PowerShell 5.1: the repo's scripts must stay 5.1-compatible
+        # because that is what a stock Windows box has. (The hosted image also
+        # carries pwsh; the solver installer step uses it, as its docs do.)
         shell: powershell
     steps:
-      # Same masking as the POSIX lanes (#303): a self-hosted job's logs go public
-      # with the repo, and profile paths print into them. Before checkout, which
-      # is the first printer.
-      - name: Mask runner-local identity in logs
-        run: |
-          echo "::add-mask::$env:USERPROFILE"
-          echo "::add-mask::$env:USERNAME"
-
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - name: Set up venv + FreeCAD-viable deps (no download; reuses installed FreeCAD)
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        id: py
+        with:
+          python-version: "3.13"
+
+      - name: Install FreeCAD 1.1 portable (bundles ccx.exe + gmsh.exe)
+        run: |
+          # The portable 7z, not the installer: no elevation, no shortcuts, and
+          # the same payload — including the bundled CalculiX + gmsh the FEM
+          # solves shell out to. Discovery is by $env:ANKUSDRIVE_FREECADCMD, the
+          # first thing ankusdrive/client.py checks, so no PATH edits either.
+          $ProgressPreference = 'SilentlyContinue'
+          $url = 'https://github.com/FreeCAD/FreeCAD/releases/download/1.1.3/FreeCAD_1.1.3-Windows-x86_64-py311.7z'
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\freecad.7z"
+          & 'C:\Program Files\7-Zip\7z.exe' x "$env:RUNNER_TEMP\freecad.7z" "-o$env:RUNNER_TEMP\FreeCAD" -y | Select-Object -Last 2
+          $cmd = Get-ChildItem "$env:RUNNER_TEMP\FreeCAD" -Recurse -Filter freecadcmd.exe | Select-Object -First 1
+          if (-not $cmd) { throw 'freecadcmd.exe not found in the portable archive' }
+          $ccx = Get-ChildItem "$env:RUNNER_TEMP\FreeCAD" -Recurse -Filter ccx.exe | Select-Object -First 1
+          if (-not $ccx) { Write-Warning 'no bundled ccx.exe - FEM solves will skip' }
+          "ANKUSDRIVE_FREECADCMD=$($cmd.FullName)" | Add-Content $env:GITHUB_ENV
+
+      - name: Install SU2 + Elmer via the project's own installer
+        # Dogfoods scripts/install-solvers.ps1 - the exact commands
+        # docs/SOLVERS_WINDOWS.md gives a user - into %LOCALAPPDATA%\AnkusDrive\
+        # solvers, where ankusdrive/solvers.py probes natively. Without these the
+        # SU2/Elmer solve halves would SKIP silently (#316's failure shape), and
+        # heavy-solves.yml has no Windows job to catch them elsewhere.
+        shell: pwsh
+        run: .\scripts\install-solvers.ps1 su2 elmer
+
+      - name: Set up venv + FreeCAD-viable deps
+        env:
+          ANKUSDRIVE_PY: ${{ steps.py.outputs.python-path }}
         run: .\tests\setup_local.ps1
 
-      - name: Sanity check — ankusdrive resolves FreeCAD
+      - name: Sanity check - ankusdrive resolves FreeCAD
         run: |
           .\.venv\Scripts\python.exe -m ankusdrive doctor --no-boot
           # doctor exits nonzero if FreeCAD is unresolved -> the run fails fast here.
@@ -90,26 +101,14 @@ jobs:
       - name: Run Windows test suite
         run: .\tests\run_all.ps1
 
-      # The user-facing installer, end to end, on a box that HAS FreeCAD (#279). Into a
-      # throwaway venv so the suite's own .venv above is untouched. It fails the step if
-      # the MCP stdio handshake doesn't complete — the acceptance criterion of #279.
+      # The user-facing installer, end to end, on a runner that HAS FreeCAD
+      # (#279). Into a throwaway venv; RUNNER_TEMP is ephemeral on a hosted
+      # runner, so no cleanup step is needed.
       - name: Scripted core install (scripts\install-core.ps1)
-        run: |
-          # Name the interpreter explicitly rather than leaning on the script's
-          # auto-discovery: the Actions service runs as NETWORK SERVICE, whose PATH has
-          # no per-user Python (that is how this lane first died). The suite's own venv
-          # was already built from a working one, so reuse its base.
-          # sys._base_executable, not base_prefix + '\python.exe': FreeCAD's bundled
-          # interpreter (setup_local.ps1's last-resort choice) lives in bin\, so the
-          # naive join would not exist.
-          $base = & .\.venv\Scripts\python.exe -c 'import sys; print(sys._base_executable)'
-          .\scripts\install-core.ps1 -Python "$base" -VenvDir "$env:RUNNER_TEMP\ankusdrive-core-venv"
-
-      - name: Remove the throwaway core-install venv
-        if: always()
-        run: |
-          Remove-Item -Recurse -Force "$env:RUNNER_TEMP\ankusdrive-core-venv" -ErrorAction SilentlyContinue
-          exit 0
+        run: >
+          .\scripts\install-core.ps1
+          -Python "${{ steps.py.outputs.python-path }}"
+          -VenvDir "$env:RUNNER_TEMP\ankusdrive-core-venv"
 
   core-install:
     name: Core install (hosted Windows, Python ${{ matrix.python-version }})
