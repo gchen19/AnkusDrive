@@ -95,6 +95,16 @@ jobs:
     env:
       RUN_HEAVY_SOLVES: "1"
     steps:
+      # A self-hosted job's logs go public with the repo, and tool paths under the
+      # service user's home print into them (FreeCAD's Mod loader, checkout's
+      # .gitconfig copy, solver discovery). Masking $HOME and the username FIRST —
+      # before checkout, which is the first printer — redacts every later
+      # occurrence to *** (#303).
+      - name: Mask runner-local identity in logs
+        run: |
+          echo "::add-mask::$HOME"
+          echo "::add-mask::$(whoami)"
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Wire local FreeCAD (no download; reuses installed AppImage)
@@ -131,6 +141,16 @@ jobs:
       # docs/MACOS.md ("Self-hosted CI runner") has the setup.
       ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # the preflight is its own step, below
     steps:
+      # A self-hosted job's logs go public with the repo, and tool paths under the
+      # service user's home print into them (FreeCAD's Mod loader, checkout's
+      # .gitconfig copy, solver discovery). Masking $HOME and the username FIRST —
+      # before checkout, which is the first printer — redacts every later
+      # occurrence to *** (#303).
+      - name: Mask runner-local identity in logs
+        run: |
+          echo "::add-mask::$HOME"
+          echo "::add-mask::$(whoami)"
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # Fail here, not four minutes into a coupled solve. A stopped VM, a dropped

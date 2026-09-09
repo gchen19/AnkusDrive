@@ -69,6 +69,14 @@ jobs:
         # installed), so use `powershell`. The scripts are 5.1-compatible.
         shell: powershell
     steps:
+      # Same masking as the POSIX lanes (#303): a self-hosted job's logs go public
+      # with the repo, and profile paths print into them. Before checkout, which
+      # is the first printer.
+      - name: Mask runner-local identity in logs
+        run: |
+          echo "::add-mask::$env:USERPROFILE"
+          echo "::add-mask::$env:USERNAME"
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up venv + FreeCAD-viable deps (no download; reuses installed FreeCAD)
