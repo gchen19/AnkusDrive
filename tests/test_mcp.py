@@ -94,7 +94,7 @@ def _imports_mcp(python: Path) -> bool:
 
 try:
     from mcp import ClientSession, StdioServerParameters  # noqa: E402
-    from mcp.client.stdio import stdio_client  # noqa: E402
+    from mcp.client.stdio import get_default_environment, stdio_client  # noqa: E402
 except ImportError:
     _tried = _candidate_pythons()
     if not os.environ.get(_REEXEC_FLAG):
@@ -116,6 +116,15 @@ SERVER_PARAMS = StdioServerParameters(
     command=SERVER_PYTHON,
     args=["-m", "ankusdrive", "mcp"],
     cwd=str(REPO),
+    # env=None makes stdio_client spawn the server with a SCRUBBED default
+    # environment, not the caller's — so every ANKUSDRIVE_* override (a hosted
+    # runner's freecadcmd, a runner .env's solver paths) silently vanished and
+    # the suite tested a server with amnesia about the machine's wiring. It
+    # passed anyway wherever FreeCAD was findable by PATH or glob luck; hosted
+    # Windows, where the wiring exists ONLY as env vars, was the first machine
+    # honest enough to fail. Forward them the way a real MCP host's config does.
+    env={**get_default_environment(),
+         **{k: v for k, v in os.environ.items() if k.startswith("ANKUSDRIVE_")}},
 )
 
 
