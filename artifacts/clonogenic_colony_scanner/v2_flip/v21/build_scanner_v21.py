@@ -177,7 +177,7 @@ screen = box(DSP_CX - 20.4, CF_Y0 - 2.62, DSP_CZ - 15.3, DSP_CX + 20.4, CF_Y0 - 
 # Blender and the explorer rebuild it from cables.json as smooth curves with per-conductor colours.
 RZ = TOWER_Z1 + 0.4                                     # ribbon lying on the top plate
 PIC = PIY + 1.6                                         # Pi component face
-SOCK_Y = PIC + 19.0 + 10.1 + 3.5                       # HAT socket mid-height: header 19, HAT pcb, socket 7 tall (101.7..108.7)
+SOCK_Y = PIC + 23.0 + 1.6 + 4.25                       # HAT header mid-height: 23 mm stacking header, HAT pcb 1.6, right-angle header 8.5 tall
 # rigid connector bodies (part "plugs")
 usbc_plug = rounded_box(PI_X0 + 11.2 - 6.0, PIC + 1.6 - 3.5, PI_Z0 - 24.0, PI_X0 + 11.2 + 6.0, PIC + 1.6 + 3.5, PI_Z0 - 1.5, 1.5)
 rj45_plug = (box(PI_X0 + 85 + 3.0, PIC + 6.75 - 4.0, PI_Z0 + 10.25 - 5.85, PI_X0 + 85 + 3.0 + 21.0, PIC + 6.75 + 4.0, PI_Z0 + 10.25 + 5.85)
@@ -201,9 +201,9 @@ ROUTES = {
                      [PI_X0 - 3.0, PIY + 9.0, PI_Z0 + 40.0], [PI_X0 - 3.0, SOCK_Y - 3.0, PI_Z0 + 31.0], [PI_X0 + 2.0, SOCK_Y, PI_Z0 + 23.0],
                      [PI_X0 + 28.0, SOCK_Y, PI_Z0 + 23.0], [PI_X0 + 38.0, SOCK_Y, PI_Z0 + 23.0]]},
   # 5-way button pigtail: lugs -> around the +X side in front of the port stacks -> into the socket from +X
-  "loom_button": {"kind": "loom", "wire_r": 0.55, "bend_r": 7.0, "colors": ["black", "red", "green", "blue", "white"],
+  "loom_button": {"kind": "loom", "wire_r": 0.55, "bend_r": 7.0, "colors": ["red", "black", "white", "yellow", "green", "blue", "brown"],
              "pts": [[BTN_X, BAY_Y0 + 7.0, BTN_Z - 5.0], [BTN_X + 3.0, BAY_Y0 + 11.0, BTN_Z - 10.0], [PI_X0 + 88.0, PIC + 13.5, PI_Z0 + 58.0],
-                     [PI_X0 + 88.0, SOCK_Y - 7.0, PI_Z0 + 46.0], [PI_X0 + 82.0, SOCK_Y, PI_Z0 + 36.0], [PI_X0 + 73.0, SOCK_Y, PI_Z0 + 35.0]]},
+                     [PI_X0 + 88.0, SOCK_Y - 7.0, PI_Z0 + 46.0], [PI_X0 + 82.0, SOCK_Y, PI_Z0 + 36.0], [PI_X0 + 72.8, SOCK_Y, PI_Z0 + 35.0]]},
   "power": {"kind": "round", "r": 1.75, "bend_r": 14.0, "color": "white",
              "pts": [[PI_X0 + 11.2, PIC + 1.6, PI_Z0 - 24.0], [PI_X0 + 11.2, PIC + 1.6, PI_Z0 - 60.0], [PI_X0 + 11.2, PIC + 16, PAD_R],
                      [PI_X0 + 11.2, 137.0, PAD_R], [PI_X0 + 11.2, 146.0, -5.1 + PAD_R], [PI_X0 + 11.2, 300.0, -5.1 + PAD_R]]},
@@ -217,7 +217,7 @@ ROUTES = {
 }
 def _v(p): return V(*p)
 ribbon = flat_ribbon([_v(p) for p in ROUTES["ribbon"]["pts"]], 15.0, 0.4, V(1, 0, 0))
-harness = sweep_round([_v(p) for p in ROUTES["loom_display"]["pts"]], 1.9, 7.0).fuse(sweep_round([_v(p) for p in ROUTES["loom_button"]["pts"]], 1.5, 7.0))
+harness = sweep_round([_v(p) for p in ROUTES["loom_display"]["pts"]], 1.9, 7.0).fuse(sweep_round([_v(p) for p in ROUTES["loom_button"]["pts"]], 1.9, 7.0))
 cables = sweep_round([_v(p) for p in ROUTES["power"]["pts"]], 1.75, 14.0).fuse(sweep_round([_v(p) for p in ROUTES["ethernet"]["pts"]], 2.75, 22.0)).fuse(sweep_round([_v(p) for p in ROUTES["pad_usb"]["pts"]], 1.6, 16.0)).fuse(pad_plug)
 json.dump(ROUTES, open(OUT + "cables.json", "w"), indent=1)
 magnets = Part.makeCompound([cyl(3, 2, s*77.5, Y_FRONT - 0.5 - 2.0, 20, V(0, 1, 0)) for s in (1, -1)] + [cyl(3, 2, s*77.5, Y_FRONT, 20, V(0, 1, 0)) for s in (1, -1)]

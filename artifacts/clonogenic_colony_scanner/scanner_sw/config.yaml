@@ -51,8 +51,9 @@ camera:
   top_exposure_us: 20000
 gpio:
   led_pin: 5                      # MOSFET gate for the pad's 5 V line (optional; harmless if unwired)
-  button_pin: 17                  # 19 mm anti-vandal switch to GND
-  status_led_pin: 27              # = the ring's green leg (ui.py drives the full RGB ring on 22/27/23)
+  button_pin: 17                  # 19 mm anti-vandal switch to GND (ChromaTek C -> GPIO17, NO -> GND)
+  status_led_pin: 27              # spare status output (unused with the NeoPixel ring)
+  ring: neopixel_spi1             # ChromaTek NeoPixel ring, data on SPI1 MOSI = GPIO20 (dtoverlay=spi1-1cs); or "gpio" for a 3-leg RGB ring on ring_pins
   ring_pins: [22, 27, 23]
   display: {dc: 25, rst: 24, backlight: 18, spi: 0}
 analysis:

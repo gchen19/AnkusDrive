@@ -6,12 +6,12 @@ SRC_REF = {
                "long edge (USB-C centred 11.2 from the corner), 2x USB-A double stacks + RJ45 on the short edge; 40-pin header along the "
                "opposite long edge; two 22-pin MIPI connectors between HDMI and header side",
     "cooler":  "Raspberry Pi Active Cooler: extruded heatsink ~46 x 36 x 14 with 30 mm fan; overall ~20 mm above the PCB",
-    "hat":     "Adafruit Perma-Proto HAT 2310: 65 x 56.5 x 1.6, 2x20 socket, camera-cable slot; tall stacking header 2x20 pins 19 mm",
+    "hat":     "Adafruit Perma-Proto HAT 2310: 65 x 56.5 x 1.6, 2x20 socket, camera-cable slot; Adafruit 1979 extra-tall 2x20 stacking header, 23 mm body",
     "hqcam":   "RPi HQ Camera drawing RP-008200: 38 x 38 PCB, holes d2.5 at 4 from edges, CS ring d30.75, housing d36, mount 12.04 "
                "from PCB back, tripod block 13.97 wide x 5.71 tall protruding 6.54 behind, 15-pin FPC at the top edge",
     "lens":    "Arducam 8 mm CS lens (LN-B0186?): d28 x 23 mm, focus ring + aperture ring, front element ~d12",
-    "display": "Waveshare 2inch LCD Module: 58 x 35 mm outline, active 40.8 x 30.6, 8-pin 2.54 header, mounting holes at the corners (VERIFY spacing)",
-    "button":  "Adafruit 3425 = PM192-11E/42RGB/12V/S datasheet: d19 hole (panel <= 10), bezel d22 x 1.8, M19x1, 38.2 mm behind the bezel, hex nut 25.2 across corners, 7 solder lugs, common-anode RGB ring",
+    "display": "Waveshare 2inch LCD Module (SKU 1746): 58 x 35 mm outline, active 40.8 x 30.6, PH2.0 8-pin socket with a 20 cm cable to Dupont females supplied, corner mounting holes (VERIFY spacing)",
+    "button":  "Adafruit 5236 ChromaTek 19-B-M-F1 (Adafruit 3425 is discontinued): d19 hole (panel <= 11.4), 5 V NeoPixel ring, momentary, detachable 7-wire harness; body modelled on the PM192 drawing (bezel d22 x 1.8, M19x1, 38.2 mm behind the bezel) - VERIFY depth against the ChromaTek drawing",
     "pad":     "Huion L4S: 360 x 270 x 5 mm, lit area 310 x 210, touch switch on the front-left edge, micro-USB on the left edge",
     "plate":   "CELLTREAT 6 Well Plate drawing 7/2/20: 127.8 x 85.38 x 20.2, lid 127.0 x 84.8 x 9.9, wells d34.7/35.5 x 17.2, one chamfered corner",
     "cables":  "RPi 22-to-15-pin camera cable 300 mm: 12.6 mm wide at the Pi 5 end, 16 mm at the camera end; Cat6 d5.5 + RJ45 11.7 x 21 x 8; USB-C d4",
@@ -155,17 +155,14 @@ def make_pi(x0, y_pcb, z0):
     pi = pcb
     for p in parts: pi = pi.fuse(p)
     # tall stacking header + Perma-Proto HAT
-    hdr = box(x0 + 7.1, yc + 8.5, z0 + 56 - 3.5 - 5.1, x0 + 7.1 + 50.8, yc + 8.5 + 19.0, z0 + 56 - 3.5 + 2.5)
-    hy = yc + 8.5 + 19.0 - 8.5
+    hdr = box(x0 + 7.1, yc, z0 + 56 - 3.5 - 5.1, x0 + 7.1 + 50.8, yc + 23.0, z0 + 56 - 3.5 + 2.5)     # Adafruit 1979: 23 mm female body over the Pi's pins
+    hy = yc + 23.0 - 8.5
     hat = box(x0 + 10, hy + 8.5, z0, x0 + 10 + 65, hy + 8.5 + 1.6, z0 + 56.5)
     hat = hat.cut(box(x0 + 41, hy + 8, z0 - 1, x0 + 41 + 20, hy + 11, z0 + 8))                        # camera-cable slot
-    # side-entry JST-XH sockets (S8B-XH-A / S5B-XH-A, 7.0 tall): the 8-way opens toward -X, the 5-way toward +X,
-    # so both pigtails run along the HAT surface and neither has to bend away from the control face 2.3 mm in front
-    hat = hat.fuse(box(x0 + 38, hy + 10.1, z0 + 20, x0 + 38 + 20, hy + 10.1 + 7, z0 + 20 + 6))        # 8-way, display; entry face at x0+38
-    hat = hat.fuse(box(x0 + 60.5, hy + 10.1, z0 + 32, x0 + 60.5 + 12.5, hy + 10.1 + 7, z0 + 32 + 6))  # 5-way, button; entry face at x0+73
-    hat = hat.fuse(box(x0 + 44, hy + 10.1, z0 + 40, x0 + 44 + 19.3, hy + 10.1 + 4.0, z0 + 40 + 6.4))  # ULN2003A DIP-16
-    for hx in (25, 33, 41):                                                                          # three 220 ohm resistors
-        hat = hat.fuse(cyl(1.1, 6, x0 + hx, hy + 10.1 + 1.2, z0 + 36, V(0, 0, 1)))
+    # two right-angle 2.54 mm pin headers (8.5 mm tall): the display's own PH2.0-to-Dupont cable plugs onto the 8-pin one
+    # (opening toward -X), the ChromaTek button's 7-wire harness onto the 7-pin one (opening toward +X). Nothing else on the HAT.
+    hat = hat.fuse(box(x0 + 38, hy + 10.1, z0 + 20, x0 + 38 + 20.3, hy + 10.1 + 8.5, z0 + 20 + 6))      # 8-pin, display; entry face at x0+38
+    hat = hat.fuse(box(x0 + 55, hy + 10.1, z0 + 32, x0 + 55 + 17.8, hy + 10.1 + 8.5, z0 + 32 + 6))      # 7-pin, button; entry face at x0+72.8
     return pi, hdr.fuse(hat)
 
 # ---------------------------------------------------------------- HQ camera + 8 mm lens (board in the XY plane, sensor at z_sensor, lens hangs -Z)

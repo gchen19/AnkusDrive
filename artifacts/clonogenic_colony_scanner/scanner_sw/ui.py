@@ -1,12 +1,12 @@
 """Front-panel UI for the scanner: a 2-inch 320x240 ST7789 SPI display and the RGB ring of the
 19 mm pushbutton. One state machine, one place that decides what the user should be doing.
 
-Wiring (Pi 5, BCM numbers; SPI0), through the two JST-XH sockets on the Perma-Proto HAT:
-  J2 display (8)  3V3 · GND · MOSI GPIO10 · SCLK GPIO11 · CS GPIO8 (CE0) · DC GPIO25 · RST GPIO24 · BL GPIO18 (PWM)
-  J1 button  (5)  switch: C1 -> GPIO17, NO1 -> GND (internal pull-up). Ring (PM192, common-ANODE "C+", 6 V version with
-                  built-in resistors): C+ -> 5 V; Red/Green/Blue cathodes -> ULN2003 outputs on the HAT; ULN2003 inputs <- GPIO22/27/23.
-                  The ULN inverts nothing from the GPIO's point of view: GPIO high = colour on, so RING_ACTIVE_LOW stays False.
-Deps on the Pi:  pip install luma.lcd pillow   (luma >= 2.4 uses lgpio on the Pi 5 automatically)
+Wiring (Pi 5, BCM numbers), through the two right-angle headers on the Perma-Proto HAT:
+  display  (8, the module's own PH2.0-to-Dupont cable)  3V3 · GND · MOSI GPIO10 · SCLK GPIO11 · CS GPIO8 (CE0) · DC GPIO25 · RST GPIO24 · BL GPIO18
+  button   (7, the ChromaTek 19-B-M-F1 harness)          switch C -> GPIO17, NO -> GND (internal pull-up); NeoPixel +5V -> 5V, GND -> GND,
+                                                           DIN -> GPIO20 (SPI1 MOSI; add `dtoverlay=spi1-1cs` to /boot/firmware/config.txt)
+Deps on the Pi:  pip install luma.lcd pillow adafruit-blinka adafruit-circuitpython-neopixel-spi
+Legacy: config `gpio.ring: gpio` drives a 3-leg common-anode RGB ring on ring_pins through a ULN2003 instead.
 """
 from __future__ import annotations
 import threading, time
@@ -29,6 +29,27 @@ STATES = {
 RING = {"ready": "ready", "labels": "busy", "colonies": "busy", "counting": "busy", "flip": "flip", "done": "done", "error": "error", "recovered": "error", "flash": "busy", "focus": "focus"}
 COLORS["done"] = (170, 90, 255)
 
+class Ring:
+    """The button's light ring. NeoPixel over SPI1 by default (ChromaTek 19-B-M-F1); a 3-leg RGB ring on GPIO as fallback."""
+    def __init__(self):
+        import yaml, pathlib
+        g = yaml.safe_load(open(pathlib.Path(__file__).with_name("config.yaml")))["gpio"]
+        self.kind = g.get("ring", "neopixel_spi1")
+        if self.kind == "gpio":
+            from gpiozero import RGBLED
+            self.led = RGBLED(*g["ring_pins"], active_high=not RING_ACTIVE_LOW)
+        else:
+            import board, busio, neopixel_spi
+            spi = busio.SPI(board.SCK_1, MOSI=board.MOSI_1, MISO=board.MISO_1)
+            self.px = neopixel_spi.NeoPixel_SPI(spi, 1, pixel_order=neopixel_spi.GRB, auto_write=True, brightness=0.6)
+    @property
+    def color(self): return getattr(self, "_c", (0, 0, 0))
+    @color.setter
+    def color(self, rgb):                      # rgb in 0..1
+        self._c = rgb
+        if self.kind == "gpio": self.led.color = rgb
+        else: self.px[0] = tuple(int(255 * c) for c in rgb)
+
 class Panel:
     def __init__(self, simulate: bool = False):
         self.sim = simulate
@@ -40,7 +61,7 @@ class Panel:
             from gpiozero import RGBLED, PWMLED
             self.dev = st7789(spi(port=0, device=0, gpio_DC=25, gpio_RST=24), width=320, height=240, rotate=0)
             self.bl = PWMLED(18); self.bl.value = 0.8
-            self.ring = RGBLED(22, 27, 23, active_high=not RING_ACTIVE_LOW)
+            self.ring = Ring()
         self.font_big = self._font(30); self.font = self._font(20); self.font_small = self._font(15)
         threading.Thread(target=self._loop, daemon=True).start()
 

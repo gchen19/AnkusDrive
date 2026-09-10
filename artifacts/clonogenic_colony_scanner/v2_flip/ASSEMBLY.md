@@ -52,14 +52,16 @@ slicer and reprint the frame only.
 
 ## 2b. Wiring: 8 cm, inside the cassette
 
-7. An 8-way JST-XH pigtail from the display header (3V3, GND, MOSI, SCLK, CS, DC, RST, BL) and a
-   5-way from the button's lugs, both to the sockets on the HAT. Everything stays inside the
-   cassette; nothing enters the tube.
-8. On the **Perma-Proto HAT** (on a tall stacking header so it clears the Active Cooler), solder two
-   side-entry JST-XH sockets (8-way opening toward the Pi's left edge, 5-way toward the right, so both looms lie along the HAT with 2.3 mm to the control face) and a ULN2003 (16-pin DIP), wired to: switch → GPIO 17 and GND; ring C+ → 5 V,
-   ring R/G/B → ULN2003 outputs 1–3, ULN inputs 1–3 ← GPIO 22/27/23, ULN GND → GND; display → 3V3,
-   GND, MOSI 10, SCLK 11, CE0 8, DC 25, RST 24, BL 18. The HAT has the camera-ribbon cutout, so the
-   CSI cable still reaches the Pi.
+7. **HAT.** Solder two right-angle 2.54 mm pin headers to the Perma-Proto HAT: an 8-pin one whose
+   pins point toward the Pi's left edge (the display's own PH2.0-to-Dupont cable plugs onto it) and a
+   7-pin one pointing toward the right edge (the ChromaTek button's harness). Wire the 8-pin to 3V3,
+   GND, MOSI GPIO 10, SCLK GPIO 11, CE0 GPIO 8, DC GPIO 25, RST GPIO 24, BL GPIO 18. Wire the 7-pin:
+   NeoPixel +5V → 5 V, GND → GND, DIN → GPIO 20 (SPI1 MOSI), switch C → GPIO 17, NO → GND; NC and
+   DOUT unused. Put the 23 mm stacking header under the HAT. Add `dtoverlay=spi1-1cs` to
+   `/boot/firmware/config.txt`. Nothing else goes on the HAT.
+8. The display's cable runs from its header down the channel beside the Pi's left edge and across
+   the HAT; the button's harness down the right side in front of the USB stacks. Both stay inside the
+   cassette.
 9. The light pad's USB lead plugs into one of the Pi's USB ports in the side window: **one power
    cable** (the Pi's 27 W supply) runs the whole instrument.
 

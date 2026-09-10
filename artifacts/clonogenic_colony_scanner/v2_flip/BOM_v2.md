@@ -1,41 +1,51 @@
-# Parts list — variant B rev 3.0, direct-to-Mac (2026-09 prices, US list, rounded)
+# Parts list — variant B rev 3.1, direct-to-Mac (prices checked on the linked pages, 2026-09-09)
 
-Raspberry Pi prices rose in 2026 (memory-driven); the 2 GB boards are enough here because the Pi
-only captures — your Mac runs the models.
+The Pi only captures; your Mac runs the models, so the 2 GB boards are enough. Every link below was
+opened and the price read off the page that day; "≈" marks a price the page did not show in text.
 
-## Buy
+## Cart 1 — PiShop.us (official reseller), ≈ $172
 
-| # | Part | Qty | USD | Where / notes |
+| # | Part | Qty | USD | Link |
 |---|---|---|---|---|
-| 1 | **Raspberry Pi 5, 2 GB** (or Pi 4 Model B 2 GB, $45, if the Pi 5 2 GB is out of stock; both have the one camera port this needs) | 1 | 50 | official resellers: PiShop, Adafruit, CanaKit |
-| 2 | Raspberry Pi 27 W USB-C power supply (Pi 4: the 15 W one) | 1 | 12 | |
-| 3 | Raspberry Pi Active Cooler (Pi 5) | 1 | 5 | skip for a Pi 4 |
-| 4 | microSD 32 GB, A2 class | 1 | 8 | |
-| 5 | **Raspberry Pi High Quality Camera** (IMX477, CS mount) | 1 | 70 | official list; Amazon runs higher |
-| 6 | **Arducam CS-mount 8 mm lens for the HQ camera, manual focus + adjustable aperture** | 1 | 28 | arducam.com or Amazon (B08GLZFY81). 50° field, 1/2.3" |
-| 7 | Camera cable: Pi 5 needs the 22-pin-to-15-pin 300 mm; Pi 4 uses the 15-pin cable in the HQ camera box | 1 | 4 | |
-| 8 | **Huion L4S LED light pad, A4** | 1 | 40 | see "Why this pad" |
-| 9 | **19 mm stainless anti-vandal momentary pushbutton with RGB ring**, Adafruit **3425** (PM192-11E/42RGB, 6 V ring) | 1 | 10 | Ø19.4 hole, 38 mm behind the panel, IP67; ring = status light |
-| 10 | **Waveshare 2inch LCD Module** (ST7789V, 58 × 35 mm, 40.8 × 30.6 active, 8-pin header) | 1 | 14 | in the printed bezel; PCB on four 5 mm bosses, 4 × M2 × 6 |
-| 11 | **Perma-Proto HAT** (Adafruit 2310) + **tall 2×20 stacking header** (~19 mm pins) | 1 + 1 | 12 | the panel harness plugs in here |
-| 11b | JST-XH 2.5 mm pigtails: 8-way and 5-way, 100 mm, with 2 side-entry sockets (S8B-XH-A, S5B-XH-A); ULN2003 DIP | 1 set | 6 | inside the cassette; the ULN switches the ring |
-| 12 | Black **matte** PETG or ASA filament | 0.65 kg | 22 | five parts in rev 2.1 (frame, tower with Pi bay, Pi cover, camera cover, door) |
-| 13 | N35 disc magnets Ø6 × 2 mm | 8 | 4 | door 4, Pi sled 4 |
-| 14 | M2.5 × 8 screws (camera to bosses) | 4 | 2 | self-tap into Ø2.2 PETG, or heat-set inserts |
-| 15 | M2.5 × 8 screws (Pi to the sled bosses) + M2 × 6 (display) | 4 + 4 | 4 | rev 2.2: no cover screws — the sled is held by magnets |
-| 16 | Felt dots, 10 mm | 4 | 1 | under the frame corners |
-| 17 | Ethernet cable, Cat 5e/6, 1–2 m | 1 | 5 | |
-| 18 | USB-C to Gigabit Ethernet adapter for the Mac | 1 | 20 | Anker, UGREEN, Apple ($30); any UVC-free plain adapter |
-| 19 | (rev 2.1: no hinge pins — the door snaps onto printed pins) | — | 0 | |
+| 1 | **Raspberry Pi 5, 2 GB** | 1 | 65.00 | https://www.pishop.us/product/raspberry-pi-5-2gb/ |
+| 1b | *or* Raspberry Pi 4 Model B, 2 GB (fits the same cassette; then skip the cooler, use the 15 W supply and the 15-pin cable in the camera box) | 1 | 55.00 | https://www.pishop.us/product/raspberry-pi-4-model-b-2gb/ |
+| 2 | Raspberry Pi 27 W USB-C power supply, white, US | 1 | 12.95 | https://www.pishop.us/product/raspberry-pi-27w-usb-c-power-supply-white-us/ |
+| 3 | Raspberry Pi Active Cooler (Pi 5) | 1 | 10.95 | https://www.pishop.us/product/raspberry-pi-active-cooler/ |
+| 4 | **Raspberry Pi HQ Camera, CS mount** (IMX477; box includes the C-CS adapter and a 200 mm 15-pin cable) | 1 | 55.00 | https://www.pishop.us/product/raspberry-pi-hq-camera-cs/ |
+| 5 | Camera cable for Raspberry Pi 5, 22-to-15 pin, choose **300 mm** | 1 | 3.95 | https://www.pishop.us/product/camera-cable-for-raspberry-pi-5/ |
+| 6 | Official Raspberry Pi microSD, 32 GB, A2, blank | 1 | ≈ 10 | https://www.pishop.us/product/raspberry-pi-sd-card-32gb/ |
+| 7 | **Waveshare 2inch IPS LCD Module, 240 × 320, ST7789** (SKU 1746; comes with its PH2.0 8-pin 20 cm cable to Dupont females) | 1 | 13.95 | https://www.pishop.us/product/240-320-general-2inch-ips-lcd-display-module/ |
 
-**Total ≈ $315** (rev 2.2: display, ring-lit button, HAT and harness) (≈ $265 if you already own the Ethernet adapter; ≈ $255 with the cheap A5 pad).
+## Cart 2 — Adafruit, ≈ $31
 
-Optional, under the $500 ceiling:
-- Logic-level MOSFET module ($4) on GPIO 18 to switch the pad's 5 V line, for automatic dark frames.
-- Amber 590 nm LED strip in a second cove is *not* applicable here (the pad is the light); an amber
-  gel filter sheet (Lee 158, $8) laid on the pad under the frame gives the same crystal-violet
-  contrast boost and is trivially removable.
-- Pi Touch Display 2 ($60) is unnecessary now: the Mac's browser is the screen.
+| # | Part | Qty | USD | Link |
+|---|---|---|---|---|
+| 8 | **ChromaTek 19 mm rugged momentary metal pushbutton with NeoPixel ring, 19-B-M-F1** (Adafruit 3425, the 6 V RGB one this design started with, is discontinued; the 16 mm RGB, 3350, is out of stock) | 1 | 19.95 | https://www.adafruit.com/product/5236 |
+| 9 | Adafruit Perma-Proto HAT for Pi Mini Kit, no EEPROM | 1 | 4.95 | https://www.adafruit.com/product/2310 |
+| 10 | Stacking header 2×20, extra tall (23 mm body), clears the Active Cooler | 1 | ≈ 3 | https://www.adafruit.com/product/1979 |
+| 11 | Right-angle 2.54 mm male pin header strip (break off 8 and 7 pins) | 1 | ≈ 2 | any; Adafruit 1540 or an Amazon strip |
+
+## Cart 3 — Amazon and the print service, ≈ $190
+
+| # | Part | Qty | USD | Link |
+|---|---|---|---|---|
+| 12 | **Arducam CS-mount 8 mm lens for the HQ camera, manual focus and adjustable aperture** | 1 | ≈ 28 | https://www.amazon.com/dp/B08GLZFY81 (maker page: https://www.arducam.com/arducam-cs-mount-lens-for-raspberry-pi-hq-camera-8mm-focal-length-with-manual-focus-and-adjustable-aperture.html) |
+| 13 | **Huion L4S LED light pad, A4** (5 mm thick, USB, stepless brightness that it remembers) | 1 | ≈ 35 | https://www.amazon.com/dp/B00J3NRAV2 |
+| 14 | Anker USB-C to Gigabit Ethernet adapter (for the Mac) | 1 | ≈ 20 | https://www.amazon.com/dp/B00ZZ6NW5E |
+| 15 | N35 disc magnets Ø6 × 2 mm (door 4, cassette 4) | 8 | ≈ 5 | search "6x2mm neodymium magnets" |
+| 16 | M2 × 6 and M2.5 × 8 screws (display 4, Pi 4, camera 4) | 12 | ≈ 6 | search "M2 M2.5 screw assortment" |
+| 17 | Felt dots 10 mm | 4 | ≈ 3 | search "felt pads 10mm self adhesive" |
+| 18 | Cat 6 Ethernet cable, 1 to 2 m | 1 | ≈ 5 | any |
+| 19 | Five printed parts, PETG black, Craftcloud (Corvallis3D) | 1 | ≈ 85 | https://craftcloud3d.com/en/upload with `v21/frame.stl tower.stl pi_sled.stl cam_cover.stl door.stl` |
+
+**Parts ≈ $310, whole build ≈ $395.** Nothing else: the ChromaTek button brings its own 7-wire harness, the
+display its own cable, so there are no pigtails, no ULN2003 and no resistors on the HAT any more.
+
+## Not this
+- **Waveshare Pico-LCD-2**: the same 2-inch 320 × 240 ST7789 panel, but built as a hat for a Raspberry Pi
+  Pico: two 20-pin female headers on the back, four corner buttons, a 52 × 35 mm outline with different
+  mounting holes and no cable. It would need the Pico's pins wired by hand and a new bezel. The
+  "2inch LCD Module" above is the one the cassette face is drawn for.
 
 ## Why this pad: Huion L4S
 
