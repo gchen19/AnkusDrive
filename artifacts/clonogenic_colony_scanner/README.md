@@ -7,7 +7,7 @@ OD per well.
 
 **Two builds.** `v2_flip/` — one camera on a light pad, you flip the plate between the label
 shot and the colony shot; the current design is **rev 4.0 in `v2_flip/v21/`**: 3 prints, camera and Pi under the
-tower's ceiling, a 2-inch display in the front wall, a plain button on the roof, parts ≈ $295, whole build ≈ $365 with the prints
+tower's ceiling, a 2-inch display in the front wall, a plain button on the roof, parts ≈ $295, whole build ≈ $372 with the prints ($77 quoted)
 (`v2_flip/BOM_v2.md`, `v2_flip/ORDER-SHEET.md`, `v2_flip/ASSEMBLY.md`, `v2_flip/OPERATION.md`).
 **This is the one to build.** It connects to a Mac by Ethernet; the Mac runs the models. The rest of this
 directory is variant A — two cameras, one press, 5 prints, ≈ $260 — kept in full because the

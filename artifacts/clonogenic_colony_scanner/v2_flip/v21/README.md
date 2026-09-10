@@ -9,7 +9,7 @@ plug directly onto the Pi's header: no HAT, no stacking header, no soldering, an
 
 Printed parts are **three**: plinth (`frame.stl`, 95 cm³, modest flare, vertical front for the door), tower
 (`tower.stl`, 292 cm³, 2.4 mm walls, 3 mm ceiling with the bosses), door (22 cm³). 409 cm³ against rev 3.3's
-586: about $70 at the quoted Craftcloud rate instead of $95. No cassette, bay, cover or HAT.
+586: Craftcloud quoted $77.33 delivered on 2026-09-10 (PETG, black, economy). No cassette, bay, cover or HAT.
 
 Source: `build_scanner_v4.py` (the rev 3.x source `build_scanner_v21.py` is kept for history). The build still
 checks interference (only a 2 mm³ graze of the flexible ribbon on a boss remains), the camera's view cone (clear),

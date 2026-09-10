@@ -48,6 +48,24 @@ Black PETG or ASA, 0.2 mm layers, 3 walls, 20% infill. Matte black if offered.
     supply into the right-wall slot, Ethernet and the pad's lead into the back-wall cutout. The pad's lead runs
     round to its port on the pad's left edge. One power cable for everything.
 
+## Does it fit? Clearances and the order of assembly
+
+Measured in the CAD (`build_scanner_v4.py` computes them): the tube's open end is 171 × 102 mm and it is 178 mm
+deep to the ceiling. Under the ceiling the Pi's PCB edge is 3.0 mm from the camera's PCB edge, its cooler 9.7 mm
+from the lens body, its USB-C edge 6.1 mm from the right wall (the plug's shell reaches through that gap and the
+2.4 mm wall), and the Dupont housings on its header end 12 mm above the lens front. The display module is 16 mm
+from the Pi and 14 mm from the button body. Everything is reached from the open end with the tower upside down,
+and every screw is driven straight down except the four display screws, which sit 126 to 156 mm in from the
+open end and want a driver at least 150 mm long.
+
+Two connectors cannot be reached once their board is mounted, so the order matters:
+1. Display first, while the tube is empty.
+2. Plug the camera cable into the camera on the bench, then screw the camera to the ceiling.
+3. Plug the cable's other end into the Pi's CAM/DISP 1 on the bench (the Pi dangles within the 200 mm of cable),
+   lay the cable along the ceiling, lower the Pi onto its bosses, screw it down.
+4. Button through the roof, then the Dupont ends onto the header from below: they slide straight down onto pins
+   that point up at you.
+
 ## 7. Software
 
 11. Raspberry Pi OS 64-bit on the card (preloaded card, or Raspberry Pi Imager: hostname `scanner`, user `pi`, SSH on).

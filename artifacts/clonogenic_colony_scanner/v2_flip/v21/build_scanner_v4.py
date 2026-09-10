@@ -44,7 +44,7 @@ g_i, g_o, g_d = 1.0, 3.0, 2.0
 HINGE_Z = 44.0
 BTN_X, BTN_Y = -60.0, -22.0                # button on the roof, front-left, beside the camera
 DSP_CX, DSP_CZ, DSP_W, DSP_H = -19.0, 191.0, 42.0, 32.0
-PI_X0, PI_Y0 = 20.0, -30.0                 # Pi footprint under the ceiling: x 20..76, y -30..55 (USB-C edge toward +X, Ethernet toward +Y)
+PI_X0, PI_Y0 = 22.0, -30.0                 # Pi footprint under the ceiling: x 22..78, y -30..55 (USB-C edge toward +X, Ethernet toward +Y); 3 mm from the camera PCB, 6 mm from the right wall
 XI = FOOT_X / 2 - WT                       # 85.6 tower inner half-width
 YI0, YI1 = Y_FRONT + WT, Y_REAR - WT       # tower inner faces (front, back)
 
@@ -152,8 +152,8 @@ PAD_R = 1.75
 ROUTES = {
   # camera ribbon: FPC connector on the camera's top face -> along the ceiling -> down the right wall gap into the Pi's CSI connector
   "ribbon": {"kind": "ribbon", "width": 15.0, "t": 0.3, "bend_r": 4.0, "color": "ivory", "width_end": 12.6, "taper_mm": 40.0,
-             "pts": [[0, 20.0, SENSOR_Z + 3.0], [0, 34.0, CEIL - 5.0], [40.0, 46.0, CEIL - 5.0], [PI_X0 + 57.5, 46.0, CEIL - 5.0],
-                     [PI_X0 + 57.5, 36.0, SENSOR_Z - 0.4], [PI_X0 + 57.5, 22.0, SENSOR_Z - 1.3], [PI_X0 + 56.5, 19.0, SENSOR_Z - 1.3]]},
+             "pts": [[0, 20.0, SENSOR_Z + 3.0], [0, 34.0, CEIL - 5.0], [40.0, 46.0, CEIL - 5.0], [PI_X0 + 56.0, 46.0, CEIL - 5.0],
+                     [PI_X0 + 56.0, 36.0, SENSOR_Z - 0.4], [PI_X0 + 56.0, 22.0, SENSOR_Z - 1.3], [PI_X0 + 56.0, 19.0, SENSOR_Z - 1.3]]},
   # display cable: from the housing on the display header, up past the lens, onto the Pi header from below
   "loom_display": {"kind": "loom", "wire_r": 0.55, "bend_r": 7.0, "colors": ["grey", "purple", "blue", "green", "yellow", "orange", "red", "brown"],
              "pts": [[DSP_CX, DH_Y0 + 14.5, DSP_CZ - 17.5 + 2.7], [DSP_CX, DH_Y0 + 27.0, DSP_CZ - 6.0], [0.0, -26.0, 196.0], [HDR_X - 2.0, -24.0, DUP_Z - 8.0], [HDR_X, -20.0, DUP_Z]]},

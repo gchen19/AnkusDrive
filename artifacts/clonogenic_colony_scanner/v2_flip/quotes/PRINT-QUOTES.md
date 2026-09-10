@@ -1,3 +1,18 @@
+# Print quotes — rev 4.0, three parts (Craftcloud, 2026-09-10)
+
+Uploaded `frame.stl` (94.8 cm³, 206 × 137 × 50), `tower.stl` (291.6 cm³, 176 × 106 × 183), `door.stl` (22.3 cm³)
+headlessly to craftcloud3d.com, PETG, Standard finish, Black. Cheapest of 62 offers, delivered to the US:
+
+| Offer | Print | Shipping | Total | Time |
+|---|---|---|---|---|
+| Economy | $67.46 | $9.87 | **$77.33** | 5–8 business days production + 2–5 shipping |
+| Economy, other vendor | $61.60 | $19.56 | $81.16 | 7–10 + 2–5 |
+| Express | $75.99 | $9.87 | $85.86 | 3–4 + 2–5 |
+| Fastest listed | | | $94.34 | 2–5 business days total |
+
+Against rev 3.3's five parts (586 cm³, estimated $95) this is $77 for 409 cm³. The tower is the cost; the plinth and
+door are cheap. Screenshots and page text: `cc12_offers.png`, `cc12_offers.txt`.
+
 # Print quotes for frame.stl + tower.stl + door.stl — collected 2026-09-09 with Playwright
 
 Uploaded the three variant-B STLs (frame 82.6 cm³, tower 314.9 cm³, door 18.5 cm³; tower is

@@ -3,7 +3,7 @@
 Three carts. Total ≈ $395 including the prints (rev 2.2). Links go to the product page; where a line has
 no link, the search term is exact enough to land on the right thing.
 
-## Cart 1 — printed parts, Craftcloud (~$70 for rev 4.0's three parts; the quote was taken on three rev 2.0 parts of similar size at $77)
+## Cart 1 — printed parts, Craftcloud ($77.33 delivered for rev 4.0's three parts, quoted 2026-09-10; $94 express)
 
 1. Go to https://craftcloud3d.com/en/upload and drop in the three files from `v21/`:
    `frame.stl`, `tower.stl`, `door.stl` (units: millimetres).

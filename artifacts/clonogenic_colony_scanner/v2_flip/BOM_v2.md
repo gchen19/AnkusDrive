@@ -16,7 +16,7 @@ opened and the price read off the page that day; "≈" marks a price the page di
 | 6 | SanDisk 32 GB microSD with **Raspberry Pi OS 64-bit** preloaded (the official blank card was out of stock; the 32-bit card on the same page works but is not what the software expects). Or any blank SanDisk 32 GB and Raspberry Pi Imager on the Mac. | 1 | 19.95 | https://www.pishop.us/product/class-10-microsd-card-with-raspberry-pi-os-bookworm-32gb/ |
 | 7 | **Waveshare 2inch IPS LCD Module, 240 × 320, ST7789** (SKU 1746; comes with its PH2.0 8-pin 20 cm cable to Dupont females) | 1 | 13.95 | https://www.pishop.us/product/240-320-general-2inch-ips-lcd-display-module/ |
 
-## Cart 2 — Amazon and the print service, ≈ $183
+## Cart 2 — Amazon and the print service, ≈ $190
 
 | # | Part | Qty | USD | Link |
 |---|---|---|---|---|
@@ -28,9 +28,9 @@ opened and the price read off the page that day; "≈" marks a price the page di
 | 16 | M2.5 × 8 (camera 4, Pi 4) and M2 × 6 (display 4) screws | 12 | ≈ 6 | search "M2 M2.5 screw assortment" |
 | 17 | Felt dots 10 mm | 4 | ≈ 3 | search "felt pads 10mm self adhesive" |
 | 18 | Cat 6 Ethernet cable, 1 to 2 m | 1 | ≈ 5 | any |
-| 19 | **Three printed parts**, PETG black, Craftcloud (Corvallis3D): plinth 95 cm³, tower 292 cm³, door 22 cm³ | 1 | ≈ 70 | https://craftcloud3d.com/en/upload with `v21/frame.stl tower.stl door.stl` |
+| 19 | **Three printed parts**, PETG black, Craftcloud: quoted 2026-09-10 at **$77.33 delivered** (5–8 days production + 2–5 shipping; $94 for the fastest) | 1 | 77 | https://craftcloud3d.com/en/upload with `v21/frame.stl tower.stl door.stl` |
 
-**Parts ≈ $295, whole build ≈ $365.** Nothing is soldered and there is no HAT: the display's own cable and the
+**Parts ≈ $295, whole build ≈ $372 with the quoted prints.** Nothing is soldered and there is no HAT: the display's own cable and the
 button's two wires plug straight onto the Pi's 40-pin header. The colour bar across the top of the screen is
 the status light.
 
