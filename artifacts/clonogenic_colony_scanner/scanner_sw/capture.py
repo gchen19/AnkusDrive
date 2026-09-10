@@ -48,9 +48,24 @@ def open_cameras():
     hq.start(); time.sleep(0.5)
     return hq, top
 
+class fan_paused:
+    """Stop the Pi 5 Active Cooler for the moment the shutter is open (its 30 mm rotor shares the ceiling with the
+    camera). Firmware cooling device 0: state 0 = fan off; restored on exit. Silently a no-op where not writable."""
+    PATH = "/sys/class/thermal/cooling_device0/cur_state"
+    def __enter__(self):
+        try:
+            self.prev = open(self.PATH).read().strip(); open(self.PATH, "w").write("0"); time.sleep(0.15)
+        except Exception: self.prev = None
+        return self
+    def __exit__(self, *a):
+        if self.prev is not None:
+            try: open(self.PATH, "w").write(self.prev)
+            except Exception: pass
+
 def grab_raw_stack(hq, n):
     frames = []
-    for _ in range(n):
+    with fan_paused():
+      for _ in range(n):
         arr = hq.capture_array("raw")                 # uint16 for the unpacked format
         if arr.dtype == np.uint8:                     # packed fallback -> view as u16 (unpacked formats avoid this)
             arr = arr.view(np.uint16)
