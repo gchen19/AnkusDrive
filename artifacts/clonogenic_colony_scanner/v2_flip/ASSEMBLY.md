@@ -1,8 +1,8 @@
 # Assembly — variant B (one camera, flip the plate, light pad floor)
 
 > **Rev 3 (current):** five printed parts — frame, tower (blank walls, Pi bay at the back), Pi sled,
-> camera cover, door. The sled's outer plate is the control face: the 2-inch display and the 19 mm
-> ring-lit button mount on it, so Pi, HAT, display, button and all their wiring are one cassette that
+> camera cover, door. The sled's outer plate is the control face: the 2-inch display and the 16 mm
+> plain button mount on it, so Pi, HAT, display, button and all their wiring are one cassette that
 > slides up into the bay and is held by magnets. No ducts, no holes in the tube. You use the box with
 > the cassette face toward you and the loading slot on your left.
 
@@ -41,10 +41,10 @@ slicer and reprint the frame only.
 
 ## 2. The cassette face: button and display
 
-5. **Button** (Adafruit 3425, datasheet PM192-11E/42RGB): drop it through the Ø19.4 hole in the
+5. **Button** (Adafruit 3425, datasheet U16A1S-11E/42RGB): drop it through the Ø16.2 hole in the
    sled's outer plate from the outside, seal ring under the bezel, hex nut on the inside (0.8 N·m
    max). Its 38 mm body points into the bay above the Pi. Seven solder lugs: C1 and NO1 are the
-   switch (GPIO 17 and GND); C+ is the ring's common anode (5 V); Red, Green, Blue are the ring
+   switch (GPIO 17 and GND).
    cathodes, switched to ground by a ULN2003 on the HAT (inputs from GPIO 22, 27, 23). The 6 V ring
    has its resistors built in.
 6. **Display**: seat the 2-inch module against the inside of the sled's outer plate, glass to the
@@ -54,13 +54,10 @@ slicer and reprint the frame only.
 
 7. **HAT.** Solder two right-angle 2.54 mm pin headers to the Perma-Proto HAT: an 8-pin one whose
    pins point toward the Pi's left edge (the display's own PH2.0-to-Dupont cable plugs onto it) and a
-   7-pin one pointing toward the right edge (the ChromaTek button's harness). Wire the 8-pin to 3V3,
-   GND, MOSI GPIO 10, SCLK GPIO 11, CE0 GPIO 8, DC GPIO 25, RST GPIO 24, BL GPIO 18. Wire the 7-pin:
-   NeoPixel +5V → 5 V, GND → GND, DIN → GPIO 20 (SPI1 MOSI), switch C → GPIO 17, NO → GND; NC and
-   DOUT unused. Put the 23 mm stacking header under the HAT. Add `dtoverlay=spi1-1cs` to
-   `/boot/firmware/config.txt`. Nothing else goes on the HAT.
+   2-pin one pointing toward the right edge (the button's two wires). Wire the 8-pin to 3V3,
+   GND, MOSI GPIO 10, SCLK GPIO 11, CE0 GPIO 8, DC GPIO 25, RST GPIO 24, BL GPIO 18. Wire the 2-pin to GPIO 17 and GND. Put the 23 mm stacking header under the HAT. Nothing else goes on the HAT.
 8. The display's cable runs from its header down the channel beside the Pi's left edge and across
-   the HAT; the button's harness down the right side in front of the USB stacks. Both stay inside the
+   the HAT; the button's two wires down the right side in front of the USB stacks. Both stay inside the
    cassette.
 9. The light pad's USB lead plugs into one of the Pi's USB ports in the side window: **one power
    cable** (the Pi's 27 W supply) runs the whole instrument.
@@ -105,7 +102,7 @@ slicer and reprint the frame only.
     it remembers the setting.
 16. Pi power supply to the wall. Ethernet from the Pi to your Mac's USB-C adapter.
 17. Focus without a laptop: with the tower on blocks and a stained plate flipped on the pad, **hold the
-    button at READY**. The screen becomes a sharpness meter and the ring's brightness follows it (green
+    button at READY**. The screen becomes a sharpness meter and the bar's brightness follows it (green
     within 3% of the best value seen). Reach up through the tower's open bottom, turn the lens focus ring
     until the bar peaks, lock the ring's set screw, tap to leave. `capture.py --focus` prints the same
     meter over SSH if you prefer a terminal.

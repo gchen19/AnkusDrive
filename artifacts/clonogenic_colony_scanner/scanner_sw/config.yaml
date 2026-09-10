@@ -51,9 +51,9 @@ camera:
   top_exposure_us: 20000
 gpio:
   led_pin: 5                      # MOSFET gate for the pad's 5 V line (optional; harmless if unwired)
-  button_pin: 17                  # 19 mm anti-vandal switch to GND (ChromaTek C -> GPIO17, NO -> GND)
-  status_led_pin: 27              # spare status output (unused with the NeoPixel ring)
-  ring: neopixel_spi1             # ChromaTek NeoPixel ring, data on SPI1 MOSI = GPIO20 (dtoverlay=spi1-1cs); or "gpio" for a 3-leg RGB ring on ring_pins
+  button_pin: 17                  # 16 mm stainless momentary switch: one wire to GPIO17, the other to GND (internal pull-up)
+  status_led_pin: 27              # spare status output, unused
+  ring: none                      # no lamp in the button; the screen's colour bar shows the state. "gpio" (3-leg RGB on ring_pins) or "neopixel_spi1" still work
   ring_pins: [22, 27, 23]
   display: {dc: 25, rst: 24, backlight: 18, spi: 0}
 analysis:

@@ -1,3 +1,11 @@
+# Rev 3.3 — a plain button (2026-09-10)
+
+"The RGB button seems a bit complex; feedback all happens on the screen anyway." So the button is now a plain
+stainless 16 mm momentary switch (Ulincos U16A1S, or the $0.95 Adafruit 1505), two wires to GPIO 17 and ground,
+no lamp, no NeoPixel, no SPI1, no driver. The colour bar across the top of the 2-inch screen is the status
+light: it blinks amber for FLIP, pulses purple for DONE and follows sharpness in FOCUS. Hole Ø16.2 on the
+cassette face; the button is 20 mm deep, so the sled plate no longer needs a clearance hole.
+
 # Rev 3.2 — everything on one face, and a plinth that cannot be rocked (2026-09-10)
 
 The Pi bay and its control cassette moved from the back wall to the **front wall, directly above the

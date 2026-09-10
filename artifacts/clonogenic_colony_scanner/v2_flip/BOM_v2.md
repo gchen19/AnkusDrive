@@ -16,19 +16,19 @@ opened and the price read off the page that day; "≈" marks a price the page di
 | 6 | Official Raspberry Pi microSD, 32 GB, A2, blank | 1 | ≈ 10 | https://www.pishop.us/product/raspberry-pi-sd-card-32gb/ |
 | 7 | **Waveshare 2inch IPS LCD Module, 240 × 320, ST7789** (SKU 1746; comes with its PH2.0 8-pin 20 cm cable to Dupont females) | 1 | 13.95 | https://www.pishop.us/product/240-320-general-2inch-ips-lcd-display-module/ |
 
-## Cart 2 — Adafruit, ≈ $31
+## Cart 2 — Adafruit, ≈ $11
 
 | # | Part | Qty | USD | Link |
 |---|---|---|---|---|
-| 8 | **ChromaTek 19 mm rugged momentary metal pushbutton with NeoPixel ring, 19-B-M-F1** (Adafruit 3425, the 6 V RGB one this design started with, is discontinued; the 16 mm RGB, 3350, is out of stock) | 1 | 19.95 | https://www.adafruit.com/product/5236 |
 | 9 | Adafruit Perma-Proto HAT for Pi Mini Kit, no EEPROM | 1 | 4.95 | https://www.adafruit.com/product/2310 |
 | 10 | Stacking header 2×20, extra tall (23 mm body), clears the Active Cooler | 1 | ≈ 3 | https://www.adafruit.com/product/1979 |
-| 11 | Right-angle 2.54 mm male pin header strip (break off 8 and 7 pins) | 1 | ≈ 2 | any; Adafruit 1540 or an Amazon strip |
+| 11 | Right-angle 2.54 mm male pin header strip (break off 8 and 2 pins) | 1 | ≈ 2 | any; Adafruit 1540 or an Amazon strip |
 
-## Cart 3 — Amazon and the print service, ≈ $190
+## Cart 3 — Amazon and the print service, ≈ $200
 
 | # | Part | Qty | USD | Link |
 |---|---|---|---|---|
+| 8 | **Ulincos U16A1S stainless momentary pushbutton, 16 mm, no lamp** (two screw terminals; the $0.95 plastic Adafruit 1505 also fits the same hole) | 1 | ≈ 8 | https://www.amazon.com/dp/B015X34IL0 |
 | 12 | **Arducam CS-mount 8 mm lens for the HQ camera, manual focus and adjustable aperture** | 1 | ≈ 28 | https://www.amazon.com/dp/B08GLZFY81 (maker page: https://www.arducam.com/arducam-cs-mount-lens-for-raspberry-pi-hq-camera-8mm-focal-length-with-manual-focus-and-adjustable-aperture.html) |
 | 13 | **Huion L4S LED light pad, A4** (5 mm thick, USB, stepless brightness that it remembers) | 1 | ≈ 35 | https://www.amazon.com/dp/B00J3NRAV2 |
 | 14 | Anker USB-C to Gigabit Ethernet adapter (for the Mac) | 1 | ≈ 20 | https://www.amazon.com/dp/B00ZZ6NW5E |
@@ -38,8 +38,9 @@ opened and the price read off the page that day; "≈" marks a price the page di
 | 18 | Cat 6 Ethernet cable, 1 to 2 m | 1 | ≈ 5 | any |
 | 19 | Five printed parts, PETG black, Craftcloud (Corvallis3D); rev 3.2's flared plinth is 137 cm³, about $10 more than the quoted frame | 1 | ≈ 95 | https://craftcloud3d.com/en/upload with `v21/frame.stl tower.stl pi_sled.stl cam_cover.stl door.stl` |
 
-**Parts ≈ $310, whole build ≈ $395.** Nothing else: the ChromaTek button brings its own 7-wire harness, the
-display its own cable, so there are no pigtails, no ULN2003 and no resistors on the HAT any more.
+**Parts ≈ $300, whole build ≈ $395.** Nothing else: the button is two wires, the display brings its own cable,
+so the HAT carries two right-angle headers and nothing more. All feedback is on the screen; its colour bar
+blinks amber for "flip the plate" and pulses purple when a plate is done.
 
 ## Not this
 - **Waveshare Pico-LCD-2**: the same 2-inch 320 × 240 ST7789 panel, but built as a hat for a Raspberry Pi

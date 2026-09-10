@@ -3,10 +3,10 @@
 
 Wiring (Pi 5, BCM numbers), through the two right-angle headers on the Perma-Proto HAT:
   display  (8, the module's own PH2.0-to-Dupont cable)  3V3 · GND · MOSI GPIO10 · SCLK GPIO11 · CS GPIO8 (CE0) · DC GPIO25 · RST GPIO24 · BL GPIO18
-  button   (7, the ChromaTek 19-B-M-F1 harness)          switch C -> GPIO17, NO -> GND (internal pull-up); NeoPixel +5V -> 5V, GND -> GND,
-                                                           DIN -> GPIO20 (SPI1 MOSI; add `dtoverlay=spi1-1cs` to /boot/firmware/config.txt)
-Deps on the Pi:  pip install luma.lcd pillow adafruit-blinka adafruit-circuitpython-neopixel-spi
-Legacy: config `gpio.ring: gpio` drives a 3-leg common-anode RGB ring on ring_pins through a ULN2003 instead.
+  button   (2 wires from its screw terminals)            GPIO17 and GND (internal pull-up). No lamp: the colour bar across the top of
+                                                           the screen is the status light (blinks amber in FLIP, pulses purple in DONE).
+Deps on the Pi:  pip install luma.lcd pillow
+Optional lit buttons: config `gpio.ring: gpio` (3-leg RGB ring via ULN2003 on ring_pins) or `neopixel_spi1` (NeoPixel on SPI1 MOSI).
 """
 from __future__ import annotations
 import threading, time
@@ -34,7 +34,8 @@ class Ring:
     def __init__(self):
         import yaml, pathlib
         g = yaml.safe_load(open(pathlib.Path(__file__).with_name("config.yaml")))["gpio"]
-        self.kind = g.get("ring", "neopixel_spi1")
+        self.kind = g.get("ring", "none")
+        if self.kind == "none": return
         if self.kind == "gpio":
             from gpiozero import RGBLED
             self.led = RGBLED(*g["ring_pins"], active_high=not RING_ACTIVE_LOW)
@@ -47,6 +48,7 @@ class Ring:
     @color.setter
     def color(self, rgb):                      # rgb in 0..1
         self._c = rgb
+        if self.kind == "none": return
         if self.kind == "gpio": self.led.color = rgb
         else: self.px[0] = tuple(int(255 * c) for c in rgb)
 
@@ -93,7 +95,12 @@ class Panel:
         im = Image.new("RGB", (320, 240), (12, 10, 16)); d = ImageDraw.Draw(im)
         title, body = STATES.get(self.state, (self.state.upper(), ""))
         col = COLORS[RING.get(self.state, "ready")]
-        d.rectangle((0, 0, 320, 8), fill=col)
+        bar = col
+        if self.state == "flip" and not self._blink: bar = (40, 30, 10)
+        if self.state == "done": bar = tuple(int(c * (0.35 + 0.65 * self._blink)) for c in col)
+        if self.state == "focus" and self.focus:
+            fr = min(1.0, self.focus["score"] / max(self.focus["best"], 1e-9)); bar = COLORS["ready"] if fr >= 0.97 else tuple(int(c * (0.12 + 0.88 * fr)) for c in col)
+        d.rectangle((0, 0, 320, 8), fill=bar)
         if self.state == "flash":
             d.text((14, 100), self.detail, font=self.font, fill=(240, 236, 245)); return im
         d.text((14, 20), title, font=self.font_big, fill=(240, 236, 245))

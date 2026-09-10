@@ -173,7 +173,7 @@ reset(); set_visible(ALL); shoot("rear.png", (-420, 540, 300), (0, 25, 118), len
 # 3. exploded
 reset(); set_visible(ALL - {"ribbon", "cables", "magnets", "harness", "plugs"})
 move("plate", dz=45); move("frame", dz=0); move("door", dy=-55, dz=0)
-move("tower", dz=110); move("pi", dz=40, dy=-60); move("hat", dz=40, dy=-60); move("pi_sled", dz=40, dy=-60); move("button", dz=40, dy=-60); move("ring", dz=40, dy=-60); move("display", dz=40, dy=-60); move("screen", dz=40, dy=-60)
+move("tower", dz=110); move("pi", dz=40, dy=-60); move("hat", dz=40, dy=-60); move("pi_sled", dz=40, dy=-60); move("button", dz=40, dy=-60); move("display", dz=40, dy=-60); move("screen", dz=40, dy=-60)
 move("cam_board", dz=200); move("lens", dz=200); move("cam_cover", dz=270)
 shoot("exploded.png", (-560, -660, 500), (0, -15, 175), lens=52, res=(1800, 1500))
 # 4. section at X=0
@@ -199,7 +199,7 @@ move("cam_cover", dz=45)
 shoot("camera.png", (-150, -170, 330), (0, -5, 218), lens=70, fstop=5.6)
 # 8. Pi bay: the cassette pulled half way down
 reset(); set_visible(ALL - {"cables"})
-for n in ("pi", "hat", "pi_sled", "button", "ring", "display", "screen", "harness", "plugs"): move(n, dz=-60)
+for n in ("pi", "hat", "pi_sled", "button", "display", "screen", "harness", "plugs"): move(n, dz=-60)
 shoot("pibay.png", (360, -400, 170), (0, -80, 120), lens=60, fstop=6)
 # 8c. wiring: the HAT face-on from the control-face side (sled and tower hidden)
 reset(); set_visible(ALL - {"cables", "tower", "pi_sled", "cam_board", "lens", "cam_cover", "screws", "plate", "door", "frame", "magnets"})

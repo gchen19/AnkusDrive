@@ -2,10 +2,10 @@
 
   SHORT press  = go / confirm / next plate
   LONG press   = cancel / discard / dismiss   (2 s; the screen shows a hold bar filling up)
-  The screen footer ALWAYS says what PRESS and HOLD do right now; the ring says the state in colour.
+  The screen footer ALWAYS says what PRESS and HOLD do right now; the colour bar across its top says the state.
 
   READY      green        press: photograph the lid                 hold: FOCUS mode
-  FOCUS      blue         live sharpness meter while you turn the lens ring; the ring's brightness follows
+  FOCUS      blue         live sharpness meter while you turn the lens ring; the bar's brightness follows
                           the score and turns green at the best value seen. press: done   hold: reset the peak
   LABELS     white        (capturing, ~1 s; button ignored)
   FLIP       amber blink  press: photograph the colonies            hold: discard this run

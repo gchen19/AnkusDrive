@@ -11,7 +11,7 @@ SRC_REF = {
                "from PCB back, tripod block 13.97 wide x 5.71 tall protruding 6.54 behind, 15-pin FPC at the top edge",
     "lens":    "Arducam 8 mm CS lens (LN-B0186?): d28 x 23 mm, focus ring + aperture ring, front element ~d12",
     "display": "Waveshare 2inch LCD Module (SKU 1746): 58 x 35 mm outline, active 40.8 x 30.6, PH2.0 8-pin socket with a 20 cm cable to Dupont females supplied, corner mounting holes (VERIFY spacing)",
-    "button":  "Adafruit 5236 ChromaTek 19-B-M-F1 (Adafruit 3425 is discontinued): d19 hole (panel <= 11.4), 5 V NeoPixel ring, momentary, detachable 7-wire harness; body modelled on the PM192 drawing (bezel d22 x 1.8, M19x1, 38.2 mm behind the bezel) - VERIFY depth against the ChromaTek drawing",
+    "button":  "Ulincos U16A1S (Amazon B015X34IL0): stainless momentary anti-vandal, 16 mm hole, head d18, 20 mm deep incl. screw terminals, 1NO; or Adafruit 1505 (plastic, 29.4 deep). Two wires, no lamp",
     "pad":     "Huion L4S: 360 x 270 x 5 mm, lit area 310 x 210, touch switch on the front-left edge, micro-USB on the left edge",
     "plate":   "CELLTREAT 6 Well Plate drawing 7/2/20: 127.8 x 85.38 x 20.2, lid 127.0 x 84.8 x 9.9, wells d34.7/35.5 x 17.2, one chamfered corner",
     "cables":  "RPi 22-to-15-pin camera cable 300 mm: 12.6 mm wide at the Pi 5 end, 16 mm at the camera end; Cat6 d5.5 + RJ45 11.7 x 21 x 8; USB-C d4",
@@ -160,9 +160,9 @@ def make_pi(x0, y_pcb, z0):
     hat = box(x0 + 10, hy + 8.5, z0, x0 + 10 + 65, hy + 8.5 + 1.6, z0 + 56.5)
     hat = hat.cut(box(x0 + 41, hy + 8, z0 - 1, x0 + 41 + 20, hy + 11, z0 + 8))                        # camera-cable slot
     # two right-angle 2.54 mm pin headers (8.5 mm tall): the display's own PH2.0-to-Dupont cable plugs onto the 8-pin one
-    # (opening toward -X), the ChromaTek button's 7-wire harness onto the 7-pin one (opening toward +X). Nothing else on the HAT.
+    # (opening toward -X), the button's two wires onto the 2-pin one (opening toward +X). Nothing else on the HAT.
     hat = hat.fuse(box(x0 + 38, hy + 10.1, z0 + 20, x0 + 38 + 20.3, hy + 10.1 + 8.5, z0 + 20 + 6))      # 8-pin, display; entry face at x0+38
-    hat = hat.fuse(box(x0 + 55, hy + 10.1, z0 + 32, x0 + 55 + 17.8, hy + 10.1 + 8.5, z0 + 32 + 6))      # 7-pin, button; entry face at x0+72.8
+    hat = hat.fuse(box(x0 + 55, hy + 10.1, z0 + 32, x0 + 55 + 5.1, hy + 10.1 + 8.5, z0 + 32 + 6))       # 2-pin, button; entry face at x0+60.1
     return pi, hdr.fuse(hat)
 
 # ---------------------------------------------------------------- HQ camera + 8 mm lens (board in the XY plane, sensor at z_sensor, lens hangs -Z)
@@ -196,21 +196,18 @@ def make_display(cx, cz, y_front_face, hsg_t):
     return glass.fuse(pcb).fuse(hdr).fuse(pins)
 
 def make_button(bx, bz, y_panel):
-    """PM192-11E/42RGB (Adafruit 3425): bezel d22 x 1.8, M19x1 thread, 38.2 behind the bezel, hex nut 25.2 A/C,
-    7 solder lugs (NC1 NC2 C1 C2, Red Green Blue, C+), IP67 seal ring d16."""
-    bezel = cyl(11.0, 1.8, bx, y_panel - 1.8, bz, V(0, 1, 0)).cut(cyl(8.6, 1.9, bx, y_panel - 1.85, bz, V(0, 1, 0)))
-    dome = cyl(8.4, 1.2, bx, y_panel - 1.2, bz, V(0, 1, 0)).fuse(cyl(7.2, 2.2, bx, y_panel - 2.2, bz, V(0, 1, 0)))     # slightly domed cap, 2 mm stroke
-    ring = cyl(9.6, 0.5, bx, y_panel - 1.85, bz, V(0, 1, 0)).cut(cyl(8.6, 0.6, bx, y_panel - 1.9, bz, V(0, 1, 0)))
-    body = cyl(9.5, 38.2, bx, y_panel, bz, V(0, 1, 0))                                                                 # M19 body, 38.2 long
-    nut = Part.makePolygon([V(bx + 12.6 * math.cos(math.radians(a)), y_panel + WALL, bz + 12.6 * math.sin(math.radians(a))) for a in range(0, 361, 60)])
-    nut = Part.Face(nut).extrude(V(0, 4.0, 0)).cut(cyl(9.6, 5, bx, y_panel + WALL - 0.5, bz, V(0, 1, 0)))
-    tail = cyl(8.0, 6.0, bx, y_panel + 38.2, bz, V(0, 1, 0))                                                          # PBT base
-    lugs = []
-    for i, (dx, dz) in enumerate([(-6, 5), (0, 5), (6, 5), (-6, -5), (0, -5), (6, -5), (0, 0)]):
-        lugs.append(box(bx + dx - 1.0, y_panel + 44.2, bz + dz - 0.4, bx + dx + 1.0, y_panel + 48.5, bz + dz + 0.4))
-    b = bezel.fuse(dome).fuse(body).fuse(nut).fuse(tail)
-    for t in lugs: b = b.fuse(t)
-    return b, ring
+    """Ulincos U16A1S (or Adafruit 1505): plain stainless momentary anti-vandal switch, 16 mm hole, bezel d18 x 1.5,
+    M16 body 20 mm behind the bezel incl. the two screw terminals, hex nut 21 A/C, O-ring seal. No lamp."""
+    bezel = cyl(9.0, 1.5, bx, y_panel - 1.5, bz, V(0, 1, 0)).cut(cyl(6.2, 1.6, bx, y_panel - 1.55, bz, V(0, 1, 0)))
+    cap = cyl(6.0, 1.0, bx, y_panel - 1.0, bz, V(0, 1, 0)).fuse(cyl(5.4, 2.0, bx, y_panel - 2.0, bz, V(0, 1, 0)))       # flat cap, 2 mm stroke
+    body = cyl(8.0, 16.0, bx, y_panel, bz, V(0, 1, 0))                                                                # M16 body
+    nut = Part.makePolygon([V(bx + 10.5 * math.cos(math.radians(a)), y_panel + WALL, bz + 10.5 * math.sin(math.radians(a))) for a in range(0, 361, 60)])
+    nut = Part.Face(nut).extrude(V(0, 3.0, 0)).cut(cyl(8.1, 4, bx, y_panel + WALL - 0.5, bz, V(0, 1, 0)))
+    base = cyl(7.0, 2.0, bx, y_panel + 16.0, bz, V(0, 1, 0))
+    terms = [box(bx + dx - 2.0, y_panel + 18.0, bz - 2.0, bx + dx + 2.0, y_panel + 20.0, bz + 2.0) for dx in (-4.0, 4.0)]  # two screw terminals
+    b = bezel.fuse(cap).fuse(body).fuse(nut).fuse(base)
+    for t in terms: b = b.fuse(t)
+    return b
 
 # ---------------------------------------------------------------- Huion L4S pad + CELLTREAT plate
 def make_pad():

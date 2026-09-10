@@ -147,9 +147,8 @@ rear = rear.cut(box(DSP_CX - DSP_W/2, CF_Y0 - 1, DSP_CZ - DSP_H/2, DSP_CX + DSP_
 for sx in (-26, 26):                                                                                             # display bosses inside, 52 x 30, M2
     for sz in (-15, 15):
         rear = rear.fuse(cyl(2.2, 5.0, DSP_CX + sx, CF_Y0 - 5.0, DSP_CZ + sz, V(0, 1, 0))).cut(cyl(0.9, 5.5, DSP_CX + sx, CF_Y0 - 5.2, DSP_CZ + sz, V(0, 1, 0)))
-rear = rear.cut(cyl(9.7, 5, BTN_X, CF_Y0 - 1, BTN_Z, V(0, 1, 0)))                                                # button hole d19.4
+rear = rear.cut(cyl(8.1, 5, BTN_X, CF_Y0 - 1, BTN_Z, V(0, 1, 0)))                                                # button hole d16.2
 sled = sled.fuse(rear)
-sled = sled.cut(cyl(11.0, SLED_T + 2, BTN_X, SLED_Y0 - 1, BTN_Z, V(0, 1, 0)))                                       # clearance for the button's tail through the front plate
 sled = sled.fuse(box(-18, CF_Y0, SLED_Z0 - 7, 18, CF_Y1, SLED_Z0 + 0.01))                                       # thumb tab below the face
 pi_sled = sled.removeSplitter()
 
@@ -181,9 +180,9 @@ cam_board, lens = make_hq(SENSOR_Z)
 cam_board.rotate(V(0, 0, 0), V(0, 0, 1), 180)                                          # FPC connector toward the front (the bay side)
 PIY = SLED_Y0 + SLED_T + PI_STANDOFF
 pi, hat = make_pi(PI_X0, PIY, PI_Z0)
-button, ring = make_button(BTN_X, BTN_Z, CF_Y1)
+button = make_button(BTN_X, BTN_Z, CF_Y1)
 M = App.Matrix(); M.A22 = -1; M.A24 = 2 * CF_Y1                                        # the button body points INTO the bay
-button = button.transformGeometry(M); ring = ring.transformGeometry(M)
+button = button.transformGeometry(M)
 display = make_display_inside(DSP_CX, DSP_CZ, CF_Y0, CF_Y1)
 screen = box(DSP_CX - 20.4, CF_Y0 - 2.62, DSP_CZ - 15.3, DSP_CX + 20.4, CF_Y0 - 2.55, DSP_CZ + 15.3)   # the lit 40.8 x 30.6, just inside the window
 # cables, routed. Every flexible run is a named ROUTE (waypoints + bend radius); the CAD sweeps it,
@@ -214,10 +213,10 @@ ROUTES = {
              "pts": [[DSP_CX, DH_Y, DSP_CZ - 17.5 + 2.7], [DSP_CX, PIY - 3.0, DSP_CZ - 17.5 + 2.7], [PI_X0 - 3.0, PIY - 3.0, PI_Z0 + 58.0],
                      [PI_X0 - 3.0, PIY + 9.0, PI_Z0 + 40.0], [PI_X0 - 3.0, SOCK_Y - 3.0, PI_Z0 + 31.0], [PI_X0 + 2.0, SOCK_Y, PI_Z0 + 23.0],
                      [PI_X0 + 28.0, SOCK_Y, PI_Z0 + 23.0], [PI_X0 + 38.0, SOCK_Y, PI_Z0 + 23.0]]},
-  # button harness: back of the button -> around the +X side in front of the port stacks -> onto the 7-pin header from +X
-  "loom_button": {"kind": "loom", "wire_r": 0.55, "bend_r": 7.0, "colors": ["red", "black", "white", "yellow", "green", "blue", "brown"],
-             "pts": [[BTN_X, BAY_Y0 + 7.0, BTN_Z - 5.0], [BTN_X + 3.0, BAY_Y0 + 11.0, BTN_Z - 10.0], [PI_X0 + 88.0, PIC + 13.5, PI_Z0 + 58.0],
-                     [PI_X0 + 88.0, SOCK_Y - 7.0, PI_Z0 + 46.0], [PI_X0 + 82.0, SOCK_Y, PI_Z0 + 36.0], [PI_X0 + 72.8, SOCK_Y, PI_Z0 + 35.0]]},
+  # button: two wires from its screw terminals -> down the +X side in front of the port stacks -> onto the 2-pin header from +X
+  "loom_button": {"kind": "loom", "wire_r": 0.55, "bend_r": 7.0, "colors": ["black", "red"],
+             "pts": [[BTN_X, CF_Y1 - 22.0, BTN_Z - 4.0], [BTN_X + 5.0, CF_Y1 - 26.0, BTN_Z - 12.0], [PI_X0 + 88.0, CF_Y1 - 24.0, PI_Z0 + 55.0],
+                     [PI_X0 + 88.0, SOCK_Y - 7.0, PI_Z0 + 46.0], [PI_X0 + 70.0, SOCK_Y, PI_Z0 + 35.5], [PI_X0 + 60.1, SOCK_Y, PI_Z0 + 35.0]]},
   # power: right-angle USB-C, cable along the Pi's bottom edge UNDER the sled foot and the bay wall, out to the right, onto the pad and away
   "power": {"kind": "round", "r": 1.75, "bend_r": 12.0, "color": "white",
              "pts": [[PI_X0 + 11.2 + 16.5, YP, PI_Z0 - 7.0], [PI_X0 + 34.0, YP, PI_Z0 - 10.5], [BAY_X + 12.0, YP, PI_Z0 - 10.5], [BAY_X + 25.0, YP, 62.0],
@@ -234,10 +233,10 @@ for k in ("loom_display", "loom_button"):                 # the looms were laid 
     ROUTES[k]["pts"] = [[x, YM - y, z] for x, y, z in ROUTES[k]["pts"]]
 def _v(p): return V(*p)
 ribbon = flat_ribbon([_v(p) for p in ROUTES["ribbon"]["pts"]], 15.0, 0.4, V(1, 0, 0))
-harness = sweep_round([_v(p) for p in ROUTES["loom_display"]["pts"]], 1.9, 7.0).fuse(sweep_round([_v(p) for p in ROUTES["loom_button"]["pts"]], 1.9, 7.0))
+harness = sweep_round([_v(p) for p in ROUTES["loom_display"]["pts"]], 1.9, 7.0).fuse(sweep_round([_v(p) for p in ROUTES["loom_button"]["pts"]], 1.1, 7.0))
 cables = sweep_round([_v(p) for p in ROUTES["power"]["pts"]], 1.75, 14.0).fuse(sweep_round([_v(p) for p in ROUTES["ethernet"]["pts"]], 2.75, 22.0)).fuse(sweep_round([_v(p) for p in ROUTES["pad_usb"]["pts"]], 1.6, 16.0)).fuse(pad_plug)
 json.dump(ROUTES, open(OUT + "cables.json", "w"), indent=1)
-pi_sled, pi, hat, button, ring, display, screen = [mY(b) for b in (pi_sled, pi, hat, button, ring, display, screen)]   # rev 3.2: cassette on the front
+pi_sled, pi, hat, button, display, screen = [mY(b) for b in (pi_sled, pi, hat, button, display, screen)]   # rev 3.2: cassette on the front
 magnets = Part.makeCompound([cyl(3, 2, s*77.5, Y_FRONT - 0.5 - 2.0, 20, V(0, 1, 0)) for s in (1, -1)] + [cyl(3, 2, s*77.5, Y_FRONT, 20, V(0, 1, 0)) for s in (1, -1)]
                             + [mY(cyl(3, 2, sx, SLED_Y0 + SLED_T + 8, SLED_Z1 - 2.2)) for sx in (-42, 42)] + [mY(cyl(3, 2, sx, SLED_Y0 + SLED_T + 8, BAY_Z1 - BAY_WALL)) for sx in (-42, 42)])
 screws = Part.makeCompound([cyl(2.25, 1.6, sx, sy, TOWER_Z1 + CAM_STANDOFF + 1.6) for sx in (-15, 15) for sy in (-15, 15)]                   # M2.5 heads on the camera
@@ -246,7 +245,7 @@ screws = Part.makeCompound([cyl(2.25, 1.6, sx, sy, TOWER_Z1 + CAM_STANDOFF + 1.6
 
 parts = {"frame": frame, "tower": tower, "pi_sled": pi_sled, "cam_cover": cam_cover, "door": door,
          "pad": pad, "pad_lit": pad_lit, "plate": plate, "cam_board": cam_board, "lens": lens, "pi": pi, "hat": hat, "button": button,
-         "ring": ring, "display": display, "screen": screen, "ribbon": ribbon, "cables": cables, "harness": harness, "plugs": plugs, "magnets": magnets, "screws": screws}
+         "display": display, "screen": screen, "ribbon": ribbon, "cables": cables, "harness": harness, "plugs": plugs, "magnets": magnets, "screws": screws}
 objs = {}
 for n, s in parts.items():
     o = doc.addObject("Part::Feature", n); o.Shape = s; objs[n] = o
@@ -266,7 +265,7 @@ inter = []
 names = list(parts)
 for i in range(len(names)):
     for j in range(i + 1, len(names)):
-        if {names[i], names[j]} & {"magnets", "ring", "screen", "screws", "pad_lit"}: continue
+        if {names[i], names[j]} & {"magnets", "screen", "screws", "pad_lit"}: continue
         if {names[i], names[j]} in ({"pi", "hat"}, {"pi", "plugs"}, {"display", "plugs"}, {"hat", "harness"}, {"plugs", "cables"}, {"plugs", "harness"}, {"cam_board", "ribbon"}, {"pi", "ribbon"}, {"pad", "cables"}, {"button", "harness"}): continue
         v = parts[names[i]].common(parts[names[j]]).Volume
         if v > 0.5: inter.append((names[i], names[j], round(v, 1)))
@@ -288,7 +287,7 @@ meta["_panel"] = {"button_xz": [BTN_X, BTN_Z], "display_center_xz": [DSP_CX, DSP
 # stability: rough masses (prints at 0.7 of solid PETG; bought parts from their datasheets), centre of mass, and the
 # horizontal push at the button height that would tip the box about each edge of its footprint
 MASS = {"frame": None, "tower": None, "pi_sled": None, "cam_cover": None, "door": None, "plate": 60, "cam_board": 30, "lens": 55, "pi": 70,
-        "hat": 25, "button": 40, "display": 20, "plugs": 30, "magnets": 8, "screws": 6, "harness": 10, "ribbon": 5}
+        "hat": 25, "button": 15, "display": 20, "plugs": 30, "magnets": 8, "screws": 6, "harness": 10, "ribbon": 5}
 tot, cx, cy, cz = 0.0, 0.0, 0.0, 0.0
 for n, m_ in MASS.items():
     if m_ is None: m_ = parts[n].Volume / 1000 * 1.27 * 0.7
