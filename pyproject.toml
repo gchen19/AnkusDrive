@@ -130,11 +130,11 @@ fluids = [
 # Non-sequential STL solid tracing runs on KrakenOS, which is GPL-3.0. It is a
 # SEPARATE, opt-in extra because AnkusDrive invokes it only out-of-process (via
 # ankusdrive/optics_gpl_runner.py) to keep the copyleft boundary clean — installing it
-# does not link GPL code into AnkusDrive. setuptools<81 restores pkg_resources, which
+# does not link GPL code into AnkusDrive. setuptools<85 restores pkg_resources, which
 # KrakenOS imports.
 optics_gpl = [
     "KrakenOS",
-    "setuptools<81",
+    "setuptools<85",
 ]
 # Exterior-acoustics BEM runs on bempp-cl, which is MIT (NOT copyleft). It is still
 # a SEPARATE, opt-in extra installed into a DEDICATED venv (.venv-bempp) and invoked
