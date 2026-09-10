@@ -1,0 +1,69 @@
+# Clonogenic plate scanner — one config, no hardcoded numbers in the scripts.
+# Units: mm unless stated. Frame: plate centre = (0,0); +X along the plate's long axis.
+# Pick the plate you actually use: `plate: celltreat_229105           # the lab's plates (CELLTREAT 229105/229106); change if another brand` etc. (presets below, sources in
+# PLATE-COMPATIBILITY.md). geometry.* is filled from the preset at load time unless overridden.
+plate: celltreat_229105           # the lab's plates (CELLTREAT 229105/229106); change if another brand
+plate_presets:
+  corning_3516:   {pitch_x_mm: 39.12, pitch_y_mm: 39.12, well_id_mm: 34.80, well_depth_mm: 17.4, floor_above_bottom_mm: 3.81, height_mm: 20.27, source: "Corning 3516 spec via Sigma cls3516"}
+  falcon_353046:  {pitch_x_mm: 39.12, pitch_y_mm: 39.12, well_id_mm: 35.0,  well_depth_mm: 18.0, floor_above_bottom_mm: 3.0,  height_mm: 20.5,  source: "Falcon 353046 listing: 35 mm x 18 mm deep; floor elevation ASSUMED"}
+  greiner_657160: {pitch_x_mm: 39.12, pitch_y_mm: 39.12, well_id_mm: 35.0,  well_depth_mm: 17.5, floor_above_bottom_mm: 3.0,  height_mm: 20.5,  source: "9.6 cm2 growth area -> 35.0 mm; depth/floor ASSUMED (SBS-conform per GBO)"}
+  nunc_140675:    {pitch_x_mm: 39.12, pitch_y_mm: 39.12, well_id_mm: 35.0,  well_depth_mm: 17.5, floor_above_bottom_mm: 3.0,  height_mm: 20.5,  source: "127.76 x 85.46, 9.6 cm2 (Thermo); depth/floor ASSUMED"}
+  eppendorf_0030720:  {pitch_x_mm: 40.0, pitch_y_mm: 38.0, well_id_mm: 34.6, well_depth_mm: 17.0, floor_above_bottom_mm: 3.0, height_mm: 20.0, source: "Eppendorf TDS 6-well: P2 40.0 / P4 38.0, d1 34.6, h2 17.0, bt 1.4; with lid 23.2"}
+  spl_30006:      {pitch_x_mm: 39.12, pitch_y_mm: 39.12, well_id_mm: 35.0,  well_depth_mm: 17.5, floor_above_bottom_mm: 2.7,  height_mm: 20.2,  source: "SPL TDS CCP6: 85.4 x 127.6 x 20.2, well 35.0 x 17.5; lid 127.1 x 84.9 x 10.0"}
+  celltreat_229105: {pitch_x_mm: 39.04, pitch_y_mm: 39.04, well_id_mm: 34.7, well_depth_mm: 17.2, floor_above_bottom_mm: 3.0, height_mm: 20.2, height_with_lid_mm: 23.0, grid_offset_mm: [-0.15, 0.0], source: "CELLTREAT 6 Well Plate drawing 7/2/20 KG: 127.8 x 85.38 x 20.2, with lid 23.0, well 34.7 bottom / 35.5 top x 17.2 deep, bottom 1.5, A1 24.71/23.17, pitch 39.04, lid 127.0 x 84.8 x 9.9"}
+  # TPP: grid pitch 37.5 (NOT 39.12) and the well pattern is centred 1.95 mm toward A1 along the long axis
+  tpp_92006:      {pitch_x_mm: 37.5,  pitch_y_mm: 37.5,  well_id_mm: 33.9,  well_depth_mm: 17.2, floor_above_bottom_mm: 3.1,  height_mm: 20.2, height_with_lid_mm: 22.4, grid_offset_mm: [-1.95, 0.0], source: "TPP TechDoc Test Plate Measurements 04/2026: L 127.8 B 85.5, X1 24.4 Xn 99.5, Y1 24.0 Yn 61.5, P=Q 37.5, H 20.2 Hd 22.4, G 1.35, OD 34.5 / 33.9, T 17.2, B 3.1"}
+  sarstedt_83_3920: {pitch_x_mm: 39.12, pitch_y_mm: 39.12, well_id_mm: 34.0, well_depth_mm: 17.5, floor_above_bottom_mm: 3.0, height_mm: 20.2, height_with_lid_mm: 22.4, source: "Sarstedt 83.3920 listing: 127.8 x 85.2 x 22.4, growth area 9.07 cm2 -> 34.0 mm; pitch/depth ASSUMED"}
+geometry:
+  well_pitch_mm: 39.12            # filled from the preset
+  well_id_mm: 34.8                # filled from the preset
+  analysis_radius_mm: 15.5        # exclude the outer ~1.9 mm (wall shadow / meniscum ring)
+  well_names: [A1, A2, A3, B1, B2, B3]
+  # (x, y) of each well centre in mm, plate frame. A row is +Y (rear of the nest), col 1 is -X.
+  well_centres_mm:
+    A1: [-39.12,  19.56]
+    A2: [  0.00,  19.56]
+    A3: [ 39.12,  19.56]
+    B1: [-39.12, -19.56]
+    B2: [  0.00, -19.56]
+    B3: [ 39.12, -19.56]
+  refine_search_mm: 3.0           # +- window for per-scan well-centre refinement
+  well_depth_mm: 17.0             # wall height above the well floor; sets the parallax crescent
+instrument:
+  variant: v2_flip                # v1_two_camera | v2_flip
+  # Loading rule for v2: lid-up with A1 at the REAR-LEFT; then flip the plate toward you about its
+  # LONG axis, so A1 lands FRONT-LEFT. flip_axis: long mirrors the well map in Y for the colony shot.
+  flip_axis: long                 # long | short
+  panel: true                     # 2-inch display + ring on the front (rev 2.2); false = button + LED only
+  camera_height_mm: 200.0         # camera sensor to colony plane (v2: 219 - ~19; v1: 150 + 3.8 -> set 154)
+  optical_axis_mm: [0.0, 0.0]     # where the optical axis meets the plate, plate frame
+camera:
+  # Written by calibrate.py after the dot-grid shot. Until then: nominal from optics_model.py.
+  px_per_mm: 26.6
+  bayer_pattern: BGGR             # IMX477 native order (picamera2 reports it; VERIFY)
+  raw_format: SBGGR12
+  raw_size: [4056, 3040]
+  plate_centre_px: [2028, 1520]   # image coordinates of the plate centre (calibrate.py)
+  rotation_deg: 0.0               # plate long axis vs image rows (calibrate.py)
+  exposure_us: 4000
+  analogue_gain: 1.0
+  frames_to_average: 4
+  top_exposure_us: 20000
+gpio:
+  led_pin: 5                      # MOSFET gate for the pad's 5 V line (optional; harmless if unwired)
+  button_pin: 17                  # 19 mm anti-vandal switch to GND
+  status_led_pin: 27              # = the ring's green leg (ui.py drives the full RGB ring on 22/27/23)
+  ring_pins: [22, 27, 23]
+  display: {dc: 25, rst: 24, backlight: 18, spi: 0}
+analysis:
+  fit_scale_per_scan: true        # fit px/mm + rotation from the six well rings every scan (plate height varies by brand)
+  od_threshold: 0.06              # background-subtracted OD to call a colony pixel
+  background_open_mm: 3.0         # grey-opening footprint (>= largest colony)
+  background_sigma_mm: 2.0
+  min_colony_diameter_mm: 0.30    # ~50 cells for most adherent lines (Franken 2006); tune per line
+  watershed_min_distance_mm: 0.35
+paths:
+  scans_dir: /home/pi/scans
+  calib_dir: /home/pi/scans/_calibration
+  runs_dir: /home/pi/scans/_runs
+  nas_sync: ""                    # e.g. rsync target "nas:/data/clonogenic/scans/"; empty = off

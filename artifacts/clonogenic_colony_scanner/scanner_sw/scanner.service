@@ -1,0 +1,11 @@
+[Unit]
+Description=Clonogenic plate scanner (button -> capture -> quantify)
+After=multi-user.target
+[Service]
+User=pi
+WorkingDirectory=/home/pi/scanner_sw
+ExecStart=/usr/bin/python3 /home/pi/scanner_sw/capture.py
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

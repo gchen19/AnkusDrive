@@ -1,0 +1,72 @@
+{
+ "artboards": [
+  {
+   "file": "Main.dc.html",
+   "x": 0,
+   "y": 0,
+   "w": 1400,
+   "h": 900,
+   "title": "01 Overview"
+  },
+  {
+   "file": "Exploded.dc.html",
+   "x": 1520,
+   "y": 0,
+   "w": 1400,
+   "h": 900,
+   "title": "02 Exploded"
+  },
+  {
+   "file": "Door.dc.html",
+   "x": 0,
+   "y": 1060,
+   "w": 1400,
+   "h": 900,
+   "title": "03 Door and loading"
+  },
+  {
+   "file": "Camera.dc.html",
+   "x": 1520,
+   "y": 1060,
+   "w": 1400,
+   "h": 900,
+   "title": "04 Camera"
+  },
+  {
+   "file": "PiBay.dc.html",
+   "x": 0,
+   "y": 2120,
+   "w": 1400,
+   "h": 900,
+   "title": "05 Pi bay"
+  },
+  {
+   "file": "Panel.dc.html",
+   "x": 1520,
+   "y": 2120,
+   "w": 1400,
+   "h": 900,
+   "title": "06 Panel and wiring"
+  },
+  {
+   "file": "Operating.dc.html",
+   "x": 0,
+   "y": 3180,
+   "w": 1400,
+   "h": 900,
+   "title": "07 Operating"
+  }
+ ],
+ "annotations": [
+  {
+   "id": "explorer-link",
+   "x": 0,
+   "y": -170,
+   "w": 640,
+   "text": "Interactive 3D explorer (orbit, exploded, section, animated load-flip-scan):\nhttps://claude.ai/code/artifact/a310ce3c-fd6b-44f2-92a4-c1d244eabbea\n\nDesign document with optics, plate compatibility and the parts list:\nhttps://claude.ai/code/artifact/d22185ef-d4eb-4a65-a34a-da505602fb09"
+  }
+ ],
+ "launch": {
+  "view": "canvas"
+ }
+}

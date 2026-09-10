@@ -1,0 +1,7 @@
+numpy
+scipy
+scikit-image
+pyyaml
+pillow
+matplotlib
+# Pi only (apt: python3-picamera2 python3-gpiozero)

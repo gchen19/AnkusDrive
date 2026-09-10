@@ -1,0 +1,5 @@
+# big regenerable files: full-size renders (renders_jpg/ is kept) and the Poly Haven HDRIs
+v2_flip/v21/renders/*.png
+v2_flip/v21/env/*.hdr
+renders_test/
+__pycache__/

@@ -1,0 +1,240 @@
+<title>Plate Scanner Explorer</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f4f2f7;--panel:#ffffff;--ink:#1f1a2a;--muted:#6a6377;--line:#dcd6e4;--accent:#5b2c83;--accent-2:#8a5fb5;--stain:#ece3f4;--hi:#ffb547;
+ --serif:"Fraunces",Georgia,serif;--sans:"Source Sans 3","Segoe UI",Helvetica,Arial,sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;--scene:#f7f6fa}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#17141d;--panel:#211c2a;--ink:#ece7f2;--muted:#a49cb3;--line:#3a3346;--accent:#c39ae8;--accent-2:#9a74c4;--stain:#2c2338;--hi:#ffc46b;--scene:#1d1925}}
+:root[data-theme="dark"]{--bg:#17141d;--panel:#211c2a;--ink:#ece7f2;--muted:#a49cb3;--line:#3a3346;--accent:#c39ae8;--accent-2:#9a74c4;--stain:#2c2338;--hi:#ffc46b;--scene:#1d1925}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.45;height:100vh;overflow:hidden}
+#app{display:grid;grid-template-columns:340px 1fr;height:100vh}
+@media (max-width:820px){#app{grid-template-columns:1fr;grid-template-rows:1fr 46vh}}
+#panel{background:var(--panel);border-right:1px solid var(--line);padding:18px 18px 24px;overflow-y:auto}
+@media (max-width:820px){#panel{order:2;border-right:0;border-top:1px solid var(--line)}}
+#view{position:relative;background:var(--scene)}
+canvas{display:block;width:100%;height:100%}
+h1{font-family:var(--serif);font-weight:600;font-size:1.45rem;margin:0 0 2px;line-height:1.15}
+.eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+.sub{color:var(--muted);font-size:.9rem;margin:0 0 14px}
+.modes{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:10px 0 12px}
+.modes button,.steps button{font:inherit;font-size:.85rem;padding:7px 4px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:5px;cursor:pointer}
+.modes button[aria-pressed="true"]{background:var(--accent);color:#fff;border-color:var(--accent)}
+.modes button:focus-visible,.steps button:focus-visible,.part:focus-visible{outline:2px solid var(--hi);outline-offset:1px}
+label.range{display:block;font-size:.8rem;color:var(--muted);margin:8px 0 2px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.steps{display:flex;gap:6px;align-items:center;margin:6px 0 4px}
+.steps button{flex:0 0 auto;padding:6px 10px}
+.steps .cap{flex:1;font-size:.9rem}
+#caption{background:var(--stain);border-radius:6px;padding:10px 12px;font-size:.92rem;margin:8px 0 14px;min-height:56px}
+#caption b{font-family:var(--serif);font-weight:600}
+h2{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:500;margin:16px 0 6px;border-top:1px solid var(--line);padding-top:12px}
+.part{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;padding:6px 6px;border-radius:5px;cursor:pointer;border:1px solid transparent}
+.part:hover{background:var(--stain)}
+.part[aria-selected="true"]{border-color:var(--accent);background:var(--stain)}
+.part .sw{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.2)}
+.part .nm{font-weight:600;font-size:.92rem}
+.part .nm small{display:block;font-weight:400;color:var(--muted);font-size:.8rem}
+.part input{margin:0}
+#detail{font-size:.9rem;margin-top:8px}
+#detail p{margin:.4rem 0}
+.tag{display:inline-block;font-family:var(--mono);font-size:.68rem;padding:1px 6px;border:1px solid var(--line);border-radius:3px;color:var(--muted);margin-right:4px}
+#hud{position:absolute;left:14px;bottom:12px;font-family:var(--mono);font-size:.72rem;color:var(--muted);pointer-events:none}
+#label{position:absolute;transform:translate(-50%,-130%);background:var(--ink);color:var(--bg);font-family:var(--mono);font-size:.75rem;padding:3px 8px;border-radius:4px;pointer-events:none;white-space:nowrap}
+#label:after{content:"";position:absolute;left:50%;bottom:-6px;margin-left:-6px;border:6px solid transparent;border-top-color:var(--ink);border-bottom:0}
+.views{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 0}
+.views button{font:inherit;font-size:.78rem;padding:4px 8px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer}
+</style>
+<div id="app">
+<div id="panel">
+  <div class="eyebrow">Variant B · rev 3.0 · interactive</div>
+  <h1>Plate Scanner Explorer</h1>
+  <p class="sub">Drag to orbit, scroll to zoom, right-drag to pan. Click a part for what it does.</p>
+  <div class="modes" role="group" aria-label="View mode">
+    <button data-mode="assembled" aria-pressed="true">Assembled</button>
+    <button data-mode="exploded" aria-pressed="false">Exploded</button>
+    <button data-mode="section" aria-pressed="false">Section</button>
+    <button data-mode="operate" aria-pressed="false">Operate</button>
+  </div>
+  <div id="explodeBox"><label class="range" for="explode">Explode</label><input id="explode" type="range" min="0" max="1" step="0.01" value="0"></div>
+  <div id="operateBox" hidden>
+    <div class="steps"><button id="prev" aria-label="Previous step">‹</button><div class="cap" id="stepName"></div><button id="next" aria-label="Next step">›</button></div>
+    <input id="step" type="range" min="0" max="9" step="0.01" value="0" aria-label="Operation timeline">
+  </div>
+  <div id="caption"><b>The whole scanner, at rest.</b> A black tube standing on an A4 light pad. The plate goes in through the flap at the bottom; the camera looks down from the top; the Pi lives in a bay on the back.</div>
+  <div class="views">
+    <button data-view="front">Front ¾</button><button data-view="rear">Rear ¾</button><button data-view="top">Top</button><button data-view="door">Door</button><button data-view="panel">Panel</button><button data-view="camera">Camera</button><button data-view="pi">Pi bay</button>
+  </div>
+  <h2>Parts</h2>
+  <div id="parts"></div>
+  <div id="detail"></div>
+</div>
+<div id="view"><canvas id="c"></canvas><div id="label" hidden></div><div id="hud"></div></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/*__DATA__*/
+</script>
+<script>
+(function(){
+const D = window.SCANNER_DATA;
+const M = D.meta, K = M._constants, HINGE = M._hinge;
+const CATALOG = {
+  frame:     {name:"Frame", sub:"printed · black PETG", color:0x3a3a40, group:"print",
+              text:"<p>Stands on the light pad. A 2 mm floor ring masks the pad everywhere except under the plate; a 6 mm rim on three sides is the plate pocket (0.4 mm clearance on a CELLTREAT skirt), open toward the loading slot. The groove in its top face locates the tower. The two lugs on the front carry the door on <b>snap-fit C-slots</b>: no pins to lose.</p><p><span class='tag'>~2 h print</span><span class='tag'>82 cm³</span></p>"},
+  tower:     {name:"Tower with Pi bay", sub:"printed · black PETG, printed upside down", color:0x232326, group:"print",
+              text:"<p>A 3 mm-walled dark tube, 160 mm tall, closed at the top by the camera plate: a Ø34 hole for the lens, four bosses for the HQ camera board, four peg holes for the cover. Three walls are blank. On the back, the <b>Pi bay</b> is part of the same print: a hood with two rail grooves, open at the bottom and the rear, a side window for USB and Ethernet, a slot in its roof for the camera ribbon, two magnet pockets. Nothing pierces the tube except that roof slot.</p><p><span class='tag'>~7 h print</span><span class='tag'>346 cm³</span></p>"},
+  pi_sled:   {name:"Cassette (Pi sled + control face)", sub:"printed · slides up into the bay", color:0x2c2c30, group:"print", text:"<p>One print: a front plate with the Pi's four bosses and two side rails, a foot notched under the power and HDMI plugs, and an outer plate that is the <b>control face</b>: display window with bosses on the inside, the Ø19.4 button hole, vents low down. Pi, HAT, display, button and 8 cm of wiring ride in it as one unit. Slide it up the grooves until the two magnets click; pull the thumb tab to take everything out.</p>"},
+  cam_cover: {name:"Camera cover", sub:"printed", color:0x2c2c30, group:"print", text:"<p>Sits over the HQ camera board on four pegs. The slot on its rear face lets the ribbon out toward the Pi bay. Lift it to reach the aperture ring; the focus ring is reached from below with the tower lifted off the frame.</p>"},
+  door:      {name:"Door", sub:"printed · gravity flap", color:0x4a4f58, group:"print",
+              text:"<p>Hangs from two integral Ø3 pins that snap into the frame lugs' C-slots; gravity keeps it shut and two Ø6 magnets in its lower corners hold it against the frame's front face. Lift from the finger notch, it swings up and out; drop it, it clicks home light-tight over the 34 mm slot.</p>"},
+  pad:       {name:"Light pad", sub:"bought · Huion L4S A4, 360 × 270 × 5", color:0xe9e8e4, group:"buy", text:"<p>The floor and the only light source: 1500 lux, USB powered from the Pi, remembers its brightness. The box just stands on it, clear of the touch switch on its front-left edge.</p>"},
+  pad_lit:   {name:"Lit area", sub:"310 × 210 mm", color:0xffffff, group:"buy", text:"<p>The pad's active area; the plate pocket sits well inside it.</p>"},
+  screws:    {name:"Screws", sub:"M2.5 × 8 ×8, M2 × 6 ×4", color:0x8d9196, group:"buy", text:"<p>Four M2.5 on the camera bosses, four M2.5 on the sled bosses, four M2 on the display. That is every screw in the instrument.</p>"},
+  plate:     {name:"6-well plate", sub:"CELLTREAT 229105, lid on", color:0x9fc7e6, group:"buy", text:"<p>Shown lid-up as it goes in for the label photo. For the colony shot it is flipped about its long axis (lid down): the well floors face the camera, the marker ink is pressed against the pad and only casts a soft shadow.</p>"},
+  cam_board: {name:"HQ camera board", sub:"bought · Raspberry Pi", color:0x1e6b3a, group:"buy", text:"<p>38 × 38 mm board on 8 mm standoffs above the top plate; sensor 200 mm above the flipped colony plane. Its ribbon leaves through the cover's slot, over the rear edge and down into the Pi bay.</p>"},
+  lens:      {name:"8 mm CS lens", sub:"bought · Arducam", color:0x2b2b2e, group:"buy", text:"<p>Hangs down through the Ø34 hole into the dark tube. Set to F5.6; depth of field ±10 mm covers both the lid-up label plane and the flipped colony plane.</p>"},
+  pi:        {name:"Raspberry Pi 5 + cooler", sub:"bought", color:0x1e6b3a, group:"buy", text:"<p>Screwed to four bosses inside the bay, components facing out, ports facing down (USB-C power, HDMI) and sideways (USB, Ethernet to your Mac). Only captures; your Mac runs the models.</p>"},
+  button:    {name:"Pushbutton, 19 mm stainless", sub:"bought · anti-vandal, RGB ring", color:0x9aa0a6, group:"buy", text:"<p>Panel-mount momentary switch with a lit ring, threaded through the Ø19.4 hole and nutted from inside. Its ring is the status light: green ready, white capturing, amber blinking means flip the plate, red error. GPIO 17 for the switch, three GPIOs for the ring.</p>"},
+  ring:      {name:"Status ring", sub:"part of the button", color:0x4cff7a, group:"buy", text:"<p>The RGB ring around the button; the colour is the state.</p>"},
+  display:   {name:"2-inch display", sub:"bought · 320 × 240 IPS, ST7789, SPI", color:0x14502c, group:"buy", text:"<p>Sits in a printed bezel on the front on four M2 screws. Shows the next step in plain words, then the six well counts and a thumbnail of the last plate. SPI plus two GPIOs; wires run inside the tube along the top plate into the Pi bay.</p>"},
+  screen:    {name:"Screen", sub:"what the display shows", color:0xe8eef6, group:"buy", text:"<p>Lit area 42 × 32 mm: LID UP · A1 REAR-LEFT · PRESS, then FLIP TOWARD YOU, then the counts.</p>"},
+  ribbon:    {name:"Camera ribbon", sub:"22-to-15 pin, 300 mm", color:0xc9d3e0, group:"buy", text:"<p>Camera board → cover slot → over the rear edge → roof slot of the Pi bay → CSI port.</p>"},
+  cables:    {name:"Power, Ethernet, pad lead", sub:"USB-C (white) · Cat 6 (blue) · USB-A to the pad (black)", color:0x2a4fb0, group:"buy", text:"<p>USB-C power drops out of the open bottom of the bay onto the pad and away. Ethernet leaves through the side window, which spans the Pi's whole port edge so a Pi 4 or a Pi 5 fits, to the Mac's adapter. The light pad's USB lead plugs into a Pi USB port in the same window and runs round the back of the pad to its micro-USB port on the left edge, so the whole instrument has one power cable. Every run is drawn at the cable's real diameter and bend radius from the same route the CAD sweeps.</p>"},
+  plugs:     {name:"Plugs", sub:"USB-C, RJ45 with boot, USB-A, 8-way housing", color:0x1b1b1d, group:"buy", text:"<p>The rigid ends: the 27 W supply's USB-C overmould under the Pi, the RJ45 plug and boot in the side window, the pad lead's USB-A plug below it, and the 8-way housing on the display's header.</p>"},
+  hat:       {name:"Proto HAT on the Pi", sub:"bought · Perma-Proto HAT + tall stacking header", color:0x14502c, group:"buy", text:"<p>Sits on the Pi's 40-pin header above the cooler. Carries two JST-XH sockets (5-pin button, 8-pin display) and the three ring resistors. The panel harness plugs in here, so nothing is soldered to the Pi and the sled comes out with one pull.</p>"},
+  harness:   {name:"Panel pigtails", sub:"8-way + 5-way, side-entry JST-XH on the HAT", color:0xee7a1c, group:"buy", text:"<p>Two flat rainbow looms, 26 AWG. The 8-way runs from the display's header down the channel beside the Pi's left edge and across the HAT into a side-entry socket; the 5-way from the button's lugs down the right side, in front of the USB stacks, into the other. Heat-shrink where each leaves its connector. Entirely inside the cassette; nothing enters the tube.</p>"},
+  magnets:   {name:"Magnets", sub:"Ø6 × 2 mm, 2 pairs", color:0xc7c9cc, group:"buy", text:"<p>One pair in the door, one in the frame's front face; polarity checked before gluing.</p>"},
+};
+const ORDER = ["pad","pad_lit","frame","door","magnets","plate","tower","cam_board","lens","cam_cover","screws","pi","hat","pi_sled","button","ring","display","screen","ribbon","cables","harness","plugs"];
+const EXPLODE = {pad:[0,0,0],frame:[0,0,0],door:[0,-70,0],magnets:[0,-70,0],plate:[0,0,45],tower:[0,0,110],button:[0,-45,110],ring:[0,-45,110],display:[0,-40,110],screen:[0,-40,110],
+  cam_board:[0,0,200],lens:[0,0,200],cam_cover:[0,0,270],screws:[0,0,1e9],pi:[0,60,40],hat:[0,60,40],pi_sled:[0,60,40],button:[0,60,40],ring:[0,60,40],display:[0,60,40],screen:[0,60,40],ribbon:[0,0,1e9],cables:[0,0,1e9],harness:[0,0,1e9],plugs:[0,0,1e9],pad_lit:[0,0,0]};
+
+// ---- STL parse
+function b64(s){const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u.buffer;}
+function parseSTL(buf){const dv=new DataView(buf);const n=dv.getUint32(80,true);const pos=new Float32Array(n*9);let o=84;
+ for(let i=0;i<n;i++){o+=12;for(let k=0;k<9;k++){pos[i*9+k]=dv.getFloat32(o,true);o+=4;}o+=2;}
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));g.computeVertexNormals();return g;}
+
+// ---- scene
+const canvas=document.getElementById('c'), view=document.getElementById('view');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.localClippingEnabled=true;
+renderer.outputEncoding=THREE.sRGBEncoding;
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(38,1,1,5000);
+const hemi=new THREE.HemisphereLight(0xffffff,0x8a8290,0.85);scene.add(hemi);
+const key=new THREE.DirectionalLight(0xffffff,0.9);key.position.set(-300,-500,600);scene.add(key);
+const rim=new THREE.DirectionalLight(0xffffff,0.35);rim.position.set(400,500,300);scene.add(rim);
+const clip=new THREE.Plane(new THREE.Vector3(-1,0,0),0.001);
+const parts={}, meshes=[];
+// ---- flexible parts: rebuilt from the CAD's cable routes as smooth filleted curves with per-conductor colours
+const FLEX={ribbon:1,cables:1,harness:1};
+const INSUL={grey:0xb9bbbd,purple:0x6f3aa8,blue:0x1e4fd0,green:0x2aa14a,yellow:0xf0cf1c,orange:0xee7a1c,red:0xcf2621,brown:0x64391a,black:0x151515,white:0xececec,ivory:0xe7e1d1};
+function filletPolyline(pts,r,nArc=12){const out=[pts[0].clone()];for(let i=1;i<pts.length-1;i++){const p0=pts[i-1],p1=pts[i],p2=pts[i+1];const d0=p0.clone().sub(p1),d2=p2.clone().sub(p1);const l0=d0.length(),l2=d2.length();if(l0<1e-6||l2<1e-6)continue;const u0=d0.divideScalar(l0),u2=d2.divideScalar(l2);const ang=Math.acos(Math.max(-1,Math.min(1,u0.dot(u2))));if(ang>Math.PI-1e-3)continue;const rr=Math.min(r,0.49*l0,0.49*l2);const tl=rr/Math.tan(ang/2);const a=p1.clone().addScaledVector(u0,tl),b=p1.clone().addScaledVector(u2,tl);const bis=u0.clone().add(u2).normalize();const c=p1.clone().addScaledVector(bis,rr/Math.sin(ang/2));const va=a.clone().sub(c),vb=b.clone().sub(c);const w=Math.acos(Math.max(-1,Math.min(1,va.dot(vb)/(va.length()*vb.length()))));for(let k=0;k<=nArc;k++){const t=k/nArc;const q=w<1e-6?va.clone():va.clone().multiplyScalar(Math.sin((1-t)*w)/Math.sin(w)).addScaledVector(vb,Math.sin(t*w)/Math.sin(w));out.push(c.clone().add(q));}}out.push(pts[pts.length-1].clone());const res=[out[0]];for(const p of out.slice(1))if(p.distanceTo(res[res.length-1])>1e-4)res.push(p);return res;}
+function frames(pts,hint){const n=pts.length,T=[],S=[];for(let i=0;i<n;i++)T.push(pts[Math.min(i+1,n-1)].clone().sub(pts[Math.max(i-1,0)]).normalize());let s0=hint.clone().addScaledVector(T[0],-hint.dot(T[0]));if(s0.length()<1e-6)s0=new THREE.Vector3(0,0,1).cross(T[0]);S.push(s0.normalize());for(let i=1;i<n;i++){const axis=T[i-1].clone().cross(T[i]);if(axis.length()<1e-8){S.push(S[i-1].clone());continue;}let ang=Math.asin(Math.max(-1,Math.min(1,axis.length())));if(T[i-1].dot(T[i])<0)ang=Math.PI-ang;const s=S[i-1].clone().applyAxisAngle(axis.normalize(),ang);s.addScaledVector(T[i],-s.dot(T[i])).normalize();S.push(s);}return {T,S};}
+function colorize(g,hex){const c=new THREE.Color(hex);const n=g.attributes.position.count;const col=new Float32Array(n*3);for(let i=0;i<n;i++){col[i*3]=c.r;col[i*3+1]=c.g;col[i*3+2]=c.b;}g.setAttribute('color',new THREE.BufferAttribute(col,3));return g;}
+function tube(pts,r,color,segs){const curve=new THREE.CatmullRomCurve3(pts,false,'catmullrom',0.5);const g=new THREE.TubeGeometry(curve,segs||Math.max(24,Math.round(curve.getLength()/1.5)),r,10,false).toNonIndexed();return colorize(g,color);}
+function strip(pts,width,widthEnd,taper,color){const {S}=frames(pts,new THREE.Vector3(1,0,0));const L=[0];for(let i=1;i<pts.length;i++)L.push(L[i-1]+pts[i].distanceTo(pts[i-1]));const tot=L[L.length-1];const pos=[];let prev=null;
+  for(let i=0;i<pts.length;i++){let w=width;if(widthEnd&&taper>0){const rem=tot-L[i];if(rem<taper)w=widthEnd+(width-widthEnd)*(rem/taper);}const a=pts[i].clone().addScaledVector(S[i],w/2),b=pts[i].clone().addScaledVector(S[i],-w/2);if(prev)pos.push(prev[0],prev[1],b,prev[0],b,a);prev=[a,b];}
+  const arr=new Float32Array(pos.length*3);pos.forEach((p,i)=>{arr[i*3]=p.x;arr[i*3+1]=p.y;arr[i*3+2]=p.z;});const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(arr,3));g.computeVertexNormals();return colorize(g,color);}
+function mergeGeos(gs){let n=0;for(const g of gs)n+=g.attributes.position.count;const pos=new Float32Array(n*3),nor=new Float32Array(n*3),col=new Float32Array(n*3);let o=0;for(const g of gs){pos.set(g.attributes.position.array,o*3);nor.set(g.attributes.normal.array,o*3);col.set(g.attributes.color.array,o*3);o+=g.attributes.position.count;}const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));g.setAttribute('normal',new THREE.BufferAttribute(nor,3));g.setAttribute('color',new THREE.BufferAttribute(col,3));return g;}
+function buildFlex(n){const R=D.cables;const V=p=>new THREE.Vector3(p[0],p[1],p[2]);const gs=[];
+  if(n==='ribbon'){const r=R.ribbon;gs.push(strip(filletPolyline(r.pts.map(V),r.bend_r,16),r.width,r.width_end,r.taper_mm||0,INSUL.ivory));}
+  else if(n==='harness'){for(const k of ['loom_display','loom_button']){const r=R[k];const dense=filletPolyline(r.pts.map(V),r.bend_r);const {T,S}=frames(dense,new THREE.Vector3(1,0,0));const m=r.colors.length,pitch=2*r.wire_r*1.03;
+    r.colors.forEach((c,i)=>{const off=(i-(m-1)/2)*pitch;gs.push(tube(dense.map((p,j)=>p.clone().addScaledVector(S[j],off)),r.wire_r,INSUL[c]));});
+    for(const e of [0,dense.length-1]){const d=T[e].clone().multiplyScalar(e===0?1:-1);gs.push(tube([dense[e].clone().addScaledVector(d,1.5),dense[e].clone().addScaledVector(d,9)],m*pitch/2*0.62+0.3,INSUL.black,4));}}}
+  else{for(const k of ['power','ethernet','pad_usb']){const r=R[k];gs.push(tube(filletPolyline(r.pts.map(V),r.bend_r),r.r,INSUL[r.color]));}}
+  return mergeGeos(gs);}
+for(const n of ORDER){ let g; if(FLEX[n]){if(!D.cables)continue;g=buildFlex(n);} else {if(!D.stl[n]) continue; g=parseSTL(b64(D.stl[n]));} const c=CATALOG[n];
+  const mat=FLEX[n]?new THREE.MeshStandardMaterial({color:0xffffff,vertexColors:true,roughness:0.5,metalness:0.05,side:THREE.DoubleSide}):new THREE.MeshStandardMaterial({color:c.color,roughness:(n==='pad'||n==='pad_lit')?0.3:0.65,metalness:(n==='lens'||n==='magnets'||n==='button'||n==='screws')?0.75:0.05,side:THREE.DoubleSide,flatShading:true,
+     transparent:n==='plate',opacity:n==='plate'?0.42:1,emissive:n==='pad_lit'?0xffffff:(n==='ring'?0x2aff60:(n==='screen'?0xbfd3ea:0x000000)),emissiveIntensity:n==='pad_lit'?0.7:(n==='ring'?1:(n==='screen'?0.8:0))});
+  const m=new THREE.Mesh(g,mat);m.name=n;m.userData.base=mat.color.getHex();scene.add(m);parts[n]=m;meshes.push(m);}
+// bench plane
+const bench=new THREE.Mesh(new THREE.PlaneGeometry(2400,2400),new THREE.MeshStandardMaterial({color:0x8f8a93,roughness:0.9}));bench.position.z=-5.2;scene.add(bench);
+function themeBg(){const c=getComputedStyle(document.documentElement).getPropertyValue('--scene').trim();renderer.setClearColor(new THREE.Color(c||'#f7f6fa'),1);bench.material.color.set(matchMedia('(prefers-color-scheme: dark)').matches&&document.documentElement.dataset.theme!=='light'?0x3a3442:0x8f8a93);}
+themeBg();matchMedia('(prefers-color-scheme: dark)').addEventListener('change',themeBg);new MutationObserver(themeBg).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+
+// ---- orbit control (minimal)
+const target=new THREE.Vector3(0,10,110); let sph={r:760,theta:-0.95,phi:1.12};
+function applyCam(){camera.position.set(target.x+sph.r*Math.sin(sph.phi)*Math.cos(sph.theta),target.y+sph.r*Math.sin(sph.phi)*Math.sin(sph.theta),target.z+sph.r*Math.cos(sph.phi));camera.up.set(0,0,1);camera.lookAt(target);}
+let drag=null;
+canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,b:e.button,moved:false};canvas.setPointerCapture(e.pointerId);});
+canvas.addEventListener('pointermove',e=>{ if(!drag)return; const dx=e.clientX-drag.x,dy=e.clientY-drag.y; drag.x=e.clientX;drag.y=e.clientY; if(Math.abs(dx)+Math.abs(dy)>2)drag.moved=true;
+  if(drag.b===2||e.shiftKey){const s=sph.r*0.0012;const right=new THREE.Vector3().crossVectors(camera.getWorldDirection(new THREE.Vector3()),camera.up).normalize();const up=camera.up.clone();target.addScaledVector(right,-dx*s).addScaledVector(up,dy*s);}
+  else{sph.theta-=dx*0.006;sph.phi=Math.min(Math.PI-0.05,Math.max(0.05,sph.phi-dy*0.006));} applyCam();});
+canvas.addEventListener('pointerup',e=>{ if(drag&&!drag.moved&&drag.b===0)pick(e); drag=null;});
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+canvas.addEventListener('wheel',e=>{e.preventDefault();sph.r=Math.min(3000,Math.max(120,sph.r*(1+Math.sign(e.deltaY)*0.08)));applyCam();},{passive:false});
+function resize(){const w=view.clientWidth,h=view.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+window.addEventListener('resize',resize);resize();applyCam();
+
+// ---- state
+let mode='assembled', explode=0, selected=null, step=0, animT=0;
+const VIEWS={front:{r:760,theta:-0.95,phi:1.12,t:[0,10,110]},rear:{r:760,theta:0.9,phi:1.15,t:[0,30,110]},top:{r:700,theta:-1.57,phi:0.12,t:[0,0,60]},
+  door:{r:330,theta:-1.35,phi:1.3,t:[0,-45,35]},panel:{r:340,theta:1.5,phi:1.3,t:[0,105,150]},camera:{r:300,theta:-0.9,phi:0.75,t:[0,10,220]},pi:{r:360,theta:0.85,phi:1.2,t:[0,75,128]}};
+function setView(v){const o=VIEWS[v];sph={r:o.r,theta:o.theta,phi:o.phi};target.set(...o.t);applyCam();}
+function setMode(m){mode=m;document.querySelectorAll('.modes button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===m)));
+  document.getElementById('explodeBox').hidden=(m!=='exploded');document.getElementById('operateBox').hidden=(m!=='operate');
+  for(const me of meshes){me.material.clippingPlanes=(m==='section')?[clip]:null;me.material.needsUpdate=true;}
+  if(m==='exploded'){explode=parseFloat(document.getElementById('explode').value);if(explode===0){document.getElementById('explode').value=1;explode=1;}}
+  if(m==='section'){setView('front');sph.theta=-0.25;sph.phi=1.25;applyCam();}
+  if(m==='operate'){setView('door');step=parseFloat(document.getElementById('step').value);}
+  caption();}
+const CAPTIONS={assembled:"<b>The whole scanner, at rest.</b> A black tube standing on an A4 light pad. The plate goes in through the flap; the camera looks down from the top; the cassette at the back carries the Pi, the screen and the button, so you work with that face toward you and the slot on your left.",
+  exploded:"<b>Five printed parts, everything else bought.</b> Pad → frame → plate → tower (with the Pi bay) → camera board, lens and cover. The door hangs off the frame's front; the cassette with Pi, HAT, display and button rides into the bay from below.",
+  section:"<b>Cut down the middle.</b> The plate lies on the pad inside the frame's pocket; 200 mm of dark tube separate it from the lens; behind the rear wall the Pi sits on its sled in the bay, ribbon dropping in through the roof."};
+const STEPS=[["READY · ring green","Screen: LID UP · A1 REAR-LEFT. Footer: PRESS photograph the lid."],["Lift the flap","It swings up on its snap pins; the magnets let go."],["Slide the plate in, lid up","A1 rear-left; the pocket's side walls guide it to the rear wall. Close the flap."],["Tap: PHOTOGRAPHING · ring white","About one second. The button is ignored while capturing."],["FLIP · ring blinks amber","Screen: FLIP THE PLATE. Footer: PRESS photograph the colonies · HOLD discard this run. Five minutes, then it files the run as incomplete."],["Flip it toward you","About the long axis, so the lid is down and A1 lands front-left."],["Slide it back in, close the flap","The lid rides in the pocket; the well floors face the camera."],["Tap: PHOTOGRAPHING then COUNTING","Four raw frames, then the count runs with the seconds ticking. HOLD discards; PRESS keeps the raw frames without counts."],["DONE · ring pulses purple","Six counts and a thumbnail. PRESS next plate · HOLD reject this run (moves it to _rejected). One minute, then READY."],["DONE",""]];
+function caption(){const el=document.getElementById('caption'); if(mode==='operate'){const i=Math.min(8,Math.floor(step));el.innerHTML=`<b>${STEPS[i][0]}.</b> ${STEPS[i][1]}`;document.getElementById('stepName').textContent=`Step ${i+1} of 9`;}
+  else if(selected){el.innerHTML=`<b>${CATALOG[selected].name}.</b> `+CATALOG[selected].text.replace(/<p>|<\/p>/g,' ').replace(/<span class='tag'>.*$/,'');} else el.innerHTML=CAPTIONS[mode]||CAPTIONS.assembled;}
+
+// ---- transforms per frame
+const tmpM=new THREE.Matrix4(), tmpP=new THREE.Vector3();
+function rotAbout(mesh,axis,ang,pivot){mesh.matrix.identity();const T=new THREE.Matrix4().makeTranslation(pivot.x,pivot.y,pivot.z),R=new THREE.Matrix4().makeRotationAxis(axis,ang),Ti=new THREE.Matrix4().makeTranslation(-pivot.x,-pivot.y,-pivot.z);mesh.matrix.multiply(T).multiply(R).multiply(Ti);}
+function ease(t){return t<0?0:t>1?1:t*t*(3-2*t);}
+function updateTransforms(){
+  for(const n in parts){const m=parts[n];m.matrixAutoUpdate=false;m.matrix.identity();m.visible=true;}
+  if(mode==='exploded'){for(const n in parts){const e=EXPLODE[n]||[0,0,0];if(e[2]>1e8){parts[n].visible=explode<0.05;continue;}parts[n].matrix.makeTranslation(e[0]*explode,e[1]*explode,e[2]*explode);}}
+  if(mode==='operate'){const hp=new THREE.Vector3(0,HINGE.y,HINGE.z),X=new THREE.Vector3(1,0,0);
+    // door angle: open during steps 1-2, closed 3, open 4-6, closed 7-8
+    const s=step;let dAng=0; const openAt=(a,b)=>{if(s>=a&&s<a+1)return ease(s-a);if(s>=a+1&&s<b)return 1;if(s>=b&&s<b+1)return 1-ease(s-b);return 0;};
+    dAng=Math.max(openAt(1,3),openAt(4,7));
+    rotAbout(parts.door,X,-1.85*dAng,hp);
+    // plate: y position and flip
+    let py=-260, flip=0, pz=0;
+    if(s<2)py=-260; else if(s<3)py=-260+260*ease(s-2); else if(s<5)py=0; else if(s<6)py=-260*ease(s-5); else if(s<7){py=-260;flip=ease(s-6);pz=Math.sin(flip*Math.PI)*70;} else if(s<8){py=-260+260*ease(s-7);flip=1;} else {py=0;flip=1;}
+    const P=parts.plate; P.matrix.identity(); const T=new THREE.Matrix4().makeTranslation(0,py,pz); const fz=M._plate_flip_center_z; const F=new THREE.Matrix4().makeTranslation(0,0,fz).multiply(new THREE.Matrix4().makeRotationX(Math.PI*flip)).multiply(new THREE.Matrix4().makeTranslation(0,0,-fz)); P.matrix.multiply(T).multiply(F);
+    const lit=(s>=3&&s<4)||(s>=7&&s<8); const R=(parts.ring||parts.button).material; if(lit){R.emissive.setHex(0xffffff);R.emissiveIntensity=1.2;} else if(s>=4&&s<7){R.emissive.setHex(0xffa020);R.emissiveIntensity=(Math.sin(animT*8)>0?1.4:0.15);} else {R.emissive.setHex(0x2aff60);R.emissiveIntensity=0.9;}
+  } else if(parts.ring){parts.ring.material.emissive.setHex(0x2aff60);parts.ring.material.emissiveIntensity=0.9;}
+  for(const n in parts){parts[n].matrixWorldNeedsUpdate=true;}
+}
+
+// ---- picking + labels
+const ray=new THREE.Raycaster(), mouse=new THREE.Vector2();
+function pick(e){const r=canvas.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;ray.setFromCamera(mouse,camera);
+  const hits=ray.intersectObjects(meshes.filter(m=>m.visible&&m.name!=='pad'&&m.name!=='pad_lit'));select(hits.length?hits[0].object.name:null);}
+function select(n){selected=n;for(const m of meshes){if(m.name==='ring')continue;m.material.emissive.setHex(m.name===n?0x6b3f00:(m.name==='pad_lit'?0xffffff:(m.name==='screen'?0xbfd3ea:0)));}
+  document.querySelectorAll('.part').forEach(p=>p.setAttribute('aria-selected',String(p.dataset.part===n)));
+  document.getElementById('detail').innerHTML=n?CATALOG[n].text:'';document.getElementById('label').hidden=!n;caption();}
+function labelPos(){if(!selected)return;const m=parts[selected];if(!m.visible){document.getElementById('label').hidden=true;return;}
+  m.geometry.computeBoundingBox();const bb=m.geometry.boundingBox;tmpP.copy(bb.getCenter(new THREE.Vector3()));tmpP.z=bb.max.z;tmpP.applyMatrix4(m.matrix);tmpP.project(camera);
+  const r=canvas.getBoundingClientRect();const el=document.getElementById('label');el.hidden=false;el.style.left=((tmpP.x+1)/2*r.width)+'px';el.style.top=((1-tmpP.y)/2*r.height)+'px';el.textContent=CATALOG[selected].name;}
+
+// ---- UI
+const list=document.getElementById('parts');
+for(const n of ORDER){ if(!parts[n])continue; const c=CATALOG[n]; const row=document.createElement('div');row.className='part';row.dataset.part=n;row.tabIndex=0;row.setAttribute('role','option');row.setAttribute('aria-selected','false');
+  row.innerHTML=`<span class="sw" style="background:#${c.color.toString(16).padStart(6,'0')}"></span><span class="nm">${c.name}<small>${c.sub}</small></span><input type="checkbox" checked aria-label="show ${c.name}">`;
+  row.querySelector('input').addEventListener('change',ev=>{parts[n].userData.hidden=!ev.target.checked;});
+  row.addEventListener('click',ev=>{if(ev.target.tagName!=='INPUT')select(n);});row.addEventListener('keydown',ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();select(n);}});
+  list.appendChild(row);}
+document.querySelectorAll('.modes button').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
+document.querySelectorAll('.views button').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
+document.getElementById('explode').addEventListener('input',e=>{explode=parseFloat(e.target.value);});
+const stepEl=document.getElementById('step');stepEl.addEventListener('input',e=>{step=parseFloat(e.target.value);caption();});
+document.getElementById('prev').addEventListener('click',()=>{stepEl.value=Math.max(0,Math.floor(step-0.001));step=parseFloat(stepEl.value);caption();});
+document.getElementById('next').addEventListener('click',()=>{stepEl.value=Math.min(9,Math.floor(step)+1);step=parseFloat(stepEl.value);caption();});
+document.getElementById('hud').textContent='mm · Z up · rev 3.0 · '+ORDER.filter(n=>parts[n]).length+' parts';
+window.__dbg={setView,parts,applyCam,select,setMode,cam:()=>sph,setCam:(r,t,p)=>{sph.r=r;sph.theta=t;sph.phi=p;applyCam();}};
+const prefersReduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function frame(t){animT=t/1000;updateTransforms();for(const n in parts){if(parts[n].userData.hidden)parts[n].visible=false;}labelPos();renderer.render(scene,camera);requestAnimationFrame(frame);}
+requestAnimationFrame(frame);
+})();
+</script>
