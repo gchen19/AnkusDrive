@@ -112,6 +112,26 @@ def sweep_round(pts, r, bend_r):
     for x in pieces[1:]: s = s.fuse(x)
     return s.removeSplitter()
 
+def flat_ribbon_surface(pts, width, t):
+    """Flat cable that lies on a surface: on horizontal runs the thickness is along Z (ribbon on a ceiling),
+    on vertical runs along the run's horizontal normal (ribbon on a wall); the width is always in the surface."""
+    segs = []
+    for a, b_ in zip(pts[:-1], pts[1:]):
+        d = b_ - a; L = d.Length
+        if L < 1e-6: continue
+        u = d.normalize()
+        if abs(u.z) < 0.9: n = V(0, 0, 1)
+        else:
+            n = V(1, 0, 0) if abs(u.x) < 0.5 else V(0, 1, 0)
+        wd = u.cross(n); wd.normalize(); n = wd.cross(u); n.normalize()
+        a2 = a - u * (t / 2); L2 = L + t
+        face = Part.Face(Part.makePolygon([a2 - wd * (width/2) - n * (t/2), a2 + wd * (width/2) - n * (t/2),
+                                           a2 + wd * (width/2) + n * (t/2), a2 - wd * (width/2) + n * (t/2), a2 - wd * (width/2) - n * (t/2)]))
+        segs.append(face.extrude(u * L2))
+    s = segs[0]
+    for x in segs[1:]: s = s.fuse(x)
+    return s
+
 def flat_ribbon(pts, width, t, width_dir):
     """Flat cable along a polyline. The WIDTH always runs along width_dir (X for a cable lying on
     the top plate and down the rear wall); the thickness is perpendicular to both the run and the

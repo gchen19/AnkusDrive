@@ -25,12 +25,12 @@ from across the bench.
 While you hold the button an orange bar fills across the screen; let go before it fills and
 nothing happens. That is the whole language: tap = go, hold = no.
 
-## Where you stand (rev 3.2)
+## Where you stand (rev 4.0)
 
-Everything is on one face. The flap is at the bottom of the plinth, the screen and button are on the
-cassette directly above it. Lift the flap past vertical and it parks against the tower under the
-cassette, so both hands are free for the plate. "A1 rear-left" means the far-left corner from where
-you stand; "toward you" means the flip brings the lid down on the near side.
+The flap is at the bottom of the front, the screen above it, the button on the roof beside the camera. Pressing the
+button pushes straight down into the bench, so it cannot rock the box. Lift the flap past vertical and it parks
+against the tower, so both hands are free for the plate. "A1 rear-left" means the far-left corner from where you
+stand; "toward you" means the flip brings the lid down on the near side.
 
 ## Focus mode
 

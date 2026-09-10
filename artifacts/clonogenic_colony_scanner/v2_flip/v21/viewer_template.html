@@ -46,7 +46,7 @@ h2{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:u
 </style>
 <div id="app">
 <div id="panel">
-  <div class="eyebrow">Variant B · rev 3.0 · interactive</div>
+  <div class="eyebrow">Variant B · rev 4.0 · interactive</div>
   <h1>Plate Scanner Explorer</h1>
   <p class="sub">Drag to orbit, scroll to zoom, right-drag to pan. Click a part for what it does.</p>
   <div class="modes" role="group" aria-label="View mode">
@@ -60,9 +60,9 @@ h2{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:u
     <div class="steps"><button id="prev" aria-label="Previous step">‹</button><div class="cap" id="stepName"></div><button id="next" aria-label="Next step">›</button></div>
     <input id="step" type="range" min="0" max="9" step="0.01" value="0" aria-label="Operation timeline">
   </div>
-  <div id="caption"><b>The whole scanner, at rest.</b> A black tube standing on an A4 light pad. The plate goes in through the flap at the bottom; the camera looks down from the top; the Pi, the screen and the button sit in a cassette on the front, right above the flap.</div>
+  <div id="caption"><b>The whole scanner, at rest.</b> A black tube standing on an A4 light pad. The plate goes in through the flap at the bottom; the camera looks down from the top; the screen sits above the flap and the button on the roof; the Pi hides under the ceiling with the camera.</div>
   <div class="views">
-    <button data-view="front">Front ¾</button><button data-view="rear">Rear ¾</button><button data-view="top">Top</button><button data-view="door">Door</button><button data-view="panel">Panel</button><button data-view="camera">Camera</button><button data-view="pi">Pi bay</button>
+    <button data-view="front">Front ¾</button><button data-view="rear">Rear ¾</button><button data-view="top">Top</button><button data-view="door">Door</button><button data-view="panel">Panel</button><button data-view="camera">Camera</button><button data-view="pi">Roof</button>
   </div>
   <h2>Parts</h2>
   <div id="parts"></div>
@@ -81,10 +81,8 @@ const M = D.meta, K = M._constants, HINGE = M._hinge;
 const CATALOG = {
   frame:     {name:"Plinth", sub:"printed · black PETG, flared", color:0x3a3a40, group:"print",
               text:"<p>Stands on the light pad. Its sides and back flare out 30 and 40 mm to the floor and two toes reach forward under the cassette, so a press on the button 176 mm up cannot rock it (about 6 N to tip, three times the button's own force). A 2 mm floor ring masks the pad everywhere except under the plate; a 6 mm rim on three sides is the plate pocket (0.4 mm clearance on a CELLTREAT skirt), open toward the loading slot. The groove in its top face locates the tower. The two lugs on the front carry the door on <b>snap-fit C-slots</b>: no pins to lose. Lifted past vertical the door parks against the tower.</p><p><span class='tag'>~2 h print</span><span class='tag'>82 cm³</span></p>"},
-  tower:     {name:"Tower with Pi bay", sub:"printed · black PETG, printed upside down", color:0x232326, group:"print",
-              text:"<p>A 3 mm-walled dark tube, 160 mm tall, closed at the top by the camera plate: a Ø34 hole for the lens, four bosses for the HQ camera board, four peg holes for the cover. Three walls are blank. On the back, the <b>Pi bay</b> is part of the same print: a hood with two rail grooves, open at the bottom and the rear, a side window for USB and Ethernet, a slot in its roof for the camera ribbon, two magnet pockets. Nothing pierces the tube except that roof slot.</p><p><span class='tag'>~7 h print</span><span class='tag'>346 cm³</span></p>"},
-  pi_sled:   {name:"Cassette (Pi sled + control face)", sub:"printed · slides up into the bay", color:0x2c2c30, group:"print", text:"<p>One print: a front plate with the Pi's four bosses and two side rails, a foot notched under the power and HDMI plugs, and an outer plate that is the <b>control face</b>: display window with bosses on the inside, the Ø16.2 button hole, vents low down. Pi, HAT, display, button and 8 cm of wiring ride in it as one unit. Slide it up the grooves until the two magnets click; pull the thumb tab to take everything out.</p>"},
-  cam_cover: {name:"Camera cover", sub:"printed", color:0x2c2c30, group:"print", text:"<p>Sits over the HQ camera board on four pegs. The slot on its rear face lets the ribbon out toward the Pi bay. Lift it to reach the aperture ring; the focus ring is reached from below with the tower lifted off the frame.</p>"},
+  tower:     {name:"Tower", sub:"printed · black PETG, printed upside down", color:0x232326, group:"print",
+              text:"<p>A 2.4 mm-walled dark tube closed by a 3 mm ceiling. Everything electronic hangs from that ceiling, above the lens front where the camera cannot see: four bosses for the HQ camera in the middle, four for the Raspberry Pi on the right, a Ø16.2 hole for the button front-left. The front wall carries the display window and its bosses; the back wall a cutout for the Pi's Ethernet and USB stacks and two vent slots; the right wall a slot for the USB-C plug and the microSD. Three walls, no ducts.</p><p><span class='tag'>~12 h print</span></p>"},
   door:      {name:"Door", sub:"printed · gravity flap", color:0x4a4f58, group:"print",
               text:"<p>Hangs from two integral Ø3 pins that snap into the frame lugs' C-slots; gravity keeps it shut and two Ø6 magnets in its lower corners hold it against the frame's front face. Lift from the finger notch, it swings up and out; drop it, it clicks home light-tight over the 34 mm slot.</p>"},
   pad:       {name:"Light pad", sub:"bought · Huion L4S A4, 360 × 270 × 5", color:0xe9e8e4, group:"buy", text:"<p>The floor and the only light source: 1500 lux, USB powered from the Pi, remembers its brightness. The box just stands on it, clear of the touch switch on its front-left edge.</p>"},
@@ -93,20 +91,19 @@ const CATALOG = {
   plate:     {name:"6-well plate", sub:"CELLTREAT 229105, lid on", color:0x9fc7e6, group:"buy", text:"<p>Shown lid-up as it goes in for the label photo. For the colony shot it is flipped about its long axis (lid down): the well floors face the camera, the marker ink is pressed against the pad and only casts a soft shadow.</p>"},
   cam_board: {name:"HQ camera board", sub:"bought · Raspberry Pi", color:0x1e6b3a, group:"buy", text:"<p>38 × 38 mm board on 8 mm standoffs above the top plate; sensor 200 mm above the flipped colony plane. Its ribbon leaves through the cover's slot, over the rear edge and down into the Pi bay.</p>"},
   lens:      {name:"8 mm CS lens", sub:"bought · Arducam", color:0x2b2b2e, group:"buy", text:"<p>Hangs down through the Ø34 hole into the dark tube. Set to F5.6; depth of field ±10 mm covers both the lid-up label plane and the flipped colony plane.</p>"},
-  pi:        {name:"Raspberry Pi 5 + cooler", sub:"bought", color:0x1e6b3a, group:"buy", text:"<p>Screwed to four bosses inside the bay, components facing out, ports facing down (USB-C power, HDMI) and sideways (USB, Ethernet to your Mac). Only captures; your Mac runs the models.</p>"},
-  button:    {name:"Pushbutton, 16 mm stainless", sub:"bought · Ulincos U16A1S, momentary, no lamp", color:0x9aa0a6, group:"buy", text:"<p>A plain stainless anti-vandal momentary switch through the Ø16.2 hole, nutted from inside, two wires to GPIO 17 and ground. Tap = go, hold = no; the screen says what each does right now, and its colour bar is the status light: green ready, white capturing, amber blinking means flip the plate, red error.</p>"},
-  display:   {name:"2-inch display", sub:"bought · 320 × 240 IPS, ST7789, SPI", color:0x14502c, group:"buy", text:"<p>Sits in a printed bezel on the front on four M2 screws. Shows the next step in plain words, then the six well counts and a thumbnail of the last plate. SPI plus two GPIOs; wires run inside the tube along the top plate into the Pi bay.</p>"},
+  pi:        {name:"Raspberry Pi 5 + cooler", sub:"bought · under the ceiling, beside the camera", color:0x1e6b3a, group:"buy", text:"<p>Screwed to four bosses under the tower's ceiling, components down, on the right of the lens. Its Ethernet and USB stacks sit in a cutout in the back wall, the USB-C power and microSD in a slot in the right wall. The display's cable and the button's two wires plug straight onto its header: no HAT, no soldering. Only captures; your Mac runs the models.</p>"},
+  button:    {name:"Pushbutton, 16 mm stainless", sub:"bought · Ulincos U16A1S on the roof", color:0x9aa0a6, group:"buy", text:"<p>A plain stainless momentary switch through the roof, front-left, beside the camera: pressing it pushes straight down into the bench, so it cannot rock the box. Two wires to GPIO 17 and ground. Tap = go, hold = no; the screen says what each does right now.</p>"},
+  display:   {name:"2-inch display", sub:"bought · 320 × 240 IPS, ST7789, SPI", color:0x14502c, group:"buy", text:"<p>In the front wall above the door, on four M2 screws inside. Shows the next step in plain words, the six well counts and a thumbnail; its colour bar is the status light. Its own cable runs up inside the tube to the Pi's header.</p>"},
   screen:    {name:"Screen", sub:"what the display shows", color:0xe8eef6, group:"buy", text:"<p>Lit area 42 × 32 mm: LID UP · A1 REAR-LEFT · PRESS, then FLIP TOWARD YOU, then the counts.</p>"},
-  ribbon:    {name:"Camera ribbon", sub:"22-to-15 pin, 300 mm", color:0xc9d3e0, group:"buy", text:"<p>Camera board → cover slot → over the rear edge → roof slot of the Pi bay → CSI port.</p>"},
-  cables:    {name:"Power, Ethernet, pad lead", sub:"USB-C (white) · Cat 6 (blue) · USB-A to the pad (black)", color:0x2a4fb0, group:"buy", text:"<p>USB-C power drops out of the open bottom of the bay onto the pad and away. Ethernet leaves through the side window, which spans the Pi's whole port edge so a Pi 4 or a Pi 5 fits, to the Mac's adapter. The light pad's USB lead plugs into a Pi USB port in the same window and runs round the back of the pad to its micro-USB port on the left edge, so the whole instrument has one power cable. Every run is drawn at the cable's real diameter and bend radius from the same route the CAD sweeps.</p>"},
-  plugs:     {name:"Plugs", sub:"USB-C, RJ45 with boot, USB-A, 8-way housing", color:0x1b1b1d, group:"buy", text:"<p>The rigid ends: the 27 W supply's USB-C overmould under the Pi, the RJ45 plug and boot in the side window, the pad lead's USB-A plug below it, and the 8-way housing on the display's header.</p>"},
-  hat:       {name:"Proto HAT on the Pi", sub:"bought · Perma-Proto HAT + tall stacking header", color:0x14502c, group:"buy", text:"<p>Sits on the Pi's 40-pin header above the cooler. Carries two right-angle pin headers, 8-pin for the display\'s own cable and 7-pin for the button\'s harness, and nothing else. Both plug in here, so nothing is soldered to the Pi and the sled comes out with one pull.</p>"},
-  harness:   {name:"Panel cables", sub:"the display's 8-wire cable and the button's two wires", color:0xee7a1c, group:"buy", text:"<p>Both come with their parts. The display cable runs from its header down the channel beside the Pi's left edge and across the HAT onto a right-angle header; the button's two wires from its screw terminals down the right side, in front of the USB stacks, onto the other. Heat-shrink where each leaves a connector. Entirely inside the cassette; nothing enters the tube.</p>"},
+  ribbon:    {name:"Camera ribbon", sub:"22-to-15 pin, 200 mm", color:0xc9d3e0, group:"buy", text:"<p>Camera board → along the ceiling → down the right wall gap → the Pi\'s CSI connector. Fifteen centimetres, entirely inside.</p>"},
+  cables:    {name:"Power, Ethernet, pad lead", sub:"USB-C (white) · Cat 6 (blue) · USB-A to the pad (black)", color:0x2a4fb0, group:"buy", text:"<p>USB-C power leaves through the right wall, Ethernet and the light pad\'s lead through the back-wall cutout, all high up and out of the way of the slot. One power cable for the whole instrument.</p>"},
+  plugs:     {name:"Plugs", sub:"USB-C, RJ45 with boot, USB-A, 8-way housing", color:0x1b1b1d, group:"buy", text:"<p>The rigid ends: the supply\'s USB-C plug in the right wall, the RJ45 plug and boot and the pad lead\'s USB-A plug in the back cutout, and the 8-way housing on the display\'s header.</p>"},
+  harness:   {name:"Panel cables", sub:"the display\'s 8-wire cable and the button\'s two wires", color:0xee7a1c, group:"buy", text:"<p>Both come with their parts and both plug straight onto the Pi\'s header from below, past the lens. Nothing is soldered.</p>"},
   magnets:   {name:"Magnets", sub:"Ø6 × 2 mm, 2 pairs", color:0xc7c9cc, group:"buy", text:"<p>One pair in the door, one in the frame's front face; polarity checked before gluing.</p>"},
 };
-const ORDER = ["pad","pad_lit","frame","door","magnets","plate","tower","cam_board","lens","cam_cover","screws","pi","hat","pi_sled","button","display","screen","ribbon","cables","harness","plugs"];
-const EXPLODE = {pad:[0,0,0],frame:[0,0,0],door:[0,-70,0],magnets:[0,-70,0],plate:[0,0,45],tower:[0,0,110],
-  cam_board:[0,0,200],lens:[0,0,200],cam_cover:[0,0,270],screws:[0,0,1e9],pi:[0,-60,40],hat:[0,-60,40],pi_sled:[0,-60,40],button:[0,-60,40],display:[0,-60,40],screen:[0,-60,40],ribbon:[0,0,1e9],cables:[0,0,1e9],harness:[0,0,1e9],plugs:[0,0,1e9],pad_lit:[0,0,0]};
+const ORDER = ["pad","pad_lit","frame","door","magnets","plate","tower","cam_board","lens","screws","pi","button","display","screen","ribbon","cables","harness","plugs"];
+const EXPLODE = {pad:[0,0,0],pad_lit:[0,0,0],frame:[0,0,0],door:[0,-70,0],magnets:[0,-70,0],plate:[0,0,45],tower:[0,0,110],cam_board:[0,0,190],lens:[0,0,190],screws:[0,0,1e9],
+  pi:[0,0,190],button:[0,0,250],display:[0,-45,110],screen:[0,-45,110],ribbon:[0,0,1e9],cables:[0,0,1e9],harness:[0,0,1e9],plugs:[0,0,1e9]};
 
 // ---- STL parse
 function b64(s){const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u.buffer;}
@@ -123,7 +120,7 @@ const camera=new THREE.PerspectiveCamera(38,1,1,5000);
 const hemi=new THREE.HemisphereLight(0xffffff,0x8a8290,0.85);scene.add(hemi);
 const key=new THREE.DirectionalLight(0xffffff,0.9);key.position.set(-300,-500,600);scene.add(key);
 const rim=new THREE.DirectionalLight(0xffffff,0.35);rim.position.set(400,500,300);scene.add(rim);
-const clip=new THREE.Plane(new THREE.Vector3(-1,0,0),0.001);
+const clip=new THREE.Plane(new THREE.Vector3(-1,0,0),45);
 const parts={}, meshes=[];
 // ---- flexible parts: rebuilt from the CAD's cable routes as smooth filleted curves with per-conductor colours
 const FLEX={ribbon:1,cables:1,harness:1};
@@ -169,7 +166,7 @@ window.addEventListener('resize',resize);resize();applyCam();
 // ---- state
 let mode='assembled', explode=0, selected=null, step=0, animT=0;
 const VIEWS={front:{r:760,theta:-0.95,phi:1.12,t:[0,10,110]},rear:{r:760,theta:0.9,phi:1.15,t:[0,30,110]},top:{r:700,theta:-1.57,phi:0.12,t:[0,0,60]},
-  door:{r:330,theta:-1.35,phi:1.3,t:[0,-45,35]},panel:{r:340,theta:-1.6,phi:1.3,t:[0,-100,150]},camera:{r:300,theta:-0.9,phi:0.75,t:[0,10,220]},pi:{r:360,theta:-2.3,phi:1.2,t:[0,-75,128]}};
+  door:{r:330,theta:-1.35,phi:1.3,t:[0,-45,35]},panel:{r:340,theta:-1.6,phi:1.2,t:[-20,-48,200]},camera:{r:300,theta:-0.9,phi:0.75,t:[0,0,225]},pi:{r:420,theta:-0.4,phi:0.9,t:[20,10,200]}};
 function setView(v){const o=VIEWS[v];sph={r:o.r,theta:o.theta,phi:o.phi};target.set(...o.t);applyCam();}
 function setMode(m){mode=m;document.querySelectorAll('.modes button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===m)));
   document.getElementById('explodeBox').hidden=(m!=='exploded');document.getElementById('operateBox').hidden=(m!=='operate');
@@ -178,9 +175,9 @@ function setMode(m){mode=m;document.querySelectorAll('.modes button').forEach(b=
   if(m==='section'){setView('front');sph.theta=-0.25;sph.phi=1.25;applyCam();}
   if(m==='operate'){setView('door');step=parseFloat(document.getElementById('step').value);}
   caption();}
-const CAPTIONS={assembled:"<b>The whole scanner, at rest.</b> A black tube on a flared plinth, standing on an A4 light pad. Everything faces you: the flap at the bottom, and above it the cassette with the Pi, the screen and the button. The camera looks down from the top.",
-  exploded:"<b>Five printed parts, everything else bought.</b> Pad → plinth → plate → tower (with the Pi bay on its front) → camera board, lens and cover. The door hangs off the plinth's front under the bay; the cassette with Pi, HAT, display and button rides into the bay from below.",
-  section:"<b>Cut down the middle.</b> The plate lies on the pad inside the plinth's pocket; 200 mm of dark tube separate it from the lens; on the front wall the Pi sits on its sled in the bay, ribbon dropping in through the roof."};
+const CAPTIONS={assembled:"<b>The whole scanner, at rest.</b> A black tube on a plinth, standing on an A4 light pad: the flap at the bottom, the screen above it, the button on the roof. Camera and Pi hang under the ceiling where the camera cannot see them. Three printed parts.",
+  exploded:"<b>Three printed parts, everything else bought.</b> Pad → plinth → plate → tower. Camera, Pi and button mount to the tower's ceiling from inside; the display sits in its front wall; the door hangs off the plinth's front.",
+  section:"<b>Cut at x = 45.</b> The plate lies on the pad inside the plinth's pocket; 200 mm of dark tube separate it from the lens; under the ceiling the camera, the button body and (cut through) the Pi; the display in the front wall."};
 const STEPS=[["READY · screen bar green","Screen: LID UP · A1 REAR-LEFT. Footer: PRESS photograph the lid."],["Lift the flap","It swings up on its snap pins, past vertical, and parks against the tower under the cassette; both hands free."],["Slide the plate in, lid up","A1 rear-left; the pocket's side walls guide it to the rear wall. Close the flap."],["Tap: PHOTOGRAPHING · bar white","About one second. The button is ignored while capturing."],["FLIP · bar blinks amber","Screen: FLIP THE PLATE. Footer: PRESS photograph the colonies · HOLD discard this run. Five minutes, then it files the run as incomplete."],["Flip it toward you","About the long axis, so the lid is down and A1 lands front-left."],["Slide it back in, close the flap","The lid rides in the pocket; the well floors face the camera."],["Tap: PHOTOGRAPHING then COUNTING","Four raw frames, then the count runs with the seconds ticking. HOLD discards; PRESS keeps the raw frames without counts."],["DONE · bar pulses purple","Six counts and a thumbnail. PRESS next plate · HOLD reject this run (moves it to _rejected). One minute, then READY."],["DONE",""]];
 function caption(){const el=document.getElementById('caption'); if(mode==='operate'){const i=Math.min(8,Math.floor(step));el.innerHTML=`<b>${STEPS[i][0]}.</b> ${STEPS[i][1]}`;document.getElementById('stepName').textContent=`Step ${i+1} of 9`;}
   else if(selected){el.innerHTML=`<b>${CATALOG[selected].name}.</b> `+CATALOG[selected].text.replace(/<p>|<\/p>/g,' ').replace(/<span class='tag'>.*$/,'');} else el.innerHTML=CAPTIONS[mode]||CAPTIONS.assembled;}
@@ -230,7 +227,7 @@ document.getElementById('explode').addEventListener('input',e=>{explode=parseFlo
 const stepEl=document.getElementById('step');stepEl.addEventListener('input',e=>{step=parseFloat(e.target.value);caption();});
 document.getElementById('prev').addEventListener('click',()=>{stepEl.value=Math.max(0,Math.floor(step-0.001));step=parseFloat(stepEl.value);caption();});
 document.getElementById('next').addEventListener('click',()=>{stepEl.value=Math.min(9,Math.floor(step)+1);step=parseFloat(stepEl.value);caption();});
-document.getElementById('hud').textContent='mm · Z up · rev 3.2 · '+ORDER.filter(n=>parts[n]).length+' parts';
+document.getElementById('hud').textContent='mm · Z up · rev 4.0 · '+ORDER.filter(n=>parts[n]).length+' parts';
 window.__dbg={setView,parts,applyCam,select,setMode,cam:()=>sph,setCam:(r,t,p)=>{sph.r=r;sph.theta=t;sph.phi=p;applyCam();}};
 const prefersReduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
 function frame(t){animT=t/1000;updateTransforms();for(const n in parts){if(parts[n].userData.hidden)parts[n].visible=false;}labelPos();renderer.render(scene,camera);requestAnimationFrame(frame);}

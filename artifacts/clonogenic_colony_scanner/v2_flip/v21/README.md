@@ -1,3 +1,21 @@
+# Rev 4.0 — everything up with the camera, three prints (2026-09-10)
+
+"Why not put the Pi on top with the camera, along with the button?" So: the HQ camera **and** the Raspberry Pi
+hang under the tower's ceiling, in the dead space above the lens front where the camera cannot see; the Pi's
+Ethernet and USB stacks sit in a cutout in the back wall, its USB-C and microSD in a slot in the right wall. The
+**16 mm button is on the roof** beside the camera, so a press goes straight down into the bench and cannot rock
+the box. The **display is in the front wall** above the door. The display's own cable and the button's two wires
+plug directly onto the Pi's header: no HAT, no stacking header, no soldering, and the camera cable is 15 cm.
+
+Printed parts are **three**: plinth (`frame.stl`, 95 cm³, modest flare, vertical front for the door), tower
+(`tower.stl`, 292 cm³, 2.4 mm walls, 3 mm ceiling with the bosses), door (22 cm³). 409 cm³ against rev 3.3's
+586: about $70 at the quoted Craftcloud rate instead of $95. No cassette, bay, cover or HAT.
+
+Source: `build_scanner_v4.py` (the rev 3.x source `build_scanner_v21.py` is kept for history). The build still
+checks interference (only a 2 mm³ graze of the flexible ribbon on a boss remains), the camera's view cone (clear),
+and estimates mass and tipping: 0.66 kg, a side push at the roof of about 2 to 3 N tips it, the button press itself
+none. If the bench is busy, two printed clips onto the pad's unlit border would make the pad the base (7 N).
+
 # Rev 3.3 — a plain button (2026-09-10)
 
 "The RGB button seems a bit complex; feedback all happens on the screen anyway." So the button is now a plain

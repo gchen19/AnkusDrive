@@ -1,4 +1,4 @@
-# Parts list — variant B rev 3.1, direct-to-Mac (prices checked on the linked pages, 2026-09-09)
+# Parts list — rev 4.0, direct-to-Mac (prices checked on the linked pages, 2026-09-09/10)
 
 The Pi only captures; your Mac runs the models, so the 2 GB boards are enough. Every link below was
 opened and the price read off the page that day; "≈" marks a price the page did not show in text.
@@ -16,15 +16,7 @@ opened and the price read off the page that day; "≈" marks a price the page di
 | 6 | SanDisk 32 GB microSD with **Raspberry Pi OS 64-bit** preloaded (the official blank card was out of stock; the 32-bit card on the same page works but is not what the software expects). Or any blank SanDisk 32 GB and Raspberry Pi Imager on the Mac. | 1 | 19.95 | https://www.pishop.us/product/class-10-microsd-card-with-raspberry-pi-os-bookworm-32gb/ |
 | 7 | **Waveshare 2inch IPS LCD Module, 240 × 320, ST7789** (SKU 1746; comes with its PH2.0 8-pin 20 cm cable to Dupont females) | 1 | 13.95 | https://www.pishop.us/product/240-320-general-2inch-ips-lcd-display-module/ |
 
-## Cart 2 — Adafruit, ≈ $11
-
-| # | Part | Qty | USD | Link |
-|---|---|---|---|---|
-| 9 | Adafruit Perma-Proto HAT for Pi Mini Kit, no EEPROM | 1 | 4.95 | https://www.adafruit.com/product/2310 |
-| 10 | Stacking header 2×20, extra tall (23 mm body), clears the Active Cooler | 1 | ≈ 3 | https://www.adafruit.com/product/1979 |
-| 11 | Right-angle 2.54 mm male pin header strip (break off 8 and 2 pins) | 1 | ≈ 2 | any; Adafruit 1540 or an Amazon strip |
-
-## Cart 3 — Amazon and the print service, ≈ $200
+## Cart 2 — Amazon and the print service, ≈ $183
 
 | # | Part | Qty | USD | Link |
 |---|---|---|---|---|
@@ -32,15 +24,15 @@ opened and the price read off the page that day; "≈" marks a price the page di
 | 12 | **Arducam CS-mount 8 mm lens for the HQ camera, manual focus and adjustable aperture** | 1 | ≈ 28 | https://www.amazon.com/dp/B08GLZFY81 (maker page: https://www.arducam.com/arducam-cs-mount-lens-for-raspberry-pi-hq-camera-8mm-focal-length-with-manual-focus-and-adjustable-aperture.html) |
 | 13 | **Huion L4S LED light pad, A4** (5 mm thick, USB, stepless brightness that it remembers) | 1 | ≈ 35 | https://www.amazon.com/dp/B00J3NRAV2 |
 | 14 | Anker USB-C to Gigabit Ethernet adapter (for the Mac) | 1 | ≈ 20 | https://www.amazon.com/dp/B00ZZ6NW5E |
-| 15 | N35 disc magnets Ø6 × 2 mm (door 4, cassette 4) | 8 | ≈ 5 | search "6x2mm neodymium magnets" |
-| 16 | M2 × 6 and M2.5 × 8 screws (display 4, Pi 4, camera 4) | 12 | ≈ 6 | search "M2 M2.5 screw assortment" |
+| 15 | N35 disc magnets Ø6 × 2 mm (door and plinth) | 4 | ≈ 5 | search "6x2mm neodymium magnets" |
+| 16 | M2.5 × 8 (camera 4, Pi 4) and M2 × 6 (display 4) screws | 12 | ≈ 6 | search "M2 M2.5 screw assortment" |
 | 17 | Felt dots 10 mm | 4 | ≈ 3 | search "felt pads 10mm self adhesive" |
 | 18 | Cat 6 Ethernet cable, 1 to 2 m | 1 | ≈ 5 | any |
-| 19 | Five printed parts, PETG black, Craftcloud (Corvallis3D); rev 3.2's flared plinth is 137 cm³, about $10 more than the quoted frame | 1 | ≈ 95 | https://craftcloud3d.com/en/upload with `v21/frame.stl tower.stl pi_sled.stl cam_cover.stl door.stl` |
+| 19 | **Three printed parts**, PETG black, Craftcloud (Corvallis3D): plinth 95 cm³, tower 292 cm³, door 22 cm³ | 1 | ≈ 70 | https://craftcloud3d.com/en/upload with `v21/frame.stl tower.stl door.stl` |
 
-**Parts ≈ $300, whole build ≈ $395.** Nothing else: the button is two wires, the display brings its own cable,
-so the HAT carries two right-angle headers and nothing more. All feedback is on the screen; its colour bar
-blinks amber for "flip the plate" and pulses purple when a plate is done.
+**Parts ≈ $295, whole build ≈ $365.** Nothing is soldered and there is no HAT: the display's own cable and the
+button's two wires plug straight onto the Pi's 40-pin header. The colour bar across the top of the screen is
+the status light.
 
 ## Not this
 - **Waveshare Pico-LCD-2**: the same 2-inch 320 × 240 ST7789 panel, but built as a hat for a Raspberry Pi
