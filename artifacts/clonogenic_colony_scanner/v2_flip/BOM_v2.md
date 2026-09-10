@@ -3,7 +3,7 @@
 The Pi only captures; your Mac runs the models, so the 2 GB boards are enough. Every link below was
 opened and the price read off the page that day; "≈" marks a price the page did not show in text.
 
-## Cart 1 — PiShop.us (official reseller), ≈ $172
+## Cart 1 — PiShop.us (official reseller), ≈ $182
 
 | # | Part | Qty | USD | Link |
 |---|---|---|---|---|
@@ -13,7 +13,7 @@ opened and the price read off the page that day; "≈" marks a price the page di
 | 3 | Raspberry Pi Active Cooler (Pi 5) | 1 | 10.95 | https://www.pishop.us/product/raspberry-pi-active-cooler/ |
 | 4 | **Raspberry Pi HQ Camera, CS mount** (IMX477; box includes the C-CS adapter and a 200 mm 15-pin cable) | 1 | 55.00 | https://www.pishop.us/product/raspberry-pi-hq-camera-cs/ |
 | 5 | Camera cable for Raspberry Pi 5, 22-to-15 pin, choose **300 mm** | 1 | 3.95 | https://www.pishop.us/product/camera-cable-for-raspberry-pi-5/ |
-| 6 | Official Raspberry Pi microSD, 32 GB, A2, blank | 1 | ≈ 10 | https://www.pishop.us/product/raspberry-pi-sd-card-32gb/ |
+| 6 | SanDisk 32 GB microSD with **Raspberry Pi OS 64-bit** preloaded (the official blank card was out of stock; the 32-bit card on the same page works but is not what the software expects). Or any blank SanDisk 32 GB and Raspberry Pi Imager on the Mac. | 1 | 19.95 | https://www.pishop.us/product/class-10-microsd-card-with-raspberry-pi-os-bookworm-32gb/ |
 | 7 | **Waveshare 2inch IPS LCD Module, 240 × 320, ST7789** (SKU 1746; comes with its PH2.0 8-pin 20 cm cable to Dupont females) | 1 | 13.95 | https://www.pishop.us/product/240-320-general-2inch-ips-lcd-display-module/ |
 
 ## Cart 2 — Adafruit, ≈ $11
