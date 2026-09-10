@@ -165,6 +165,8 @@ def shoot(fn, loc_mm, target_mm, lens=50, res=(1800, 1350), fstop=None):
 ALL = set(PARTS)
 OPEN = -170   # the door flips up and parks against the tower's front wall
 INSIDE_HIDE = {"frame", "pad", "pad_lit", "plate", "door", "magnets", "cables"}
+_fill = bpy.data.lights.new("fill_inside", "POINT"); _fill.energy = 25; _fill.shadow_soft_size = 0.05
+FILL = bpy.data.objects.new("fill_inside", _fill); scene.collection.objects.link(FILL); FILL.location = (0.0, 0.0, 0.12); FILL.hide_render = True
 # 1. hero: the face you work at (door, display, button on the roof), from the front-left
 reset(); set_visible(ALL); shoot("hero.png", (-430, -600, 330), (0, -20, 120), lens=55, res=(2000, 1500))
 reset(); set_visible(ALL); shoot("front.png", (360, -560, 320), (0, -20, 118), lens=55, res=(2000, 1500))
@@ -193,14 +195,14 @@ reset(); set_visible(ALL)
 rotate_about("door", "X", OPEN, (0, HINGE["y"], HINGE["z"])); rotate_about("plate", "X", 180, (0, 0, FLIP_Z))
 shoot("flipped.png", (-260, -520, 200), (0, -30, 40), lens=60)
 # 7. camera detail: looking up at the ceiling from inside the tube (tower cut at x=45 hides nothing; hide the base instead)
-reset(); set_visible(ALL - INSIDE_HIDE)
+reset(); set_visible(ALL - INSIDE_HIDE); FILL.hide_render = False
 shoot("camera.png", (-40, -30, 60), (0, 0, 228), lens=28, fstop=8)
 # 8. inside: the ceiling with camera, Pi, button body and the display's back, seen from below at an angle
 reset(); set_visible(ALL - INSIDE_HIDE)
 shoot("inside.png", (38, -28, 92), (18, 6, 226), lens=22, fstop=8)
 # 8c. wiring: display cable and button wires to the Pi header, ribbon along the ceiling
 reset(); set_visible(ALL - INSIDE_HIDE - {"tower"})
-shoot("wiring.png", (-60, -120, 130), (8, -8, 212), lens=45, fstop=8)
+shoot("wiring.png", (-60, -120, 130), (8, -8, 212), lens=45, fstop=8); FILL.hide_render = True
 # 8d. cables leaving the back and right walls
 reset(); set_visible(ALL)
 shoot("cables.png", (520, 300, 260), (60, 40, 170), lens=60, fstop=8)
