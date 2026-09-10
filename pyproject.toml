@@ -67,7 +67,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 # Host-side runtime deps. Floors are the OLDEST versions verified to work:
-#   mcp>=1.2,<2 — ankusdrive/mcp_server.py imports `mcp.server.fastmcp.FastMCP`,
+#   mcp>=1.2,<3 — ankusdrive/mcp_server.py imports `mcp.server.fastmcp.FastMCP`,
 #                which was first shipped in mcp 1.2.0; 1.0/1.1 lack that module
 #                (empirically confirmed) so an older pin would install and then
 #                fail to boot the MCP server. The <2 CEILING is just as load-
@@ -85,7 +85,7 @@ classifiers = [
 #                bound (pip still selects a py3.13-compatible newer numpy where
 #                needed). 1.24 is the conservative floor.
 dependencies = [
-    "mcp>=1.2,<2",
+    "mcp>=1.2,<3",
     "Pillow>=10.0",
     "numpy>=1.24",
 ]
