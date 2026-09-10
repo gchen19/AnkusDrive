@@ -53,7 +53,6 @@ MATS = {
     "alu":     mat("aluminium", srgb("b9bec4"), rough=0.35, metal=0.9),
     "steel":   mat("stainless", srgb("d0d3d6"), rough=0.22, metal=1.0),
     "screen":  mat("screen", srgb("cfe0f2"), rough=0.2, emit=(0.75, 0.86, 1.0), emit_str=2.5),
-    "ledm":    mat("led", srgb("4cff7a"), rough=0.3, emit=(0.3, 1, 0.45), emit_str=6),
     "ribbon":  mat("ribbon", srgb("c9d3e0"), rough=0.6),
     "rubber":  mat("cable", srgb("111111"), rough=0.8),
     "harness": mat("harness", srgb("c8102e"), rough=0.6),
@@ -65,7 +64,7 @@ MATS = {
 add_layer_lines(MATS["print"])
 PART_MAT = {"frame": "print", "tower": "print", "pi_sled": "print", "cam_cover": "print", "door": "print",
             "pad": "pad", "plate": "plate", "cam_board": "pcb", "lens": "metal", "pi": "pcb", "button": "steel",
-            "ring": "ledm", "display": "pcb", "screen": "screen", "ribbon": "ribbon", "cables": "rubber", "harness": "harness", "plugs": "plug", "hat": "pcb", "magnets": "magnet", "pad_lit": "padlit", "screws": "screw"}
+            "display": "pcb", "screen": "screen", "ribbon": "ribbon", "cables": "rubber", "harness": "harness", "plugs": "plug", "hat": "pcb", "magnets": "magnet", "pad_lit": "padlit", "screws": "screw"}
 FLEX = {"ribbon", "cables", "harness"}          # built as curves from cables.json, not from STL
 
 # ---------------------------------------------------------------- scene
