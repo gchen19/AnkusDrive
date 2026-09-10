@@ -21,7 +21,7 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
-## [Unreleased]
+## [0.5.1] — 2026-09-10
 
 The first release cut after the repository became public. Its reason for existing
 is unglamorous: a PyPI project page's description is frozen at upload time, so
@@ -42,6 +42,17 @@ Everything else here is hardening that accumulated behind it.
 - `SECURITY.md` — a private reporting route, a scope statement for a project whose
   headline feature is executing Python, and what is handled upstream
   ([#305](https://github.com/gchen19/AnkusDrive/pull/305)).
+- Per-platform solver install guides — macOS, Linux, and Windows — transcribed
+  from the reference machines and scrubbed to placeholders
+  ([#320](https://github.com/gchen19/AnkusDrive/pull/320)).
+- `CONTRIBUTING.md` (the seven registration points a new tool touches, the CI
+  lanes, and a Releasing section), a Contributor Covenant 2.1
+  `CODE_OF_CONDUCT.md`, and this changelog
+  ([#318](https://github.com/gchen19/AnkusDrive/pull/318)).
+- An issue chooser whose contact link routes a suspected vulnerability to
+  private reporting instead of a public issue — plus bug / question /
+  tool-request forms and a PR template
+  ([#322](https://github.com/gchen19/AnkusDrive/pull/322)).
 
 ### Changed
 
@@ -51,6 +62,13 @@ Everything else here is hardening that accumulated behind it.
 - Three `docs/` plans whose work had shipped moved to `docs/archive/`; three more
   that survived the sweep were rewritten, because surviving an archive pass is not
   the same as having been read ([#305](https://github.com/gchen19/AnkusDrive/pull/305)).
+- Every PR-triggered CI lane runs on GitHub-hosted runners. A green Windows run
+  now certifies the documented install path end to end — the FreeCAD portable
+  archive plus `scripts/install-solvers.ps1 su2 elmer`, landing exactly where
+  solver discovery probes ([#326](https://github.com/gchen19/AnkusDrive/pull/326)).
+- `tests/run_all.sh` falls back to `python3` when there is no `.venv`, so a
+  machine where one interpreter satisfies every import runs the whole suite
+  under it ([#326](https://github.com/gchen19/AnkusDrive/pull/326)).
 
 ### Fixed
 
@@ -62,6 +80,12 @@ Everything else here is hardening that accumulated behind it.
 - The macOS heavy-solver lane reports the stale-rename failure by name, and stops
   reading a stderr warning as a verdict
   ([#304](https://github.com/gchen19/AnkusDrive/pull/304)).
+- The MCP test suite forwards `ANKUSDRIVE_*` to the server it spawns. The stdio
+  client's scrubbed default environment silently dropped every override, so the
+  suite passed only where FreeCAD was findable by PATH or glob luck
+  ([#326](https://github.com/gchen19/AnkusDrive/pull/326)).
+- Two tests asserted environment variables the CI box merely happened not to
+  export ([#319](https://github.com/gchen19/AnkusDrive/pull/319)).
 
 ### Security
 
@@ -71,11 +95,24 @@ Everything else here is hardening that accumulated behind it.
 - All 18 GitHub Action references are pinned to commit SHAs, each resolving the tag
   already in use rather than silently taking a major bump
   ([#301](https://github.com/gchen19/AnkusDrive/pull/301)).
-- Fork pull requests no longer reach the self-hosted runners. `test.yml` and
-  `test-windows.yml` ran on persistent machines behind a bare `pull_request:`
-  trigger, which on a public repository is arbitrary code execution for anyone who
-  can open a PR. Fork PRs get their FreeCAD signal from the hosted lane instead
-  ([#302](https://github.com/gchen19/AnkusDrive/pull/302)).
+- Fork pull requests cannot reach a persistent machine, structurally. First the
+  self-hosted lanes learned to skip them ([#302](https://github.com/gchen19/AnkusDrive/pull/302));
+  then every PR-triggered lane moved to hosted runners outright, so fork PRs run
+  the FULL suite and the exposure class is gone rather than trigger-guarded
+  ([#326](https://github.com/gchen19/AnkusDrive/pull/326)). Self-hosted machines
+  serve only scheduled solver regressions.
+- The repository is public as of 2026-09-10, with the protections that only
+  exist on public repos turned on the same hour: branch protection with five
+  required hosted checks and linear history, a `v*` tag ruleset, secret scanning
+  with push protection, SHA-pinning enforcement for every action, private
+  vulnerability reporting, and Dependabot
+  ([#303](https://github.com/gchen19/AnkusDrive/issues/303)).
+- A fast-lane guard sweeps every tracked file and path for machine-identifying
+  content — home directories, hostnames, tailnet names, ANY contributor's, in
+  any encoding — without itself naming what it forbids
+  ([#323](https://github.com/gchen19/AnkusDrive/pull/323)); self-hosted job logs
+  mask the runner's identity before the first step prints
+  ([#325](https://github.com/gchen19/AnkusDrive/pull/325)).
 
 ## [0.5.0] — 2026-08-24
 
@@ -360,7 +397,8 @@ Before the first tag, in April 2026: the initial CLI and MCP scaffold over FreeC
 1.1.1, and Phase 2 — the full core mechanical-design surface, roughly 72 MCP tools.
 Those commits are in the git history rather than in this file.
 
-[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/gchen19/AnkusDrive/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/gchen19/AnkusDrive/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/gchen19/AnkusDrive/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/gchen19/AnkusDrive/releases/tag/v0.3.0

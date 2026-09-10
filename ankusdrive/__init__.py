@@ -3,7 +3,7 @@
 # Single source of truth for the package version. pyproject.toml reads this
 # attr (setuptools dynamic version), publish.yml greps this line at tag
 # push, and the CLI exposes it via --version.
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 # Normalise the environment ONCE, before anything reads it. The DriftPin ->
 # AnkusDrive rename (#295) renamed ~40 env vars; this promotes any surviving
