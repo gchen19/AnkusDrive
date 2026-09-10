@@ -1,0 +1,18 @@
+# Dependabot version updates (#303). The github-actions ecosystem is the
+# load-bearing one: every `uses:` in this repo is pinned to a full commit SHA
+# (#301), and without maintained bumps a pin is just slow rot — Dependabot
+# updates the SHA and the version comment together. The pip ecosystem watches
+# pyproject's runtime pins (mcp's `<2` ceiling in particular, #277/#285).
+# Alerts themselves are enabled repo-side at the flip; this file only
+# configures version-update PRs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
