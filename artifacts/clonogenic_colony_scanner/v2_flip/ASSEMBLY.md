@@ -14,7 +14,7 @@ flush cutters, a 2.5 mm drill bit or a 1.75 mm filament offcut, superglue, calip
 | Part | Orientation on the bed | Supports | Time |
 |---|---|---|---|
 | `frame.stl` | as modelled, floor ring down | none (lug wedges are 45°) | ~2 h |
-| `tower.stl` | **upside down**: camera plate on the bed, open end up; the Pi bay's roof slot and side window bridge fine | none | ~7.5 h |
+| `tower.stl` | **upside down**: camera plate on the bed, open end up; the Pi bay (now on the front wall) prints with its roof slot and side window bridging | none | ~7.5 h |
 | `pi_sled.stl` | rear (vented) plate down, front plate up; the foot bridges 26 mm, fine | none | ~55 min |
 | `cam_cover.stl` | open side down, pegs up | none | ~30 min |
 | `door.stl` | flat on its outer face (the two pins lie on the bed) | none | ~40 min |
@@ -92,11 +92,12 @@ slicer and reprint the frame only.
 
 ## 5. Stack it
 
-13. Tower onto the frame: the tongue drops into the groove, the slot and door at the front. Two
+13. Tower onto the plinth: the tongue drops into the groove, the bay over the door (both on the front). Two
     strips of black tape over the seam if you want it fully light-tight (it is not critical; the pad
     outshines the room a thousandfold).
-14. Set the whole box on the **light pad**, centred, the pad's touch button and cable clear of the box.
-    Four small felt dots under the frame corners stop it sliding.
+14. Set the whole thing on the light pad with felt dots under the plinth's four corners, clear of the
+    pad's touch switch. The flared plinth and the two toes under the cassette keep it upright under a
+    button press (about 6 N to tip toward the back, twice what the button needs); no tape, no clamps.
 
 ## 6. Cables and first light
 

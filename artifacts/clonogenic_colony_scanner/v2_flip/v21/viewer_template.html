@@ -60,7 +60,7 @@ h2{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:u
     <div class="steps"><button id="prev" aria-label="Previous step">‹</button><div class="cap" id="stepName"></div><button id="next" aria-label="Next step">›</button></div>
     <input id="step" type="range" min="0" max="9" step="0.01" value="0" aria-label="Operation timeline">
   </div>
-  <div id="caption"><b>The whole scanner, at rest.</b> A black tube standing on an A4 light pad. The plate goes in through the flap at the bottom; the camera looks down from the top; the Pi lives in a bay on the back.</div>
+  <div id="caption"><b>The whole scanner, at rest.</b> A black tube standing on an A4 light pad. The plate goes in through the flap at the bottom; the camera looks down from the top; the Pi, the screen and the button sit in a cassette on the front, right above the flap.</div>
   <div class="views">
     <button data-view="front">Front ¾</button><button data-view="rear">Rear ¾</button><button data-view="top">Top</button><button data-view="door">Door</button><button data-view="panel">Panel</button><button data-view="camera">Camera</button><button data-view="pi">Pi bay</button>
   </div>
@@ -79,8 +79,8 @@ h2{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:u
 const D = window.SCANNER_DATA;
 const M = D.meta, K = M._constants, HINGE = M._hinge;
 const CATALOG = {
-  frame:     {name:"Frame", sub:"printed · black PETG", color:0x3a3a40, group:"print",
-              text:"<p>Stands on the light pad. A 2 mm floor ring masks the pad everywhere except under the plate; a 6 mm rim on three sides is the plate pocket (0.4 mm clearance on a CELLTREAT skirt), open toward the loading slot. The groove in its top face locates the tower. The two lugs on the front carry the door on <b>snap-fit C-slots</b>: no pins to lose.</p><p><span class='tag'>~2 h print</span><span class='tag'>82 cm³</span></p>"},
+  frame:     {name:"Plinth", sub:"printed · black PETG, flared", color:0x3a3a40, group:"print",
+              text:"<p>Stands on the light pad. Its sides and back flare out 30 and 40 mm to the floor and two toes reach forward under the cassette, so a press on the button 176 mm up cannot rock it (about 6 N to tip, three times the button's own force). A 2 mm floor ring masks the pad everywhere except under the plate; a 6 mm rim on three sides is the plate pocket (0.4 mm clearance on a CELLTREAT skirt), open toward the loading slot. The groove in its top face locates the tower. The two lugs on the front carry the door on <b>snap-fit C-slots</b>: no pins to lose. Lifted past vertical the door parks against the tower.</p><p><span class='tag'>~2 h print</span><span class='tag'>82 cm³</span></p>"},
   tower:     {name:"Tower with Pi bay", sub:"printed · black PETG, printed upside down", color:0x232326, group:"print",
               text:"<p>A 3 mm-walled dark tube, 160 mm tall, closed at the top by the camera plate: a Ø34 hole for the lens, four bosses for the HQ camera board, four peg holes for the cover. Three walls are blank. On the back, the <b>Pi bay</b> is part of the same print: a hood with two rail grooves, open at the bottom and the rear, a side window for USB and Ethernet, a slot in its roof for the camera ribbon, two magnet pockets. Nothing pierces the tube except that roof slot.</p><p><span class='tag'>~7 h print</span><span class='tag'>346 cm³</span></p>"},
   pi_sled:   {name:"Cassette (Pi sled + control face)", sub:"printed · slides up into the bay", color:0x2c2c30, group:"print", text:"<p>One print: a front plate with the Pi's four bosses and two side rails, a foot notched under the power and HDMI plugs, and an outer plate that is the <b>control face</b>: display window with bosses on the inside, the Ø19.4 button hole, vents low down. Pi, HAT, display, button and 8 cm of wiring ride in it as one unit. Slide it up the grooves until the two magnets click; pull the thumb tab to take everything out.</p>"},
@@ -106,8 +106,8 @@ const CATALOG = {
   magnets:   {name:"Magnets", sub:"Ø6 × 2 mm, 2 pairs", color:0xc7c9cc, group:"buy", text:"<p>One pair in the door, one in the frame's front face; polarity checked before gluing.</p>"},
 };
 const ORDER = ["pad","pad_lit","frame","door","magnets","plate","tower","cam_board","lens","cam_cover","screws","pi","hat","pi_sled","button","ring","display","screen","ribbon","cables","harness","plugs"];
-const EXPLODE = {pad:[0,0,0],frame:[0,0,0],door:[0,-70,0],magnets:[0,-70,0],plate:[0,0,45],tower:[0,0,110],button:[0,-45,110],ring:[0,-45,110],display:[0,-40,110],screen:[0,-40,110],
-  cam_board:[0,0,200],lens:[0,0,200],cam_cover:[0,0,270],screws:[0,0,1e9],pi:[0,60,40],hat:[0,60,40],pi_sled:[0,60,40],button:[0,60,40],ring:[0,60,40],display:[0,60,40],screen:[0,60,40],ribbon:[0,0,1e9],cables:[0,0,1e9],harness:[0,0,1e9],plugs:[0,0,1e9],pad_lit:[0,0,0]};
+const EXPLODE = {pad:[0,0,0],frame:[0,0,0],door:[0,-70,0],magnets:[0,-70,0],plate:[0,0,45],tower:[0,0,110],
+  cam_board:[0,0,200],lens:[0,0,200],cam_cover:[0,0,270],screws:[0,0,1e9],pi:[0,-60,40],hat:[0,-60,40],pi_sled:[0,-60,40],button:[0,-60,40],ring:[0,-60,40],display:[0,-60,40],screen:[0,-60,40],ribbon:[0,0,1e9],cables:[0,0,1e9],harness:[0,0,1e9],plugs:[0,0,1e9],pad_lit:[0,0,0]};
 
 // ---- STL parse
 function b64(s){const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u.buffer;}
@@ -170,7 +170,7 @@ window.addEventListener('resize',resize);resize();applyCam();
 // ---- state
 let mode='assembled', explode=0, selected=null, step=0, animT=0;
 const VIEWS={front:{r:760,theta:-0.95,phi:1.12,t:[0,10,110]},rear:{r:760,theta:0.9,phi:1.15,t:[0,30,110]},top:{r:700,theta:-1.57,phi:0.12,t:[0,0,60]},
-  door:{r:330,theta:-1.35,phi:1.3,t:[0,-45,35]},panel:{r:340,theta:1.5,phi:1.3,t:[0,105,150]},camera:{r:300,theta:-0.9,phi:0.75,t:[0,10,220]},pi:{r:360,theta:0.85,phi:1.2,t:[0,75,128]}};
+  door:{r:330,theta:-1.35,phi:1.3,t:[0,-45,35]},panel:{r:340,theta:-1.6,phi:1.3,t:[0,-100,150]},camera:{r:300,theta:-0.9,phi:0.75,t:[0,10,220]},pi:{r:360,theta:-2.3,phi:1.2,t:[0,-75,128]}};
 function setView(v){const o=VIEWS[v];sph={r:o.r,theta:o.theta,phi:o.phi};target.set(...o.t);applyCam();}
 function setMode(m){mode=m;document.querySelectorAll('.modes button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===m)));
   document.getElementById('explodeBox').hidden=(m!=='exploded');document.getElementById('operateBox').hidden=(m!=='operate');
@@ -179,10 +179,10 @@ function setMode(m){mode=m;document.querySelectorAll('.modes button').forEach(b=
   if(m==='section'){setView('front');sph.theta=-0.25;sph.phi=1.25;applyCam();}
   if(m==='operate'){setView('door');step=parseFloat(document.getElementById('step').value);}
   caption();}
-const CAPTIONS={assembled:"<b>The whole scanner, at rest.</b> A black tube standing on an A4 light pad. The plate goes in through the flap; the camera looks down from the top; the cassette at the back carries the Pi, the screen and the button, so you work with that face toward you and the slot on your left.",
-  exploded:"<b>Five printed parts, everything else bought.</b> Pad → frame → plate → tower (with the Pi bay) → camera board, lens and cover. The door hangs off the frame's front; the cassette with Pi, HAT, display and button rides into the bay from below.",
-  section:"<b>Cut down the middle.</b> The plate lies on the pad inside the frame's pocket; 200 mm of dark tube separate it from the lens; behind the rear wall the Pi sits on its sled in the bay, ribbon dropping in through the roof."};
-const STEPS=[["READY · ring green","Screen: LID UP · A1 REAR-LEFT. Footer: PRESS photograph the lid."],["Lift the flap","It swings up on its snap pins; the magnets let go."],["Slide the plate in, lid up","A1 rear-left; the pocket's side walls guide it to the rear wall. Close the flap."],["Tap: PHOTOGRAPHING · ring white","About one second. The button is ignored while capturing."],["FLIP · ring blinks amber","Screen: FLIP THE PLATE. Footer: PRESS photograph the colonies · HOLD discard this run. Five minutes, then it files the run as incomplete."],["Flip it toward you","About the long axis, so the lid is down and A1 lands front-left."],["Slide it back in, close the flap","The lid rides in the pocket; the well floors face the camera."],["Tap: PHOTOGRAPHING then COUNTING","Four raw frames, then the count runs with the seconds ticking. HOLD discards; PRESS keeps the raw frames without counts."],["DONE · ring pulses purple","Six counts and a thumbnail. PRESS next plate · HOLD reject this run (moves it to _rejected). One minute, then READY."],["DONE",""]];
+const CAPTIONS={assembled:"<b>The whole scanner, at rest.</b> A black tube on a flared plinth, standing on an A4 light pad. Everything faces you: the flap at the bottom, and above it the cassette with the Pi, the screen and the button. The camera looks down from the top.",
+  exploded:"<b>Five printed parts, everything else bought.</b> Pad → plinth → plate → tower (with the Pi bay on its front) → camera board, lens and cover. The door hangs off the plinth's front under the bay; the cassette with Pi, HAT, display and button rides into the bay from below.",
+  section:"<b>Cut down the middle.</b> The plate lies on the pad inside the plinth's pocket; 200 mm of dark tube separate it from the lens; on the front wall the Pi sits on its sled in the bay, ribbon dropping in through the roof."};
+const STEPS=[["READY · ring green","Screen: LID UP · A1 REAR-LEFT. Footer: PRESS photograph the lid."],["Lift the flap","It swings up on its snap pins, past vertical, and parks against the tower under the cassette; both hands free."],["Slide the plate in, lid up","A1 rear-left; the pocket's side walls guide it to the rear wall. Close the flap."],["Tap: PHOTOGRAPHING · ring white","About one second. The button is ignored while capturing."],["FLIP · ring blinks amber","Screen: FLIP THE PLATE. Footer: PRESS photograph the colonies · HOLD discard this run. Five minutes, then it files the run as incomplete."],["Flip it toward you","About the long axis, so the lid is down and A1 lands front-left."],["Slide it back in, close the flap","The lid rides in the pocket; the well floors face the camera."],["Tap: PHOTOGRAPHING then COUNTING","Four raw frames, then the count runs with the seconds ticking. HOLD discards; PRESS keeps the raw frames without counts."],["DONE · ring pulses purple","Six counts and a thumbnail. PRESS next plate · HOLD reject this run (moves it to _rejected). One minute, then READY."],["DONE",""]];
 function caption(){const el=document.getElementById('caption'); if(mode==='operate'){const i=Math.min(8,Math.floor(step));el.innerHTML=`<b>${STEPS[i][0]}.</b> ${STEPS[i][1]}`;document.getElementById('stepName').textContent=`Step ${i+1} of 9`;}
   else if(selected){el.innerHTML=`<b>${CATALOG[selected].name}.</b> `+CATALOG[selected].text.replace(/<p>|<\/p>/g,' ').replace(/<span class='tag'>.*$/,'');} else el.innerHTML=CAPTIONS[mode]||CAPTIONS.assembled;}
 
@@ -197,7 +197,7 @@ function updateTransforms(){
     // door angle: open during steps 1-2, closed 3, open 4-6, closed 7-8
     const s=step;let dAng=0; const openAt=(a,b)=>{if(s>=a&&s<a+1)return ease(s-a);if(s>=a+1&&s<b)return 1;if(s>=b&&s<b+1)return 1-ease(s-b);return 0;};
     dAng=Math.max(openAt(1,3),openAt(4,7));
-    rotAbout(parts.door,X,-1.85*dAng,hp);
+    rotAbout(parts.door,X,-2.97*dAng,hp);
     // plate: y position and flip
     let py=-260, flip=0, pz=0;
     if(s<2)py=-260; else if(s<3)py=-260+260*ease(s-2); else if(s<5)py=0; else if(s<6)py=-260*ease(s-5); else if(s<7){py=-260;flip=ease(s-6);pz=Math.sin(flip*Math.PI)*70;} else if(s<8){py=-260+260*ease(s-7);flip=1;} else {py=0;flip=1;}
@@ -231,7 +231,7 @@ document.getElementById('explode').addEventListener('input',e=>{explode=parseFlo
 const stepEl=document.getElementById('step');stepEl.addEventListener('input',e=>{step=parseFloat(e.target.value);caption();});
 document.getElementById('prev').addEventListener('click',()=>{stepEl.value=Math.max(0,Math.floor(step-0.001));step=parseFloat(stepEl.value);caption();});
 document.getElementById('next').addEventListener('click',()=>{stepEl.value=Math.min(9,Math.floor(step)+1);step=parseFloat(stepEl.value);caption();});
-document.getElementById('hud').textContent='mm · Z up · rev 3.0 · '+ORDER.filter(n=>parts[n]).length+' parts';
+document.getElementById('hud').textContent='mm · Z up · rev 3.2 · '+ORDER.filter(n=>parts[n]).length+' parts';
 window.__dbg={setView,parts,applyCam,select,setMode,cam:()=>sph,setCam:(r,t,p)=>{sph.r=r;sph.theta=t;sph.phi=p;applyCam();}};
 const prefersReduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
 function frame(t){animT=t/1000;updateTransforms();for(const n in parts){if(parts[n].userData.hidden)parts[n].visible=false;}labelPos();renderer.render(scene,camera);requestAnimationFrame(frame);}

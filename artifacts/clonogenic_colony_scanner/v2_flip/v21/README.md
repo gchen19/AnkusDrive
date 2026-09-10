@@ -1,3 +1,22 @@
+# Rev 3.2 — everything on one face, and a plinth that cannot be rocked (2026-09-10)
+
+The Pi bay and its control cassette moved from the back wall to the **front wall, directly above the
+door**: slot at the bottom, screen and button above it, nothing to walk round. The door now lifts past
+vertical and parks against the tower under the cassette, so both hands are free for the plate. The
+power cable uses a right-angle USB-C plug and runs under the sled foot and out of the side window with
+the Ethernet and the pad lead; nothing hangs in front of the slot.
+
+The frame became a **flared plinth**: sides and back taper out 30 and 40 mm to the floor, two chamfered
+toes reach forward under the cassette, 3 mm skin, 2 mm floor. The build now estimates mass (≈ 0.88 kg),
+centre of mass and the push at button height that would tip the box about each edge (`_stability` in
+`parts.json`): about 6 N toward the back or sides, 4 N toward the front, against a button that needs
+about 2 to 3 N. Nothing is taped to the light pad.
+
+Layout is done by mirroring: the cassette bodies and their cable routes are built in the rev 3.0
+rear-bay coordinates and reflected with `mY()` (y' = Y_FRONT + Y_REAR − y), so every dimension of the
+cassette, HAT and looms is unchanged. Camera board turned 180° so its FPC connector faces the bay;
+cover slot on the front.
+
 # Rev 3.1 — real cables, focus mode, and three bugs the cables found (2026-09-09)
 
 Every flexible run is now a named **route** in `cables.json`, written by `build_scanner_v21.py`

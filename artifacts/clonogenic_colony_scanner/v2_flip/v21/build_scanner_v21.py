@@ -32,6 +32,11 @@ Y_REAR = 59.0
 IN_X = FOOT_X - 2 * WALL
 FRAME_H, FLOOR_T, RIM_H = 50.0, 2.0, 6.0
 SLOT_HALF_X, SLOT_Z1 = 75.0, 34.0
+# rev 3.2: the Pi bay and control face sit on the FRONT wall above the door, so everything faces the user;
+# the frame is a tapered plinth (flared sides and back, low toes under the bay) so a button press cannot rock it.
+FLARE_X, FLARE_Y, TOE_LEN, TOE_H = 30.0, 40.0, 62.0, 6.0
+YM = Y_FRONT + Y_REAR                      # mirror constant: y' = YM - y moves a rear-bay body to the front
+def mY(shape): return shape.mirror(V(0, YM / 2, 0), V(0, 1, 0))
 SENSOR_Z = 220.0                          # 200 mm above the flipped colony plane (Z ~ 20)
 TOP_T, CAM_STANDOFF = 3.0, 8.0
 TOWER_Z1 = SENSOR_Z - 1.6 - CAM_STANDOFF  # 210.4
@@ -52,8 +57,15 @@ def wedge_x(x0, x1, y_wall, z_bottom, out, up):
     w = f.extrude(V(x1 - x0, 0, 0)); w.translate(V(x0, 0, 0)); return w
 
 # ------------------------------------------------------------------ frame
-frame = box(-FOOT_X/2, Y_FRONT, 0, FOOT_X/2, Y_REAR, FRAME_H)
-frame = frame.cut(box(-IN_X/2, Y_FRONT + WALL, FLOOR_T, IN_X/2, Y_REAR - WALL, FRAME_H + 1))
+def rect(x0, y0, x1, y1, z): return Part.makePolygon([V(x0, y0, z), V(x1, y0, z), V(x1, y1, z), V(x0, y1, z), V(x0, y0, z)])
+frame = Part.makeLoft([rect(-FOOT_X/2 - FLARE_X, Y_FRONT, FOOT_X/2 + FLARE_X, Y_REAR + FLARE_Y, 0),
+                       rect(-FOOT_X/2, Y_FRONT, FOOT_X/2, Y_REAR, FRAME_H)], True, True)                       # plinth: vertical front, flared sides and back
+frame = frame.cut(Part.makeLoft([rect(-FOOT_X/2 - FLARE_X + 3.5, Y_FRONT + WALL, FOOT_X/2 + FLARE_X - 3.5, Y_REAR + FLARE_Y - 3.5, FLOOR_T),
+                                 rect(-IN_X/2, Y_FRONT + WALL, IN_X/2, Y_REAR - WALL, FRAME_H + 1)], True, True))   # hollow, 3 mm skin, 2 mm floor
+for s_ in (1, -1):                                                                                           # toes under the bay, chamfered
+    toe = Part.Face(Part.makePolygon([V(0, Y_FRONT, 0), V(0, Y_FRONT - TOE_LEN, 0), V(0, Y_FRONT - TOE_LEN, 2), V(0, Y_FRONT - TOE_LEN + 6, TOE_H), V(0, Y_FRONT, TOE_H), V(0, Y_FRONT, 0)])).extrude(V(FOOT_X/2 + FLARE_X - 82, 0, 0))
+    toe.translate(V(82 if s_ > 0 else -(FOOT_X/2 + FLARE_X), 0, 0))
+    frame = frame.fuse(toe)
 frame = frame.cut(box(-POCKET_X/2, Y_FRONT - 1, -1, POCKET_X/2, POCKET_Y/2, FLOOR_T + 1))
 rim = box(-POCKET_X/2 - 2.5, Y_FRONT + WALL, 0, POCKET_X/2 + 2.5, POCKET_Y/2 + 2.5, RIM_H)
 rim = rim.cut(box(-POCKET_X/2, Y_FRONT - 1, -1, POCKET_X/2, POCKET_Y/2, RIM_H + 1))
@@ -108,7 +120,7 @@ bay = bay.cut(box(BAY_X - BAY_WALL - 1, SLED_Y0 + SLED_T + 1, PI_Z0 - 2, BAY_X +
 bay = bay.cut(box(-10, SLED_Y0 + SLED_T + 1.5, BAY_Z1 - BAY_WALL - 1, 10, SLED_Y0 + SLED_T + 8, BAY_Z1 + 1))  # ribbon slot in the roof, behind the sled plate
 for sx in (-42, 42):                                                                                        # magnet pockets in the roof underside
     bay = bay.cut(cyl(3.1, 2.2, sx, SLED_Y0 + SLED_T + 8, BAY_Z1 - BAY_WALL - 0.01))
-tower = tower.fuse(bay)
+tower = tower.fuse(mY(bay))                              # rev 3.2: the bay is on the FRONT wall
 tower = tower.removeSplitter()
 
 # ------------------------------------------------------------------ Pi sled (front plate + foot + vented rear plate, one print)
@@ -145,8 +157,8 @@ pi_sled = sled.removeSplitter()
 CC, CCH = 28.5, 25.0                      # cover clears the HQ board's tripod block (6.54 behind the edge)
 cam_cover = box(-CC, -CC, TOWER_Z1, CC, CC, TOWER_Z1 + CCH)
 cam_cover = cam_cover.cut(box(-CC + 2, -CC + 2, TOWER_Z1 - 1, CC - 2, CC - 2, TOWER_Z1 + CCH - 2))
-cam_cover = cam_cover.cut(box(-9, CC - 3, TOWER_Z1 - 1, 9, CC + 1, TOWER_Z1 + 12))               # ribbon slot (rear)
-cam_cover = cam_cover.cut(box(-9, -CC - 1, TOWER_Z1 - 1, 9, -CC + 3, TOWER_Z1 + 8))             # notch for the tripod block if the board is fitted the other way
+cam_cover = cam_cover.cut(box(-9, -CC - 1, TOWER_Z1 - 1, 9, -CC + 3, TOWER_Z1 + 12))            # ribbon slot (front, toward the bay)
+cam_cover = cam_cover.cut(box(-9, CC - 3, TOWER_Z1 - 1, 9, CC + 1, TOWER_Z1 + 8))               # notch for the tripod block (rear)
 for sx in (-22, 22):
     for sy in (-22, 22):
         cam_cover = cam_cover.fuse(cyl(1.4, 3.5, sx, sy, TOWER_Z1 - 3.5))                          # pegs
@@ -166,6 +178,7 @@ exec(open(OUT + "reference_parts.py").read())
 pad, pad_lit, pad_touch, pad_port = make_pad()
 plate = make_plate(PLATE_L, PLATE_W, PLATE_H, LID_L, LID_W, LID_H, WELL_ID, WELL_PITCH, WELL_DEPTH)
 cam_board, lens = make_hq(SENSOR_Z)
+cam_board.rotate(V(0, 0, 0), V(0, 0, 1), 180)                                          # FPC connector toward the front (the bay side)
 PIY = SLED_Y0 + SLED_T + PI_STANDOFF
 pi, hat = make_pi(PI_X0, PIY, PI_Z0)
 button, ring = make_button(BTN_X, BTN_Z, CF_Y1)
@@ -178,53 +191,58 @@ screen = box(DSP_CX - 20.4, CF_Y0 - 2.62, DSP_CZ - 15.3, DSP_CX + 20.4, CF_Y0 - 
 RZ = TOWER_Z1 + 0.4                                     # ribbon lying on the top plate
 PIC = PIY + 1.6                                         # Pi component face
 SOCK_Y = PIC + 23.0 + 1.6 + 4.25                       # HAT header mid-height: 23 mm stacking header, HAT pcb 1.6, right-angle header 8.5 tall
-# rigid connector bodies (part "plugs")
-usbc_plug = rounded_box(PI_X0 + 11.2 - 6.0, PIC + 1.6 - 3.5, PI_Z0 - 24.0, PI_X0 + 11.2 + 6.0, PIC + 1.6 + 3.5, PI_Z0 - 1.5, 1.5)
-rj45_plug = (box(PI_X0 + 85 + 3.0, PIC + 6.75 - 4.0, PI_Z0 + 10.25 - 5.85, PI_X0 + 85 + 3.0 + 21.0, PIC + 6.75 + 4.0, PI_Z0 + 10.25 + 5.85)
+# rigid connector bodies (part "plugs"); the cassette bodies are built in rear-bay coordinates and mirrored (y' = YM - y)
+YP = YM - (PIC + 1.6)                                    # USB-C port centre line, front layout
+usbc_plug = rounded_box(PI_X0 + 11.2 - 5.5, YP - 3.5, PI_Z0 - 12.0, PI_X0 + 11.2 + 5.5 + 11.0, YP + 3.5, PI_Z0 - 1.5, 1.5)   # right-angle USB-C, cable toward +X
+rj45_plug = mY(box(PI_X0 + 85 + 3.0, PIC + 6.75 - 4.0, PI_Z0 + 10.25 - 5.85, PI_X0 + 85 + 3.0 + 21.0, PIC + 6.75 + 4.0, PI_Z0 + 10.25 + 5.85)
              .fuse(rounded_box(PI_X0 + 85 + 3.0 + 14.0, PIC + 6.75 - 4.4, PI_Z0 + 10.25 - 6.5, PI_X0 + 85 + 3.0 + 30.0, PIC + 6.75 + 4.4, PI_Z0 + 10.25 + 6.5, 2.0)))   # plug + boot
-usba_plug = (box(PI_X0 + 85 + 3.0, PIC + 4.6 - 2.25, PI_Z0 + 27 - 6.0, PI_X0 + 85 + 6.5, PIC + 4.6 + 2.25, PI_Z0 + 27 + 6.0)
+usba_plug = mY(box(PI_X0 + 85 + 3.0, PIC + 4.6 - 2.25, PI_Z0 + 27 - 6.0, PI_X0 + 85 + 6.5, PIC + 4.6 + 2.25, PI_Z0 + 27 + 6.0)
              .fuse(rounded_box(PI_X0 + 85 + 6.5, PIC + 4.6 - 3.8, PI_Z0 + 27 - 7.5, PI_X0 + 85 + 6.5 + 30.0, PIC + 4.6 + 3.8, PI_Z0 + 27 + 7.5, 2.0)))
-dsp_housing = box(DSP_CX - 10.2, CF_Y0 - 5.0 - 1.6 - 11.0 - 14.0, DSP_CZ - 17.5 + 2.7 - 1.3, DSP_CX + 10.2, CF_Y0 - 5.0 - 1.6 - 11.0 + 0.5, DSP_CZ - 17.5 + 2.7 + 1.3)   # 8-way 2.54 housing on the display header
-pad_plug = rounded_box(-194.0, 110.0 - 3.6, -2.5 - 3.0, -180.0, 110.0 + 3.6, -2.5 + 3.0, 1.5)              # micro-USB into the pad's left edge (VERIFY position)
+dsp_housing = mY(box(DSP_CX - 10.2, CF_Y0 - 5.0 - 1.6 - 11.0 - 14.0, DSP_CZ - 17.5 + 2.7 - 1.3, DSP_CX + 10.2, CF_Y0 - 5.0 - 1.6 - 11.0 + 0.5, DSP_CZ - 17.5 + 2.7 + 1.3))   # 8-way housing on the display header
 plugs = usbc_plug.fuse(rj45_plug).fuse(usba_plug).fuse(dsp_housing)
-DH_Y = CF_Y0 - 5.0 - 1.6 - 11.0 - 14.0                  # wire exit of the display housing
+DH_Y = CF_Y0 - 5.0 - 1.6 - 11.0 - 14.0                  # wire exit of the display housing (rear coords)
 PAD_R = 1.75
+SY = SLED_Y0 + SLED_T + 4.5                              # ribbon plane behind the Pi (rear coords)
 ROUTES = {
   "ribbon": {"kind": "ribbon", "width": 15.0, "t": 0.3, "bend_r": 3.0, "color": "ivory",
              "width_end": 12.6, "taper_mm": 45.0,
-             "pts": [[0, 19.5, SENSOR_Z + 1.5], [0, CC + 2.5, SENSOR_Z + 1.5], [0, CC + 2.5, RZ], [0, Y_REAR + 0.8, RZ],
-                     [0, Y_REAR + 0.8, BAY_Z1 + 1.0], [0, SLED_Y0 + SLED_T + 4.5, BAY_Z1 + 1.0], [0, SLED_Y0 + SLED_T + 4.5, PI_Z0 + 22.0],
-                     [PI_X0 + 49.0, SLED_Y0 + SLED_T + 4.5, PI_Z0 - 4.0], [PI_X0 + 49.0, PIC + 2.0, PI_Z0 - 3.5], [PI_X0 + 49.0, PIC + 2.0, PI_Z0 + 4.0]]},
-  # 8-way display pigtail: housing exit -> behind the Pi's top edge -> down the channel beside the PCB -> across the HAT into the side-entry socket
+             "pts": [[0, -19.5, SENSOR_Z + 1.5], [0, -(CC + 2.5), SENSOR_Z + 1.5], [0, -(CC + 2.5), RZ], [0, Y_FRONT - 0.8, RZ],
+                     [0, Y_FRONT - 0.8, BAY_Z1 + 1.0], [0, YM - SY, BAY_Z1 + 1.0], [0, YM - SY, PI_Z0 + 22.0],
+                     [PI_X0 + 49.0, YM - SY, PI_Z0 - 4.0], [PI_X0 + 49.0, YM - (PIC + 2.0), PI_Z0 - 3.5], [PI_X0 + 49.0, YM - (PIC + 2.0), PI_Z0 + 4.0]]},
+  # display cable: housing exit -> behind the Pi's top edge -> down the channel beside the PCB -> across the HAT onto the right-angle header
   "loom_display": {"kind": "loom", "wire_r": 0.55, "bend_r": 7.0, "colors": ["grey", "purple", "blue", "green", "yellow", "orange", "red", "brown"],
              "pts": [[DSP_CX, DH_Y, DSP_CZ - 17.5 + 2.7], [DSP_CX, PIY - 3.0, DSP_CZ - 17.5 + 2.7], [PI_X0 - 3.0, PIY - 3.0, PI_Z0 + 58.0],
                      [PI_X0 - 3.0, PIY + 9.0, PI_Z0 + 40.0], [PI_X0 - 3.0, SOCK_Y - 3.0, PI_Z0 + 31.0], [PI_X0 + 2.0, SOCK_Y, PI_Z0 + 23.0],
                      [PI_X0 + 28.0, SOCK_Y, PI_Z0 + 23.0], [PI_X0 + 38.0, SOCK_Y, PI_Z0 + 23.0]]},
-  # 5-way button pigtail: lugs -> around the +X side in front of the port stacks -> into the socket from +X
+  # button harness: back of the button -> around the +X side in front of the port stacks -> onto the 7-pin header from +X
   "loom_button": {"kind": "loom", "wire_r": 0.55, "bend_r": 7.0, "colors": ["red", "black", "white", "yellow", "green", "blue", "brown"],
              "pts": [[BTN_X, BAY_Y0 + 7.0, BTN_Z - 5.0], [BTN_X + 3.0, BAY_Y0 + 11.0, BTN_Z - 10.0], [PI_X0 + 88.0, PIC + 13.5, PI_Z0 + 58.0],
                      [PI_X0 + 88.0, SOCK_Y - 7.0, PI_Z0 + 46.0], [PI_X0 + 82.0, SOCK_Y, PI_Z0 + 36.0], [PI_X0 + 72.8, SOCK_Y, PI_Z0 + 35.0]]},
-  "power": {"kind": "round", "r": 1.75, "bend_r": 14.0, "color": "white",
-             "pts": [[PI_X0 + 11.2, PIC + 1.6, PI_Z0 - 24.0], [PI_X0 + 11.2, PIC + 1.6, PI_Z0 - 60.0], [PI_X0 + 11.2, PIC + 16, PAD_R],
-                     [PI_X0 + 11.2, 137.0, PAD_R], [PI_X0 + 11.2, 146.0, -5.1 + PAD_R], [PI_X0 + 11.2, 300.0, -5.1 + PAD_R]]},
+  # power: right-angle USB-C, cable along the Pi's bottom edge UNDER the sled foot and the bay wall, out to the right, onto the pad and away
+  "power": {"kind": "round", "r": 1.75, "bend_r": 12.0, "color": "white",
+             "pts": [[PI_X0 + 11.2 + 16.5, YP, PI_Z0 - 7.0], [PI_X0 + 34.0, YP, PI_Z0 - 10.5], [BAY_X + 12.0, YP, PI_Z0 - 10.5], [BAY_X + 25.0, YP, 62.0],
+                     [100.0, YP + 6.0, 34.0], [124.0, YP + 16.0, 8.0], [140.0, YP + 30.0, PAD_R], [175.0, 20.0, PAD_R], [190.0, 60.0, -5.1 + PAD_R], [320.0, 200.0, -5.1 + PAD_R]]},
   "ethernet": {"kind": "round", "r": 2.75, "bend_r": 22.0, "color": "blue",
-             "pts": [[PI_X0 + 85 + 33.0, PIC + 6.75, PI_Z0 + 10.25], [PI_X0 + 85 + 70.0, PIC + 6.75, PI_Z0 + 8.0], [150.0, 95.0, 40.0], [160.0, 112.0, 2.75],
-                     [172.0, 130.0, 2.75], [190.0, 150.0, -5.1 + 2.75], [330.0, 230.0, -5.1 + 2.75]]},
+             "pts": [[PI_X0 + 85 + 33.0, YM - (PIC + 6.75), PI_Z0 + 10.25], [95.0, YM - (PIC + 6.75), 100.0], [118.0, -60.0, 60.0], [136.0, -45.0, 20.0], [152.0, -25.0, 2.75],
+                     [172.0, 60.0, 2.75], [190.0, 120.0, -5.1 + 2.75], [330.0, 230.0, -5.1 + 2.75]]},
   "pad_usb": {"kind": "round", "r": 1.6, "bend_r": 16.0, "color": "black",
-             "pts": [[PI_X0 + 85 + 36.5, PIC + 4.6, PI_Z0 + 27.0], [PI_X0 + 85 + 62.0, PIC + 4.6, PI_Z0 + 25.0], [140.0, 70.0, 30.0], [150.0, 62.0, 1.6],
-                     [166.0, 80.0, 1.6], [170.0, 137.0, 1.6], [170.0, 146.0, -5.1 + 1.6], [-170.0, 150.0, -5.1 + 1.6], [-196.0, 138.0, -5.1 + 1.6],
+             "pts": [[PI_X0 + 85 + 36.5, YM - (PIC + 4.6), PI_Z0 + 27.0], [98.0, YM - (PIC + 4.6), 126.0], [125.0, -56.0, 80.0], [145.0, -40.0, 30.0], [157.0, -22.0, 1.6],
+                     [166.0, 20.0, 1.6], [170.0, 137.0, 1.6], [170.0, 146.0, -5.1 + 1.6], [-170.0, 150.0, -5.1 + 1.6], [-196.0, 138.0, -5.1 + 1.6],
                      [-197.0, 110.0, -2.5], [-194.0, 110.0, -2.5]]},
 }
+for k in ("loom_display", "loom_button"):                 # the looms were laid out in rear-bay coordinates: mirror them with the cassette
+    ROUTES[k]["pts"] = [[x, YM - y, z] for x, y, z in ROUTES[k]["pts"]]
 def _v(p): return V(*p)
 ribbon = flat_ribbon([_v(p) for p in ROUTES["ribbon"]["pts"]], 15.0, 0.4, V(1, 0, 0))
 harness = sweep_round([_v(p) for p in ROUTES["loom_display"]["pts"]], 1.9, 7.0).fuse(sweep_round([_v(p) for p in ROUTES["loom_button"]["pts"]], 1.9, 7.0))
 cables = sweep_round([_v(p) for p in ROUTES["power"]["pts"]], 1.75, 14.0).fuse(sweep_round([_v(p) for p in ROUTES["ethernet"]["pts"]], 2.75, 22.0)).fuse(sweep_round([_v(p) for p in ROUTES["pad_usb"]["pts"]], 1.6, 16.0)).fuse(pad_plug)
 json.dump(ROUTES, open(OUT + "cables.json", "w"), indent=1)
+pi_sled, pi, hat, button, ring, display, screen = [mY(b) for b in (pi_sled, pi, hat, button, ring, display, screen)]   # rev 3.2: cassette on the front
 magnets = Part.makeCompound([cyl(3, 2, s*77.5, Y_FRONT - 0.5 - 2.0, 20, V(0, 1, 0)) for s in (1, -1)] + [cyl(3, 2, s*77.5, Y_FRONT, 20, V(0, 1, 0)) for s in (1, -1)]
-                            + [cyl(3, 2, sx, SLED_Y0 + SLED_T + 8, SLED_Z1 - 2.2) for sx in (-42, 42)] + [cyl(3, 2, sx, SLED_Y0 + SLED_T + 8, BAY_Z1 - BAY_WALL) for sx in (-42, 42)])
+                            + [mY(cyl(3, 2, sx, SLED_Y0 + SLED_T + 8, SLED_Z1 - 2.2)) for sx in (-42, 42)] + [mY(cyl(3, 2, sx, SLED_Y0 + SLED_T + 8, BAY_Z1 - BAY_WALL)) for sx in (-42, 42)])
 screws = Part.makeCompound([cyl(2.25, 1.6, sx, sy, TOWER_Z1 + CAM_STANDOFF + 1.6) for sx in (-15, 15) for sy in (-15, 15)]                   # M2.5 heads on the camera
-                           + [cyl(2.25, 1.6, PI_X0 + hx, PIY - 1.6, PI_Z0 + hz, V(0, 1, 0)) for hx in (3.5, 61.5) for hz in (3.5, 52.5)]        # M2.5 heads on the sled bosses (from the wall side)
-                           + [cyl(1.9, 1.4, DSP_CX + hx, CF_Y0 - 5.0 - 1.6 - 1.4, DSP_CZ + hz, V(0, 1, 0)) for hx in (-26, 26) for hz in (-15, 15)])  # M2 on the display, from inside
+                           + [mY(cyl(2.25, 1.6, PI_X0 + hx, PIY - 1.6, PI_Z0 + hz, V(0, 1, 0))) for hx in (3.5, 61.5) for hz in (3.5, 52.5)]        # M2.5 heads on the sled bosses (from the wall side)
+                           + [mY(cyl(1.9, 1.4, DSP_CX + hx, CF_Y0 - 5.0 - 1.6 - 1.4, DSP_CZ + hz, V(0, 1, 0))) for hx in (-26, 26) for hz in (-15, 15)])  # M2 on the display, from inside
 
 parts = {"frame": frame, "tower": tower, "pi_sled": pi_sled, "cam_cover": cam_cover, "door": door,
          "pad": pad, "pad_lit": pad_lit, "plate": plate, "cam_board": cam_board, "lens": lens, "pi": pi, "hat": hat, "button": button,
@@ -265,7 +283,26 @@ for n, shp in parts.items():
 meta["_view_cone_blockers"] = blockers
 meta["_hinge"] = {"axis": "x", "y": Y_FRONT - 2.0, "z": HINGE_Z}
 meta["_plate_flip_center_z"] = PLATE_H / 2
-meta["_panel"] = {"button_xz": [BTN_X, BTN_Z], "display_center_xz": [DSP_CX, DSP_CZ], "display_window": [DSP_W, DSP_H], "module_hole_pattern": [52, 30]}
+meta["_panel"] = {"button_xz": [BTN_X, BTN_Z], "display_center_xz": [DSP_CX, DSP_CZ], "display_window": [DSP_W, DSP_H], "module_hole_pattern": [52, 30],
+                  "face_y": YM - CF_Y1, "layout": "front: door below the cassette"}
+# stability: rough masses (prints at 0.7 of solid PETG; bought parts from their datasheets), centre of mass, and the
+# horizontal push at the button height that would tip the box about each edge of its footprint
+MASS = {"frame": None, "tower": None, "pi_sled": None, "cam_cover": None, "door": None, "plate": 60, "cam_board": 30, "lens": 55, "pi": 70,
+        "hat": 25, "button": 40, "display": 20, "plugs": 30, "magnets": 8, "screws": 6, "harness": 10, "ribbon": 5}
+tot, cx, cy, cz = 0.0, 0.0, 0.0, 0.0
+for n, m_ in MASS.items():
+    if m_ is None: m_ = parts[n].Volume / 1000 * 1.27 * 0.7
+    sh = parts[n]
+    if sh.ShapeType == "Compound":                       # compounds (magnets, screws): volume-weighted mean of their solids
+        vs = [(sol.Volume, sol.CenterOfMass) for sol in sh.Solids]; vt = sum(v for v, _ in vs)
+        c = V(sum(v * cc.x for v, cc in vs) / vt, sum(v * cc.y for v, cc in vs) / vt, sum(v * cc.z for v, cc in vs) / vt)
+    else: c = sh.CenterOfMass
+    tot += m_; cx += m_ * c.x; cy += m_ * c.y; cz += m_ * c.z
+cx, cy, cz = cx / tot, cy / tot, cz / tot
+fb = parts["frame"].BoundBox; h_push = BTN_Z
+edges = {"front": cy - fb.YMin, "back": fb.YMax - cy, "left": cx - fb.XMin, "right": fb.XMax - cx}
+meta["_stability"] = {"mass_g": round(tot), "com_mm": [round(cx, 1), round(cy, 1), round(cz, 1)], "footprint": [[fb.XMin, fb.YMin], [fb.XMax, fb.YMax]],
+                      "push_height_mm": h_push, "tip_force_N": {k: round(tot / 1000 * 9.81 * d / h_push, 2) for k, d in edges.items()}}
 meta["_constants"] = {"Y_FRONT": Y_FRONT, "Y_REAR": Y_REAR, "TOWER_Z1": TOWER_Z1, "SENSOR_Z": SENSOR_Z, "FRAME_H": FRAME_H}
 json.dump(meta, open(OUT + "parts.json", "w"), indent=1)
 __result__ = {"printed_volumes": {n: meta[n]["volume_mm3"] for n in printed}, "valid": {n: meta[n]["valid"] for n in printed}, "interference": inter, "view_cone_blockers": blockers}

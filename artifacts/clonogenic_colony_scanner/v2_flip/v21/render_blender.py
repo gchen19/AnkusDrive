@@ -164,53 +164,54 @@ def shoot(fn, loc_mm, target_mm, lens=50, res=(1800, 1350), fstop=None):
     scene.render.filepath = os.path.join(OUT, fn); t = time.time(); bpy.ops.render.render(write_still=True); print(fn, f"{time.time()-t:.0f}s")
 
 ALL = set(PARTS)
-# 1. hero, assembled
-reset(); set_visible(ALL); shoot("hero.png", (420, 560, 300), (0, 30, 120), lens=55, res=(2000, 1500))
-reset(); set_visible(ALL); shoot("front.png", (-330, -560, 300), (0, -5, 112), lens=55, res=(2000, 1500))
-# 2. rear 3/4, assembled (Pi bay closed, cables)
+OPEN = -170   # the door flips up and parks against the tower's front wall under the bay
+# 1. hero: the face you work at (door below, cassette above), from the front-left
+reset(); set_visible(ALL); shoot("hero.png", (-420, -600, 300), (0, -35, 115), lens=55, res=(2000, 1500))
+reset(); set_visible(ALL); shoot("front.png", (330, -560, 300), (0, -30, 112), lens=55, res=(2000, 1500))
+# 2. rear 3/4: the blank back and the flared plinth
 reset(); set_visible(ALL); shoot("rear.png", (-420, 540, 300), (0, 25, 118), lens=55)
 # 3. exploded
 reset(); set_visible(ALL - {"ribbon", "cables", "magnets", "harness", "plugs"})
 move("plate", dz=45); move("frame", dz=0); move("door", dy=-55, dz=0)
-move("tower", dz=110); move("pi", dz=40, dy=60); move("hat", dz=40, dy=60); move("pi_sled", dz=40, dy=60); move("button", dz=40, dy=60); move("ring", dz=40, dy=60); move("display", dz=40, dy=60); move("screen", dz=40, dy=60)
+move("tower", dz=110); move("pi", dz=40, dy=-60); move("hat", dz=40, dy=-60); move("pi_sled", dz=40, dy=-60); move("button", dz=40, dy=-60); move("ring", dz=40, dy=-60); move("display", dz=40, dy=-60); move("screen", dz=40, dy=-60)
 move("cam_board", dz=200); move("lens", dz=200); move("cam_cover", dz=270)
-shoot("exploded.png", (-560, -660, 500), (0, 15, 175), lens=52, res=(1800, 1500))
-# 4. section at X=0 (cut halves, looking at the cut face)
+shoot("exploded.png", (-560, -660, 500), (0, -15, 175), lens=52, res=(1800, 1500))
+# 4. section at X=0
 for o in PARTS.values(): o.hide_render = True
 CUT = {}
 for n in PART_MAT:
     fn = "cut_" + n + ".stl"
     if os.path.exists(os.path.join(HERE, fn)): CUT[n] = import_stl(n + "_cut", fn)
-shoot("section.png", (520, -300, 260), (0, 0, 110), lens=60)
+shoot("section.png", (520, -300, 260), (0, -10, 110), lens=60)
 for o in CUT.values(): bpy.data.objects.remove(o)
-# 5. door open, plate half inserted lid-up
+# 5. door parked open, plate half inserted lid-up, under the cassette
 reset(); set_visible(ALL)
-rotate_about("door", "X", -105, (0, HINGE["y"], HINGE["z"])); rotate_about("magnets", "X", 0, (0, 0, 0))
+rotate_about("door", "X", OPEN, (0, HINGE["y"], HINGE["z"]))
 move("plate", dy=-75)
-shoot("loading.png", (-300, -560, 190), (0, -30, 40), lens=60)
-# 6. flipped plate seated, door open (what the camera sees)
+shoot("loading.png", (-300, -560, 190), (0, -50, 60), lens=60)
+# 6. flipped plate seated, door parked open
 reset(); set_visible(ALL)
-rotate_about("door", "X", -105, (0, HINGE["y"], HINGE["z"])); rotate_about("plate", "X", 180, (0, 0, FLIP_Z))
-shoot("flipped.png", (-260, -520, 200), (0, -10, 30), lens=60)
+rotate_about("door", "X", OPEN, (0, HINGE["y"], HINGE["z"])); rotate_about("plate", "X", 180, (0, 0, FLIP_Z))
+shoot("flipped.png", (-260, -520, 200), (0, -30, 40), lens=60)
 # 7. camera detail: cover lifted
 reset(); set_visible({"tower", "cam_board", "lens", "cam_cover", "ribbon", "pi_sled"})
 move("cam_cover", dz=45)
-shoot("camera.png", (-150, -170, 330), (0, 5, 218), lens=70, fstop=5.6)
-# 8. Pi bay detail: the sled pulled half way out
+shoot("camera.png", (-150, -170, 330), (0, -5, 218), lens=70, fstop=5.6)
+# 8. Pi bay: the cassette pulled half way down
 reset(); set_visible(ALL - {"cables"})
 for n in ("pi", "hat", "pi_sled", "button", "ring", "display", "screen", "harness", "plugs"): move(n, dz=-60)
-shoot("pibay.png", (360, 360, 170), (0, 80, 120), lens=60, fstop=6)
-# 8c. wiring: the HAT face-on from the control-face side (sled and tower hidden): both pigtails, the display housing, the ribbon's last bend
+shoot("pibay.png", (360, -400, 170), (0, -80, 120), lens=60, fstop=6)
+# 8c. wiring: the HAT face-on from the control-face side (sled and tower hidden)
 reset(); set_visible(ALL - {"cables", "tower", "pi_sled", "cam_board", "lens", "cam_cover", "screws", "plate", "door", "frame", "magnets"})
-shoot("wiring.png", (70, 330, 150), (0, 95, 135), lens=70, fstop=6)
+shoot("wiring.png", (-70, -330, 150), (0, -85, 135), lens=70, fstop=6)
 # 8d. side view with the cables leaving the bay window
 reset(); set_visible(ALL)
-shoot("cables.png", (520, 260, 120), (60, 70, 90), lens=60, fstop=8)
-# 8b. front panel close-up
+shoot("cables.png", (520, -300, 120), (60, -60, 90), lens=60, fstop=8)
+# 8b. control face close-up
 reset(); set_visible(ALL)
-shoot("panel.png", (70, 330, 200), (0, 103, 160), lens=70, fstop=5.6)
-# 9. door hinge detail
+shoot("panel.png", (-70, -340, 200), (0, -103, 160), lens=70, fstop=5.6)
+# 9. door hinge detail, door half open
 reset(); set_visible({"frame", "door", "magnets", "tower"})
 rotate_about("door", "X", -60, (0, HINGE["y"], HINGE["z"]))
-shoot("hinge.png", (-190, -150, 95), (-78, -48, 42), lens=85, fstop=4)
+shoot("hinge.png", (-190, -170, 95), (-78, -52, 42), lens=85, fstop=4)
 print("done")

@@ -13,7 +13,8 @@ from across the bench.
 
 | Ring | State | Screen says | Press (tap) | Hold (2 s) |
 |---|---|---|---|---|
-| green, steady | READY | Lid UP · A1 rear-left · slide in, close the flap | photograph the lid | — |
+| green, steady | READY | Lid UP · A1 rear-left · slide in, close the flap | photograph the lid | focus mode |
+| blue, brightness follows sharpness | FOCUS | sharpness bar with a peak marker | done | reset the peak |
 | white | PHOTOGRAPHING the lid | hold still (about 1 s) | ignored | ignored |
 | **amber, blinking** | FLIP THE PLATE | toward you, lid DOWN · slide in, close the flap | photograph the colonies | discard this run |
 | white | PHOTOGRAPHING the colonies | | ignored | ignored |
@@ -23,6 +24,13 @@ from across the bench.
 
 While you hold the button an orange bar fills across the screen; let go before it fills and
 nothing happens. That is the whole language: tap = go, hold = no.
+
+## Where you stand (rev 3.2)
+
+Everything is on one face. The flap is at the bottom of the plinth, the screen and button are on the
+cassette directly above it. Lift the flap past vertical and it parks against the tower under the
+cassette, so both hands are free for the plate. "A1 rear-left" means the far-left corner from where
+you stand; "toward you" means the flip brings the lid down on the near side.
 
 ## Focus mode
 

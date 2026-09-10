@@ -36,7 +36,7 @@ opened and the price read off the page that day; "≈" marks a price the page di
 | 16 | M2 × 6 and M2.5 × 8 screws (display 4, Pi 4, camera 4) | 12 | ≈ 6 | search "M2 M2.5 screw assortment" |
 | 17 | Felt dots 10 mm | 4 | ≈ 3 | search "felt pads 10mm self adhesive" |
 | 18 | Cat 6 Ethernet cable, 1 to 2 m | 1 | ≈ 5 | any |
-| 19 | Five printed parts, PETG black, Craftcloud (Corvallis3D) | 1 | ≈ 85 | https://craftcloud3d.com/en/upload with `v21/frame.stl tower.stl pi_sled.stl cam_cover.stl door.stl` |
+| 19 | Five printed parts, PETG black, Craftcloud (Corvallis3D); rev 3.2's flared plinth is 137 cm³, about $10 more than the quoted frame | 1 | ≈ 95 | https://craftcloud3d.com/en/upload with `v21/frame.stl tower.stl pi_sled.stl cam_cover.stl door.stl` |
 
 **Parts ≈ $310, whole build ≈ $395.** Nothing else: the ChromaTek button brings its own 7-wire harness, the
 display its own cable, so there are no pigtails, no ULN2003 and no resistors on the HAT any more.
