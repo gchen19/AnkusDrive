@@ -18,7 +18,9 @@ name: Publish to PyPI
 #
 # Releasing:
 #   - Tag `vX.Y.Z` matching the version in pyproject.toml and push the tag.
-#     Tag push triggers the real PyPI upload.
+#     Tag push triggers the real PyPI upload, then the MCP Registry listing
+#     (publish-mcp-registry). Bump `version` in server.json — both places — in
+#     the same PR as __version__; the fast lane fails the PR if you forget.
 #   - Or run the workflow manually with target=testpypi to dry-run against
 #     TestPyPI without cutting a tag.
 
@@ -123,3 +125,48 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  publish-mcp-registry:
+    # Lists the release on the official MCP Registry as io.github.gchen19/ankusdrive
+    # (#201). Runs only after PyPI has the release: the registry verifies the
+    # package exists at server.json's version and that its uploaded README carries
+    # the `mcp-name:` token. tests/test_mcp_registry.py holds server.json's version
+    # to __version__ in the fast lane, so a mismatch fails the release PR, not here.
+    # Auth is GitHub OIDC — the io.github.gchen19/* namespace is granted to this
+    # repo's workflows, no stored token.
+    name: Publish to MCP Registry
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # Pinned + checksum-verified, same policy as gitleaks: `latest` would run
+      # whatever the registry repo shipped last with an OIDC token in scope.
+      MCP_PUBLISHER_VERSION: "1.8.1"
+      MCP_PUBLISHER_SHA256: "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install mcp-publisher
+        run: |
+          tarball="mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSLo "$tarball" "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/${tarball}"
+          echo "${MCP_PUBLISHER_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "$tarball" mcp-publisher
+
+      - name: Log in (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json
+        # PyPI's JSON API can trail the upload by a minute or two, and the
+        # registry's package check reads it — retry rather than fail a release
+        # whose PyPI half already landed.
+        run: |
+          for attempt in 1 2 3 4 5; do
+            ./mcp-publisher publish server.json && exit 0
+            echo "::warning::registry publish attempt $attempt failed; retrying in 30s"
+            sleep 30
+          done
+          echo "::error::MCP Registry publish failed after 5 attempts. PyPI already has this release; re-run this job once the cause is fixed."
+          exit 1

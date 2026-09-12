@@ -1,0 +1,40 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.gchen19/ankusdrive",
+  "title": "AnkusDrive",
+  "description": "Drive FreeCAD from an agent: CAD modeling, drawings, FEM, CFD, EM, and multiphysics simulation.",
+  "version": "0.5.1",
+  "websiteUrl": "https://github.com/gchen19/AnkusDrive",
+  "repository": {
+    "url": "https://github.com/gchen19/AnkusDrive",
+    "source": "github",
+    "id": "1219605505"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "ankusdrive",
+      "version": "0.5.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "ANKUSDRIVE_FREECADCMD",
+          "description": "Absolute path to FreeCAD 1.1's freecadcmd. Leave unset to auto-discover on PATH and standard install locations.",
+          "format": "filepath",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

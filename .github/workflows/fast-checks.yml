@@ -64,6 +64,12 @@ jobs:
         # known identifiers, so the guard never spells out what it forbids.
         run: python tests/test_pii.py
 
+      - name: MCP Registry — server.json matches the release it ships with (#201)
+        # publish.yml lists every v* tag on the official MCP Registry after the
+        # PyPI upload. A version drift or a lost README mcp-name token would only
+        # surface there, after PyPI has burned the version — so catch it here.
+        run: python tests/test_mcp_registry.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.
