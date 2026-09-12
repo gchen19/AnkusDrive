@@ -13,6 +13,25 @@
 set -e
 cd "$(dirname "$0")/.."
 
+# FEM scratch sweep. tests/fem_scratch.py removes each ccx working directory on
+# normal interpreter exit, but atexit does not run when a solve gets SIGKILLed
+# (earlyoom, a runner cancel), and those directories are not small -- a modal
+# solve leaves an 8 MB Mesh.frd. So sweep once more on the way out. Named
+# directories ONLY, and only on EXIT: TMPDIR is shared by the nine self-hosted
+# runners on this box, so a glob (or a sweep on entry) would delete scratch
+# belonging to a concurrent run. The worker's own mkdtemp gate scratch cleans
+# itself up and is deliberately not touched here.
+FEM_SCRATCH_NAMES="modal buckle thermal fem_decomp nl_tension nl_elastica \
+integration_fem probe_det_fem edit_baseline edit_edited neg_fem"
+_fem_scratch_sweep() {
+    [ -n "$ANKUSDRIVE_KEEP_SCRATCH" ] && return 0
+    for n in $FEM_SCRATCH_NAMES; do
+        rm -rf "${TMPDIR:-/tmp}/ankusdrive_$n"
+    done
+    return 0
+}
+trap _fem_scratch_sweep EXIT
+
 # The repo .venv when present (the AppImage two-interpreter split), else the
 # running python3 — a machine where ONE env satisfies every import (hosted CI's
 # conda env, a dev box with global deps) runs the whole suite under it. Without

@@ -25,9 +25,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/ -> fem_scratch
 
 from ankusdrive import Worker, WorkerError  # noqa: E402
 from ankusdrive.client import WorkerDied  # noqa: E402
+from fem_scratch import fem_workdir  # noqa: E402
 
 
 # --- individual tests ---------------------------------------------------------
@@ -1137,7 +1139,7 @@ def test_fem_modal_cantilever():
                                   element_order="2nd")
         w.call("fem_modal", analysis=h["analysis"], n_modes=6)
         w.call("fem_run", analysis=h["analysis"],
-               workdir="/tmp/ankusdrive_modal", _timeout=300.0)
+               workdir=fem_workdir("modal"), _timeout=300.0)
         freqs = w.call("fem_modal_results", analysis=h["analysis"])["frequencies_hz"]
         assert len(freqs) == 6 and all(f > 0 for f in freqs), freqs
         assert freqs == sorted(freqs), f"freqs must ascend: {freqs}"
@@ -1190,7 +1192,7 @@ def test_fem_buckling_column():
         )
         w.call("fem_buckling", analysis=h["analysis"], n_factors=1)
         w.call("fem_run", analysis=h["analysis"],
-               workdir="/tmp/ankusdrive_buckle", _timeout=300.0)
+               workdir=fem_workdir("buckle"), _timeout=300.0)
         results = w.call("fem_buckling_results", analysis=h["analysis"])
         factors = results["buckling_factors"]
         assert len(factors) >= 1, f"expected at least 1 buckling factor, got {factors}"
@@ -1266,7 +1268,7 @@ def test_fem_thermal_steady_state():
         )
         try:
             w.call("fem_run", analysis=h["analysis"],
-                   workdir="/tmp/ankusdrive_thermal", _timeout=300.0)
+                   workdir=fem_workdir("thermal"), _timeout=300.0)
         except WorkerError as e:
             # Some FreeCAD/CCX combos error on thermomech without an initial
             # condition or extra constraint — note and skip rather than fail.
@@ -1683,7 +1685,7 @@ def test_fem_decomposed_cantilever():
         w.call(
             "fem_run",
             analysis=analysis["handle"],
-            workdir="/tmp/ankusdrive_fem_decomp",
+            workdir=fem_workdir("fem_decomp"),
             _timeout=300.0,
         )
         results = w.call("fem_results", analysis=analysis["handle"], top_n=3)

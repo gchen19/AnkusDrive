@@ -27,10 +27,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/ -> fem_scratch
 
 from ankusdrive import Worker  # noqa: E402
 from ankusdrive.analysis import nonlinear as nl  # noqa: E402
 from ankusdrive.client import FREECADCMD  # noqa: E402
+from fem_scratch import fem_workdir  # noqa: E402
 
 _STEEL = {"Name": "Steel", "YoungsModulus": "210000 MPa",
           "PoissonRatio": "0.30", "Density": "7900 kg/m^3"}
@@ -184,7 +186,7 @@ def test_fem_plasticity_uniaxial_tension():
         w.call("fem_mesh", analysis=h["analysis"], body=h["box"],
                char_length=5.0, element_order="2nd", _timeout=180.0)
         w.call("fem_run", analysis=h["analysis"],
-               workdir="/tmp/ankusdrive_nl_tension", _timeout=500.0)
+               workdir=fem_workdir("nl_tension"), _timeout=500.0)
         res = w.call("fem_results", analysis=h["analysis"])
         vm = res["max_vonmises_mpa"]
         linear = E * eps                                   # 1260 MPa, elastic prediction
@@ -230,7 +232,7 @@ def test_fem_large_deflection_elastica():
         w.call("fem_mesh", analysis=h["analysis"], body=h["box"],
                char_length=6.0, element_order="2nd", _timeout=200.0)
         w.call("fem_run", analysis=h["analysis"],
-               workdir="/tmp/ankusdrive_nl_elastica", _timeout=600.0)
+               workdir=fem_workdir("nl_elastica"), _timeout=600.0)
         res = w.call("fem_results", analysis=h["analysis"])
         vx, _, vz = res["max_displacement_vector"]
         transverse, drawin = abs(vz), abs(vx)

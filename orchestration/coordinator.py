@@ -23,7 +23,7 @@ from pathlib import Path
 
 from ankusdrive import Worker
 from ankusdrive import builder_brief
-from ankusdrive.manifest import resolve_constraints, resolve_manifest
+from ankusdrive.manifest import resolve_manifest
 from . import agentkit
 
 

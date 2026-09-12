@@ -24,8 +24,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/ -> fem_scratch
 
 from ankusdrive import Worker, WorkerError  # noqa: E402
+from fem_scratch import fem_workdir  # noqa: E402
 
 try:
     from ankusdrive import render as render_lib
@@ -175,7 +177,7 @@ def _run_fem(w, fillet_handle, bottom_tag, loaded_tag):
     w.call(
         "fem_run",
         analysis=analysis["handle"],
-        workdir="/tmp/ankusdrive_integration_fem",
+        workdir=fem_workdir("integration_fem"),
         _timeout=300.0,
     )
     results = w.call("fem_results", analysis=analysis["handle"], top_n=3)
