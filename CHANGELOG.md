@@ -21,6 +21,19 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
+## [Unreleased]
+
+### Added
+
+- AnkusDrive is listed on the official [MCP Registry](https://registry.modelcontextprotocol.io/)
+  as `io.github.gchen19/ankusdrive`. `server.json` describes the PyPI package
+  (`uvx ankusdrive mcp`, optional `ANKUSDRIVE_FREECADCMD`); the README carries the
+  `mcp-name:` ownership token the registry reads from the PyPI upload; and
+  `publish.yml` publishes to the registry after every PyPI release, via GitHub OIDC
+  with a pinned, checksum-verified `mcp-publisher`. A fast-lane contract test
+  fails any release PR whose `server.json` version drifts from `__version__`
+  ([#201](https://github.com/gchen19/AnkusDrive/issues/201)).
+
 ## [0.5.1] — 2026-09-10
 
 The first release cut after the repository became public. Its reason for existing

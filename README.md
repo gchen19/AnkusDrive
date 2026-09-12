@@ -1,5 +1,10 @@
 # AnkusDrive
 
+<!-- mcp-name: io.github.gchen19/ankusdrive -->
+<!-- ↑ Ownership proof for the official MCP Registry (#201): the registry reads it
+     from the README *as uploaded to PyPI*, so it must survive every release and
+     match `name` in server.json. tests/test_mcp_registry.py holds both to that. -->
+
 <!-- Absolute raw.githubusercontent URLs, not repo-relative paths: this README is
      also the PyPI project page, which resolves relative links against pypi.org.
      PNG rather than the SVG because raw.githubusercontent serves SVG as
