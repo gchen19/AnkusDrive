@@ -1,0 +1,58 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "ankusdrive",
+  "display_name": "AnkusDrive",
+  "version": "0.5.2",
+  "description": "Drive FreeCAD from an agent: CAD modeling, drawings, FEM, CFD, EM, and multiphysics simulation.",
+  "long_description": "AnkusDrive wraps FreeCAD's Python API as 280+ MCP tools: parametric CAD (sketches, pads, pockets, gears, threads, sheet metal), TechDraw drawings with GD&T, structural FEM through CalculiX, and a broader simulation surface (thermal, CFD/CHT, EM, acoustics, FSI, injection molding, optics, multibody) plus a design-control layer (part numbers, revisions, change orders).\n\n**Requires FreeCAD 1.1**, installed separately from https://www.freecad.org/. AnkusDrive finds `freecadcmd` on PATH and in the standard install locations; set the FreeCAD command path below only if yours lives elsewhere. Solvers beyond CalculiX and Gmsh (OpenFOAM, Elmer, SU2, openEMS, ...) are optional, and their tools report what is missing and how to install it rather than failing.",
+  "author": {
+    "name": "George Chen",
+    "url": "https://github.com/gchen19"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gchen19/AnkusDrive.git"
+  },
+  "homepage": "https://github.com/gchen19/AnkusDrive",
+  "documentation": "https://github.com/gchen19/AnkusDrive#readme",
+  "support": "https://github.com/gchen19/AnkusDrive/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "uv",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "src/server.py"],
+      "env": {
+        "ANKUSDRIVE_FREECADCMD": "${user_config.freecadcmd}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "setup_status", "description": "Report what resolved: FreeCAD, solvers, and how to install anything missing" },
+    { "name": "new_document", "description": "Create a FreeCAD document" },
+    { "name": "add_primitive", "description": "Add a box, cylinder, sphere, cone, or torus" },
+    { "name": "pad", "description": "Extrude a sketch into a PartDesign solid" },
+    { "name": "fem_run", "description": "Mesh and solve a structural FEM analysis with CalculiX" },
+    { "name": "render_view", "description": "Render a shaded view of the model as a PNG" }
+  ],
+  "tools_generated": true,
+  "keywords": ["freecad", "cad", "fem", "simulation", "mechanical-engineering", "mcp"],
+  "license": "Apache-2.0",
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  },
+  "user_config": {
+    "freecadcmd": {
+      "type": "file",
+      "title": "FreeCAD command path",
+      "description": "Absolute path to FreeCAD 1.1's freecadcmd (freecadcmd.exe on Windows). Leave empty to auto-discover it on PATH and in the standard install locations.",
+      "required": false,
+      "default": ""
+    }
+  }
+}

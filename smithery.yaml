@@ -4,8 +4,7 @@
 # user's machine, so Smithery launches the `ankusdrive` command (installed via
 # `pipx install ankusdrive`, Phase B) rather than running it in Smithery's cloud.
 #
-# Submission is a human step: once this file is on the default branch and the
-# PyPI release is live, submit at https://smithery.ai/new.
+# Submission is a human step — see the next block for what is actually submitted.
 #
 # It does NOT have to stay local. A remote box can serve this same tool surface
 # over HTTP to an agent that installed nothing — that is epic #296, and the
@@ -13,25 +12,28 @@
 # to it, and what must be true before this file may ever point at a URL.
 #
 # ---------------------------------------------------------------------------
-# ⚠ FORMAT DRIFT — verify before submitting (Phase C; tracked in epic #303)
+# HOW THE LOCAL LISTING IS ACTUALLY PUBLISHED (#201) — this file is not it
 # ---------------------------------------------------------------------------
 # The `startCommand: {type: stdio, commandFunction: …}` schema below is
-# Smithery's older repo-scanned format, and the URL this header used to cite
-# (smithery.ai/docs/config) now 404s. As of 2026-08 their build docs describe
-# exactly two publish routes, and neither one reads this file:
+# Smithery's older repo-scanned format; the URL this header used to cite
+# (smithery.ai/docs/config) 404s. Smithery's build docs describe two publish
+# routes, and neither reads this file:
 #
 #   * URL   — you host a public streamable-HTTP endpoint and the Smithery
-#             Gateway proxies to it. Session config is supplied at publish
-#             time (`smithery mcp publish <url> --config-schema '<json>'`).
-#   * Local — you upload a prebuilt `.mcpb` (MCPB) bundle that clients run
-#             on their own machine.
+#             Gateway proxies to it (`smithery mcp publish <url> …`). Epic #296.
+#   * Local — you upload a prebuilt `.mcpb` bundle that clients run on their
+#             own machine. THIS is AnkusDrive's route.
 #
-# So Phase C's real deliverable is probably an MCPB bundle wrapping this same
-# `ankusdrive mcp` invocation, with this file kept as the declarative record of
-# what that bundle must launch and which config it must collect. `build:`,
-# `homepage:` and `license:` below are likewise legacy top-level keys. Confirm
-# the current format at smithery.ai/new before cutting the release — do not
-# assume this file alone produces a listing.
+# The bundle source is mcpb/ (manifest.json, a pinned pyproject.toml, and a
+# launcher shim); scripts/build-mcpb.sh packs it, publish.yml attaches
+# ankusdrive-<version>.mcpb to each GitHub release, and the listing is
+#
+#   smithery mcp publish ./ankusdrive-<version>.mcpb -n <namespace>/ankusdrive
+#
+# This file stays as the declarative record of what the bundle launches and
+# which config it collects, and tests/test_mcpb_bundle.py holds the two to one
+# name for the FreeCAD path: `freecadcmd`, the same key config.toml uses.
+# `build:`, `homepage:` and `license:` below are likewise legacy top-level keys.
 
 name: ankusdrive
 description: >-
@@ -50,7 +52,7 @@ startCommand:
     type: object
     additionalProperties: false
     properties:
-      freecadCmd:
+      freecadcmd:
         type: string
         title: FreeCAD command path
         description: >-
@@ -62,7 +64,7 @@ startCommand:
     (config) => ({
       command: 'ankusdrive',
       args: ['mcp'],
-      env: config.freecadCmd ? { ANKUSDRIVE_FREECADCMD: config.freecadCmd } : {}
+      env: config.freecadcmd ? { ANKUSDRIVE_FREECADCMD: config.freecadcmd } : {}
     })
 
 # The upstream dependency users must install themselves (not shipped by pip).

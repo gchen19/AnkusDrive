@@ -1,0 +1,16 @@
+# The MCPB bundle's environment, resolved by the host with `uv run` (manifest
+# server.type = "uv"). It is not a package: it only pins the PyPI release this
+# bundle launches. The pin is exact and tracks ankusdrive/__init__.py's
+# __version__ — tests/test_mcpb_bundle.py fails a release PR that bumps one
+# without the other.
+[project]
+name = "ankusdrive-mcpb"
+version = "0.5.2"
+description = "MCPB bundle environment for the AnkusDrive MCP server"
+requires-python = ">=3.10"
+dependencies = [
+    "ankusdrive==0.5.2",
+]
+
+[tool.uv]
+package = false

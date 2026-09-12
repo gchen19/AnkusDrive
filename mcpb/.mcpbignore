@@ -1,0 +1,7 @@
+.venv/
+uv.lock
+__pycache__/
+*.pyc
+README.md
+server/lib/
+server/venv/

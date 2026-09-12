@@ -186,14 +186,22 @@ ruff check ankusdrive tests && python3 tests/test_contracts.py
 For the maintainer, recorded here so it is not folklore:
 
 1. Bump `__version__` in `ankusdrive/__init__.py` — the single source; `pyproject.toml`
-   reads it dynamically.
+   reads it dynamically. Four copies must follow it in the same PR, and the fast lane
+   fails the PR if any lags: both `version` fields in `server.json`
+   (`tests/test_mcp_registry.py`), and `version` in `mcpb/manifest.json` plus the
+   `version` and `ankusdrive==` pin in `mcpb/pyproject.toml` (`tests/test_mcpb_bundle.py`).
 2. Move `## [Unreleased]` in `CHANGELOG.md` to the new version with today's date,
    and add the compare link at the bottom.
 3. Tag `vX.Y.Z` and push the tag. That triggers `publish.yml`, which verifies the
    tag matches the version and uploads to PyPI by OIDC trusted publishing — there is
-   no API token to leak. `workflow_dispatch` with `target=testpypi` dry-runs it.
-4. `gh release create vX.Y.Z --notes-file <the changelog section>`. The changelog is
-   the source; the release page is a copy of it, not a second draft.
+   no API token to leak — then publishes `server.json` to the MCP Registry and builds
+   `ankusdrive-X.Y.Z.mcpb`. `workflow_dispatch` with `target=testpypi` dry-runs the
+   PyPI half.
+4. The GitHub release is created by that same run, with the changelog section as its
+   notes and the `.mcpb` (plus its `.sha256`) attached. The changelog is the source; the
+   release page is a copy of it, not a second draft. The run titles it `X.Y.Z` — add
+   the descriptive half by hand. A release you create before the run finishes keeps
+   its notes; the run only attaches the bundle.
 
 ## Code of conduct
 
