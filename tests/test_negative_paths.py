@@ -23,8 +23,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/ -> fem_scratch
 
 from ankusdrive import Worker, WorkerError  # noqa: E402
+from fem_scratch import fem_workdir  # noqa: E402
 
 try:
     from ankusdrive import render as render_lib
@@ -84,7 +86,7 @@ def test_slice3_fem_run_without_solver_errors():
         e = _expect_error(
             w.call, "fem_run",
             analysis=analysis["handle"],
-            workdir="/tmp/dp_neg_fem",
+            workdir=fem_workdir("neg_fem"),
             _timeout=30.0,
         )
         # Either "no solver" message OR a CCX prereq failure are acceptable —

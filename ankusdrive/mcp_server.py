@@ -3509,10 +3509,13 @@ def fem_mesh(
 
 
 @mcp.tool()
-def fem_run(analysis: str, workdir: str = "/tmp/ankusdrive_fem") -> dict:
+def fem_run(analysis: str, workdir: str | None = None) -> dict:
     """Run the CalculiX solver on an analysis. Blocks until the solve finishes.
-    Returns {workdir, status}."""
-    return _call("fem_run", _timeout=600.0, analysis=analysis, workdir=workdir)
+    `workdir` defaults to `<TMPDIR>/ankusdrive_fem`. Returns {workdir, status}."""
+    params = {"analysis": analysis}
+    if workdir is not None:
+        params["workdir"] = workdir
+    return _call("fem_run", _timeout=600.0, **params)
 
 
 @mcp.tool()
@@ -3570,7 +3573,7 @@ def fem_cantilever_demo(
     height: float = 1000.0,
     force: float = 9_000_000.0,
     mesh_size: float = 500.0,
-    workdir: str = "/tmp/ankusdrive_fem",
+    workdir: str | None = None,
 ) -> dict:
     """Run the built-in cantilever FEM demo end-to-end (geometry → mesh → CalculiX).
 
@@ -3586,7 +3589,7 @@ def fem_cantilever_demo(
         height=height,
         force=force,
         mesh_size=mesh_size,
-        workdir=workdir,
+        **({"workdir": workdir} if workdir is not None else {}),
     )
 
 

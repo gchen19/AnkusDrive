@@ -23,8 +23,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/ -> fem_scratch
 
 from ankusdrive import Worker, WorkerError  # noqa: E402
+from fem_scratch import fem_workdir  # noqa: E402
 
 
 def _build_pad(w, doc_name="edit"):
@@ -182,7 +184,7 @@ def test_fem_constraint_survives_unrelated_fillet():
             )
             return w.call("fem_results", analysis=analysis["handle"])
 
-        baseline = setup_and_run("/tmp/dp_edit_fem_baseline")
+        baseline = setup_and_run(fem_workdir("edit_baseline"))
 
         # Now apply an "unrelated" fillet on a vertical edge near the loaded
         # end — nominally far from the fixed end where peak stress lives.
@@ -206,7 +208,7 @@ def test_fem_constraint_survives_unrelated_fillet():
         # Re-run FEM. Max stress at fixed end should be within 10% of baseline.
         # (Even a fillet at the loaded end doesn't materially change the
         # bending moment at the fixed end.)
-        edited = setup_and_run("/tmp/dp_edit_fem_edited")
+        edited = setup_and_run(fem_workdir("edit_edited"))
 
         bs = baseline["max_vonmises_mpa"]
         es = edited["max_vonmises_mpa"]

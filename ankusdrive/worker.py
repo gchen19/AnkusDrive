@@ -8667,6 +8667,14 @@ def _solve_fused_first_mode(fused, fix_faces, material, spec, assembly_handle):
             pass
         if prev is not None and prev in App.listDocuments():
             App.setActiveDocument(prev)
+        # The ccx scratch (Mesh.frd alone runs to ~6 MB on a real assembly) is
+        # dead the moment the frequencies are extracted above, but mkdtemp does
+        # not clean up after itself -- every gate run used to strand a directory
+        # under TMPDIR. Set ANKUSDRIVE_KEEP_SCRATCH=1 to keep it when debugging
+        # a gate that solved wrong.
+        if not os.environ.get("ANKUSDRIVE_KEEP_SCRATCH"):
+            import shutil as _shutil
+            _shutil.rmtree(workdir, ignore_errors=True)
 
 
 def _performance_contract_gate(comp_of_inst, links_by_inst, by_name):
@@ -12745,6 +12753,15 @@ def _h_fem_mesh(p):
     }
 
 
+def _default_fem_workdir():
+    """Default ccx working directory when the caller names none: `<TMPDIR>/ankusdrive_fem`.
+
+    Rooted at tempfile.gettempdir() rather than a literal /tmp so it honours
+    TMPDIR and resolves to a real temp dir on Windows."""
+    import tempfile as _tempfile
+    return os.path.join(_tempfile.gettempdir(), "ankusdrive_fem")
+
+
 @handler("fem_run")
 def _h_fem_run(p):
     """Run the CalculiX solver attached to an analysis. Returns workdir + status."""
@@ -12758,7 +12775,7 @@ def _h_fem_run(p):
     if solver is None:
         raise RuntimeError("no solver attached to analysis; call fem_set_solver first")
 
-    workdir = p.get("workdir", "/tmp/ankusdrive_fem")
+    workdir = p.get("workdir") or _default_fem_workdir()
     os.makedirs(workdir, exist_ok=True)
     fea = ccxtools.FemToolsCcx(analysis, solver)
     fea.purge_results()
@@ -13658,7 +13675,7 @@ def _h_fem_cantilever(p):
     analysis.addObject(mesh)
     GmshTools(mesh).create_mesh()
 
-    workdir = p.get("workdir", "/tmp/ankusdrive_fem")
+    workdir = p.get("workdir") or _default_fem_workdir()
     os.makedirs(workdir, exist_ok=True)
     fea = ccxtools.FemToolsCcx(analysis, solver)
     fea.purge_results()
