@@ -373,7 +373,7 @@ BOUNDED_SUBMITS = [
         "note": "reference async job: content-keyed, FreeCAD-free, sub-second.",
     },
     # fem_cantilever_demo is exercised directly by test_fem_results_within_tolerance
-    # (8% disp / 15% stress). The heavy real solvers below are DECLARED with their
+    # (2% disp and stress; serial Gmsh makes it reproducible). The heavy real solvers below are DECLARED with their
     # documented bound but not auto-run on the shared host.
     {
         "tool": "cfd_internal_flow_submit",

@@ -1690,17 +1690,20 @@ def test_fem_decomposed_cantilever():
         )
         results = w.call("fem_results", analysis=analysis["handle"], top_n=3)
 
-        # Same geometry/material/load → results should be in the same ballpark
-        # as the monolithic demo. Gmsh nondeterminism alone produces ~5% run-
-        # to-run variance on this geometry, so 8% is the meaningful tolerance.
+        # Same geometry/material/load → results should match the monolithic demo.
+        # Both paths mesh with serial Gmsh (_gmsh_serial_meshing), so the meshes
+        # are identical and the solves agree to rounding. Threaded Gmsh used to
+        # give ~3-8% run-to-run scatter here, which made the old 8% tolerance
+        # flaky. 2% leaves headroom for solver rounding while still catching a
+        # real divergence between the two paths.
         bd = baseline["max_displacement_mm"]
         bs = baseline["max_vonmises_mpa"]
         d = results["max_displacement_mm"]
         s = results["max_vonmises_mpa"]
-        assert abs(d - bd) / bd < 0.08, (
+        assert abs(d - bd) / bd < 0.02, (
             f"max disp diverged: baseline={bd:.4f}mm, decomposed={d:.4f}mm"
         )
-        assert abs(s - bs) / bs < 0.15, (
+        assert abs(s - bs) / bs < 0.02, (
             f"max von Mises diverged: baseline={bs:.2f}MPa, decomposed={s:.2f}MPa"
         )
         assert len(results["top_stress_nodes"]) == 3

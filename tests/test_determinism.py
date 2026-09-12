@@ -126,9 +126,11 @@ def test_repeated_calls_in_one_worker():
 
 
 def test_fem_results_within_tolerance():
-    """FEM is solver-bound and Gmsh has bounded nondeterminism. Two runs of
-    the same geometry must agree within the same tolerances we use elsewhere
-    (8% disp, 15% stress — Slice 3 baseline)."""
+    """Two runs of the same geometry, in separate worker processes, must agree.
+    The worker meshes with serial Gmsh (_gmsh_serial_meshing), so the mesh and
+    the solve are reproducible run to run. Threaded Gmsh used to scatter this
+    by ~3-8%, hence the old 8% disp / 15% stress limits. 2% leaves headroom for
+    solver rounding and still catches meshing going nondeterministic again."""
     with Worker() as w_a:
         a = w_a.call("fem_cantilever_demo", _timeout=180.0, mesh_size=500.0)
     with Worker() as w_b:
@@ -141,17 +143,17 @@ def test_fem_results_within_tolerance():
 
     disp_diff = abs(da - db) / max(da, db)
     stress_diff = abs(sa - sb) / max(sa, sb)
-    assert disp_diff < 0.08, (
+    assert disp_diff < 0.02, (
         f"FEM disp variance too high across runs: "
         f"a={da:.4f}mm, b={db:.4f}mm ({disp_diff:.1%})"
     )
-    assert stress_diff < 0.15, (
+    assert stress_diff < 0.02, (
         f"FEM stress variance too high across runs: "
         f"a={sa:.2f}MPa, b={sb:.2f}MPa ({stress_diff:.1%})"
     )
     print(
-        f"    FEM cross-run: disp diff {disp_diff:.1%} (<8%), "
-        f"stress diff {stress_diff:.1%} (<15%)"
+        f"    FEM cross-run: disp diff {disp_diff:.1%} (<2%), "
+        f"stress diff {stress_diff:.1%} (<2%)"
     )
 
 
