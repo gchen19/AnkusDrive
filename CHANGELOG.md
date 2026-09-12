@@ -21,7 +21,12 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
-## [Unreleased]
+## [0.5.2] — 2026-09-12
+
+The release that puts AnkusDrive on the official MCP Registry. The registry proves
+PyPI ownership by reading an `mcp-name:` token out of the README *as uploaded*, and
+0.5.1's upload predates that token — so, as with 0.5.1's frozen project page, only a
+new version can carry it. This is the first release whose tag push lists itself.
 
 ### Added
 
@@ -33,6 +38,15 @@ separately, so this file is the source and the release page is the copy.
   with a pinned, checksum-verified `mcp-publisher`. A fast-lane contract test
   fails any release PR whose `server.json` version drifts from `__version__`
   ([#201](https://github.com/gchen19/AnkusDrive/issues/201)).
+
+### Changed
+
+- `fem_run` and `fem_cantilever_demo` default their workdir to
+  `<TMPDIR>/ankusdrive_fem` instead of a literal `/tmp` path, so the default follows
+  the platform's temp directory. Callers that pass `workdir` see no change. The FEM
+  tests now remove their CalculiX scratch dirs at exit instead of stranding
+  multi-MB result files on the runners; `ANKUSDRIVE_KEEP_SCRATCH=1` keeps them for
+  debugging ([#336](https://github.com/gchen19/AnkusDrive/pull/336)).
 
 ## [0.5.1] — 2026-09-10
 
@@ -410,7 +424,8 @@ Before the first tag, in April 2026: the initial CLI and MCP scaffold over FreeC
 1.1.1, and Phase 2 — the full core mechanical-design surface, roughly 72 MCP tools.
 Those commits are in the git history rather than in this file.
 
-[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/gchen19/AnkusDrive/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/gchen19/AnkusDrive/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/gchen19/AnkusDrive/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/gchen19/AnkusDrive/compare/v0.3.0...v0.4.0
