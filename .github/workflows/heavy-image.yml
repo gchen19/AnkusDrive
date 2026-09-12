@@ -1,0 +1,176 @@
+name: Heavy-solver image
+
+# Builds ghcr.io/<owner>/ankusdrive-heavy — every external solver the Linux
+# heavy-solves lane runs live, prebuilt (#339), so that lane can move off the
+# self-hosted box onto a GitHub-hosted runner (#338 / #340). Recipe and pins:
+# docker/heavy-solvers/Dockerfile.
+#
+# SHAPE. The Dockerfile's four source-build stages (YADE, openEMS, the preCICE FSI
+# stack, OpenFOAM-7 + openInjMoldSim) are independent, and together they are too
+# much compile for one hosted runner's 6-hour cap. So: one job builds the shared
+# `system` stage, four parallel jobs build one stage each, and a final job
+# assembles the image — every job reading and writing a per-stage registry cache,
+# so a run that changes one stage recompiles only that stage.
+#
+# The image is not pushed unless its own last build step passes:
+# scripts/ci-linux-preflight.sh, which fails if any heavy solver does not resolve.
+#
+# TRIGGERS. A push to main touching the recipe; a PR touching it (built, never
+# pushed); on demand; and monthly, because the apt layers (ESI OpenFOAM, the Elmer
+# PPA) float and a drift should surface here rather than inside a heavy-solves run.
+# heavy-solves.yml pins the image by digest, so a rebuild never changes what that
+# lane tests until the pin is bumped.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker/heavy-solvers/**"
+      - ".dockerignore"
+      - "scripts/install-solvers.sh"
+      - "scripts/install-freecad-appimage.sh"
+      - "scripts/ci-linux-preflight.sh"
+      - "tools/build_openinjmoldsim.sh"
+      - "ankusdrive/solvers.py"
+      - ".github/workflows/heavy-image.yml"
+  pull_request:
+    paths:
+      - "docker/heavy-solvers/**"
+      - ".dockerignore"
+      - "scripts/install-solvers.sh"
+      - "scripts/install-freecad-appimage.sh"
+      - "scripts/ci-linux-preflight.sh"
+      - "tools/build_openinjmoldsim.sh"
+      - "ankusdrive/solvers.py"
+      - ".github/workflows/heavy-image.yml"
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 3 1 * *"   # 03:00 UTC on the 1st — apt/PPA drift guard
+
+concurrency:
+  group: heavy-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/ankusdrive-heavy
+  # Fork PRs get a read-only token: they read the cache but cannot write it.
+  CAN_WRITE: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+jobs:
+  system:
+    name: Build stage — system (apt layers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/heavy-solvers/Dockerfile
+          target: system
+          push: false
+          cache-from: type=registry,ref=${{ env.IMAGE }}:cache-system
+          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-system,mode=max', env.IMAGE) || '' }}
+
+  stage:
+    name: Build stage — ${{ matrix.target }}
+    needs: system
+    runs-on: ubuntu-latest
+    # A hosted runner has 4 cores; OpenFOAM-7 is the long pole.
+    timeout-minutes: 350
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [yade, openems, fsi, oims]
+    steps:
+      # The OpenFOAM-7 tree and YADE's objects need more than the image's default
+      # free space; these preinstalled toolchains are unused here.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/heavy-solvers/Dockerfile
+          target: ${{ matrix.target }}
+          build-args: JOBS=4
+          push: false
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cache-system
+            type=registry,ref=${{ env.IMAGE }}:cache-${{ matrix.target }}
+          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-{1},mode=max', env.IMAGE, matrix.target) || '' }}
+
+  image:
+    name: Assemble, preflight, push
+    needs: stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=schedule,pattern={{date 'YYYYMMDD'}}
+            type=sha,format=short
+      - id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/heavy-solvers/Dockerfile
+          target: final
+          # Never from a PR: the image a heavy-solves run pulls comes from main only.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cache-system
+            type=registry,ref=${{ env.IMAGE }}:cache-yade
+            type=registry,ref=${{ env.IMAGE }}:cache-openems
+            type=registry,ref=${{ env.IMAGE }}:cache-fsi
+            type=registry,ref=${{ env.IMAGE }}:cache-oims
+            type=registry,ref=${{ env.IMAGE }}:cache-final
+          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-final,mode=max', env.IMAGE) || '' }}
+      - name: Record the digest to pin
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "### ankusdrive-heavy" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pin in heavy-solves.yml: \`${IMAGE}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
