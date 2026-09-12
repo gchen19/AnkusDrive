@@ -170,3 +170,50 @@ jobs:
           done
           echo "::error::MCP Registry publish failed after 5 attempts. PyPI already has this release; re-run this job once the cause is fixed."
           exit 1
+
+  release-mcpb:
+    # Builds the MCPB bundle (#201) and attaches it to the GitHub release — the
+    # one-click Claude Desktop install and the file Smithery distributes. Runs after
+    # PyPI because mcpb/pyproject.toml pins ankusdrive==<version>, which only
+    # resolves once the upload exists. tests/test_mcpb_bundle.py holds the pin and
+    # manifest version to __version__ in the fast lane.
+    #
+    # Creates the release from this version's CHANGELOG section when it does not
+    # exist yet (the changelog is the source, the release page a copy), and only
+    # replaces the asset when it does — so a hand-created release keeps its notes.
+    name: Release MCPB bundle
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the bundle
+        # ubuntu-latest ships node/npx; the packer version is pinned in the script.
+        run: scripts/build-mcpb.sh dist
+
+      - name: Create or update the GitHub release
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^__version__ = "([^"]+)"$/\1/p' ankusdrive/__init__.py)"
+          tag="v${version}"
+          asset="dist/ankusdrive-${version}.mcpb"
+          sha256sum "$asset" | tee "${asset}.sha256"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" "${asset}.sha256" --clobber
+          else
+            awk -v v="$version" '
+              index($0, "## [" v "]") == 1 { f = 1; next }
+              f && /^## \[/ { exit }
+              f' CHANGELOG.md > notes.md
+            if [ ! -s notes.md ]; then
+              echo "::error::CHANGELOG.md has no ## [${version}] section to use as release notes"
+              exit 1
+            fi
+            gh release create "$tag" "$asset" "${asset}.sha256" \
+              --verify-tag --title "${version}" --notes-file notes.md
+            echo "::notice::Created ${tag} titled '${version}' — add the descriptive half of the title by hand if wanted."
+          fi

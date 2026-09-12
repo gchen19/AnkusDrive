@@ -70,6 +70,12 @@ jobs:
         # surface there, after PyPI has burned the version — so catch it here.
         run: python tests/test_mcp_registry.py
 
+      - name: MCPB bundle — mcpb/ launches the release it ships with (#201)
+        # The bundle pins ankusdrive==<version> and passes the FreeCAD path through
+        # a user_config placeholder. A stale pin or a placeholder that can arrive
+        # unexpanded only shows up on a user's machine — so catch it here.
+        run: python tests/test_mcpb_bundle.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.

@@ -21,6 +21,28 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
+## [Unreleased]
+
+### Added
+
+- An MCPB bundle, `ankusdrive-<version>.mcpb`, attached to every GitHub release — the
+  one-click Claude Desktop install and the artifact the Smithery listing distributes.
+  It carries no AnkusDrive code: `mcpb/pyproject.toml` pins the matching PyPI release
+  and the host resolves it with `uv` (manifest 0.4, `server.type: "uv"`), so the bundle
+  is ~34 kB and handles numpy/Pillow on every platform. One optional install field,
+  the FreeCAD command path. A launcher shim drops `ANKUSDRIVE_*` values that arrive as
+  unexpanded `${user_config.*}` text, which the MCPB reference host leaves in place for
+  an unset option and AnkusDrive would otherwise read as an explicit, nonexistent
+  FreeCAD path. `publish.yml` builds it after the PyPI upload and creates the GitHub
+  release from the changelog section when it does not exist yet
+  ([#201](https://github.com/gchen19/AnkusDrive/issues/201)).
+
+### Changed
+
+- The FreeCAD-path config key is `freecadcmd` everywhere: `smithery.yaml` said
+  `freecadCmd` while `config.toml` and the bundle say `freecadcmd`
+  ([#201](https://github.com/gchen19/AnkusDrive/issues/201)).
+
 ## [0.5.2] — 2026-09-12
 
 The release that puts AnkusDrive on the official MCP Registry. The registry proves

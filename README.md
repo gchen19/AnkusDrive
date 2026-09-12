@@ -221,6 +221,12 @@ If `ankusdrive` isn't on the host process's PATH, use an absolute path —
 e.g. `/Users/<you>/.local/bin/ankusdrive` (pipx default) or
 `/absolute/path/to/AnkusDrive/.venv/bin/ankusdrive` (clone+venv).
 
+**Claude Desktop, one click** — download `ankusdrive-<version>.mcpb` from the
+[latest release](https://github.com/gchen19/AnkusDrive/releases/latest) and open it.
+Claude Desktop sets up its Python environment with `uv`, so no `pipx` step is needed
+— FreeCAD 1.1 still is. The install dialog has one optional field, the FreeCAD
+command path, for a FreeCAD that auto-discovery cannot find.
+
 **Claude Code** — register once:
 
 ```bash
