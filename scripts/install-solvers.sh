@@ -423,7 +423,15 @@ build_dem_gpl() {
   log "cmake build -j$jobs  (capped — keep headroom for any co-resident runner)"
   cmake --build "$src/build" -j"$jobs" || die "cmake build failed"
   cmake --build "$src/build" --target install || die "cmake install failed"
-  ok "YADE installed to $prefix — verify: $prefix/bin/yade --version  (or set ANKUSDRIVE_YADE)"
+  # YADE installs VERSIONED executables (yade-<date>.git-<sha>[-batch]); discovery
+  # (ankusdrive/solvers.py) looks for plain `yade` / `yade-batch`, so without these
+  # links a finished build does not resolve (#339).
+  local exe
+  exe="$(find "$prefix/bin" -maxdepth 1 -type f -name 'yade-*' ! -name '*-batch' | sort | tail -1)"
+  [ -n "$exe" ] || die "no yade-* executable under $prefix/bin after install"
+  ln -sfn "$(basename "$exe")" "$prefix/bin/yade"
+  [ -f "$exe-batch" ] && ln -sfn "$(basename "$exe")-batch" "$prefix/bin/yade-batch"
+  ok "YADE installed to $prefix ($(basename "$exe"), linked as yade) — verify: $prefix/bin/yade --version  (or set ANKUSDRIVE_YADE)"
 }
 
 # --- freecad: the CORE dependency, not a solver (issue #280) -------------------
