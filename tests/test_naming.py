@@ -55,9 +55,10 @@ ALLOWED = {
     "CHANGELOG.md":                 "0.5.0 IS the rename — the entry and its deprecation list must name what was renamed",
     "docs/archive/PUBLISHING_PLAN.md": "the old name is an unclaimed PyPI project to reserve",
     # Migration aids. These do not keep anything working — they DETECT the
-    # pre-rename state and say how to move off it, so they must name it. Both go
+    # pre-rename state and say how to move off it, so they must name it. All go
     # when the shims do, in 0.6.
     "scripts/ci-macos-preflight.sh": "fails a runner whose .env is still on the legacy prefix",
+    "scripts/ci-linux-preflight.sh": "fails a heavy-lane environment still on the legacy prefix (#339)",
     "docs/MACOS.md":                 "documents the pre-0.5 runner .env + solver dir, and the migration",
     # NOTE: logo/ was exempt while the pre-rename artwork was still tracked — that
     # mark is a drift pin threading a reticle, so the picture and its filenames WERE
