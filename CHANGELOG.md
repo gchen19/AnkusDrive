@@ -37,6 +37,23 @@ separately, so this file is the source and the release page is the copy.
   release from the changelog section when it does not exist yet
   ([#201](https://github.com/gchen19/AnkusDrive/issues/201)).
 
+### Fixed
+
+- Install hints now match how AnkusDrive was installed. `setup_status`, `doctor`,
+  `solve_capabilities` and every `*_submit` degradation used to say
+  `pip install 'ankusdrive[X]'`, which under pipx, `uv tool`, `uvx` (the MCP Registry
+  launch) and the Claude Desktop extension installs into a different Python and
+  leaves the family missing with no explanation. `ankusdrive/install_kind.py`
+  detects the install (`ANKUSDRIVE_INSTALL_KIND`, else the interpreter path) and
+  rewrites pip hints: `pipx runpip ankusdrive install …`, `uv tool install
+  --reinstall 'ankusdrive[X]'`, `uvx --from 'ankusdrive[X]' ankusdrive mcp`, and for
+  the extension a plain statement that extras cannot be added, with the pipx route.
+  Non-pip hints and plain venvs are unchanged. The report gains `install: {kind,
+  source}`; the FreeCAD worker receives the host's kind, since its own interpreter is
+  FreeCAD's; the MCPB launcher announces `mcpb`. A fast-lane test fails any hint
+  string that bypasses the routing
+  ([#347](https://github.com/gchen19/AnkusDrive/issues/347)).
+
 ### Changed
 
 - The FreeCAD-path config key is `freecadcmd` everywhere: `smithery.yaml` said

@@ -40,6 +40,7 @@ import platform
 import shutil
 
 from ankusdrive import config as _config
+from ankusdrive import install_kind as _install_kind
 
 # Registry of the P2 external solvers, keyed by the name agents pass (and the
 # ANKUSDRIVE_<NAME>_PATH env override is the upper-cased key). Ordered by the
@@ -1017,8 +1018,19 @@ def find_solver(name: str) -> dict:
         info["wire_hint"] = wire_hint
     else:
         info["status"] = "absent"
-    info["install_hint"] = spec["install_hint"]
+    info["install_hint"] = install_hint(name)
     return info
+
+
+def install_hint(name: str) -> str:
+    """``name``'s install hint, written for how THIS AnkusDrive was installed (#347).
+
+    The registry strings are the plain-venv form (``pip install 'ankusdrive[X]'``);
+    under pipx / uv tool / uvx / the Claude Desktop extension that command installs
+    into a different Python and changes nothing, so it is rewritten here — the one
+    place every ``install_hint`` and ``require_solver`` ``install`` field comes from.
+    Raises ValueError for an unknown name."""
+    return _install_kind.adapt(_spec(name)["install_hint"])
 
 
 def is_available(name: str) -> bool:

@@ -3181,7 +3181,8 @@ def setup_status(verify_freecad_boot: bool = False) -> dict:
     user doubts the install actually runs).
 
     Returns {platform: {system, machine}, freecad: {available, path, source,
-    version?, fix?}, solvers: {available, unwired, prepared_case_only, solvers:
+    version?, fix?}, install: {kind, source} (venv | pipx | uv_tool | uvx | mcpb —
+    the install every fix string is written for), solvers: {available, unwired, prepared_case_only, solvers:
     {name: {..., install_hint | wire_hint}}, families: {family: {solvers, available,
     unwired, prepared_case_only, any_available}}, extras}} —
     `families[*].any_available` is what gates each *_submit family, and every
@@ -3204,8 +3205,10 @@ def diagnose_setup() -> str:
         "2. For each family that is unwired or absent, give me the exact fix for "
         "my platform (the report's `platform.system`), copy-paste ready — use each "
         "item's `fix`/`install_hint`/`wire_hint` string verbatim; don't invent "
-        "commands. Note that pip-wheel families install into the SAME Python "
-        "environment that runs `ankusdrive mcp`.\n"
+        "commands. The report's `install.kind` says how AnkusDrive was installed "
+        "(venv, pipx, uv_tool, uvx, or the mcpb Claude Desktop extension) and every "
+        "fix string is already written for it — don't translate a fix back into a "
+        "plain `pip install`.\n"
         "3. Point out anything I explicitly do NOT need to install for my platform "
         "(e.g. Linux-only source builds on Windows/macOS) so I don't chase it.\n"
         "4. End with the single highest-value next step.\n"

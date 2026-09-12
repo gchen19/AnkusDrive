@@ -28,7 +28,7 @@ import time
 
 from pathlib import Path
 
-from . import solvers
+from . import install_kind, solvers
 from .client import (
     _DEFAULT_FREECADCMD_CANDIDATES,
     _freecadcmd_candidates,
@@ -162,6 +162,9 @@ def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
         "freecad": freecad_report(probe_version=probe_version),
         "config": config_report(),
         "mcp": mcp_report(serve=mcp_serve),
+        # How this AnkusDrive was installed (#347) — every fix string below is
+        # already written for it; reported so the assumption is visible.
+        "install": install_kind.detect(),
         "solvers": solvers.capabilities(),
     }
 
@@ -178,6 +181,11 @@ def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
 # Printed verbatim as the remediation. It is the pyproject pin: the floor is where
 # `mcp.server.fastmcp` first shipped, the ceiling is where it was removed.
 MCP_PIN_FIX = 'pip install "mcp>=1.2,<2"'
+
+
+def _pin_fix() -> str:
+    """MCP_PIN_FIX as a command that reaches THIS install (pipx / uv / extension, #347)."""
+    return install_kind.adapt(MCP_PIN_FIX)
 
 # The interpreter window AnkusDrive's dependency set is verified on: the floor is
 # pyproject's requires-python, the ceiling is its newest Programming Language
@@ -253,8 +261,8 @@ def mcp_import_report() -> dict:
     except BaseException as e:  # noqa: BLE001 — a broken dep is reported, never raised
         rep["error"] = f"{type(e).__name__}: {e}"
         rep["fix"] = (
-            MCP_PIN_FIX if rep["package_version"]
-            else f"{MCP_PIN_FIX}   (no mcp distribution found in this interpreter)"
+            _pin_fix() if rep["package_version"]
+            else f"{_pin_fix()}   (no mcp distribution found in this interpreter)"
         )
         return rep
     rep["available"] = True
@@ -360,7 +368,7 @@ def mcp_serve_report(timeout: float = 60.0, argv: list[str] | None = None) -> di
         # Collapse whitespace: the command is echoed for the user to paste back.
         shown = " ".join(" ".join(cmd).split())
         rep["fix"] = (f"reproduce with `{shown}`; if the server dies on an mcp "
-                      f"import: {MCP_PIN_FIX}")
+                      f"import: {_pin_fix()}")
     finally:
         errlog.close()
     return rep
@@ -530,6 +538,16 @@ def render(report: dict) -> str:
                        "to ANKUSDRIVE_*; removed in 0.6." %
                        (len(cfg["legacy_env"]), ", ".join(cfg["legacy_env"])))
     out.append("")
+    inst = report.get("install")
+    if inst:
+        # Which install the fix commands below are written for (#347).
+        how = {"env": f"from {install_kind.ENV}", "prefix": "from the interpreter path",
+               "default": "no managed install detected"}[inst["source"]]
+        out.append(f"install: {inst['kind']} ({how})")
+        if inst.get("ignored_env"):
+            out.append(f"  ignored {install_kind.ENV}={inst['ignored_env']!r} — not one of "
+                       f"{', '.join(install_kind.KINDS)}")
+        out.append("")
     mcp = report.get("mcp")
     if mcp:
         out.append("MCP server:")

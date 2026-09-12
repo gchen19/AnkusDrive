@@ -18,6 +18,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+from . import install_kind as _install_kind
+
 
 # The console binary is `freecadcmd` on POSIX and `freecadcmd.exe` / `FreeCADCmd.exe`
 # on Windows. `shutil.which` (below) tries every name against PATH (honoring Windows
@@ -145,6 +147,10 @@ class Worker:
             text=True,
             start_new_session=(os.name == "posix"),
             creationflags=creationflags,
+            # The worker runs under FreeCAD's Python, whose sys.prefix says nothing
+            # about how AnkusDrive was installed; hand it the host's answer so the
+            # install hints it builds match (#347).
+            env=_install_kind.worker_env(),
         )
         # The session leader's PGID equals its PID; capture it now so we can group-kill
         # later even after self.proc has been reaped (getpgid would then fail). On

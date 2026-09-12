@@ -36,6 +36,10 @@ def scrub_unsubstituted(environ) -> list:
 
 def main() -> None:
     removed = scrub_unsubstituted(os.environ)
+    # Announce the install kind before the package reads the environment: this
+    # interpreter lives in a host-managed, pinned .venv, so a `pip install` hint is
+    # wrong here, and ankusdrive.install_kind rewrites hints on seeing this (#347).
+    os.environ["ANKUSDRIVE_INSTALL_KIND"] = "mcpb"
     if removed:
         # stderr only: stdout is the MCP stdio channel.
         print(f"ankusdrive-mcpb: ignoring unset user config {', '.join(sorted(removed))}", file=sys.stderr)
