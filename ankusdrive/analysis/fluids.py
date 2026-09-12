@@ -26,7 +26,16 @@ Return conventions mirror the rest of the corpus (``fidelity``, ``valid_range_ok
 """
 from __future__ import annotations
 
-_INSTALL_HINT = "pip install ankusdrive[fluids]   # CoolProp (BSD-3, in-process)"
+from ankusdrive import install_kind as _install_kind
+
+# The plain-venv form; _install_hint() rewrites it for pipx / uv / the Claude
+# Desktop extension, where a shell `pip install` lands in another Python (#347).
+_INSTALL_HINT = "pip install 'ankusdrive[fluids]'  (CoolProp, BSD-3, in-process)"
+
+
+def _install_hint() -> str:
+    return _install_kind.adapt(_INSTALL_HINT)
+
 
 try:  # in-process import, like optiland — no GPL/copyleft boundary
     import CoolProp  # noqa: F401
@@ -131,7 +140,7 @@ def fluid_props(name: str, T_K: float, P_Pa: float = 101325.0) -> dict:
                 "fluid": name,
                 "coolprop_name": cp_name,
                 "reason": f"CoolProp not installed and no constant fallback for {name!r}",
-                "install": _INSTALL_HINT,
+                "install": _install_hint(),
                 "coolprop_available": False,
             }
         rho = fb["density"]
@@ -152,7 +161,7 @@ def fluid_props(name: str, T_K: float, P_Pa: float = 101325.0) -> dict:
             "source": "constant fallback (≈20 °C, 1 atm) — CoolProp not installed",
             "warnings": [
                 f"CoolProp absent: returning ≈20 °C constants for {cp_name}, "
-                "not f(T,P). " + _INSTALL_HINT
+                "not f(T,P). " + _install_hint()
             ],
             "coolprop_available": False,
         }
@@ -198,7 +207,7 @@ def fluid_props(name: str, T_K: float, P_Pa: float = 101325.0) -> dict:
                 "fluid": name,
                 "coolprop_name": cp_name,
                 "reason": f"CoolProp could not resolve state: {exc2}",
-                "install": _INSTALL_HINT,
+                "install": _install_hint(),
                 "valid_range_ok": False,
                 "warnings": warnings,
                 "coolprop_available": True,

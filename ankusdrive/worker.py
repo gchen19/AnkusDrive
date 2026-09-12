@@ -15333,8 +15333,7 @@ def _h_optics_solid_trace(p):
         from ankusdrive import solvers
         info = solvers.find_solver("kraken")
         return {"ok": False, "solver": "kraken", "reason": "solver not installed",
-                "install": info.get("install_hint",
-                                    "pip install 'ankusdrive[optics_gpl]'  (KrakenOS, GPL-3.0)")}
+                "install": info.get("install_hint") or solvers.install_hint("kraken")}
 
     stl_path = p.get("stl_path")
     tmp = None
@@ -15500,9 +15499,7 @@ def _h_em_fullwave_submit(p):
         from ankusdrive import solvers
         info = solvers.find_solver("openems")
         return {"ok": False, "solver": "openems", "reason": "solver not installed",
-                "install": info.get("install_hint",
-                                    "source-build openEMS (GPL-3.0) — "
-                                    "scripts/install-solvers.sh em_gpl")}
+                "install": info.get("install_hint") or solvers.install_hint("openems")}
 
     from ankusdrive import jobs
     kind = p.get("problem", "waveguide_sweep")
@@ -15701,9 +15698,7 @@ def _dem_unavailable():
     from ankusdrive import solvers
     info = solvers.find_solver("yade")
     return {"ok": False, "solver": "yade", "reason": "solver not installed",
-            "install": info.get("install_hint",
-                                "source-build YADE (GPL-3.0): scripts/install-solvers.sh "
-                                "dem_gpl, then set ANKUSDRIVE_YADE")}
+            "install": info.get("install_hint") or solvers.install_hint("yade")}
 
 
 @handler("dem_pack_submit")
@@ -15995,9 +15990,7 @@ def _h_acoustic_radiation_submit(p):
         from ankusdrive import solvers
         info = solvers.find_solver("bempp")
         return {"ok": False, "solver": "bempp", "reason": "solver not installed",
-                "install": info.get("install_hint",
-                                    "python3 -m venv .venv-bempp && "
-                                    ".venv-bempp/bin/pip install bempp-cl gmsh 'meshio>=5'")}
+                "install": info.get("install_hint") or solvers.install_hint("bempp")}
 
     from ankusdrive import jobs
     kind = p.get("problem", "radiation")
