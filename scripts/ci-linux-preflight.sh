@@ -67,8 +67,10 @@ else:
 
 # Every solver the Linux heavy lane runs live. Adding a heavy family means adding
 # its solver here, or its live tests can go absent without anything turning red.
+# bempp and openems are NOT here: they live in dedicated venvs, and find_solver only
+# probes THIS interpreter — see the dedicated-venv section below.
 REQUIRED = (
-    "bempp", "calculix", "elmer", "kraken", "openems", "openfoam", "optiland",
+    "calculix", "elmer", "kraken", "openfoam", "optiland",
     "precice", "prusaslicer", "pybullet", "rayoptics", "topopt", "yade",
 )
 print("\n== Solvers ==")
@@ -86,6 +88,46 @@ for name in REQUIRED:
         fail(f"{name}: installed but unwired at {info.get('found_at')} — {info.get('wire_hint')}")
     else:
         fail(f"{name}: absent — {info.get('install') or 'see scripts/install-solvers.sh'}")
+
+# The live Bempp / openEMS tests gate on their own interpreter probes
+# (tests/test_acoustics_bem.py::_bempp_python, tests/test_em_fullwave.py::
+# _openems_python): the env override, then .venv-<x> beside the repo or one level
+# up, then python3 on PATH — each checked with find_spec in THAT interpreter.
+# Same order and same probe here, so this passes exactly when those tests would run.
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+REPO = Path(os.getcwd())
+
+
+def venv_python(env_var, venv, modules):
+    cands = [os.environ.get(env_var)]
+    for base in (REPO, REPO.parent):
+        cands += [str(base / venv / "bin" / "python3"), str(base / venv / "bin" / "python")]
+    cands.append(shutil.which("python3"))
+    probe = ("import importlib.util,sys;sys.exit(0 if all(importlib.util.find_spec(m) "
+             f"for m in {list(modules)!r}) else 1)")
+    for c in dict.fromkeys(c for c in cands if c):
+        if os.path.isfile(c):
+            try:
+                if subprocess.run([c, "-c", probe], capture_output=True, timeout=30).returncode == 0:
+                    return c
+            except Exception:
+                pass
+    return None
+
+
+print("\n== Dedicated-venv solvers ==")
+for label, env_var, venv, modules in (
+    ("bempp", "ANKUSDRIVE_BEMPP_PYTHON", ".venv-bempp", ("bempp_cl",)),
+    ("openems", "ANKUSDRIVE_OPENEMS_PYTHON", ".venv-openems", ("openEMS", "CSXCAD")),
+):
+    if py := venv_python(env_var, venv, modules):
+        ok(f"{label:11s} {py}")
+    else:
+        fail(f"{label}: no interpreter imports {', '.join(modules)} — set {env_var} "
+             f"(scripts/install-solvers.sh {'acoustics_bem' if label == 'bempp' else 'em_gpl'})")
 
 print("\n== FSI stack ==")
 fsi = solvers.fsi_stack_status()

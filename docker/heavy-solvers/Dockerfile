@@ -185,6 +185,9 @@ RUN cd /src/ankusdrive && PY=/opt/venv/bin/python3 PREFIX=/opt/freecad BINDIR=/u
 ENV ANKUSDRIVE_FREECADCMD=/opt/freecad/squashfs-root/usr/bin/freecadcmd \
     ANKUSDRIVE_CALCULIX_PATH=/usr/bin/ccx \
     ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc \
+    # is_available("openfoam") — what test_openfoam gates on — needs the BINARY;
+    # the apt install puts it on PATH only after the bashrc is sourced
+    ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linux64GccDPInt32Opt/bin/simpleFoam \
     ANKUSDRIVE_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc \
     ANKUSDRIVE_CCX_PRECICE=/opt/fsi/calculix-adapter/bin/ccx_preCICE \
     ANKUSDRIVE_PRECICE_LIB=/opt/fsi/precice/lib \
