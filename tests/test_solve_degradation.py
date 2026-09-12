@@ -6,9 +6,9 @@ from docs/archive/SIMULATION_P2_KICKOFF.md: with a solver ABSENT, the resolution
 return the clean {ok:false, reason, install} dict and never raise — that is what
 lets each P2 family's *_submit degrade instead of crashing on a missing binary.
 
-The two low-level probes (_module_available / _binary_path) are monkeypatched to
-simulate absent/present, so the contract is deterministic regardless of what's
-actually installed on the test box. As each external family lands (M2+), its own
+The low-level probes (_module_available / _binary_path / _interpreter_python) are
+monkeypatched to simulate absent/present, so the contract is deterministic
+regardless of what's actually installed on the test box. As each external family lands (M2+), its own
 *_submit adds a degradation assertion; this file guards the shared primitive every
 one of them is built on.
 
@@ -32,7 +32,7 @@ _EXPECTED_FAMILIES = {"mbd", "topology", "cfd", "thermal_transient", "optics"}
 
 
 class _force:
-    """Context manager: force every solver absent (or present) by patching the two
+    """Context manager: force every solver absent (or present) by patching the
     resolution primitives find_solver() relies on. Restores them on exit."""
 
     def __init__(self, available: bool):
@@ -42,6 +42,7 @@ class _force:
         self._mod = solvers._module_available
         self._bin = solvers._binary_path
         self._unwired = solvers._unwired_found
+        self._interp = solvers._interpreter_python
         # neutralize the installed-but-unwired probe (#177): "truly absent" means no
         # standard-location bashrc / dedicated venv on the box counts as evidence, so
         # the two-state contract stays deterministic regardless of the test host.
@@ -49,15 +50,18 @@ class _force:
         if self.available:
             solvers._module_available = lambda m: True
             solvers._binary_path = lambda name, spec: "/fake/bin/" + name
+            solvers._interpreter_python = lambda name, spec: "/fake/venv/bin/python3"
         else:
             solvers._module_available = lambda m: False
             solvers._binary_path = lambda name, spec: None
+            solvers._interpreter_python = lambda name, spec: None
         return self
 
     def __exit__(self, *exc):
         solvers._module_available = self._mod
         solvers._binary_path = self._bin
         solvers._unwired_found = self._unwired
+        solvers._interpreter_python = self._interp
         return False
 
 
@@ -154,10 +158,12 @@ def test_doctor_ready_via_names_the_resolved_package():
     doctor exists to avoid. Regression guard for the honest-label fix (issue #189)."""
     from ankusdrive import doctor
 
-    _mod, _bin, _unwired = (
-        solvers._module_available, solvers._binary_path, solvers._unwired_found)
+    _mod, _bin, _unwired, _interp = (
+        solvers._module_available, solvers._binary_path, solvers._unwired_found,
+        solvers._interpreter_python)
     solvers._unwired_found = lambda name, spec: None
     solvers._binary_path = lambda name, spec: None          # no binaries resolve
+    solvers._interpreter_python = lambda name, spec: None
     # only solidspy present; topopt (the entry's own name) is absent
     solvers._module_available = lambda m: m == "solidspy"
     try:
@@ -174,6 +180,7 @@ def test_doctor_ready_via_names_the_resolved_package():
         solvers._module_available = _mod
         solvers._binary_path = _bin
         solvers._unwired_found = _unwired
+        solvers._interpreter_python = _interp
     # a dotted name whose parent is missing must be absent, not an exception
     assert solvers._module_available("nope_xyz.sub") is False
 
@@ -285,13 +292,18 @@ class _absent_binaries_and_wheels:
     def __enter__(self):
         self._mod = solvers._module_available
         self._bin = solvers._binary_path
+        self._imports = solvers._interpreter_imports
         solvers._module_available = lambda m: False
         solvers._binary_path = lambda name, spec: None
+        # no interpreter carries a dedicated-interpreter solver (#351) — the
+        # candidates are still enumerated, so the unwired venv probe is exercised
+        solvers._interpreter_imports = lambda exe, modules: False
         return self
 
     def __exit__(self, *exc):
         solvers._module_available = self._mod
         solvers._binary_path = self._bin
+        solvers._interpreter_imports = self._imports
         return False
 
 
@@ -417,6 +429,129 @@ def test_truly_absent_solver_still_reports_absent_with_install_hint():
         os.rmdir(empty)
 
 
+# --- dedicated-interpreter solvers resolve in THEIR interpreter (issue #351) -------
+
+_DEDICATED = ("openems", "bempp", "kraken")
+
+
+def _make_venv(root):
+    """A real venv under ``root`` (no pip, so it is quick) and its python path."""
+    import subprocess
+    import venv as _venv
+    _venv.EnvBuilder(with_pip=False).create(root)
+    py = next(p for p in solvers._venv_pythons(root) if os.path.isfile(p))
+    purelib = subprocess.run(
+        [py, "-c", "import sysconfig;print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    return py, purelib
+
+
+class _only_the_dedicated_interpreter:
+    """Run find_solver as a process that CANNOT import the dedicated solvers, whatever
+    the test box has installed: nothing in-process, no find_spec-origin venv, this
+    interpreter's child probe blinded, the beside-the-repo venvs moved out of reach
+    (ANKUSDRIVE_REPO_ROOT -> an empty dir), and every *_PYTHON declaration cleared —
+    so only the override the test sets can answer."""
+
+    def __init__(self, empty_root):
+        self.root = empty_root
+
+    def __enter__(self):
+        self._mod, self._origin, self._imports = (
+            solvers._module_available, solvers._module_origin, solvers._interpreter_imports)
+        real = solvers._interpreter_imports_exec
+        solvers._module_available = lambda m: False
+        solvers._module_origin = lambda m: None
+        solvers._interpreter_imports = (
+            lambda exe, modules: exe != sys.executable and real(exe, modules, 30.0))
+        self._restore = _clear_declared(
+            "ANKUSDRIVE_REPO_ROOT",
+            *(solvers._SOLVERS[n]["interpreter"]["env"] for n in _DEDICATED))
+        os.environ["ANKUSDRIVE_REPO_ROOT"] = self.root
+        return self
+
+    def __exit__(self, *exc):
+        for n in _DEDICATED:
+            os.environ.pop(solvers._SOLVERS[n]["interpreter"]["env"], None)
+        os.environ.pop("ANKUSDRIVE_REPO_ROOT", None)
+        self._restore()
+        solvers._module_available = self._mod
+        solvers._module_origin = self._origin
+        solvers._interpreter_imports = self._imports
+        return False
+
+
+def test_dedicated_interpreter_override_resolves_ok():
+    """#351: openEMS / Bempp / KrakenOS run under a dedicated interpreter named by
+    their *_PYTHON override. Discovery must ask THAT interpreter: with each override
+    pointing at a venv that imports the solver's modules, run from a process that
+    can't, find_solver reports ok (path = the interpreter) and each family is
+    available. The reverse — override set, modules missing there — is absent, not ok."""
+    import shutil
+    tmp = tempfile.mkdtemp(prefix="dedicated-py-")
+    try:
+        empty = os.path.join(tmp, "repo")
+        os.makedirs(empty)
+        py, purelib = _make_venv(os.path.join(tmp, "solver-venv"))
+        with _only_the_dedicated_interpreter(empty):
+            for n in _DEDICATED:
+                os.environ[solvers._SOLVERS[n]["interpreter"]["env"]] = py
+
+            # reverse first: the interpreter exists but carries none of the modules
+            for n in _DEDICATED:
+                info = solvers.find_solver(n)
+                assert info["status"] == "absent", (n, info)
+                assert info["available"] is False and "path" not in info, (n, info)
+            assert solvers.solver_python("bempp") is None
+
+            # now give that interpreter the modules (stub packages via a .pth)
+            stubs = os.path.join(tmp, "stubs")
+            for n in _DEDICATED:
+                for m in solvers._SOLVERS[n]["interpreter"]["requires"]:
+                    os.makedirs(os.path.join(stubs, m))
+                    open(os.path.join(stubs, m, "__init__.py"), "w", encoding="utf-8").close()
+            with open(os.path.join(purelib, "stubs.pth"), "w", encoding="utf-8") as fh:
+                fh.write(stubs + "\n")
+
+            caps = solvers.capabilities()
+            for n in _DEDICATED:
+                info = caps["solvers"][n]
+                assert info["status"] == "ok", (n, info)
+                assert info["path"] == py, (n, info)
+                assert info["module"] == solvers._SOLVERS[n]["interpreter"]["requires"][0]
+                assert caps["families"][info["family"]]["any_available"] is True, (n, caps)
+                assert solvers.solver_python(n) == py, n
+                r = solvers.require_solver(n)
+                assert r["ok"] is True and r["path"] == py, (n, r)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_dedicated_interpreter_needs_every_required_module():
+    """openEMS's runner imports BOTH openEMS and CSXCAD — an interpreter carrying only
+    one of them must not read as ok (the worker would launch it and fail)."""
+    _imports = solvers._interpreter_imports
+    _cands = solvers._interpreter_candidates
+    solvers._interpreter_candidates = lambda spec: [sys.executable]
+    solvers._interpreter_imports = lambda exe, modules: set(modules) <= {"openEMS"}
+    try:
+        assert solvers.solver_python("openems") is None
+        solvers._interpreter_imports = lambda exe, modules: set(modules) <= {"openEMS", "CSXCAD"}
+        assert solvers.solver_python("openems") == sys.executable
+    finally:
+        solvers._interpreter_imports = _imports
+        solvers._interpreter_candidates = _cands
+
+
+def test_solver_python_rejects_a_non_dedicated_solver():
+    try:
+        solvers.solver_python("openfoam")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("solver_python should refuse a binary solver")
+
+
 # --- honest capabilities: drivability + the three Multipass states (issue #237) ---
 
 class _only_available:
@@ -428,18 +563,21 @@ class _only_available:
         self.names = set(names)
 
     def __enter__(self):
-        self._mod, self._bin, self._unwired = (
-            solvers._module_available, solvers._binary_path, solvers._unwired_found)
+        self._mod, self._bin, self._unwired, self._interp = (
+            solvers._module_available, solvers._binary_path, solvers._unwired_found,
+            solvers._interpreter_python)
         solvers._module_available = lambda m: False
         solvers._unwired_found = lambda name, spec: None
         solvers._binary_path = (
             lambda name, spec: ("/fake/bin/" + name) if name in self.names else None)
+        solvers._interpreter_python = lambda name, spec: None
         return self
 
     def __exit__(self, *exc):
         solvers._module_available = self._mod
         solvers._binary_path = self._bin
         solvers._unwired_found = self._unwired
+        solvers._interpreter_python = self._interp
         return False
 
 

@@ -46,32 +46,10 @@ RUNNER = str(REPO / "ankusdrive" / "em_fullwave_gpl_runner.py")
 
 def _openems_python():
     """The interpreter that can import openEMS/CSXCAD (a dedicated .venv-openems),
-    NOT this test process. Mirrors worker._em_fullwave_gpl_python: env override →
-    .venv-openems beside the repo or one level up → PATH. Each candidate is probed
-    with find_spec (no import here — the copyleft boundary holds). None if absent."""
-    cands = []
-    if env := os.environ.get("ANKUSDRIVE_OPENEMS_PYTHON"):
-        cands.append(env)
-    for base in (REPO, REPO.parent):
-        cands += [str(base / ".venv-openems" / "bin" / "python3"),
-                  str(base / ".venv-openems" / "bin" / "python")]
-    if w := shutil.which("python3"):
-        cands.append(w)
-    probe = ("import importlib.util,sys;"
-             "sys.exit(0 if importlib.util.find_spec('openEMS') and "
-             "importlib.util.find_spec('CSXCAD') else 1)")
-    seen = set()
-    for c in cands:
-        if not c or c in seen or not os.path.isfile(c):
-            continue
-        seen.add(c)
-        try:
-            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
-        except Exception:
-            continue
-        if r.returncode == 0:
-            return c
-    return None
+    NOT this test process — resolved by the same solvers.solver_python the worker and
+    solve_capabilities use (issue #351). None if absent."""
+    from ankusdrive import solvers
+    return solvers.solver_python("openems")
 
 
 def _run(problem, python_exe, timeout=600):

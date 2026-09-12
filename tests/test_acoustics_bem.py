@@ -51,31 +51,10 @@ RUNNER = str(REPO / "ankusdrive" / "bempp_runner.py")
 
 def _bempp_python():
     """The interpreter that can import bempp_cl (a dedicated .venv-bempp with
-    meshio>=5), NOT this test process. Mirrors worker._bempp_python: env override →
-    .venv-bempp beside the repo or one level up → PATH. Each candidate is probed
-    with find_spec (no import here). None if absent."""
-    cands = []
-    if env := os.environ.get("ANKUSDRIVE_BEMPP_PYTHON"):
-        cands.append(env)
-    for base in (REPO, REPO.parent):
-        cands += [str(base / ".venv-bempp" / "bin" / "python3"),
-                  str(base / ".venv-bempp" / "bin" / "python")]
-    if w := shutil.which("python3"):
-        cands.append(w)
-    probe = ("import importlib.util,sys;"
-             "sys.exit(0 if importlib.util.find_spec('bempp_cl') else 1)")
-    seen = set()
-    for c in cands:
-        if not c or c in seen or not os.path.isfile(c):
-            continue
-        seen.add(c)
-        try:
-            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
-        except Exception:
-            continue
-        if r.returncode == 0:
-            return c
-    return None
+    meshio>=5), NOT this test process — resolved by the same solvers.solver_python the
+    worker and solve_capabilities use (issue #351). None if absent."""
+    from ankusdrive import solvers
+    return solvers.solver_python("bempp")
 
 
 def _run(problem, python_exe, timeout=900):
