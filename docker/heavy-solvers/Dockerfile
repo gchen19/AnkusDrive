@@ -47,6 +47,7 @@ RUN apt-get update \
       libboost-all-dev libgmp-dev libmpfr-dev libcgal-dev libeigen3-dev \
       python3-numpy python3-mpmath libvtk9-dev libgts-dev libmetis-dev \
       libopenblas-dev libsuitesparse-dev zlib1g-dev \
+      ipython3 python3-matplotlib python3-pygraphviz python3-xlib python3-sphinx python3-tk \
       # openEMS (the em_gpl list), GUI disabled
       libhdf5-dev libtinyxml-dev \
       # FSI (the fsi list) + calculix-adapter's yaml-cpp

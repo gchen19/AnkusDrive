@@ -406,7 +406,10 @@ build_dem_gpl() {
   $SUDO apt-get install -y cmake git build-essential ccache libboost-all-dev \
       libgmp-dev libmpfr-dev libcgal-dev libeigen3-dev python3-dev python3-numpy \
       python3-mpmath libvtk9-dev libgts-dev libmetis-dev libopenblas-dev \
-      libsuitesparse-dev zlib1g-dev || die "apt build-deps failed"
+      libsuitesparse-dev zlib1g-dev \
+      `# YADE's cmake REQUIRES these importable (cMake/YadePythonHelpers.cmake) - #339` \
+      ipython3 python3-matplotlib python3-pygraphviz python3-xlib python3-sphinx \
+      python3-tk || die "apt build-deps failed"
   if [ ! -d "$src/.git" ]; then
     log "clone YADE (gitlab.com/yade-dev/trunk) -> $src"
     git clone --depth 1 https://gitlab.com/yade-dev/trunk.git "$src" || die "git clone failed"
