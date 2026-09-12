@@ -96,6 +96,8 @@ if [ -z "${PY:-}" ]; then
 fi
 FORCE="${FORCE:-0}"
 OS="$(uname -s)"
+# Root (a container build, #339) has no sudo to call and needs none.
+SUDO="sudo"; [ "$(id -u)" = "0" ] && SUDO=""
 # macOS provisioner dir — the Darwin analog of the Windows %LOCALAPPDATA%\AnkusDrive\
 # solvers layout; ankusdrive/solvers.py globs it, so binaries extracted here resolve
 # with NO env vars (the way a minimal-env MCP host launches `ankusdrive mcp`).
@@ -245,7 +247,10 @@ EOF
       || die "git clone failed"
   fi
   log "build openEMS (+ python bindings) into $prefix  (this takes a while)"
-  ( cd "$src" && ./update_openEMS.sh "$prefix" --python ) || die "update_openEMS.sh failed"
+  # EM_UPDATE_FLAGS: extra update_openEMS.sh flags — a headless image (#339) passes
+  # --disable-GUI (skips AppCSXCAD's Qt/VTK-Qt deps) and --njobs=N.
+  # shellcheck disable=SC2086
+  ( cd "$src" && ./update_openEMS.sh "$prefix" --python ${EM_UPDATE_FLAGS:-} ) || die "update_openEMS.sh failed"
 
   log "dedicated venv -> $venv  (openEMS/CSXCAD python bindings)"
   python3 -m venv "$venv" || die "venv create failed"
@@ -398,7 +403,7 @@ build_dem_gpl() {
   local src="${YADE_SRC:-$HOME/yade-trunk}"
   local jobs="${YADE_JOBS:-8}"   # cap parallelism — do NOT use -j$(nproc) on a CI host
   log "build deps (apt) — boost, gmp/mpfr, cgal, eigen, vtk, gts, metis, ccache"
-  sudo apt-get install -y cmake git build-essential ccache libboost-all-dev \
+  $SUDO apt-get install -y cmake git build-essential ccache libboost-all-dev \
       libgmp-dev libmpfr-dev libcgal-dev libeigen3-dev python3-dev python3-numpy \
       python3-mpmath libvtk9-dev libgts-dev libmetis-dev libopenblas-dev \
       libsuitesparse-dev zlib1g-dev || die "apt build-deps failed"
