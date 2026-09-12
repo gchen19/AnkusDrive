@@ -54,7 +54,8 @@ def _gmsh_serial_meshing():
     `NumOfThreads` (defaulting to the host core count). Parallel 3-D Delaunay is
     non-deterministic and, under CPU contention, can silently produce a degenerate
     mesh that ignores the requested size cap. Serial meshing is reproducible across
-    hosts and load, at a negligible cost for the modest meshes the bridges build."""
+    hosts and load, at a negligible cost: a 440k-tet box meshed in 12.2 s serial vs
+    11.8 s on 24 threads. Every GmshTools call in the worker goes through this."""
     param = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh")
     had = param.GetInt("NumOfThreads", 0)  # 0 ⇒ unset (GmshTools falls back to cores)
     param.SetInt("NumOfThreads", 1)
@@ -12743,7 +12744,9 @@ def _h_fem_mesh(p):
     doc.recompute()
     analysis.addObject(mesh)
 
-    GmshTools(mesh).create_mesh()
+    # Serial: threaded Gmsh gave a different mesh (and a ~3% different solve) run to run.
+    with _gmsh_serial_meshing():
+        GmshTools(mesh).create_mesh()
     h = _register("mesh", mesh)
     return {
         "handle": h,
@@ -13673,7 +13676,8 @@ def _h_fem_cantilever(p):
     mesh.CharacteristicLengthMax = float(p.get("mesh_size", 500.0))
     doc.recompute()
     analysis.addObject(mesh)
-    GmshTools(mesh).create_mesh()
+    with _gmsh_serial_meshing():
+        GmshTools(mesh).create_mesh()
 
     workdir = p.get("workdir") or _default_fem_workdir()
     os.makedirs(workdir, exist_ok=True)

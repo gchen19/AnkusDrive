@@ -101,9 +101,9 @@ Actual output from the bundled demo at default args (verified by running it):
 
 ```json
 {
-  "nodes": 164, "tets": 412,
-  "max_displacement_mm": 0.0538,
-  "max_vonmises_mpa": 0.224,
+  "nodes": 162, "tets": 392,
+  "max_displacement_mm": 0.0510,
+  "max_vonmises_mpa": 0.227,
   "workdir": "/tmp/ankusdrive_fem"
 }
 ```
