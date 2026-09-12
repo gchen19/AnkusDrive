@@ -1,0 +1,10 @@
+# Build context for docker/heavy-solvers/Dockerfile (#339). The Dockerfile COPYs only
+# what provisioning reads; this keeps the context upload small.
+.git
+.venv*
+artifacts
+results
+scratch
+examples
+**/__pycache__
+**/*.pyc

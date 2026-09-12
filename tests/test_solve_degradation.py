@@ -6,7 +6,7 @@ from docs/archive/SIMULATION_P2_KICKOFF.md: with a solver ABSENT, the resolution
 return the clean {ok:false, reason, install} dict and never raise — that is what
 lets each P2 family's *_submit degrade instead of crashing on a missing binary.
 
-The low-level probes (_module_available / _binary_path / _interpreter_python) are
+The low-level resolution probes (see _RESOLUTION_PRIMITIVES) are
 monkeypatched to simulate absent/present, so the contract is deterministic
 regardless of what's actually installed on the test box. As each external family lands (M2+), its own
 *_submit adds a degradation assertion; this file guards the shared primitive every
@@ -14,6 +14,8 @@ one of them is built on.
 
 Run:  python3 tests/test_solve_degradation.py
 """
+import ast
+import inspect
 import json
 import os
 import sys
@@ -31,38 +33,61 @@ from ankusdrive import solvers  # noqa: E402
 _EXPECTED_FAMILIES = {"mbd", "topology", "cfd", "thermal_transient", "optics"}
 
 
-class _force:
-    """Context manager: force every solver absent (or present) by patching the
-    resolution primitives find_solver() relies on. Restores them on exit."""
+# Every module-level probe find_solver() consults to decide whether a solver
+# resolves. A helper that forces a resolution state must patch ALL of them: one left
+# live answers from whatever the test host has declared. _vm_binary_path (the macOS
+# Multipass branch, #193) was added after these helpers and was missed, so on a Mac
+# with a declared in-VM OpenFOAM the "everything absent" tests saw it resolve (#349).
+# test_helpers_patch_every_resolution_primitive derives the real set from
+# find_solver's AST and fails when this tuple falls behind.
+_RESOLUTION_PRIMITIVES = ("_module_available", "_binary_path", "_vm_binary_path",
+                          "_interpreter_python", "_unwired_found")
+
+
+class _patched_resolution:
+    """Base for the forcing helpers: saves and restores every resolution primitive,
+    so a subclass only says what each one returns."""
+
+    def _patches(self) -> dict:
+        raise NotImplementedError
+
+    def __enter__(self):
+        patches = self._patches()
+        missing = set(_RESOLUTION_PRIMITIVES) - set(patches)
+        assert not missing, f"{type(self).__name__} leaves {sorted(missing)} live"
+        self._saved = {n: getattr(solvers, n) for n in _RESOLUTION_PRIMITIVES}
+        for n, fn in patches.items():
+            setattr(solvers, n, fn)
+        return self
+
+    def __exit__(self, *exc):
+        for n, fn in self._saved.items():
+            setattr(solvers, n, fn)
+        return False
+
+
+class _force(_patched_resolution):
+    """Context manager: force every solver absent (or present) by patching every
+    resolution primitive find_solver() relies on. Restores them on exit."""
 
     def __init__(self, available: bool):
         self.available = available
 
-    def __enter__(self):
-        self._mod = solvers._module_available
-        self._bin = solvers._binary_path
-        self._unwired = solvers._unwired_found
-        self._interp = solvers._interpreter_python
-        # neutralize the installed-but-unwired probe (#177): "truly absent" means no
-        # standard-location bashrc / dedicated venv on the box counts as evidence, so
-        # the two-state contract stays deterministic regardless of the test host.
-        solvers._unwired_found = lambda name, spec: None
-        if self.available:
-            solvers._module_available = lambda m: True
-            solvers._binary_path = lambda name, spec: "/fake/bin/" + name
-            solvers._interpreter_python = lambda name, spec: "/fake/venv/bin/python3"
-        else:
-            solvers._module_available = lambda m: False
-            solvers._binary_path = lambda name, spec: None
-            solvers._interpreter_python = lambda name, spec: None
-        return self
-
-    def __exit__(self, *exc):
-        solvers._module_available = self._mod
-        solvers._binary_path = self._bin
-        solvers._unwired_found = self._unwired
-        solvers._interpreter_python = self._interp
-        return False
+    def _patches(self) -> dict:
+        return {
+            # neutralize the installed-but-unwired probe (#177): "truly absent" means
+            # no standard-location bashrc / dedicated venv on the box counts as
+            # evidence, so the two-state contract stays deterministic on any host.
+            "_unwired_found": lambda name, spec: None,
+            "_module_available": lambda m: self.available,
+            "_binary_path": (lambda name, spec: "/fake/bin/" + name) if self.available
+                            else (lambda name, spec: None),
+            # the host path answers when forcing present; nothing answers from a VM
+            "_vm_binary_path": lambda name, spec: None,
+            # dedicated-interpreter solvers (#351) resolve in their own interpreter
+            "_interpreter_python": (lambda name, spec: "/fake/venv/bin/python3")
+                                   if self.available else (lambda name, spec: None),
+        }
 
 
 def test_registry_covers_every_planned_family():
@@ -554,7 +579,7 @@ def test_solver_python_rejects_a_non_dedicated_solver():
 
 # --- honest capabilities: drivability + the three Multipass states (issue #237) ---
 
-class _only_available:
+class _only_available(_patched_resolution):
     """Force exactly ``names`` to resolve as binaries and nothing else, with the
     installed-but-unwired probe neutralized — so a family roll-up can be asserted
     independently of what the test box has installed."""
@@ -562,23 +587,14 @@ class _only_available:
     def __init__(self, *names):
         self.names = set(names)
 
-    def __enter__(self):
-        self._mod, self._bin, self._unwired, self._interp = (
-            solvers._module_available, solvers._binary_path, solvers._unwired_found,
-            solvers._interpreter_python)
-        solvers._module_available = lambda m: False
-        solvers._unwired_found = lambda name, spec: None
-        solvers._binary_path = (
-            lambda name, spec: ("/fake/bin/" + name) if name in self.names else None)
-        solvers._interpreter_python = lambda name, spec: None
-        return self
-
-    def __exit__(self, *exc):
-        solvers._module_available = self._mod
-        solvers._binary_path = self._bin
-        solvers._unwired_found = self._unwired
-        solvers._interpreter_python = self._interp
-        return False
+    def _patches(self) -> dict:
+        return {
+            "_module_available": lambda m: False,
+            "_unwired_found": lambda name, spec: None,
+            "_binary_path": lambda name, spec: ("/fake/bin/" + name) if name in self.names else None,
+            "_vm_binary_path": lambda name, spec: None,
+            "_interpreter_python": lambda name, spec: None,
+        }
 
 
 class _declares_prepared_case_only:
@@ -829,6 +845,67 @@ def test_multipass_running_state_live_on_macos():
 
 
 # --- runner -------------------------------------------------------------------
+
+def test_helpers_patch_every_resolution_primitive():
+    """#349, the gate that keeps the forcing helpers hermetic as discovery grows.
+
+    Derive the probes find_solver() really calls from its AST (module-level `_name(`
+    calls, minus the registry lookup `_spec`), and require _RESOLUTION_PRIMITIVES to
+    match exactly. Then prove each helper replaces every one of them while active and
+    restores them all afterwards. Adding a third resolution branch — a container
+    probe, a second VM — fails here on every lane, instead of only on the one machine
+    whose config happens to exercise it."""
+    tree = ast.parse(inspect.getsource(solvers.find_solver))
+    called = {n.func.id for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+              and n.func.id.startswith("_") and callable(getattr(solvers, n.func.id, None))}
+    probes = called - {"_spec"}
+    assert probes == set(_RESOLUTION_PRIMITIVES), (
+        f"find_solver's resolution probes {sorted(probes)} != "
+        f"_RESOLUTION_PRIMITIVES {sorted(_RESOLUTION_PRIMITIVES)} — patch the new one in "
+        f"_force/_only_available and add it to the tuple")
+
+    originals = {n: getattr(solvers, n) for n in _RESOLUTION_PRIMITIVES}
+    for helper in (_force(available=False), _force(available=True), _only_available("su2")):
+        with helper:
+            live = [n for n in _RESOLUTION_PRIMITIVES if getattr(solvers, n) is originals[n]]
+            assert not live, f"{type(helper).__name__} leaves {live} live"
+        leaked = [n for n in _RESOLUTION_PRIMITIVES if getattr(solvers, n) is not originals[n]]
+        assert not leaked, f"{type(helper).__name__} did not restore {leaked}"
+
+
+def test_force_absent_holds_against_a_declared_multipass_solver():
+    """#349's failure, made reachable on every lane: a macOS box with `multipass` and
+    an in-VM OpenFOAM override declared. Multipass is faked present and the override
+    is declared through the env layer (config file blinded), so this runs on Linux and
+    Windows CI too — where the real bug never showed.
+
+    Control first: unforced, the declaration resolves via the VM branch. Otherwise the
+    forced assertion below could pass on a box where that branch is simply dead."""
+    declared = "/usr/lib/openfoam/openfoam2512/platforms/fake/bin/simpleFoam"
+    restore = _clear_declared("ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC",
+                              "ANKUSDRIVE_OPENFOAM_DIRS")
+    saved_avail, saved_bin = solvers.multipass_available, solvers._binary_path
+    os.environ["ANKUSDRIVE_OPENFOAM_PATH"] = declared
+    try:
+        solvers.multipass_available = lambda: True
+        solvers._binary_path = lambda name, spec: None      # nothing on the host
+        control = solvers.find_solver("openfoam")
+        assert control["available"] and control.get("via") == "multipass", \
+            ("control: the VM branch did not resolve the declared override", control)
+
+        with _force(available=False):
+            r = solvers.require_solver("openfoam")
+            assert r["ok"] is False and r["status"] == "absent", r
+            caps = solvers.capabilities()
+            assert "openfoam" not in caps["available"], caps["available"]
+        with _only_available("su2"):
+            assert solvers.capabilities()["families"]["cfd"]["available"] == ["su2"]
+    finally:
+        solvers.multipass_available, solvers._binary_path = saved_avail, saved_bin
+        os.environ.pop("ANKUSDRIVE_OPENFOAM_PATH", None)
+        restore()
+
 
 def test_clear_declared_blinds_the_config_file_not_just_the_env():
     """#313, this suite's own isolation gate: the "solver is not declared" state must
