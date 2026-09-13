@@ -69,6 +69,9 @@ on:
       - "scripts/ci-container-preflight.sh"
       - "tests/test_container_substrate.py"
       - "tests/test_wind_tunnel.py"
+      - "tests/test_macos_relay_shim.py"
+      - "tests/test_su2_case.py"
+      - "tests/ci/**"
       - ".github/workflows/heavy-solves.yml"
   workflow_dispatch:
     inputs:
@@ -264,6 +267,59 @@ jobs:
       - name: Container logs on failure
         if: failure()
         run: docker logs --tail 200 ankusdrive-solvers || true
+
+  heavy-solves-macos-hosted:
+    name: macOS host regressions — SU2/Rosetta + Multipass relay via shim (hosted)
+    # Lane C of #341 (#364). What the macOS lane checks that genuinely needs a Mac, and
+    # needs no VM — so it runs on a hosted Apple-Silicon runner, which cannot run
+    # Multipass (no nested virtualization):
+    #   * SU2's official x86_64 macOS binary under Rosetta 2 (live solve);
+    #   * the Darwin routing contracts;
+    #   * the REAL macOS Multipass code path — bash_argv, multipass_vm_state,
+    #     run_coupled_fsi, _stop_participant — driven unmodified against
+    #     tests/ci/multipass, a stand-in CLI that rejects what a real VM breaks on
+    #     (attached stdin, a case dir outside the mount, a relay whose death kills the
+    #     solver) from the runner's real /var/folders TMPDIR.
+    # The live in-VM solves themselves are covered by lanes A/B and the hosted image
+    # lane; the Multipass daemon itself is #365's question.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      RUN_HEAVY_SOLVES: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install AnkusDrive
+        run: python -m pip install -e .
+
+      # SU2's official macOS build is x86_64. Provision Rosetta if the image lacks it,
+      # then prove translation actually runs before anything depends on it.
+      - name: Rosetta 2
+        run: |
+          if /usr/bin/pgrep -q oahd; then
+            echo "Rosetta 2 already running"
+          else
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -x86_64 /usr/bin/true && echo "x86_64 translation works"
+
+      - name: Install SU2 (official macOS binary, auto-discovered)
+        run: bash scripts/install-solvers.sh su2
+
+      - name: Preflight — Rosetta + SU2 resolve
+        run: bash scripts/ci-macos-preflight.sh --su2
+
+      - name: Host-side macOS regressions
+        env:
+          ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # the --su2 preflight above already ran
+        run: >-
+          bash tests/run_macos_heavy.sh
+          tests/test_wsl_routing.py tests/test_su2_native.py tests/test_su2_case.py
+          tests/test_macos_relay_shim.py
 
   heavy-solves-macos:
     name: macOS substrate regressions — SU2/Rosetta + FSI/Multipass (self-hosted)

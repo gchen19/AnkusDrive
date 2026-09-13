@@ -1,0 +1,5 @@
+# Stub OpenFOAM environment for tests/ci/multipass (issue #364). Sourced by the same
+# scripts that source the real etc/bashrc; it only puts the stub solvers on PATH.
+_stub_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PATH="$_stub_dir/bin:$PATH"
+export WM_PROJECT=OpenFOAM-stub

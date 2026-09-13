@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Stub pimpleFoam fluid participant (issue #364). A HANG marker beside the participant
+# dirs simulates a wedged solve.
+[ -f system/controlDict ] || { echo "--> FOAM FATAL ERROR: cannot find system/controlDict in $(pwd)" >&2; exit 1; }
+if [ -e ../HANG ]; then exec sleep 3600; fi
+for w in 1 2 3 4; do echo "Time = 0.0$w"; done
+echo "End"

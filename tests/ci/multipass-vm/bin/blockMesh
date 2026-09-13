@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub blockMesh (issue #364): fails like the real one when run outside a case dir.
+[ -f system/blockMeshDict ] || { echo "--> FOAM FATAL ERROR: cannot find system/blockMeshDict in $(pwd)" >&2; exit 1; }
+echo "stub blockMesh: mesh written"
