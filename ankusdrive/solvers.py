@@ -1337,7 +1337,10 @@ def find_solver(name: str) -> dict:
             # a plain macOS host path is absolute POSIX too (issues #193, #361).
             info["available"] = True
             info["path"] = vm_path
-            info["via"] = substrate()
+            # which opaque substrate answered — from the branch that is reachable, not
+            # from substrate(): the two agree in production, and #349's guard fakes
+            # multipass_available() on hosts whose default substrate is not multipass
+            info["via"] = "container" if container_available() else "multipass"
     if info["available"]:
         info["status"] = "ok"
         return info
