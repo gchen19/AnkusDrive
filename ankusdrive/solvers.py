@@ -487,10 +487,15 @@ def _freecad_bundled_bin_dirs() -> list:
     dirs = []
     # _resolve_freecadcmd() honours ANKUSDRIVE_FREECADCMD / PATH / the globbed installs and
     # returns the real freecadcmd; its candidates cover the not-yet-resolved installs too.
+    # A freecadcmd outside bin/ still has its solvers in bin/: the Windows portable 7z
+    # carries a FreeCADCmd.exe launcher at the archive ROOT beside the real bin\, and a
+    # recursive search (or a user) picks the root one first — so probe <dir>\bin too,
+    # or bundled ccx silently goes absent (#316: the hosted Windows lane did exactly this).
     for c in [_resolve_freecadcmd(), *_freecadcmd_candidates()]:
         d = os.path.dirname(c)
-        if d and os.path.isdir(d) and d not in dirs:
-            dirs.append(d)
+        for cand in (d, os.path.join(d, "bin") if d else ""):
+            if cand and os.path.isdir(cand) and cand not in dirs:
+                dirs.append(cand)
     return dirs
 
 
