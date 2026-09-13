@@ -222,7 +222,13 @@ function Install-Blender {
         Remove-Item $zip
         if (-not (Test-Path $exe)) { throw "blender.exe not found at $exe after extract" }
     }
+    # Windows PowerShell 5.1 wraps a native command's stderr in an ErrorRecord when it
+    # is redirected, which $ErrorActionPreference='Stop' turns TERMINATING - so a
+    # Blender that prints any driver/GPU warning on startup would fail the install here,
+    # AFTER a perfectly good extract. Same guard Install-Pip uses.
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     $ver = (& $exe --background --factory-startup --version 2>$null | Select-Object -First 1)
+    $ErrorActionPreference = $prev
     if (-not $ver) { throw "$exe did not run (missing VC++ runtime? install it, then retry)" }
     Write-Host "  $ver -> $exe"
     Write-Host '  auto-discovered under -Dir (no env var needed); verify: render_capabilities or ankusdrive doctor (studio_render)'
