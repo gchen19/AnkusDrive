@@ -96,8 +96,10 @@ as a subprocess running a script AnkusDrive ships (nothing is linked). Any Blend
 The scripted downloads verify the official SHA-256 manifest and try the official
 mirrors first — `download.blender.org` challenges scripted clients (HTTP 403), so a
 plain `curl` of it fails. Override with `BLENDER_MIRRORS="<base url> …"`. Linux arm64
-has no official build (use a distro package + `ANKUSDRIVE_BLENDER_PATH`); Blender 5.x is
-Apple-Silicon-only on macOS (brew picks the right build).
+has no official build (use a distro package + `ANKUSDRIVE_BLENDER_PATH`). Blender 5.x is
+Apple-Silicon-only on macOS, and so is the brew cask (it has no Intel variant); on an
+Intel Mac install Blender 4.5 LTS from blender.org instead. On macOS the script keeps an
+existing `Blender.app` unless `FORCE=1`.
 
 **How it is discovered.** Blender is registered as the `blender` entry of the
 `studio_render` solver family in [`ankusdrive/solvers.py`](../ankusdrive/solvers.py),
@@ -215,6 +217,9 @@ render_photoreal(
   OIDN-denoised, adaptive sampling; resolution is `width`/`height`. The result reports
   `samples`, `denoised`, `device` and `elapsed_s`.
 - **Device.** `auto` (OptiX → CUDA → HIP → Metal → oneAPI, else CPU) · `cpu` · `gpu`.
+  The **first** Metal render on a Mac compiles Cycles' GPU kernels (~90 s on an M4 Max,
+  measured); Blender caches them, and later renders start in well under a second. Use
+  `render_photoreal_submit` for that first call if the client times tool calls out early.
 - **Geometry.** Each B-rep face is meshed separately with **exact surface normals**, so
   cylinders and fillets shade smooth while real edges stay crisp. True scale (metres).
 - **Output.** `png_path` and `blend_path` (`render.png` / `render.blend` in `output_dir`,

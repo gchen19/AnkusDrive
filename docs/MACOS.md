@@ -308,6 +308,11 @@ that script — supports Darwin via the cask or the pinned arm64 DMG). It needs 
 add-on, lands in `/Applications/Blender.app` where discovery finds it with no env var,
 and renders with Metal on Apple Silicon. See [`RENDERING.md`](RENDERING.md) §3.
 
+Verified on an M4 Max (macOS 26.5, Blender 5.2.1): the probe reports `METAL` + OIDN and
+the Blender photoreal tests pass. Expect the **first** render to spend ~90 s compiling
+Metal kernels (cached afterwards). Blender 5.x — and the cask — are Apple Silicon only;
+Intel Macs need Blender 4.5 LTS from blender.org.
+
 ## CI: the Apple-Silicon lane
 
 Everything above was verified by hand. [`heavy-solves.yml`](../.github/workflows/heavy-solves.yml)

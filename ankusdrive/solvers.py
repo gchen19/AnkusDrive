@@ -478,8 +478,9 @@ _SOLVERS: dict = {
         "install_hint": "Blender 4.2+ (5.2 LTS recommended; free, GPL-3.0, run only as a "
                         "subprocess): Linux 'scripts/install-renderers.sh blender' (pinned "
                         "official tarball, auto-discovered) or 'sudo snap install blender "
-                        "--classic'; macOS 'brew install --cask blender' (or "
-                        "'scripts/install-renderers.sh blender'); Windows 'winget install "
+                        "--classic'; macOS (Apple Silicon) 'brew install --cask blender' (or "
+                        "'scripts/install-renderers.sh blender'; Intel Macs: Blender 4.5 "
+                        "LTS from blender.org); Windows 'winget install "
                         "BlenderFoundation.Blender' (or 'scripts/install-solvers.ps1 blender') "
                         "— or set ANKUSDRIVE_BLENDER_PATH to the blender executable",
     },

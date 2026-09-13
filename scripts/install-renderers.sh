@@ -54,6 +54,8 @@
 #                 in BINDIR as well when that dir is writable (for your own shell).
 #   macOS         `brew install --cask blender` when Homebrew is present, else the
 #                 pinned arm64 DMG copied to /Applications (or ~/Applications).
+#                 Apple Silicon only (5.x has no Intel build). An existing Blender.app
+#                 is kept unless FORCE=1 (which also lets brew replace a non-brew app).
 #   Windows       scripts/install-solvers.ps1 blender (winget, or the pinned zip).
 # It is ~1 GB on disk and GPL-3.0 (run only as a subprocess), so the no-arg run skips it.
 set -euo pipefail
@@ -90,9 +92,16 @@ BLENDER_SHA_linux_x64="a31f524fa99a527d3d52b7f5aaa68c34e1a19d5a1c9473f79c5cc610f
 BLENDER_SHA_macos_arm64="6409e21de80994db5f4c4a34486b6fd43cea21085b912f7491c53e923acb65a3"
 BLENDER_MIRRORS="${BLENDER_MIRRORS:-https://mirrors.ocf.berkeley.edu/blender/release https://ftp.nluug.nl/pub/graphics/blender/release https://mirror.clarkson.edu/blender/release https://download.blender.org/release}"
 
-# Staging dirs to clean on exit (populated by install_prebuilt).
+# Staging dirs to clean on exit (populated by install_prebuilt), and the Blender DMG
+# mount point (install_blender_macos) so a die between attach and detach unmounts it.
 STAGE_DIRS=()
-cleanup() { local d; for d in "${STAGE_DIRS[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done; }
+DMG_MOUNT=""
+cleanup() {
+  local d
+  if [ -n "$DMG_MOUNT" ]; then hdiutil detach -quiet "$DMG_MOUNT" 2>/dev/null || true; rmdir "$DMG_MOUNT" 2>/dev/null || true; fi
+  for d in "${STAGE_DIRS[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done
+  return 0   # an EXIT trap's last status becomes the script's: a false `[ -n "" ]` turned success into exit 1
+}
 trap cleanup EXIT
 
 # --- logging ------------------------------------------------------------------
@@ -287,34 +296,70 @@ install_blender_linux() {
   blender_postcheck "$dest/blender"
 }
 
+# The macOS app bundles discovery (solvers.py `blender`) looks in, in its order.
+MAC_BLENDER_APPS="/Applications/Blender.app $HOME/Applications/Blender.app"
+
+mac_blender_found() {  # print the first discoverable Blender binary, if any
+  local app
+  for app in $MAC_BLENDER_APPS; do
+    [ -x "$app/Contents/MacOS/Blender" ] && { printf '%s\n' "$app/Contents/MacOS/Blender"; return 0; }
+  done
+  return 1
+}
+
 install_blender_macos() {
-  if command -v brew >/dev/null 2>&1; then
-    log "brew install --cask blender"
-    brew install --cask blender || die "brew install --cask blender failed"
-    blender_postcheck "/Applications/Blender.app/Contents/MacOS/Blender"
+  # Blender 5.x ships macOS builds for Apple Silicon only, and the brew cask carries
+  # no Intel variant (it would install an arm64 app that cannot launch), so gate the
+  # arch before either path.
+  [ "$(uname -m)" = "arm64" ] || die "Blender $BLENDER_SERIES has no Intel macOS build (the cask and the pinned DMG are arm64 only); install Blender 4.5 LTS (the last Intel release) from blender.org, then set ANKUSDRIVE_BLENDER_PATH if it is not in /Applications"
+  local existing
+  if [ "$FORCE" != "1" ] && existing="$(mac_blender_found)"; then
+    ok "Blender already installed ($existing); skipping (FORCE=1 to reinstall)"
+    blender_postcheck "$existing"
     return
   fi
-  [ "$(uname -m)" = "arm64" ] || die "no Homebrew and no pinned Intel DMG (Blender 5.x is Apple Silicon only); install Blender 4.5 LTS from blender.org, or set ANKUSDRIVE_BLENDER_PATH"
+  if command -v brew >/dev/null 2>&1; then
+    # --force replaces an app brew did not install (e.g. a blender.org drag-install),
+    # which a plain `brew install --cask` refuses to overwrite.
+    local force_flag=""; [ "$FORCE" = "1" ] && force_flag="--force"
+    log "brew install --cask $force_flag blender"
+    brew install --cask $force_flag blender || die "brew install --cask blender failed (an existing Blender.app not installed by brew? re-run with FORCE=1)"
+    # The cask honours --appdir / HOMEBREW_CASK_OPTS, so don't assume /Applications.
+    if existing="$(mac_blender_found)"; then
+      blender_postcheck "$existing"
+    elif existing="$(command -v blender)"; then
+      blender_postcheck "$existing"
+      warn "Blender.app is outside /Applications and ~/Applications, so discovery will not find it; set ANKUSDRIVE_BLENDER_PATH to the Blender executable inside the app"
+    else
+      die "brew installed Blender but no Blender.app was found; set ANKUSDRIVE_BLENDER_PATH"
+    fi
+    return
+  fi
   need_cmd curl; need_cmd hdiutil
   local file="blender-$BLENDER_VERSION-macos-arm64.dmg"
   mkdir -p "$CACHE_DIR"
   fetch_blender "$file" "$CACHE_DIR/$file"
   verify_sha "$CACHE_DIR/$file" "$BLENDER_SHA_macos_arm64"
-  local mnt; mnt="$(mktemp -d "${TMPDIR:-/tmp}/ankusdrive-dmg.XXXXXX")"
-  hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$CACHE_DIR/$file" >/dev/null || die "hdiutil attach failed"
+  DMG_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/ankusdrive-dmg.XXXXXX")"   # detached by cleanup()
+  hdiutil attach -nobrowse -readonly -mountpoint "$DMG_MOUNT" "$CACHE_DIR/$file" >/dev/null </dev/null || die "hdiutil attach failed"
   local apps="/Applications"; [ -w "$apps" ] || { apps="$HOME/Applications"; mkdir -p "$apps"; }
   log "copying Blender.app to $apps"
   rm -rf "$apps/Blender.app"
-  cp -R "$mnt/Blender.app" "$apps/" || { hdiutil detach "$mnt" >/dev/null; die "copy failed"; }
-  hdiutil detach "$mnt" >/dev/null || true
+  cp -R "$DMG_MOUNT/Blender.app" "$apps/" || die "copy to $apps failed"
+  hdiutil detach -quiet "$DMG_MOUNT" && { rmdir "$DMG_MOUNT" 2>/dev/null || true; DMG_MOUNT=""; }
   blender_postcheck "$apps/Blender.app/Contents/MacOS/Blender"
 }
 
 blender_postcheck() {  # binary — confirm it launches headless and prints its version
-  local v
+  local v hint
   v="$("$1" --background --factory-startup --version 2>/dev/null | head -1)" || true
-  [ -n "$v" ] || die "installed, but '$1 --background --version' did not run (missing system libs? try: ldd $1)"
+  case "$(uname -s)" in
+    Darwin) hint="run it directly to see the error, or check the arch with: file $1" ;;
+    *)      hint="missing system libs? try: ldd $1" ;;
+  esac
+  [ -n "$v" ] || die "installed, but '$1 --background --version' did not run ($hint)"
   ok "$v at $1"
+  [ "$(uname -s)" = "Darwin" ] && log "the first Metal render compiles GPU kernels once (~1-2 min); later renders start in seconds"
   ok "verify discovery: render_capabilities (renderers.Blender) or 'ankusdrive doctor' (studio_render)"
 }
 
@@ -344,7 +389,17 @@ EOF
     fi
   done
   printf '\nStudio backend (own target, not in the no-arg run):\n\n'
-  if command -v blender >/dev/null 2>&1; then
+  local found=""
+  case "$(uname -s)" in
+    Darwin) found="$(mac_blender_found)" || found="" ;;
+    Linux)  for found in /opt/blender-* "$HOME"/.local/opt/blender-*; do
+              [ -x "$found/blender" ] && { found="$found/blender"; break; }
+              found=""
+            done ;;
+  esac
+  if [ -n "$found" ]; then
+    printf '  %-10s Blender %s  [installed: %s]\n' blender "$BLENDER_VERSION" "$found"
+  elif command -v blender >/dev/null 2>&1; then
     printf '  %-10s Blender %s  [on PATH: %s]\n' blender "$BLENDER_VERSION" "$(command -v blender)"
   else
     printf '  %-10s Blender %s  (Linux x86_64 tarball / macOS cask; discovery also globs /opt/blender-* and ~/.local/opt/blender-*)\n' blender "$BLENDER_VERSION"
@@ -369,7 +424,7 @@ main() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --list|-l) do_list; exit 0 ;;
-      -h|--help) sed -n '2,57p' "$0"; exit 0 ;;
+      -h|--help) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 0 ;;
       luxcore|appleseed) targets+=("$1") ;;
       blender) want_blender=1 ;;
       ospray|pbrt|cycles) die "$1 has no prebuilt CLI; build from source (scripts/install-renderers.sh --list)" ;;
