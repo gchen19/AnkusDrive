@@ -1,0 +1,15 @@
+# Build context for the root (introspection) Dockerfile only — BuildKit reads
+# <Dockerfile>.dockerignore in place of .dockerignore, which belongs to
+# docker/heavy-solvers/Dockerfile (#339). Allow-list: just what this Dockerfile COPYs.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!NOTICE
+!TRADEMARKS.md
+!MANIFEST.in
+!MIGRATION.md
+!ankusdrive/**
+!scripts/**
+**/__pycache__
+**/*.pyc
