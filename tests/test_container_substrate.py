@@ -114,11 +114,17 @@ def _container_host(p, system="Linux", engine_on_path=("docker",), host_files=()
     p.env(ANKUSDRIVE_SUBSTRATE="container")
     p.set(solvers.shutil, "which",
           lambda n: f"/usr/bin/{n}" if n in engine_on_path else None)
-    files = set(host_files)
-    p.set(solvers.os.path, "isfile", lambda x: x in files)
+    # The fake host is POSIX-shaped, but the resolvers build candidates with the REAL
+    # os.path — on a Windows runner "/usr/bin" + "simpleFoam" joins as
+    # "/usr/bin\\simpleFoam" and "~" expands to "C:\\Users\\...". Compare with separators
+    # normalized so the fake filesystem answers identically on every host OS.
+    def _norm(x):
+        return str(x).replace("\\", "/")
+    files = {_norm(f) for f in host_files}
+    p.set(solvers.os.path, "isfile", lambda x: _norm(x) in files)
     p.set(solvers.os.path, "isdir", lambda x: False)
     p.set(glob, "glob", lambda pat, recursive=False: sorted(
-        f for f in files if fnmatch.fnmatch(f, os.path.expanduser(pat))))
+        f for f in files if fnmatch.fnmatchcase(f, _norm(os.path.expanduser(pat)))))
 
 
 # --- selection ------------------------------------------------------------------
