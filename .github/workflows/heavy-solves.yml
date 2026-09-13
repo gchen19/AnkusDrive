@@ -143,7 +143,7 @@ jobs:
     env:
       # Digest-pinned: a rebuild of the image never changes what this lane tests until
       # this line changes. heavy-image.yml's run summary prints the digest to pin.
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:432e01885a1ba365649e924b3b77fcea7d976d1c4d1dc254216bdad865eefbf2  # sha-5e10107
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:f86cca6b3491ebb995bfde7e91b303921ad76442ad02b794520e6bcfa3f81d8b  # sha-0c4567f
     steps:
       # Not `container:` — that pulls the image before any step, leaving no chance to
       # free the runner's disk first, and this image plus the suite's case dirs need it.
