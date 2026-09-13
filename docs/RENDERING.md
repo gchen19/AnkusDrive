@@ -91,7 +91,8 @@ as a subprocess running a script AnkusDrive ships (nothing is linked). Any Blend
 | Linux (alt)  | `sudo snap install blender --classic` | `/snap/bin/blender` |
 | macOS        | `brew install --cask blender` (or `scripts/install-renderers.sh blender`) | `/Applications/Blender.app` (or `~/Applications`) |
 | Windows      | `pwsh scripts\install-solvers.ps1 blender` (portable, no admin) | `%LOCALAPPDATA%\AnkusDrive\solvers\blender-5.2.1\…\blender.exe` |
-| Windows (alt)| ⚠️ `winget install BlenderFoundation.Blender` (the `blender-winget` target) — **currently fails**, see below | `Program Files\Blender Foundation\Blender 5.2` (discovered if you get it installed some other way) |
+| Windows (per-machine) | `pwsh scripts\install-solvers.ps1 blender-msi` (**needs an elevated shell**) | `Program Files\Blender Foundation\Blender 5.2\blender.exe` |
+| Windows (alt)| ⚠️ `winget install BlenderFoundation.Blender` (the `blender-winget` target) — **currently fails**, see below | — |
 
 The scripted downloads verify the official SHA-256 manifest and try the official
 mirrors first — `download.blender.org` challenges scripted clients (HTTP 403), so a
@@ -99,8 +100,11 @@ plain `curl` of it fails. **That is also why the Windows `winget` route does not
 the `BlenderFoundation.Blender` manifest points its installer at `download.blender.org`,
 and winget cannot be redirected to a mirror, so it aborts with `0x80190193 : Forbidden
 (403)` right after resolving the package (verified on Windows 11, 2026-09). Use
-`install-solvers.ps1 blender`, which tries the mirrors. Override with
-`BLENDER_MIRRORS="<base url> …"`. Linux arm64
+`install-solvers.ps1 blender`, or `blender-msi` for the same per-machine install winget
+would have done — it fetches the *same* official `.msi` from the mirrors, checks the same
+pinned SHA-256, and runs `msiexec /i /qn`. Override with
+`BLENDER_MIRRORS="<base url> …"`. Windows arm64 *is* an official build from Blender 5.x
+and both the `blender` and `blender-msi` targets pick it automatically. Linux arm64
 has no official build (use a distro package + `ANKUSDRIVE_BLENDER_PATH`). Blender 5.x is
 Apple-Silicon-only on macOS, and so is the brew cask (it has no Intel variant); on an
 Intel Mac install Blender 4.5 LTS from blender.org instead. On macOS the script keeps an

@@ -266,14 +266,24 @@ def test_installers_pin_the_same_blender():
     sh_ver = re.search(r'^BLENDER_VERSION="([\d.]+)"', sh, re.M).group(1)
     ps_ver = re.search(r"^\$BLENDER_VER = '([\d.]+)'", ps, re.M).group(1)
     assert sh_ver == ps_ver, f"install-renderers.sh pins {sh_ver}, install-solvers.ps1 {ps_ver}"
-    for sha in re.findall(r'BLENDER_SHA_\w+="(\w+)"', sh) + re.findall(r"\$BLENDER_SHA_\w+ = '(\w+)'", ps):
+    # install-solvers.ps1 pins its Windows hashes in a per-arch $BLENDER_SHA table
+    # (zip + msi, x64 + arm64); install-renderers.sh uses BLENDER_SHA_<os>_<arch> vars.
+    ps_shas = re.findall(r"^\s+(zip|msi) = '(\w+)'", ps, re.M)
+    assert len(ps_shas) == 4, f"expected 4 pinned Windows hashes, found {ps_shas}"
+    for sha in (re.findall(r'BLENDER_SHA_\w+="(\w+)"', sh)
+                + re.findall(r"\$BLENDER_SHA_\w+ = '(\w+)'", ps)
+                + [v for _, v in ps_shas]):
         assert re.fullmatch(r"[0-9a-f]{64}", sha), sha
+    assert len({v for _, v in ps_shas}) == 4, "a Windows artifact hash is duplicated"
     assert re.search(r"^\s+blender\) want_blender=1", sh, re.M), "install-renderers.sh lost its blender target"
-    assert re.search(r"'blender'\s*\{", ps), "install-solvers.ps1 lost its blender target"
+    for target in ("'blender'", "'blender-msi'", "'blender-winget'"):
+        assert re.search(re.escape(target) + r"\s*\{", ps), f"install-solvers.ps1 lost {target}"
     # the discovery globs cover where the installers put Blender
     globs = solvers._SOLVERS["blender"]["dir_globs"]
     assert "/opt/blender-*" in globs["Linux"] and "~/.local/opt/blender-*" in globs["Linux"]
     assert "AnkusDrive\\solvers" in ps  # portable zip lands in the provisioner dir
+    # blender-msi installs per-machine into the dir the Windows glob already covers
+    assert any("Blender Foundation" in g for g in globs["Windows"]), globs["Windows"]
 
 
 def test_mcp_tools_expose_the_blender_arguments():

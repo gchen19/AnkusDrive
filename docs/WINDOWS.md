@@ -345,7 +345,12 @@ Without WSL (or with an unprovisioned distro), these families still degrade clea
   `0x80190193 : Forbidden (403)` after resolving the package. winget cannot be pointed at a
   mirror. The portable target already works around the same challenge by trying official
   mirrors first, so use it; the winget target stays in the script and will start working
-  again if Blender's CDN stops challenging winget.
+  again if Blender's CDN stops challenging winget. If you specifically want the
+  **per-machine** install winget would have done, use `install-solvers.ps1 blender-msi`:
+  the same official `.msi`, fetched from the mirrors with the same pinned SHA-256 and
+  installed with `msiexec /i /qn` into `Program Files\Blender Foundation\Blender 5.2`
+  (auto-discovered, no env var). It needs an **elevated** shell; the portable `blender`
+  target does not.
 
 ## Process cleanup
 
