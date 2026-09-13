@@ -820,14 +820,46 @@ def _version_key(path: str) -> list:
     return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", path)]
 
 
+# Windows machine-wide roots that an MCP host does NOT pass to the server. The MCP
+# SDK's get_default_environment() forwards APPDATA, LOCALAPPDATA, PATH, USERPROFILE
+# and friends but NOT ProgramFiles — so `%ProgramFiles%\...` in a dir_glob went
+# unexpanded, the pattern was dropped, and a per-machine install (the `blender-msi`
+# / `blender-winget` shape, or a hand-run vendor installer) was invisible to
+# `ankusdrive mcp` even though `ankusdrive doctor` in a normal shell resolved it —
+# the worst failure shape there is: doctor says ready, the tool says not installed.
+# These roots are fixed by Windows itself, so falling back to them is safe.
+_WINDOWS_ROOT_FALLBACKS = {
+    "ProgramFiles": r"{drive}\Program Files",
+    "ProgramFiles(x86)": r"{drive}\Program Files (x86)",
+    "ProgramW6432": r"{drive}\Program Files",
+    "ProgramData": r"{drive}\ProgramData",
+}
+
+
+def _expand_win_roots(pat: str) -> str:
+    """Substitute the well-known Windows roots os.path.expandvars could not, because
+    the variable is absent from a scrubbed MCP-host environment. Env wins when set;
+    names are matched case-insensitively, the way Windows treats them."""
+    import re
+    if "%" not in pat:
+        return pat
+    drive = os.environ.get("SystemDrive") or "C:"
+    for name, default in _WINDOWS_ROOT_FALLBACKS.items():
+        value = os.environ.get(name) or default.format(drive=drive)
+        pat = re.sub(re.escape(f"%{name}%"), lambda _, v=value: v, pat, flags=re.I)
+    return pat
+
+
 def _versioned_dirs(patterns) -> list:
     """Existing directories matching a spec's ``dir_globs`` (``~`` and ``%VAR%``
-    expanded), newest version first. An unset ``%VAR%`` drops its pattern rather
-    than globbing a literal ``%ProgramFiles%`` directory."""
+    expanded), newest version first. A ``%VAR%`` naming a well-known Windows root
+    falls back to its standard location (see ``_WINDOWS_ROOT_FALLBACKS``); any other
+    unset ``%VAR%`` drops its pattern rather than globbing a literal
+    ``%SOMETHING%`` directory."""
     import glob as _glob
     out = []
     for pat in patterns:
-        pat = os.path.expandvars(os.path.expanduser(pat))
+        pat = _expand_win_roots(os.path.expandvars(os.path.expanduser(pat)))
         if "%" in pat or "$" in pat:
             continue
         out.extend(sorted((d for d in _glob.glob(pat) if os.path.isdir(d)),

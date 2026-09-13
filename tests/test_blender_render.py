@@ -188,6 +188,30 @@ def test_versioned_dirs_glob_newest_first():
             "an unexpanded %VAR% must be dropped, not globbed literally"
 
 
+def test_program_files_glob_survives_a_scrubbed_mcp_environment():
+    """An MCP host spawns the server WITHOUT ProgramFiles (the MCP SDK's
+    get_default_environment() forwards APPDATA/LOCALAPPDATA/PATH but not that), so
+    `%ProgramFiles%\\...` used to go unexpanded and its dir_glob was dropped — a
+    per-machine Blender (install-solvers.ps1 blender-msi / blender-winget, or a
+    hand-run installer) was then invisible to `ankusdrive mcp` while `ankusdrive
+    doctor` in a normal shell found it. Regression guard for that split-brain."""
+    pat = solvers._SOLVERS["blender"]["dir_globs"]["Windows"][0]
+    assert "%ProgramFiles%" in pat, pat
+    saved = {k: os.environ[k] for k in list(os.environ)
+             if k.lower() in ("programfiles", "programfiles(x86)", "programw6432",
+                              "programdata", "systemdrive")}
+    for k in saved:
+        del os.environ[k]
+    try:
+        expanded = solvers._expand_win_roots(os.path.expandvars(pat))
+        assert "%" not in expanded, f"ProgramFiles left unexpanded: {expanded}"
+        assert expanded.startswith("C:\\Program Files\\"), expanded
+        # and an unknown variable is still dropped rather than globbed literally
+        assert "%" in solvers._expand_win_roots("%NOPE_335%\\x")
+    finally:
+        os.environ.update(saved)
+
+
 # --- job files ----------------------------------------------------------------------
 
 def test_part_buffers_round_trip():
