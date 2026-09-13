@@ -413,7 +413,9 @@ jobs:
     # Multipass's own daemon and its sshfs mount.
     needs: heavy-vmdisk
     runs-on: macos-latest
-    timeout-minutes: 240
+    # Measured under emulation (#365): test_fsi 56 s, test_openfoam 54 min (~12x native),
+    # test_meshbridge 18 min (~23x), plus ~15 min of disk download + VM boot + preflight.
+    timeout-minutes: 150
     env:
       RUN_HEAVY_SOLVES: "1"
     steps:
@@ -441,13 +443,16 @@ jobs:
       - name: Preflight — the real macOS lane's substrate checks, against the VM
         run: bash scripts/ci-macos-preflight.sh --fsi
 
+      # test_molding_fill is deliberately NOT here: under emulation it ran past 3 hours
+      # (interFoam + openInjMoldSim are ~15 min native). Its solves run live on lanes A/B
+      # and the hosted image lane, and its relay path is the one test_openfoam and
+      # test_meshbridge already drive through this VM.
       - name: Live solves through the macOS Multipass path
         env:
           ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # ran as its own step above
         run: >-
           bash tests/run_macos_heavy.sh
           tests/test_fsi.py tests/test_openfoam.py tests/test_meshbridge.py
-          tests/test_molding_fill.py
 
       - name: VM console on failure
         if: failure()
