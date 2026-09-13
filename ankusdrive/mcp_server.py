@@ -8131,6 +8131,14 @@ def sheet_check(handle: str, k_factor: float | None = None,
     return _call("sheet_check", **params)
 
 
+# Every tool gets a display title and read-only / destructive hints from the one
+# registry in tool_annotations.py (#368). Runs after the last @mcp.tool(); raises at
+# import on a tool nobody classified, so it cannot ship unannotated.
+from ankusdrive import tool_annotations as _tool_annotations  # noqa: E402
+
+_tool_annotations.apply(mcp)
+
+
 def run():
     mcp.run()
 

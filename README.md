@@ -619,6 +619,15 @@ at, with the script that regenerates each one — is indexed in
 - **Async / concurrency**: multi-doc shipped (`list_documents` / `set_active_document` / `close_document`), and the long-running external solvers run off the channel via the `*_submit` + `job_*` pattern, but the in-worker `fem_run` itself is still synchronous and blocks the MCP channel for the duration of a CalculiX/Elmer solve.
 - **macOS Gatekeeper / sandboxing**: `freecadcmd` launched from a non-interactive context may hit quarantine issues. This has never been confirmed either way — tracked in [#310](https://github.com/gchen19/AnkusDrive/issues/310), which will either document the fix or delete this caveat.
 
+## Privacy Policy
+
+AnkusDrive runs entirely on your computer and **collects nothing**: no telemetry, no
+analytics, no accounts, and no network requests from its own code. It reads and writes
+only the files you point it at, plus its config file and temp working directories. Your
+MCP host (e.g. Claude Desktop) sends tool inputs and results to its AI model provider
+under the host's own policy. The full policy, including exactly what is stored where, is
+in [`PRIVACY.md`](https://github.com/gchen19/AnkusDrive/blob/main/PRIVACY.md).
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](https://github.com/gchen19/AnkusDrive/blob/main/LICENSE). Contributions
