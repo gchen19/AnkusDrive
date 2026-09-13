@@ -347,7 +347,7 @@ def test_bundled_ccx_found_beside_a_root_level_freecadcmd():
         fc = os.path.join(root, "FreeCADCmd.exe")
         ccx = os.path.join(root, "bin", "ccx.exe")
         for f in (fc, ccx):
-            open(f, "w").close()
+            Path(f).touch()
         with _patch() as p:
             p.set(client, "_resolve_freecadcmd", lambda: fc)
             p.set(client, "_freecadcmd_candidates", lambda: [])
