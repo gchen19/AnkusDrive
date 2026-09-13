@@ -134,12 +134,24 @@ jobs:
         run: bash tests/run_all.sh
 
   heavy-solves-hosted:
-    name: Live external-solver regressions (Linux, hosted image)
-    # The same suite as the self-hosted job above, on a GitHub-hosted runner inside
-    # the prebuilt solver image (#339, docker/heavy-solvers/Dockerfile) — #340 of the
-    # move off self-hosted runners (#338). Both jobs run side by side until #342 shows
-    # this one tests the same things; then the self-hosted one is removed (#343).
-    runs-on: ubuntu-latest
+    name: Live external-solver regressions (Linux ${{ matrix.platform.arch }}, hosted image)
+    # The same suite as the self-hosted job above, on GitHub-hosted runners inside the
+    # prebuilt solver image (#339, docker/heavy-solvers/Dockerfile) — #340 of the move
+    # off self-hosted runners (#338). Both run side by side until #342 shows this one
+    # tests the same things; then the self-hosted one is removed (#343).
+    #
+    # Per architecture (#363): amd64, and arm64 — lane A of #341 — which is the only
+    # place arm64 Linux solver builds (OpenFOAM-7 on linuxArm64, preCICE on aarch64)
+    # are exercised now that the macOS VM lane is not the hosted path. The image is a
+    # multi-arch manifest, so the same digest pulls each runner's platform. What an arch
+    # deliberately lacks (Elmer on arm64) is reported by the preflight, not skipped silently.
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
     # Unmeasured on 4 hosted cores (the self-hosted run is ~36 min on 24). Generous
     # until #342 records real timings, then tighten.
     timeout-minutes: 240
@@ -147,9 +159,10 @@ jobs:
       contents: read
       packages: read
     env:
-      # Digest-pinned: a rebuild of the image never changes what this lane tests until
-      # this line changes. heavy-image.yml's run summary prints the digest to pin.
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:f86cca6b3491ebb995bfde7e91b303921ad76442ad02b794520e6bcfa3f81d8b  # sha-0c4567f
+      # Digest-pinned multi-arch manifest: a rebuild of the image never changes what
+      # these lanes test until this line changes. heavy-image.yml's `manifest` job
+      # summary prints the digest to pin. Keep heavy-solves-container's pin in lockstep.
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:5f4f71833daeefa1973144fd84a5be9509cbeb0bde290655958556060a437429  # sha-275a711, linux/amd64 + linux/arm64
     steps:
       # Not `container:` — that pulls the image before any step, leaving no chance to
       # free the runner's disk first, and this image plus the suite's case dirs need it.
@@ -198,7 +211,7 @@ jobs:
       RUN_HEAVY_SOLVES: "1"
       ANKUSDRIVE_SUBSTRATE: container
       # keep in lockstep with heavy-solves-hosted's pin
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:f86cca6b3491ebb995bfde7e91b303921ad76442ad02b794520e6bcfa3f81d8b  # sha-0c4567f
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:5f4f71833daeefa1973144fd84a5be9509cbeb0bde290655958556060a437429  # sha-275a711, linux/amd64 + linux/arm64
     defaults:
       run:
         shell: bash -el {0}   # login shell so the conda env stays activated
