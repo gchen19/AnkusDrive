@@ -512,6 +512,7 @@ def _run_foam_case(case_dir, cmds):
     chain = " && ".join(" ".join(a) for a in cmds)
     script = (f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else "") + chain
     return subprocess.run(solvers.bash_argv(script, case_dir), cwd=case_dir,
+                          stdin=subprocess.DEVNULL,
                           capture_output=True, text=True)
 
 
