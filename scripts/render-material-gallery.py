@@ -35,7 +35,7 @@ sys.path.insert(0, str(REPO))
 from ankusdrive import Worker                                   # noqa: E402
 from ankusdrive.client import WorkerError                       # noqa: E402
 
-_ORDER = ["Povray", "Luxcore", "Appleseed", "Cycles", "Ospray", "Pbrt"]
+_ORDER = ["Blender", "Povray", "Luxcore", "Appleseed", "Cycles", "Ospray", "Pbrt"]
 _FONT_DIRS = ("/usr/share/fonts/truetype/dejavu", "/Library/Fonts", "/System/Library/Fonts")
 
 

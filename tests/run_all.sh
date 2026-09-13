@@ -204,6 +204,10 @@ echo "== P2 solver degradation contract (pure-Python; no FreeCAD) =="
 python3 tests/test_solve_degradation.py
 
 echo
+echo "== Blender studio-render contract (#335; appearance/selection/install advice; no Blender) =="
+python3 tests/test_blender_render.py
+
+echo
 echo "== WSL routing for the OpenFOAM families (#193; monkeypatched, runs anywhere) =="
 python3 tests/test_wsl_routing.py
 

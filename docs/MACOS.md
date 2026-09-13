@@ -298,8 +298,15 @@ a few hours at `WM_NCOMPPROCS=6` on the 8-core VM.
 `scripts/install-renderers.sh` and `scripts/build-renderers.sh` remain Linux-x86_64
 only: the pinned LuxCore/appleseed/OSPRay tarballs are linux64 **ELF**, which can never
 run on macOS (Rosetta translates x86_64 *macOS* binaries, not Linux ones). POV-Ray is
-the one turnkey renderer here (`brew install povray`). No automated path for the rest
-on any OS yet.
+the one turnkey *add-on* renderer here (`brew install povray`). No automated path for
+the rest on any OS yet.
+
+**Blender is the turnkey photoreal path on macOS** (issue
+[#335](https://github.com/gchen19/AnkusDrive/issues/335)): `brew install --cask blender`
+(or `scripts/install-renderers.sh blender`, whose `blender` target — unlike the rest of
+that script — supports Darwin via the cask or the pinned arm64 DMG). It needs no Render
+add-on, lands in `/Applications/Blender.app` where discovery finds it with no env var,
+and renders with Metal on Apple Silicon. See [`RENDERING.md`](RENDERING.md) §3.
 
 ## CI: the Apple-Silicon lane
 

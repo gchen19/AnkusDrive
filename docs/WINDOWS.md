@@ -333,6 +333,11 @@ Without WSL (or with an unprovisioned distro), these families still degrade clea
   vars don't survive MCP-host launches; a `%APPDATA%\ankusdrive\config.toml` resolution layer
   is planned so paths persist without `setx`.
 - **Renderers** (LuxCore/appleseed/cycles/OSPRay) — no automated install path on any OS yet.
+  The photoreal path that *is* turnkey on Windows is Blender (issue
+  [#335](https://github.com/gchen19/AnkusDrive/issues/335)):
+  `pwsh scripts\install-solvers.ps1 blender` (pinned portable zip, no admin, auto-discovered
+  under `%LOCALAPPDATA%\AnkusDrive\solvers`) or `winget install BlenderFoundation.Blender`.
+  See [`RENDERING.md`](RENDERING.md) §3.
 
 ## Process cleanup
 

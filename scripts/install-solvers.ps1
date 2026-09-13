@@ -31,6 +31,13 @@
     * YADE, openEMS, bempp - still need Linux mechanisms; same WSL route works
       manually (see docs/WINDOWS.md).
 
+  STUDIO RENDER (issue #335): the 'blender' target installs full Blender for
+  render_photoreal's studio backend - the pinned official portable zip (SHA-256
+  checked) extracted under -Dir, where ankusdrive/solvers.py discovers blender.exe with
+  NO env var. 'blender-winget' uses `winget install BlenderFoundation.Blender` instead
+  (per-machine, lands in Program Files\Blender Foundation\Blender X.Y - also
+  auto-discovered). ~1 GB, GPL-3.0, run only as a subprocess; never part of 'all'.
+
   DISCOVERY: a family resolves its solver via ankusdrive/solvers.py - a wheel must import in
   the venv; a binary is found via ANKUSDRIVE_<SOLVER>_PATH -> PATH -> per-OS dirs -> (for
   ccx) FreeCAD's bundled bin. So the wheel installs MUST target the same venv that runs
@@ -43,7 +50,8 @@
   to it so a user who found only this script isn't stranded.
 
 .PARAMETER Targets
-  Any of: core pip su2 prusaslicer elmer wsl all list. Default (no args) = pip + guidance.
+  Any of: core pip su2 prusaslicer elmer wsl blender blender-winget all list.
+  Default (no args) = pip + guidance.
 
 .PARAMETER Dir
   Where portable binaries are extracted. Default: %LOCALAPPDATA%\AnkusDrive\solvers.
@@ -56,6 +64,7 @@
   pwsh scripts\install-solvers.ps1 core                  # -> scripts\install-core.ps1
   pwsh scripts\install-solvers.ps1                       # pip extras + guidance
   pwsh scripts\install-solvers.ps1 su2 prusaslicer -Persist
+  pwsh scripts\install-solvers.ps1 blender               # studio render backend
   pwsh scripts\install-solvers.ps1 list                 # ankusdrive doctor
 #>
 [CmdletBinding()]
@@ -79,6 +88,18 @@ $PRUSA_URL = "https://github.com/prusa3d/PrusaSlicer/releases/download/version_$
 # despite older guidance). nogui-nompi is all AnkusDrive needs: ElmerSolver + ElmerGrid +
 # ViewFactors as plain subprocesses.
 $ELMER_URL = 'https://www.nic.funet.fi/pub/sci/physics/elmer/bin/windows/ElmerFEM-nogui-nompi-Windows-AMD64.zip'
+# Blender 5.2 LTS portable zip; the hash is the official blender-5.2.1.sha256 manifest
+# (must match BLENDER_SHA_* in scripts/install-renderers.sh). download.blender.org
+# challenges scripted clients, so official mirrors are tried first.
+$BLENDER_VER = '5.2.1'
+$BLENDER_SERIES = '5.2'
+$BLENDER_SHA_WIN_X64 = '0e631dad7d0cad6d5d18abdd2e2550f6c0213215334eda00ddbd3d22b96ecb2c'
+$BLENDER_MIRRORS = @(
+    'https://mirrors.ocf.berkeley.edu/blender/release',
+    'https://ftp.nluug.nl/pub/graphics/blender/release',
+    'https://mirror.clarkson.edu/blender/release',
+    'https://download.blender.org/release'
+)
 
 $venvPy = Join-Path $repo '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPy)) {
@@ -164,6 +185,62 @@ function Install-Elmer {
     Set-SolverEnv 'ANKUSDRIVE_ELMER_PATH' $exe.FullName
 }
 
+function Install-Blender {
+    Write-Host "== Blender $BLENDER_VER (studio render backend for render_photoreal) =="
+    if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+        throw 'pinned zip is x64; on Windows ARM64 use: winget install BlenderFoundation.Blender'
+    }
+    $name = "blender-$BLENDER_VER-windows-x64"
+    $dest = Join-Path $Dir "blender-$BLENDER_VER"
+    $exe  = Join-Path $dest "$name\blender.exe"
+    if ((Test-Path $exe) -and -not $env:FORCE) {
+        Write-Host "  already installed: $exe  (set FORCE=1 to reinstall)"
+    } else {
+        New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+        $zip = Join-Path $Dir "$name.zip"
+        $ProgressPreference = 'SilentlyContinue'
+        $got = $false
+        foreach ($m in $BLENDER_MIRRORS) {
+            try {
+                Write-Host "  downloading $name.zip from $m"
+                Invoke-WebRequest -Uri "$m/Blender$BLENDER_SERIES/$name.zip" -OutFile $zip -UserAgent 'ankusdrive-install-solvers'
+                $got = $true; break
+            } catch { Write-Warning "  mirror failed: $m ($($_.Exception.Message))" }
+        }
+        if (-not $got) { throw "could not download $name.zip from any mirror" }
+        $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+        if ($hash -ne $BLENDER_SHA_WIN_X64) {
+            Remove-Item $zip
+            throw "checksum mismatch for $name.zip: expected $BLENDER_SHA_WIN_X64, got $hash"
+        }
+        Write-Host "  sha256 $hash"
+        if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Write-Host '  extracting (tar is much faster than Expand-Archive for ~20k files)'
+        if (Get-Command tar -ErrorAction SilentlyContinue) { & tar -xf $zip -C $dest }
+        else { Expand-Archive -Path $zip -DestinationPath $dest -Force }
+        Remove-Item $zip
+        if (-not (Test-Path $exe)) { throw "blender.exe not found at $exe after extract" }
+    }
+    $ver = (& $exe --background --factory-startup --version 2>$null | Select-Object -First 1)
+    if (-not $ver) { throw "$exe did not run (missing VC++ runtime? install it, then retry)" }
+    Write-Host "  $ver -> $exe"
+    Write-Host '  auto-discovered under -Dir (no env var needed); verify: render_capabilities or ankusdrive doctor (studio_render)'
+    if ($Dir -ne (Join-Path $env:LOCALAPPDATA 'AnkusDrive\solvers')) {
+        Set-SolverEnv 'ANKUSDRIVE_BLENDER_PATH' $exe          # non-default -Dir is not globbed
+    }
+}
+
+function Install-BlenderWinget {
+    Write-Host '== Blender via winget (per-machine install) =='
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw 'winget not available - use the portable target instead: install-solvers.ps1 blender'
+    }
+    & winget install --id BlenderFoundation.Blender --exact --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "winget install failed ($LASTEXITCODE)" }
+    Write-Host '  installed under Program Files\Blender Foundation - auto-discovered; verify with ankusdrive doctor'
+}
+
 function Install-WslSolvers {
     Write-Host '== OpenFOAM families (CFD / FSI / injection molding) via WSL2 (issue #193) =='
     if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
@@ -199,9 +276,11 @@ foreach ($t in $Targets) {
         'prusa'       { Install-Prusa; $did = $true }
         'elmer'       { Install-Elmer; $did = $true }
         'wsl'         { Install-WslSolvers; $did = $true }
+        'blender'     { Install-Blender; $did = $true }
+        'blender-winget' { Install-BlenderWinget; $did = $true }
         'all'         { Install-Pip; Install-SU2; Install-Prusa; Install-Elmer; $did = $true }
         'list'        { Show-List; $did = $true }
-        default       { Write-Warning "unknown target '$t' (use: core pip su2 prusaslicer elmer wsl all list)" }
+        default       { Write-Warning "unknown target '$t' (use: core pip su2 prusaslicer elmer wsl blender blender-winget all list)" }
     }
 }
 if (-not $did) { Install-Pip }

@@ -309,6 +309,16 @@ Remaining follow-ups (not yet implemented):
 
 ## 8. Future directions (proposed, not committed)
 
+> **Update (issue [#335](https://github.com/gchen19/AnkusDrive/issues/335)).** The first
+> three directions below — `scene`/`quality` presets, per-part appearance and assembly
+> rendering — shipped as the **Blender backend** of `render_photoreal`
+> (`renderer="Blender"`, preferred by the new default `renderer="auto"`) rather than on
+> top of this add-on: full Blender run headless on a checked-in scene script, so the
+> high-quality path no longer depends on the unmaintained add-on (§7 upstream risk).
+> Appearance is passed per call (card names or a neutral PBR dict), not yet persisted
+> in the `.FCStd`; creative refinement beyond the presets is handed to Blender itself
+> via the saved `.blend`. See [`RENDERING.md`](RENDERING.md) §3 and §5.
+
 Larger design directions that build *on top of* the shipped foundation (§5:
 `render_photoreal` + material-library cards + `render_capabilities`). These were
 sketched in the original pipeline proposal (PR #16, closed as superseded once the

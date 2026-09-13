@@ -3049,60 +3049,99 @@ def render_fem_results(
 
 @mcp.tool()
 def render_photoreal(
-    handle: str,
-    renderer: str = "Povray",
+    handle: str | None = None,
+    renderer: str = "auto",
     view: str = "iso",
     material: str | None = None,
     width: int = 800,
     height: int = 600,
+    parts: list[dict] | None = None,
+    appearances: dict[str, Any] | None = None,
+    scene: str | None = None,
+    quality: str | None = None,
+    device: str | None = None,
+    output_dir: str | None = None,
 ) -> dict:
-    """Photorealistic render of a shaped object via the FreeCAD Render workbench
-    (an external renderer, e.g. POV-Ray) — a presentation-quality "nice picture",
-    unlike render_view's fast software-rasterized preview.
+    """Photorealistic "hero image" of a part or a whole assembly — presentation
+    quality, unlike render_view's fast software-rasterized preview.
 
-    Requires the Render addon and a renderer binary to be installed (see
-    docs/RENDER_WORKBENCH.md); raises with install guidance otherwise. Renders in
-    an isolated temporary document, so the live model is never modified.
+    Call render_capabilities first when unsure what is installed. renderer='auto'
+    (default) uses Blender (Cycles, full install, run headless) when it resolves,
+    otherwise POV-Ray (or another FreeCAD Render add-on renderer). Name one to force
+    it: 'Blender' | 'Povray' | 'Luxcore' | 'Appleseed' | 'Cycles' (the stripped
+    standalone build, not Blender) | 'Ospray' | 'Pbrt'. Renders never modify the
+    live model.
 
+    What to render: `handle` (a part, or an assembly handle — every leaf part is
+    rendered in place) or `parts`, a list of {handle, appearance?, name?} entries.
+    Appearance per part: `appearances` maps an assembly's part names (as
+    list_assembly_parts reports them) to an appearance; `parts[].appearance` sets it
+    inline; `material` is the fallback for every unassigned part. An appearance is a
+    card name ('Aluminium', 'Brass', 'Carpaint', 'Emission', 'Glass', 'GlossyPlastic',
+    'Gold', 'Iron', 'Matte', 'RoughPlastic', ...) or a neutral PBR dict {base?, color
+    ('#rrggbb' or linear [r,g,b]), metallic, roughness, emission, emission_strength,
+    transmission, ior, coat, finish ('none'|'fdm_layers'|'brushed'),
+    layer_height_mm}. Unknown cards/fields raise listing the valid ones.
+
+    Blender-only (reported under `ignored` on an add-on renderer): per-part
+    appearance, scene ('studio': seamless cyclorama, soft key/fill/rim area lights,
+    contact shadows), quality ('draft' 16 | 'preview' 64 (default) | 'final' 384
+    samples, OIDN-denoised), device ('auto' GPU-if-present | 'cpu' | 'gpu'), and
+    output_dir (where render.png + render.blend are written; default a temp dir).
     view: 'iso' | 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right' | 'side'.
-    material: optional Render material library card — e.g. 'Gold', 'Glass',
-        'Aluminium', 'GlossyPlastic', 'RoughPlastic', 'Iron', 'Brass'. Omitted
-        gives a neutral default material; an unknown name raises with the full list.
-    Returns {png_base64, png_path, renderer, view, material, width, height}.
+
+    Returns {png_base64, png_path, renderer, auto_selected, view, material, width,
+    height}. The Blender backend adds {blend_path, scene, quality, samples, denoised,
+    device, blender_version, elapsed_s, parts: [{name, material, triangles}]}: open
+    blend_path in Blender 5.1+ (optionally with Blender's own MCP server connected) to
+    art-direct the scene further — AnkusDrive does not drive that server. When 'auto'
+    falls back off Blender the result carries `suggestion` {renderer, why, install}:
+    relay its `install` command to the user verbatim rather than installing anything.
+    Not installed: Blender/'auto' return {ok: False, renderer, status, reason,
+    install}; a named add-on renderer raises with install guidance.
 
     Presentation-only: output is not bit-reproducible, so it is kept out of the
-    reliability/golden tests. External renders can take seconds to minutes, so this
-    call uses an extended worker timeout.
+    reliability/golden tests. Renders can take seconds to minutes (extended worker
+    timeout); prefer render_photoreal_submit for quality='final'.
     """
     return _call(
         "render_photoreal", _timeout=600.0,
         handle=handle, renderer=renderer, view=view, material=material,
-        width=width, height=height,
+        width=width, height=height, parts=parts, appearances=appearances,
+        scene=scene, quality=quality, device=device, output_dir=output_dir,
     )
 
 
 @mcp.tool()
 def render_photoreal_submit(
-    handle: str,
-    renderer: str = "Povray",
+    handle: str | None = None,
+    renderer: str = "auto",
     view: str = "iso",
     material: str | None = None,
     width: int = 800,
     height: int = 600,
+    parts: list[dict] | None = None,
+    appearances: dict[str, Any] | None = None,
+    scene: str | None = None,
+    quality: str | None = None,
+    device: str | None = None,
+    output_dir: str | None = None,
 ) -> dict:
     """Start a photorealistic render asynchronously; returns immediately with
-    {job_id, status} instead of blocking for the whole render.
+    {job_id, status, renderer} instead of blocking for the whole render.
 
     Use this (rather than render_photoreal) for renders that may take a long time —
-    heavy materials/renderers, large images — so the worker stays responsive. The
-    external renderer runs in the background; poll render_job(job_id) until status is
-    'done' (then it returns the PNG) or 'failed'. Same arguments as render_photoreal;
-    requires the Render addon + a renderer binary (see docs/RENDER_WORKBENCH.md).
+    quality='final', large images, big assemblies — so the worker stays responsive.
+    Poll render_job(job_id) until status is 'done' (then it returns the PNG and, for
+    Blender, blend_path) or 'failed'. Same arguments, renderer selection and
+    not-installed miss dict as render_photoreal; see render_capabilities for what
+    resolves on this machine.
     """
     return _call(
         "render_photoreal_submit",
         handle=handle, renderer=renderer, view=view, material=material,
-        width=width, height=height,
+        width=width, height=height, parts=parts, appearances=appearances,
+        scene=scene, quality=quality, device=device, output_dir=output_dir,
     )
 
 
@@ -3123,22 +3162,29 @@ def render_job(job_id: str, discard: bool = False) -> dict:
 
 @mcp.tool()
 def render_capabilities() -> dict:
-    """Report which photoreal renderers are usable right now, and whether the FreeCAD
-    Render addon imports — so you can pick a working renderer for render_photoreal
-    instead of discovering availability by trial and error.
+    """Report which photoreal renderers are usable right now — Blender (the studio
+    backend) and the FreeCAD Render add-on renderers — so you can pick one for
+    render_photoreal, or tell the user exactly what to install, instead of
+    discovering availability by trial and error.
 
-    Takes no arguments. Resolves each renderer's binary exactly as render_photoreal
-    would (ANKUSDRIVE_<R>_PATH env override -> FreeCAD prefs -> PATH -> per-OS install
-    dirs), but renders nothing and changes no settings.
+    Takes no arguments and renders nothing. Resolves Blender like a solver
+    (ANKUSDRIVE_BLENDER_PATH -> PATH -> per-OS install dirs, incl. the versioned
+    `Blender Foundation\\Blender X.Y` and /opt|~/.local/opt/blender-*) and launches it
+    once (cached) to read its version and GPU; resolves each add-on renderer as
+    render_photoreal would, changing no settings.
 
-    Returns {addon_importable (bool), default_renderer ('Povray'), platform,
-    available (sorted list of ready renderer names for the `renderer=` argument),
-    renderers: {name: {available, param_key, batch, binaries, and either path (the
-    resolved binary) or install_hint}}, materials (library card names usable as
-    render_photoreal's material= argument, present only when the addon imports), and
-    addon_error (present only when the addon does not import)}.
+    Returns {default_renderer ('auto'), auto_selects (the renderer 'auto' would use
+    now, or None), recommended ('Blender'), platform, available (ready renderer names
+    for `renderer=`), renderers: {name: {available, backend ('blender' |
+    'render_addon'), path or install_hint, ...}} — Blender adds version, device, gpu,
+    oidn, supported, scenes, qualities, devices, finishes — materials (appearance card
+    names), appearance_fields (the PBR dict keys), addon_importable, addon_error (when
+    the add-on does not import), and `suggestion` {renderer, why, install} while
+    Blender is missing}. When the user wants better renders, relay the Blender
+    `install_hint` verbatim — never run installers yourself. setup_status reports the
+    same install under the `studio_render` family.
     """
-    return _call("render_capabilities")
+    return _call("render_capabilities", _timeout=120.0)
 
 
 @mcp.tool()

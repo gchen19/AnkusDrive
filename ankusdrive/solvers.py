@@ -446,6 +446,43 @@ _SOLVERS: dict = {
                         "'apt install calculix-ccx' (Linux) or point ANKUSDRIVE_CALCULIX_PATH "
                         "at a ccx binary",
     },
+    # --- studio render: full Blender (Cycles) headless (issue #335) -----------
+    # The render_photoreal backend for assemblies, per-part appearance and the studio
+    # scene. Full Blender, NOT the stripped standalone `cycles` the Render add-on
+    # drives (_RENDERERS["Cycles"] in worker.py): run as `blender --background
+    # --python ankusdrive/blender_scene.py`, so it is GPL at arm's length like ccx —
+    # a subprocess running a script we ship, never linked or imported.
+    "blender": {
+        "kind": "binary",
+        "family": "studio_render",
+        "extra": None,
+        "license": "GPL-3.0",
+        "isolation": "subprocess",
+        "binaries": ("blender", "Blender"),
+        "dirs": {
+            "Linux":   ("/usr/bin", "/usr/local/bin", "/snap/bin"),
+            "Darwin":  ("/Applications/Blender.app/Contents/MacOS",
+                        os.path.expanduser("~/Applications/Blender.app/Contents/MacOS")),
+            "Windows": (),
+        },
+        # Versioned install dirs a literal `dirs` entry cannot name: the official
+        # installer's `Blender Foundation\Blender 5.2`, and the tarball extracts
+        # scripts/install-renderers.sh writes (root -> /opt, user -> ~/.local/opt).
+        # Globbed newest-version first, so a provisioned box resolves with no env var.
+        "dir_globs": {
+            "Linux":   ("/opt/blender-*", "~/.local/opt/blender-*"),
+            "Darwin":  (),
+            "Windows": (r"%ProgramFiles%\Blender Foundation\Blender *",
+                        r"%LOCALAPPDATA%\Programs\Blender Foundation\Blender *"),
+        },
+        "install_hint": "Blender 4.2+ (5.2 LTS recommended; free, GPL-3.0, run only as a "
+                        "subprocess): Linux 'scripts/install-renderers.sh blender' (pinned "
+                        "official tarball, auto-discovered) or 'sudo snap install blender "
+                        "--classic'; macOS 'brew install --cask blender' (or "
+                        "'scripts/install-renderers.sh blender'); Windows 'winget install "
+                        "BlenderFoundation.Blender' (or 'scripts/install-solvers.ps1 blender') "
+                        "— or set ANKUSDRIVE_BLENDER_PATH to the blender executable",
+    },
 }
 
 
@@ -773,6 +810,27 @@ def _override_candidates(name: str, spec: dict) -> list:
     return out
 
 
+def _version_key(path: str) -> list:
+    """Natural sort key, so `Blender 10.0` sorts after `Blender 9.9`."""
+    import re
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", path)]
+
+
+def _versioned_dirs(patterns) -> list:
+    """Existing directories matching a spec's ``dir_globs`` (``~`` and ``%VAR%``
+    expanded), newest version first. An unset ``%VAR%`` drops its pattern rather
+    than globbing a literal ``%ProgramFiles%`` directory."""
+    import glob as _glob
+    out = []
+    for pat in patterns:
+        pat = os.path.expandvars(os.path.expanduser(pat))
+        if "%" in pat or "$" in pat:
+            continue
+        out.extend(sorted((d for d in _glob.glob(pat) if os.path.isdir(d)),
+                          key=_version_key, reverse=True))
+    return out
+
+
 def _binary_candidates(name: str, spec: dict) -> list:
     """Ordered candidate paths for a binary solver, most-preferred first:
     ANKUSDRIVE_<NAME>_PATH env override -> PATH (shutil.which) -> common per-OS
@@ -785,6 +843,10 @@ def _binary_candidates(name: str, spec: dict) -> list:
             candidates.append(found)
     for d in spec["dirs"].get(platform.system(), ()):  # 3) common install dirs
         for binname in spec["binaries"]:
+            for exe in (binname, binname + ".exe"):
+                candidates.append(os.path.join(d, exe))
+    for d in _versioned_dirs(spec.get("dir_globs", {}).get(platform.system(), ())):
+        for binname in spec["binaries"]:             # 3b) versioned install dirs
             for exe in (binname, binname + ".exe"):
                 candidates.append(os.path.join(d, exe))
     # 4) the provisioners' portable extracts: scripts/install-solvers.ps1 unzips

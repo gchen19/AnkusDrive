@@ -12134,8 +12134,11 @@ def _require_render():
 def _parse_render_request(p):
     """Validate render_photoreal params and resolve the renderer binary (setting
     its FreeCAD param). Returns a dict of normalized parameters. Shared by the
-    blocking and async handlers."""
-    src = _resolve(p["handle"])
+    blocking and async handlers. An assembly or a parts list is fused into one
+    compound here: the add-on renderers take a single shape and material."""
+    import types
+    compound = _flatten_for_addon(p)
+    src = types.SimpleNamespace(Shape=compound) if compound is not None else _resolve(p["handle"])
     if not hasattr(src, "Shape"):
         raise TypeError(f"handle {p['handle']!r} has no Shape to render")
     width = int(p.get("width", 800))
@@ -12187,21 +12190,301 @@ def _setup_render_project(tmp, req):
     return proj
 
 
+# --- Blender studio backend (issue #335) ------------------------------------------
+# renderer="Blender" (or "auto" when Blender resolves) bypasses the Render add-on:
+# every part is tessellated here into raw buffers and ankusdrive/blender_scene.py
+# builds the studio scene inside `blender --background`. The request contract and
+# discovery live in the FreeCAD-free ankusdrive/blender_render.py.
+
+_BLENDER_ONLY_PARAMS = ("appearances", "scene", "quality", "device", "output_dir")
+
+
+def _addon_renderers_available():
+    """Add-on renderers usable right now: the addon imports AND the binary resolves."""
+    try:
+        _require_render()
+    except Exception:
+        return []
+    return [n for n in _RENDERERS if _find_renderer_exec(n)]
+
+
+def _photoreal_choice(p):
+    """Resolve render_photoreal's `renderer` (default "auto"). Returns
+    {renderer, auto, blender (find_solver info)}; renderer None = nothing usable."""
+    from ankusdrive import blender_render as _br
+    requested = p.get("renderer") or "auto"
+    valid = ["auto", "Blender", *_RENDERERS]
+    if requested not in valid:
+        raise RuntimeError(
+            f"renderer {requested!r} is not wired in AnkusDrive (valid: {valid}); "
+            "call render_capabilities to see which ones resolve on this machine."
+        )
+    blender = _br.find()
+    if requested in ("Blender", "auto") and (blender["available"] or requested == "Blender"):
+        return {"renderer": "Blender", "auto": requested == "auto", "blender": blender}
+    choice = _br.choose_renderer(requested, False, _addon_renderers_available()
+                                 if requested == "auto" else [])
+    choice["blender"] = blender
+    return choice
+
+
+def _no_photoreal_renderer():
+    """renderer="auto" with nothing installed: the solver-family miss dict, naming
+    the recommended install (Blender) and the lightweight floor (POV-Ray)."""
+    from ankusdrive import solvers as _solvers
+    return {
+        "ok": False, "renderer": "auto", "status": "absent",
+        "reason": "no photoreal renderer installed",
+        "install": _solvers.install_hint("blender"),
+        "alternatives": {
+            "Povray": "the FreeCAD Render add-on (Addon Manager) plus POV-Ray: "
+                      + _RENDERERS["Povray"]["install_hint"],
+        },
+        "check": "render_capabilities",
+    }
+
+
+def _render_leaves(obj):
+    """[(name, world_shape)] for a handle: an assembly (App::Part) flattens to its
+    leaf parts through linked subassemblies; anything else is one part."""
+    if obj.isDerivedFrom("App::Part"):
+        acc = []
+        _leaf_world_shapes(obj.Group, App.Matrix(), acc)
+        return acc
+    if obj.isDerivedFrom("App::Link") and obj.LinkedObject is not None:
+        return [(obj.Name, _world_shape(obj))]
+    if not hasattr(obj, "Shape") or obj.Shape.isNull():
+        raise TypeError(f"{obj.Name!r} has no Shape to render")
+    return [(obj.Label or obj.Name, obj.Shape)]
+
+
+def _blender_scene_parts(p):
+    """Resolve handle/parts + appearances to [(name, shape, appearance dict)].
+    Appearances are validated (blender_render.resolve_appearance) before anything
+    is tessellated, so a typo'd card fails fast with the valid names."""
+    from ankusdrive import blender_render as _br
+    default = p.get("material")
+    entries = []
+    if p.get("parts"):
+        if p.get("handle"):
+            raise ValueError("pass either handle or parts, not both")
+        for entry in p["parts"]:
+            if isinstance(entry, str):
+                entry = {"handle": entry}
+            unknown = set(entry) - {"handle", "appearance", "name"}
+            if unknown or "handle" not in entry:
+                raise ValueError(f"parts entries are {{handle, appearance?, name?}}; got {entry!r}")
+            obj = _resolve(entry["handle"])
+            leaves = _render_leaves(obj)
+            for leaf, shape in leaves:
+                name = entry.get("name") or (obj.Label if len(leaves) == 1 else f"{obj.Label}/{leaf}")
+                entries.append((name, shape, entry.get("appearance", default)))
+    else:
+        if not p.get("handle"):
+            raise ValueError("render_photoreal needs handle (a part or an assembly) or parts")
+        leaves = _render_leaves(_resolve(p["handle"]))
+        appearances = dict(p.get("appearances") or {})
+        names = [leaf for leaf, _ in leaves]
+        for leaf, shape in leaves:
+            key = leaf if leaf in appearances else leaf.rsplit("/", 1)[-1]
+            entries.append((leaf, shape, appearances.pop(key, default)))
+        if appearances:
+            raise ValueError(f"appearances for unknown part(s) {sorted(appearances)}; "
+                             f"this handle's parts are {names}")
+    if not entries:
+        raise ValueError("nothing to render: the handle has no parts with geometry")
+    out = []
+    palette = len(entries) > 1
+    for i, (name, shape, value) in enumerate(entries):
+        fallback = _br.palette_appearance(i) if palette else None
+        out.append((name, shape, _br.resolve_appearance(value, fallback)))
+    return out
+
+
+def _tessellate_for_blender(shape, lin_mm, ang_rad):
+    """Mesh a shape face by face -> (verts_m, tris, normals) flat lists. Vertices are
+    NOT shared across B-rep faces (crisp edges) and each carries the exact surface
+    normal from the B-rep (smooth curved faces, no facets)."""
+    import MeshPart
+    verts, tris, normals = [], [], []
+    for face in shape.Faces:
+        try:
+            mesh = MeshPart.meshFromShape(Shape=face, LinearDeflection=lin_mm,
+                                          AngularDeflection=ang_rad, Relative=False)
+        except Exception:
+            continue
+        pts = [q.Vector for q in mesh.Points]
+        if not pts or not mesh.CountFacets:
+            continue
+        base = len(verts) // 3
+        face_normals = []
+        try:
+            surf = face.Surface
+            for v in pts:
+                u, w = surf.parameter(v)
+                face_normals.append(face.normalAt(u, w))
+        except Exception:
+            face_normals = None
+        facets = [f.PointIndices for f in mesh.Facets]
+        if face_normals is not None:
+            # Guard against a surface whose normalAt disagrees with the facet winding.
+            i, j, k = facets[0]
+            geo = (pts[j] - pts[i]).cross(pts[k] - pts[i])
+            if geo.dot(face_normals[i] + face_normals[j] + face_normals[k]) < 0:
+                face_normals = [App.Vector(-n.x, -n.y, -n.z) for n in face_normals]
+        else:
+            acc = [App.Vector() for _ in pts]
+            for i, j, k in facets:
+                n = (pts[j] - pts[i]).cross(pts[k] - pts[i])
+                for idx in (i, j, k):
+                    acc[idx] = acc[idx] + n
+            face_normals = acc
+        for v, n in zip(pts, face_normals):
+            verts.extend((v.x * 0.001, v.y * 0.001, v.z * 0.001))
+            length = n.Length or 1.0
+            normals.extend((n.x / length, n.y / length, n.z / length))
+        for i, j, k in facets:
+            tris.extend((base + i, base + j, base + k))
+    return verts, tris, normals
+
+
+def _prepare_blender_job(p, blender):
+    """Validate, tessellate, and write the Blender job. Returns the request dict the
+    blocking and async handlers share (job_path, blender path, echo fields)."""
+    import tempfile
+    from ankusdrive import blender_render as _br
+    view = p.get("view", "iso")
+    if view not in _RENDER_VIEWS:
+        raise ValueError(f"unknown view {view!r}; valid: {sorted(_RENDER_VIEWS)}")
+    width, height = int(p.get("width", 800)), int(p.get("height", 600))
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive")
+    scene = p.get("scene") or "studio"
+    quality = p.get("quality") or "preview"
+    device = p.get("device") or "auto"
+    _br.validate_request(scene, quality, device)
+    probe = _br.probe(blender["path"])
+    if "error" in probe:
+        raise RuntimeError(f"Blender resolved at {blender['path']} but will not run: "
+                           f"{probe['error']}")
+    if not probe["supported"]:
+        return {"miss": {"ok": False, "renderer": "Blender", "status": "unsupported_version",
+                         "reason": f"Blender {probe['version_string']} is too old",
+                         "install": _br.upgrade_hint(probe), "path": blender["path"]}}
+    parts = _blender_scene_parts(p)
+
+    bb = None
+    for _, shape, _ in parts:
+        b = shape.BoundBox
+        bb = b if bb is None else bb.united(b)
+    diag = bb.DiagonalLength or 1.0
+    coarse = {"draft": 3.0, "preview": 1.0, "final": 0.5}[quality]
+    lin, ang = max(diag * 4e-4 * coarse, 1e-3), 0.2 * min(coarse, 1.5)
+
+    job_dir = tempfile.mkdtemp(prefix="ankusdrive_blender_")
+    out_dir = p.get("output_dir") or job_dir
+    os.makedirs(out_dir, exist_ok=True)
+    stem = "render"
+    part_entries = []
+    for i, (name, shape, appearance) in enumerate(parts):
+        verts, tris, normals = _tessellate_for_blender(shape, lin, ang)
+        if not tris:
+            continue
+        entry = _br.write_part(job_dir, i, verts, tris, normals)
+        entry.update(name=name, appearance=appearance)
+        part_entries.append(entry)
+    if not part_entries:
+        raise RuntimeError("tessellation produced no triangles to render")
+    cam_dir, up = _RENDER_VIEWS[view]
+    job_path = _br.build_job(
+        job_dir, part_entries, view=view, view_dir=cam_dir, view_up=up, width=width,
+        height=height, scene=scene, quality=quality, device=device,
+        out_png=os.path.join(out_dir, stem + ".png"),
+        out_blend=os.path.join(out_dir, stem + ".blend"))
+    return {
+        "job_path": job_path, "blender": blender["path"], "probe": probe,
+        "echo": {"renderer": "Blender", "view": view, "width": width, "height": height,
+                 "scene": scene, "quality": quality,
+                 "material": p.get("material") or None},
+    }
+
+
+def _blender_result(req, data, auto):
+    import base64
+    from ankusdrive import blender_render as _br
+    _br.discard_buffers(req["job_path"])             # the .blend now holds the meshes
+    with open(data["png_path"], "rb") as f:
+        png = f.read()
+    out = {"png_base64": base64.b64encode(png).decode("ascii"),
+           "png_path": data["png_path"], "blend_path": data["blend_path"],
+           **req["echo"], "auto_selected": auto,
+           "samples": data["samples"], "denoised": data["denoised"],
+           "device": data["device"], "blender_version": data["blender_version"],
+           "elapsed_s": data["elapsed_s"], "parts": data["parts"]}
+    return out
+
+
+def _ignored_blender_params(p):
+    """Blender-only arguments an add-on renderer dropped. A parts list itself IS
+    rendered (fused into one compound); only its per-part appearances are lost."""
+    ignored = [k for k in _BLENDER_ONLY_PARAMS if p.get(k)]
+    if any(isinstance(e, dict) and e.get("appearance") for e in p.get("parts") or ()):
+        ignored.insert(0, "parts[].appearance")
+    return ignored
+
+
+def _flatten_for_addon(p):
+    """The add-on renderers take ONE shape: an assembly or a parts list is fused into
+    a compound (one material). Returns a handle-like object for _parse_render_request."""
+    if not p.get("parts"):
+        obj = _resolve(p["handle"])
+        if not obj.isDerivedFrom("App::Part"):
+            return None
+        shapes = [s for _, s in _render_leaves(obj)]
+    else:
+        shapes = []
+        for entry in p["parts"]:
+            h = entry if isinstance(entry, str) else entry["handle"]
+            shapes += [s for _, s in _render_leaves(_resolve(h))]
+    return Part.makeCompound(shapes)
+
+
 @handler("render_photoreal")
 def _h_render_photoreal(p):
-    """Photorealistic render of a shaped object via the FreeCAD Render workbench
-    (external renderer; POV-Ray by default). Renders in an isolated temporary
-    document so the live model is never mutated, then returns
-    {png_base64, png_path, renderer, view, material, width, height}.
+    """Photorealistic render. renderer="auto" (default) uses Blender (Cycles, studio
+    scene, per-part appearance, saved .blend) when it resolves, else POV-Ray (or any
+    other add-on renderer that resolves) through the FreeCAD Render workbench.
 
-    Optional `material` names a Render material library card (e.g. 'Gold',
-    'Glass', 'Aluminium', 'GlossyPlastic'); omitted -> default gray material. An
-    unknown name raises ValueError listing the available cards.
+    Blender path returns {png_base64, png_path, blend_path, renderer, auto_selected,
+    view, width, height, scene, quality, material, samples, denoised, device,
+    blender_version, elapsed_s, parts: [{name, material, triangles}]}. Add-on path
+    returns {png_base64, png_path, renderer, view, material, width, height}, plus
+    {auto_selected, suggestion} when "auto" fell back off Blender and {ignored} naming
+    Blender-only arguments it could not honour. A renderer that is not installed
+    returns the solver-family miss dict {ok: False, renderer, status, reason, install}
+    for Blender / "auto", and raises with install guidance for a named add-on renderer.
 
-    Blocks until the render finishes; for long renders use render_photoreal_submit
-    + render_job. Presentation-only: photoreal output is not bit-reproducible
-    (sampler noise, thread count), so this stays out of the reliability/golden tests.
+    Presentation-only: photoreal output is not bit-reproducible (sampler noise, thread
+    count), so this stays out of the reliability/golden tests.
     """
+    from ankusdrive import blender_render as _br
+    choice = _photoreal_choice(p)
+    if choice["renderer"] == "Blender":
+        if not choice["blender"]["available"]:
+            return _br.not_installed()
+        req = _prepare_blender_job(p, choice["blender"])
+        if "miss" in req:
+            return req["miss"]
+        data = _br.run(req["blender"], req["job_path"],
+                       timeout=float(p.get("timeout_s") or 570.0))
+        return _blender_result(req, data, choice["auto"])
+    if choice["renderer"] is None:
+        return _no_photoreal_renderer()
+    return _addon_photoreal(dict(p, renderer=choice["renderer"]), choice)
+
+
+def _addon_photoreal(p, choice):
+    """The Render-workbench path (one shape, one library card)."""
     import base64
     _require_render()
     req = _parse_render_request(p)
@@ -12221,7 +12504,7 @@ def _h_render_photoreal(p):
             )
         with open(out, "rb") as f:
             data = f.read()
-        return {
+        result = {
             "png_base64": base64.b64encode(data).decode("ascii"),
             "png_path": out,
             "renderer": req["renderer"],
@@ -12230,6 +12513,7 @@ def _h_render_photoreal(p):
             "width": req["width"],
             "height": req["height"],
         }
+        return _annotate_addon_result(result, p, choice)
     finally:
         try:
             App.closeDocument(tmp.Name)
@@ -12237,6 +12521,18 @@ def _h_render_photoreal(p):
             pass
         if prev_active and App.getDocument(prev_active) is not None:
             App.setActiveDocument(prev_active)
+
+
+def _annotate_addon_result(result, p, choice):
+    from ankusdrive import blender_render as _br
+    if choice.get("auto"):
+        result["auto_selected"] = True
+        result["suggestion"] = _br.upgrade_suggestion()
+    ignored = _ignored_blender_params(p)
+    if ignored:
+        result["ignored"] = ignored
+        result.setdefault("suggestion", _br.upgrade_suggestion())
+    return result
 
 
 # Async render jobs. render_photoreal_submit launches the external renderer via the
@@ -12252,6 +12548,10 @@ _render_jobs = {}
 # whole worker session. Only finished (done/failed) jobs are evicted — a running
 # job holds an open temp document the renderer is still reading.
 _MAX_RENDER_JOBS = 16
+
+# A Blender render saturates every core (or the GPU); running many at once only
+# thrashes, so submits past this many in-flight Blender jobs are refused.
+_MAX_BLENDER_JOBS = 2
 
 
 def _close_render_job_doc(job):
@@ -12282,6 +12582,9 @@ def _refresh_render_job(job):
     import base64
     if job["status"] != "running":
         return
+    if job.get("proc") is not None:                  # Blender backend (issue #335)
+        _refresh_blender_job(job)
+        return
     thread = job.get("thread")
     if thread is not None and thread.is_alive():
         return                                       # renderer still running
@@ -12300,12 +12603,58 @@ def _refresh_render_job(job):
     _close_render_job_doc(job)
 
 
+def _refresh_blender_job(job):
+    from ankusdrive import blender_render as _br
+    proc = job["proc"]
+    if proc.poll() is None:
+        return                                       # Blender still rendering
+    try:
+        data = _br.collect(job["job_path"], proc.returncode)
+        result = _blender_result(job["req"], data, job["auto"])
+        job["png_base64"] = result.pop("png_base64")
+        job["out_path"] = result["png_path"]
+        job["extra"] = result
+        job["status"] = "done"
+    except Exception as e:
+        job["status"] = "failed"
+        job["error"] = str(e)
+    job.pop("proc", None)
+    job.pop("req", None)
+
+
 @handler("render_photoreal_submit")
 def _h_render_photoreal_submit(p):
     """Start a photoreal render asynchronously and return immediately, so a long
-    external render does not block the worker. Same params as render_photoreal.
-    Returns {job_id, status}; poll render_job(job_id) for the result."""
+    external render does not block the worker. Same params and renderer selection as
+    render_photoreal. Returns {job_id, status, renderer} (a miss dict when the renderer
+    is not installed, as render_photoreal); poll render_job(job_id) for the result."""
     import threading
+    from ankusdrive import blender_render as _br
+    choice = _photoreal_choice(p)
+    if choice["renderer"] == "Blender":
+        if not choice["blender"]["available"]:
+            return _br.not_installed()
+        for j in _render_jobs.values():
+            _refresh_render_job(j)                   # a finished-but-unpolled job is not in flight
+        running = sum(1 for j in _render_jobs.values() if j.get("proc") is not None)
+        if running >= _MAX_BLENDER_JOBS:
+            raise RuntimeError(
+                f"{running} Blender renders are already running (cap {_MAX_BLENDER_JOBS}; "
+                "each uses every CPU core or the GPU) — poll render_job until one finishes")
+        req = _prepare_blender_job(p, choice["blender"])
+        if "miss" in req:
+            return req["miss"]
+        job_id = _new_handle("render_job")
+        _render_jobs[job_id] = {
+            "status": "running", "proc": _br.launch(req["blender"], req["job_path"]),
+            "job_path": req["job_path"], "req": req, "auto": choice["auto"],
+            "out_path": None, **req["echo"],
+        }
+        _evict_render_jobs()
+        return {"job_id": job_id, "status": "running", "renderer": "Blender"}
+    if choice["renderer"] is None:
+        return _no_photoreal_renderer()
+    p = dict(p, renderer=choice["renderer"])
     _require_render()
     req = _parse_render_request(p)
     prev_active = App.ActiveDocument.Name if App.ActiveDocument else None
@@ -12335,9 +12684,10 @@ def _h_render_photoreal_submit(p):
         "material": req["material"],
         "width": req["width"],
         "height": req["height"],
+        "extra": _annotate_addon_result({}, p, choice),
     }
     _evict_render_jobs()
-    return {"job_id": job_id, "status": "running"}
+    return {"job_id": job_id, "status": "running", "renderer": req["renderer"]}
 
 
 @handler("render_job")
@@ -12345,7 +12695,9 @@ def _h_render_job(p):
     """Poll an async render started by render_photoreal_submit. Returns
     {job_id, status} with status 'running' | 'done' | 'failed'. When 'done', also
     returns {png_base64, png_path, renderer, view, material, width, height}; when
-    'failed', {error}. The result stays available for repeat polls.
+    'failed', {error}. A Blender job's 'done' result also carries blend_path, scene,
+    quality, samples, denoised, device, blender_version, elapsed_s and parts (see
+    render_photoreal). The result stays available for repeat polls.
 
     Pass discard=True to free the job once you have a terminal result (closes its
     temp document and drops the cached PNG); ignored while still running."""
@@ -12365,6 +12717,7 @@ def _h_render_job(p):
             "width": job["width"],
             "height": job["height"],
         })
+        out.update(job.get("extra") or {})
     elif job["status"] == "failed":
         out["error"] = job.get("error", "render failed")
     if p.get("discard") and job["status"] != "running":
@@ -12379,17 +12732,24 @@ def _h_render_capabilities(p):
     FreeCAD Render addon imports, so a caller can pick a working renderer instead of
     probing render_photoreal by trial and error.
 
-    For each renderer in the registry it resolves the binary the same way
+    For each add-on renderer in the registry it resolves the binary the same way
     render_photoreal does (ANKUSDRIVE_<R>_PATH env -> FreeCAD prefs -> PATH -> per-OS
     install dirs) but WITHOUT mutating prefs or rendering anything. The addon check
     is the lazy import render_photoreal performs on call (the worker boots without it).
+    Blender (issue #335) resolves through solvers.find_solver("blender"); when found it
+    is launched once (cached) to read its version and GPU compute devices.
 
-    Returns {addon_importable (bool), default_renderer, platform, available (sorted
-    names of ready renderers), renderers: {name: {available, param_key, batch,
-    binaries, and either path (resolved binary) or install_hint}}, materials (library
-    card names — only when the addon imports), addon_error (only when it does not)}.
+    Returns {addon_importable (bool), default_renderer ('auto'), auto_selects (what
+    'auto' would use now, or None), recommended ('Blender'), platform, available
+    (sorted names of ready renderers), renderers: {name: {available, ... and either
+    path or install_hint}} — the Blender row adds backend 'blender', family, version,
+    device, gpu, oidn, supported, scenes, qualities, devices, finishes — materials
+    (card names; always present, the Blender backend ships its own translation),
+    appearance_fields (the neutral PBR schema), addon_error (only when it does not
+    import)}.
     """
     import platform
+    from ankusdrive import blender_render as _br
     addon_importable = True
     addon_error = None
     try:
@@ -12399,10 +12759,32 @@ def _h_render_capabilities(p):
         addon_error = str(e)
 
     renderers = {}
+    blender = _br.find()
+    brow = {"available": blender["available"], "backend": "blender",
+            "family": "studio_render", "binaries": ["blender"],
+            "scenes": list(_br.SCENES), "qualities": list(_br.QUALITY),
+            "devices": list(_br.DEVICES), "finishes": list(_br.FINISHES)}
+    if blender["available"]:
+        brow["path"] = blender["path"]
+        probe = _br.probe(blender["path"])
+        if "error" in probe:
+            brow.update(available=False, error=probe["error"],
+                        install_hint=_br.solvers.install_hint("blender"))
+        else:
+            brow.update(version=probe["version_string"], device=probe["device"],
+                        gpu=probe["gpu"], oidn=probe["oidn"], supported=probe["supported"])
+            if not probe["supported"]:
+                brow.update(available=False, install_hint=_br.upgrade_hint(probe))
+    else:
+        brow["status"] = blender["status"]
+        brow["install_hint"] = blender["install_hint"]
+    renderers["Blender"] = brow
+
     for name, spec in _RENDERERS.items():
         path = _find_renderer_exec(name)             # side-effect-free probe
         info = {
             "available": path is not None,
+            "backend": "render_addon",
             "param_key": spec["param_key"],
             "batch": bool(spec.get("batch", False)),
             "binaries": list(spec["binaries"]),
@@ -12413,20 +12795,28 @@ def _h_render_capabilities(p):
             info["install_hint"] = spec["install_hint"]
         renderers[name] = info
 
+    addon_ready = [n for n in _RENDERERS if addon_importable and renderers[n]["available"]]
+    auto = _br.choose_renderer("auto", renderers["Blender"]["available"], addon_ready)
     out = {
         "addon_importable": addon_importable,
-        "default_renderer": "Povray",
+        "default_renderer": "auto",
+        "auto_selects": auto["renderer"],
+        "recommended": "Blender",
         "platform": platform.system(),
         "available": sorted(n for n, i in renderers.items() if i["available"]),
         "renderers": renderers,
+        "materials": sorted(_br.MATERIAL_PRESETS),
+        "appearance_fields": sorted(_br._PBR_FIELDS),
     }
+    if not renderers["Blender"]["available"]:
+        out["suggestion"] = _br.upgrade_suggestion()
     if addon_error is not None:
         out["addon_error"] = addon_error
     if addon_importable:
-        # Cheap listdir of the addon's material cards — discover materials too, not
-        # just renderers. Best-effort: never let it sink the whole capability probe.
+        # The addon's own cards (normally the same 14 names). Best-effort: never let
+        # it sink the whole capability probe.
         try:
-            out["materials"] = _available_render_materials()
+            out["addon_materials"] = _available_render_materials()
         except Exception:
             pass
     return out

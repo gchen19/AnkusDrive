@@ -8,9 +8,21 @@ how to install them, how to confirm they work, and the known limitations.
   external dependencies, flat shading. The right tool for "can the agent *see* what it
   built." Nothing to install beyond `Pillow`/`numpy` (regular pip deps).
 - **Photoreal** — `render_photoreal` (+ async `render_photoreal_submit` / `render_job`):
-  materials, lighting, global illumination, perspective, via the third-party
-  [FreeCAD Render workbench](https://github.com/FreeCAD/FreeCAD-render) shelling out to
-  an external renderer. Requires the addon **and** a renderer binary (this guide).
+  materials, lighting, global illumination, perspective. Two backends behind one tool:
+  - **Blender (recommended)** — full Blender run headless
+    (`blender --background --python ankusdrive/blender_scene.py`). Renders whole
+    **assemblies with per-part appearance** in a **studio scene** (seamless cyclorama,
+    soft key/fill/rim area lights, contact shadows), Cycles + OIDN denoise, GPU when
+    present, and saves the `.blend`. One install on every OS (§3, issue #335).
+  - **FreeCAD Render add-on renderers** — the third-party
+    [FreeCAD Render workbench](https://github.com/FreeCAD/FreeCAD-render) shelling out to
+    POV-Ray / LuxCore / Appleseed / standalone Cycles / OSPRay / pbrt: one shape, one
+    library card, each renderer's stock lighting template. Requires the addon **and** a
+    renderer binary.
+
+`renderer="auto"` (the default) uses Blender when it resolves and falls back to POV-Ray
+(then any other add-on renderer), naming the renderer it used and — when it fell back —
+handing the agent the Blender install command as a `suggestion`.
 
 For design/architecture see [`RENDER_WORKBENCH.md`](RENDER_WORKBENCH.md); for the
 provisioning detail and pinned download checksums see
@@ -20,25 +32,31 @@ provisioning detail and pinned download checksums see
 
 ## 1. Renderer support matrix
 
-`render_photoreal(handle, renderer="…")` — `Povray` is the default. All six are wired
-into the worker's `_RENDERERS` registry; the table is about whether a usable **binary**
-is obtainable.
+`render_photoreal(handle | parts, renderer="…")` — `"auto"` is the default: **Blender**
+when it resolves, else **POV-Ray**, else any add-on renderer that resolves. The table
+is about whether a usable **binary** is obtainable.
 
-| `renderer=` | Status | How to get the binary | Notes |
+| `renderer=` | Status | How to get it | Assemblies · per-part appearance · studio scene · `.blend` |
 |---|---|---|---|
-| **`Povray`**     | ✅ works (default) | `apt install povray` · `brew install povray` · Windows installer | Single CLI; fast; lower photoreal ceiling. |
-| **`Luxcore`**    | ✅ works | `scripts/install-renderers.sh` (LuxCore **v2.6 SDK**) | Highest quality + PBR; GI sampler noise on quick renders. Needs the `-sdk` build — the plain standalone lacks `luxcoreconsole`. |
-| **`Appleseed`**  | ✅ works (one material caveat — §6) | `scripts/install-renderers.sh` (Appleseed **2.1.0-beta**, 2019 final build) | Console renderer `appleseed.cli`. |
-| **`Cycles`**     | ✅ works | `scripts/build-renderers.sh cycles` (CPU standalone, built against system libs) | Blender's engine; no standalone CLI ships, so we compile it. |
-| **`Ospray`**     | ⚠️ builds + renders, but dim | `scripts/build-renderers.sh ospray` (OSPRay Studio vs the OSPRay 3.2.0 SDK) | Renders correct geometry but low-contrast on the stock template — see §6. |
-| **`Pbrt`**       | ✅ works | `scripts/build-renderers.sh pbrt` ([mmp/pbrt-v4](https://github.com/mmp/pbrt-v4)) | pbrt-v4 support is experimental upstream. |
+| **`Blender`**    | ✅ works (preferred by `auto`) | Linux `scripts/install-renderers.sh blender` or `snap install blender --classic` · macOS `brew install --cask blender` · Windows `scripts/install-solvers.ps1 blender` or `winget install BlenderFoundation.Blender` | ✅ · ✅ · ✅ · ✅ — Blender **4.2+** (5.2 LTS pinned). No Render add-on needed. |
+| **`Povray`**     | ✅ works (`auto` fallback) | `apt install povray` · `brew install povray` · Windows installer | Assembly fused to one shape, one card, stock template. Fast; lower ceiling. |
+| **`Luxcore`**    | ✅ works | `scripts/install-renderers.sh` (LuxCore **v2.6 SDK**) | One shape/card. Highest add-on quality + PBR; needs the `-sdk` build (`luxcoreconsole`). |
+| **`Appleseed`**  | ✅ works (one material caveat — §6) | `scripts/install-renderers.sh` (Appleseed **2.1.0-beta**, 2019 final build) | One shape/card. Console renderer `appleseed.cli`. |
+| **`Cycles`**     | ✅ works | `scripts/build-renderers.sh cycles` (CPU standalone, built against system libs) | One shape/card. The **stripped standalone** Cycles (no OIDN/OSL/GPU, Linux only) — for Cycles quality use `Blender`. |
+| **`Ospray`**     | ⚠️ builds + renders, but dim | `scripts/build-renderers.sh ospray` (OSPRay Studio vs the OSPRay 3.2.0 SDK) | One shape/card. Low-contrast on the stock template — see §6. |
+| **`Pbrt`**       | ✅ works | `scripts/build-renderers.sh pbrt` ([mmp/pbrt-v4](https://github.com/mmp/pbrt-v4)) | One shape/card. pbrt-v4 support is experimental upstream. |
+
+Blender-only arguments passed to an add-on renderer are not silently dropped: the result
+lists them under `ignored` (e.g. `["parts[].appearance", "scene"]`).
 
 To see the live status on a given box, call the **`render_capabilities`** tool (§4) —
 it never renders, just reports what resolves right now.
 
 ---
 
-## 2. Prerequisite: the Render addon
+## 2. Prerequisite for the add-on renderers: the Render addon
+
+*Not needed for `renderer="Blender"`.*
 
 Install the workbench into the Mod dir FreeCAD reads (derive it from
 `App.getUserAppDataDir()`; don't hardcode — it varies by OS and sandbox):
@@ -60,7 +78,44 @@ photoreal tests. AnkusDrive imports the addon lazily, so the worker boots fine w
 
 ## 3. Installing renderer binaries
 
-### POV-Ray (default)
+### Blender (recommended — the studio backend)
+
+Blender is optional like every renderer, ~1 GB on disk, GPL-3.0 and only ever launched
+as a subprocess running a script AnkusDrive ships (nothing is linked). Any Blender
+**4.2 or newer** works; the installers pin **5.2.1 LTS** (5.1+ also opens the saved
+`.blend` with Blender's own MCP server, §5a).
+
+| OS | Command | Lands in (auto-discovered, no env var) |
+|---|---|---|
+| Linux x86_64 | `scripts/install-renderers.sh blender` | `~/.local/opt/blender-5.2.1` (as root: `/opt/blender-5.2.1`), + a `blender` symlink in `~/.local/bin` / `$BINDIR` |
+| Linux (alt)  | `sudo snap install blender --classic` | `/snap/bin/blender` |
+| macOS        | `brew install --cask blender` (or `scripts/install-renderers.sh blender`) | `/Applications/Blender.app` (or `~/Applications`) |
+| Windows      | `pwsh scripts\install-solvers.ps1 blender` (portable, no admin) | `%LOCALAPPDATA%\AnkusDrive\solvers\blender-5.2.1\…\blender.exe` |
+| Windows (alt)| `winget install BlenderFoundation.Blender` (or the `blender-winget` target) | `Program Files\Blender Foundation\Blender 5.2` |
+
+The scripted downloads verify the official SHA-256 manifest and try the official
+mirrors first — `download.blender.org` challenges scripted clients (HTTP 403), so a
+plain `curl` of it fails. Override with `BLENDER_MIRRORS="<base url> …"`. Linux arm64
+has no official build (use a distro package + `ANKUSDRIVE_BLENDER_PATH`); Blender 5.x is
+Apple-Silicon-only on macOS (brew picks the right build).
+
+**How it is discovered.** Blender is registered as the `blender` entry of the
+`studio_render` solver family in [`ankusdrive/solvers.py`](../ankusdrive/solvers.py),
+so it resolves exactly like the simulation solvers:
+`ANKUSDRIVE_BLENDER_PATH` (env or `config.toml`) → `PATH` → per-OS install dirs →
+the versioned dirs above (globbed newest first). That also means the MCP surfaces that
+suggest solver installs suggest Blender the same way:
+
+- `render_capabilities` → `renderers.Blender` (`available`, `version`, `device`, `gpu`,
+  `oidn`, or `install_hint`) plus a top-level `suggestion` while it is missing;
+- `setup_status` / `ankusdrive doctor` → the `studio_render` family with its fix line;
+- `render_photoreal(renderer="Blender")` when absent → the solver-family miss dict
+  `{ok: false, status: "absent", reason, install}`; `renderer="auto"` renders with
+  POV-Ray instead and attaches `suggestion: {renderer, why, install}`.
+
+The agent relays those `install` strings; it never runs an installer itself.
+
+### POV-Ray (`auto` fallback)
 ```bash
 sudo apt install povray        # Linux ·  brew install povray (macOS) ·  installer (Windows)
 ```
@@ -97,7 +152,7 @@ checksum and the exact CMake flags are in
 cmake, ninja, a C++17 compiler, and apt for Cycles' system-library dependencies.
 
 ### How AnkusDrive finds a binary (and how to override)
-`render_photoreal` resolves a renderer in this order: **`ANKUSDRIVE_<RENDERER>_PATH` env →
+An add-on renderer resolves in this order: **`ANKUSDRIVE_<RENDERER>_PATH` env →
 FreeCAD prefs → `PATH` (`shutil.which`) → per-OS install dirs**, then writes the path
 into the FreeCAD param the plugin reads. The renderer subprocess inherits the worker's
 env, which inherits the **MCP server's** env — so do discovery in the environment that
@@ -111,22 +166,84 @@ set only in an interactive shell does not).
 ```python
 render_capabilities()           # MCP tool — never renders; pure discovery probe
 ```
-Returns `addon_importable`, and per renderer `available` + the resolved `path` (or an
-`install_hint`), plus the material card list. Run it before/after installing to watch a
-renderer flip to `available: true`.
+Returns `default_renderer` (`"auto"`), `auto_selects` (what `auto` would use right now),
+`addon_importable`, and per renderer `available` + the resolved `path` (or an
+`install_hint`) — the Blender row adds `version`, `device`, `gpu`, `oidn` (it launches
+Blender once, cached) — plus the appearance card list. Run it before/after installing
+to watch a renderer flip to `available: true`.
 
 ```bash
 .venv/bin/python3 tests/test_render_photoreal.py     # gated tests SKIP→PASS as binaries land
 ```
 A renderer with no binary makes its test **skip** (not fail), so CI stays green on boxes
-that provision nothing.
+that provision nothing. The Blender request contract (appearance schema, `auto`
+selection, install advice, installer pins) is covered without Blender by
+`tests/test_blender_render.py`.
 
 ---
 
-## 5. Materials & galleries
+## 5. Assemblies, appearance, scene & quality (Blender)
 
-`render_photoreal(..., material="Gold")` applies a Render material library card. Omit it
-for a neutral default; an unknown name errors with the full list. 14 cards ship
+```python
+render_photoreal(
+    parts=[
+        {"handle": base,    "name": "base_plate", "appearance": {"base": "Aluminium", "finish": "brushed"}},
+        {"handle": housing, "name": "housing",    "appearance": {"color": "#8a8d91", "roughness": 0.6,
+                                                                  "finish": "fdm_layers", "layer_height_mm": 0.3}},
+        {"handle": display, "name": "display",    "appearance": {"color": "#101418", "emission": "#3fa7ff",
+                                                                  "emission_strength": 3}},
+        {"handle": button,  "name": "button",     "appearance": "Brass"},
+        {"handle": pcb,     "name": "pcb",        "appearance": {"color": "#1b6e2a", "roughness": 0.35}},
+    ],
+    scene="studio", quality="final", output_dir="artifacts/rendering")
+# or: render_photoreal(handle=<assembly>, appearances={"housing": "Matte", ...})
+```
+
+- **What to render.** `handle` = a part or an **assembly** (every leaf part is rendered
+  in place, through linked subassemblies), or `parts=[{handle, appearance?, name?}]`.
+  `appearances` maps an assembly's part names (as `list_assembly_parts` reports) to an
+  appearance; `material` is the fallback for unassigned parts. Unassigned parts of a
+  multi-part render get distinct muted tones so they stay legible.
+- **Appearance.** A card name (the 14 below, translated to Principled BSDF) or a neutral
+  PBR dict: `base` (start from a card), `color` (`"#rrggbb"` sRGB or linear `[r,g,b]`),
+  `metallic`, `roughness`, `emission` + `emission_strength`, `transmission`, `ior`,
+  `coat`, `finish` (`none` · `fdm_layers` with `layer_height_mm` · `brushed`). Bad names
+  fail before anything renders, listing the valid ones.
+- **Scene.** `studio`: seamless floor-to-wall cyclorama behind the part (relative to the
+  camera), key/fill/rim/top area lights scaled to the model, AgX view transform.
+- **Quality.** `draft` 16 · `preview` 64 (default) · `final` 384 Cycles samples, all
+  OIDN-denoised, adaptive sampling; resolution is `width`/`height`. The result reports
+  `samples`, `denoised`, `device` and `elapsed_s`.
+- **Device.** `auto` (OptiX → CUDA → HIP → Metal → oneAPI, else CPU) · `cpu` · `gpu`.
+- **Geometry.** Each B-rep face is meshed separately with **exact surface normals**, so
+  cylinders and fillets shade smooth while real edges stay crisp. True scale (metres).
+- **Output.** `png_path` and `blend_path` (`render.png` / `render.blend` in `output_dir`,
+  default a temp dir). Up to two async Blender jobs run at once.
+
+![Blender studio render of a five-part enclosure](../artifacts/rendering/render_blender_studio.png)
+
+*Five parts, five appearances, one call — `scripts/render-studio-demo.py`.*
+
+### 5a. Refine in Blender (optional hand-off to Blender's MCP server)
+
+AnkusDrive gives a good first image in one call; creative changes belong in Blender.
+Open `blend_path` in **Blender 5.1+** — parts, materials, lights and camera are all
+intact (the materials are procedural, so there are no external textures to relink) — and,
+if you like, connect Blender's own experimental
+[MCP server](https://www.blender.org/lab/mcp-server/)
+([lab/blender_mcp](https://projects.blender.org/lab/blender_mcp)) to art-direct by
+prompt ("anodize the housing black", "warmer key light").
+
+- AnkusDrive does **not** depend on or talk to that server or its add-on; the pairing is
+  this document plus the `.blend` file format.
+- **Security:** upstream warns it *"will execute LLM generated code in Blender without
+  any guards"* and recommends a virtual machine. Treat it accordingly.
+
+## 5b. Material cards & add-on galleries
+
+`render_photoreal(..., material="Gold")` applies a Render material library card (on
+Blender, the same names map to Principled BSDF presets). Omit it for a neutral default;
+an unknown name errors with the full list. 14 cards ship
 (Aluminium, Brass, Carpaint, Disney, Emission, Glass, GlossyPlastic, Gold, GreenMarble,
 Iron, Magnetite, Matte, RoughPlastic, Terrazzo).
 
@@ -173,6 +290,11 @@ Regenerate: `.venv/bin/python3 scripts/render-material-gallery.py` (all renderer
   (`GreenMarble`, `Terrazzo`) show their colour map; normal / displacement maps are
   dropped (a POV-Ray-plugin limitation). See
   [`RENDER_TEXTURE_CHECK.md`](RENDER_TEXTURE_CHECK.md).
+- **Blender backend scope.** One scene preset (`studio`) today; `outdoor`/`hdri` are
+  follow-ons. Anything beyond presets + per-part appearance is meant for Blender itself
+  (§5a), not a growing AnkusDrive lighting DSL. Blender older than 4.2 resolves but is
+  reported `supported: false` with an upgrade hint. CPU renders at `final` quality take
+  tens of seconds to minutes — use `render_photoreal_submit`.
 - **Photoreal output is not bit-reproducible** (sampler noise, thread count), so it is
   *presentation-only* and stays out of the reliability/golden tests; the gated tests
   assert invariants (valid PNG, non-blank, view/material changes the image), not pixels.
