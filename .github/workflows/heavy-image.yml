@@ -1,25 +1,28 @@
 name: Heavy-solver image
 
 # Builds ghcr.io/<owner>/ankusdrive-heavy — every external solver the Linux
-# heavy-solves lane runs live, prebuilt (#339), so that lane can move off the
-# self-hosted box onto a GitHub-hosted runner (#338 / #340). Recipe and pins:
-# docker/heavy-solvers/Dockerfile.
+# heavy-solves lanes run live, prebuilt (#339), for linux/amd64 AND linux/arm64 (#363).
+# Recipe and pins: docker/heavy-solvers/Dockerfile.
 #
-# SHAPE. The Dockerfile's four source-build stages (YADE, openEMS, the preCICE FSI
-# stack, OpenFOAM-7 + openInjMoldSim) are independent, and together they are too
-# much compile for one hosted runner's 6-hour cap. So: one job builds the shared
-# `system` stage, four parallel jobs build one stage each, and a final job
-# assembles the image — every job reading and writing a per-stage registry cache,
-# so a run that changes one stage recompiles only that stage.
+# SHAPE. Per architecture, on a NATIVE runner (ubuntu-latest / ubuntu-24.04-arm — no
+# QEMU emulation, which would multiply these compile times): one job builds the shared
+# `system` stage, four parallel jobs build one source stage each (YADE, openEMS, the
+# preCICE FSI stack, OpenFOAM-7 + openInjMoldSim), and a final job assembles that
+# architecture's image. Every job reads and writes a per-stage, per-arch registry
+# cache, so a run that changes one stage recompiles only that stage. On main, each
+# architecture is pushed by digest and a last job joins them into one multi-arch
+# manifest carrying the tags — `docker pull` then picks the right platform.
 #
-# The image is not pushed unless its own last build step passes:
-# scripts/ci-linux-preflight.sh, which fails if any heavy solver does not resolve.
+# The image is not pushed unless its own last build step passes on that architecture:
+# scripts/ci-linux-preflight.sh, which fails if any heavy solver does not resolve —
+# apart from what that architecture's image explicitly excludes (Elmer on arm64: no
+# build exists), which it reports instead.
 #
 # TRIGGERS. A push to main touching the recipe; a PR touching it (built, never
 # pushed); on demand; and monthly, because the apt layers (ESI OpenFOAM, the Elmer
 # PPA) float and a drift should surface here rather than inside a heavy-solves run.
-# heavy-solves.yml pins the image by digest, so a rebuild never changes what that
-# lane tests until the pin is bumped.
+# heavy-solves.yml pins the image by digest, so a rebuild never changes what those
+# lanes test until the pin is bumped.
 
 on:
   push:
@@ -61,12 +64,18 @@ env:
 
 jobs:
   system:
-    name: Build stage — system (apt layers)
-    runs-on: ubuntu-latest
+    name: Build stage — system (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 120
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -80,14 +89,18 @@ jobs:
           context: .
           file: docker/heavy-solvers/Dockerfile
           target: system
+          platforms: linux/${{ matrix.platform.arch }}
           push: false
-          cache-from: type=registry,ref=${{ env.IMAGE }}:cache-system
-          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-system,mode=max', env.IMAGE) || '' }}
+          # the unsuffixed refs are the pre-multi-arch (amd64) caches: read-only fallback
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cache-system-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-system
+          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-system-{1},mode=max', env.IMAGE, matrix.platform.arch) || '' }}
 
   stage:
-    name: Build stage — ${{ matrix.target }}
+    name: Build stage — ${{ matrix.target }} (${{ matrix.platform.arch }})
     needs: system
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform.runner }}
     # A hosted runner has 4 cores; OpenFOAM-7 is the long pole.
     timeout-minutes: 350
     permissions:
@@ -96,10 +109,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        platform:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
         target: [yade, openems, fsi, oims]
     steps:
       # The OpenFOAM-7 tree and YADE's objects need more than the image's default
-      # free space; these preinstalled toolchains are unused here.
+      # free space; these preinstalled toolchains are unused here (absent paths on
+      # the arm64 image are simply skipped by rm -f).
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -116,27 +133,95 @@ jobs:
           context: .
           file: docker/heavy-solvers/Dockerfile
           target: ${{ matrix.target }}
+          platforms: linux/${{ matrix.platform.arch }}
           build-args: JOBS=4
           push: false
           cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cache-system-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-${{ matrix.target }}-${{ matrix.platform.arch }}
             type=registry,ref=${{ env.IMAGE }}:cache-system
             type=registry,ref=${{ env.IMAGE }}:cache-${{ matrix.target }}
-          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-{1},mode=max', env.IMAGE, matrix.target) || '' }}
+          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-{1}-{2},mode=max', env.IMAGE, matrix.target, matrix.platform.arch) || '' }}
 
   image:
-    name: Assemble, preflight, push
+    name: Assemble + preflight (${{ matrix.platform.arch }})
     needs: stage
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 120
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/heavy-solvers/Dockerfile
+          target: final
+          platforms: linux/${{ matrix.platform.arch }}
+          # Never from a PR. On main each arch is pushed untagged, by digest; the
+          # `manifest` job below joins them under the tags.
+          outputs: ${{ github.event_name != 'pull_request' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=cacheonly' }}
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cache-system-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-yade-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-openems-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-fsi-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-oims-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-final-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-system
+            type=registry,ref=${{ env.IMAGE }}:cache-yade
+            type=registry,ref=${{ env.IMAGE }}:cache-openems
+            type=registry,ref=${{ env.IMAGE }}:cache-fsi
+            type=registry,ref=${{ env.IMAGE }}:cache-oims
+            type=registry,ref=${{ env.IMAGE }}:cache-final
+          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-final-{1},mode=max', env.IMAGE, matrix.platform.arch) || '' }}
+      - name: Record this architecture's digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -151,26 +236,21 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=schedule,pattern={{date 'YYYYMMDD'}}
             type=sha,format=short
-      - id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: docker/heavy-solvers/Dockerfile
-          target: final
-          # Never from a PR: the image a heavy-solves run pulls comes from main only.
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=registry,ref=${{ env.IMAGE }}:cache-system
-            type=registry,ref=${{ env.IMAGE }}:cache-yade
-            type=registry,ref=${{ env.IMAGE }}:cache-openems
-            type=registry,ref=${{ env.IMAGE }}:cache-fsi
-            type=registry,ref=${{ env.IMAGE }}:cache-oims
-            type=registry,ref=${{ env.IMAGE }}:cache-final
-          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-final,mode=max', env.IMAGE) || '' }}
-      - name: Record the digest to pin
-        if: github.event_name != 'pull_request'
+      - name: Join the per-arch digests under the tags
+        working-directory: ${{ runner.temp }}/digests
         run: |
-          echo "### ankusdrive-heavy" >> "$GITHUB_STEP_SUMMARY"
-          echo "Pin in heavy-solves.yml: \`${IMAGE}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          n=$(ls | wc -l)
+          [ "$n" -eq 2 ] || { echo "expected 2 architecture digests, got $n" >&2; exit 1; }
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+      - name: Record the digest to pin
+        run: |
+          ref="$IMAGE:${{ steps.meta.outputs.version }}"
+          docker buildx imagetools inspect "$ref"
+          digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)
+          {
+            echo "### ankusdrive-heavy (linux/amd64 + linux/arm64)"
+            echo "Pin in heavy-solves.yml: \`$IMAGE@$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "PIN $IMAGE@$digest"

@@ -49,6 +49,10 @@
 set -euo pipefail
 
 JOBS="${JOBS:-8}"
+# arm64 only: the c++OPT CPU flag for the synthesized linuxArm64Gcc rules. -mcpu=native
+# is right for a box that runs what it builds (the Multipass VM, #276); a published
+# image must not bake in the build host's CPU, so the image passes -march=armv8-a (#363).
+OF7_ARM64_CPU_FLAG="${OF7_ARM64_CPU_FLAG:--mcpu=native}"
 PREFIX="${PREFIX:-$HOME/opt}"
 OF7_VERSION="${OF7_VERSION:-7}"
 OF7_DIR="$HOME/OpenFOAM/OpenFOAM-${OF7_VERSION}"
@@ -80,7 +84,7 @@ arm64_enable_of7() {
     sed -i 's/ -m64//g' "${rules}/linuxArm64Gcc/c" "${rules}/linuxArm64Gcc/c++"
     sed -i 's/^cc          = gcc$/cc          = gcc-11/' "${rules}/linuxArm64Gcc/c"
     sed -i 's/^CC          = g++ /CC          = g++-11 /' "${rules}/linuxArm64Gcc/c++"
-    sed -i 's/^c++OPT      = -O3$/c++OPT      = -O3 -mcpu=native/' \
+    sed -i "s/^c++OPT      = -O3\$/c++OPT      = -O3 ${OF7_ARM64_CPU_FLAG}/" \
       "${rules}/linuxArm64Gcc/c++Opt"
   fi
   local settings="${OF7_DIR}/etc/config.sh/settings"

@@ -15,6 +15,8 @@
 #   1. no legacy DRIFTPIN_* vars in the environment (renamed in 0.5, #295)
 #   2. freecadcmd resolves to an executable file
 #   3. every solver in REQUIRED resolves with status ok (not absent, not unwired),
+#      except those this platform's image explicitly excludes (ANKUSDRIVE_HEAVY_EXCLUSIONS,
+#      #363) — which are reported, and fail if they turn out to resolve after all;
 #      dedicated-interpreter solvers (bempp, openems, kraken) probed in that interpreter
 #   4. the four-part FSI stack resolves (fsi_stack_status().ok)
 #   5. openInjMoldSim and its OpenFOAM-7 bashrc resolve
@@ -89,6 +91,25 @@ REQUIRED = (
     "bempp", "calculix", "elmer", "kraken", "openems", "openfoam", "optiland",
     "precice", "prusaslicer", "pybullet", "rayoptics", "topopt", "yade",
 )
+# Per-platform exclusions (#363): the image lists, one "<solver><TAB><reason>" per line,
+# what THIS architecture deliberately lacks (e.g. Elmer on arm64 — no build exists). An
+# excluded solver is reported, not failed; an exclusion for an unknown solver, or for
+# one that DOES resolve, fails as stale — so the list can never quietly widen.
+EXCLUDED = {}
+excl_file = os.environ.get("ANKUSDRIVE_HEAVY_EXCLUSIONS")
+if excl_file:
+    try:
+        with open(excl_file, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip() and not line.startswith("#"):
+                    name, _, reason = line.rstrip("\n").partition("\t")
+                    EXCLUDED[name.strip()] = reason.strip() or "no reason given"
+    except OSError as e:
+        fail(f"ANKUSDRIVE_HEAVY_EXCLUSIONS={excl_file!r} is set but unreadable: {e}")
+for name in EXCLUDED:
+    if name not in REQUIRED:
+        fail(f"exclusion for {name!r}, which is not a required heavy solver — stale entry")
+
 print("\n== Solvers ==")
 caps = solvers.capabilities()["solvers"]
 for name in REQUIRED:
@@ -98,6 +119,13 @@ for name in REQUIRED:
         continue
     status = info.get("status", "ok" if info["available"] else "absent")
     where = info.get("path") or info.get("module") or info.get("found_at") or ""
+    if name in EXCLUDED:
+        if status == "ok" and info["available"]:
+            fail(f"{name}: excluded ({EXCLUDED[name]}) but it resolves at {where} — "
+                 "remove the stale exclusion so it is tested")
+        else:
+            print(f"  excl  {name:11s} {EXCLUDED[name]}")
+        continue
     if status == "ok" and info["available"]:
         ok(f"{name:11s} {where}")
     elif status == "unwired":
