@@ -61,10 +61,24 @@ from ankusdrive import client, solvers  # noqa: E402  (after the path insert)
 
 print("\n== FreeCAD ==")
 fc = client.FREECADCMD
-if os.path.isfile(fc) and os.access(fc, os.X_OK):
-    ok(f"freecadcmd -> {fc}")
-else:
+if not (os.path.isfile(fc) and os.access(fc, os.X_OK)):
     fail(f"freecadcmd does not resolve to an executable (got {fc!r}) — set ANKUSDRIVE_FREECADCMD")
+else:
+    ok(f"freecadcmd -> {fc}")
+    # export_drawing's PDF leg runs in FreeCAD's BUNDLED Python; without svglib +
+    # reportlab there, test_worker SKIPs it (#340). Probe that interpreter, not this one.
+    import subprocess  # noqa: E402
+    fc_py = os.path.join(os.path.dirname(os.path.realpath(fc)), "python")
+    probe = "import svglib, reportlab"
+    if os.path.isfile(fc_py):
+        r = subprocess.run([fc_py, "-c", probe], capture_output=True, timeout=60)
+        if r.returncode == 0:
+            ok(f"svglib + reportlab importable in {fc_py} (drawing PDF export)")
+        else:
+            fail(f"svglib/reportlab not importable in FreeCAD's Python ({fc_py}) — "
+                 "export_drawing's PDF test would SKIP; pip install 'svglib<1.6' reportlab there")
+    else:
+        fail(f"no bundled python beside {os.path.realpath(fc)} to probe for svglib/reportlab")
 
 # Every solver the Linux heavy lane runs live. Adding a heavy family means adding
 # its solver here, or its live tests can go absent without anything turning red.
