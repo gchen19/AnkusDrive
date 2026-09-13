@@ -66,6 +66,9 @@ on:
       - "tests/test_warpage.py"
       - "tests/test_molding_fill.py"
       - "scripts/ci-linux-preflight.sh"
+      - "scripts/ci-container-preflight.sh"
+      - "tests/test_container_substrate.py"
+      - "tests/test_wind_tunnel.py"
       - ".github/workflows/heavy-solves.yml"
   workflow_dispatch:
     inputs:
@@ -172,6 +175,95 @@ jobs:
 
       - name: Run full suite WITH live external-solver solves
         run: bash scripts/ci-heavy-docker.sh bash tests/run_all.sh
+
+  heavy-solves-container:
+    name: Container-substrate regressions (hosted Linux, solvers in a sidecar)
+    # Lane B of #341 (#362). The RELAY half of what the macOS VM lane verifies, with real
+    # solves: the test process runs on the runner HOST with ANKUSDRIVE_SUBSTRATE=container
+    # (#361), and every OpenFOAM-backed solve crosses `docker exec` into a sidecar built
+    # from the same pinned image — opaque in-container paths, the case dir at the same
+    # absolute path, no stdin, pidfile stop. The host has FreeCAD but deliberately NO
+    # OpenFOAM, so a solve that bypassed the relay fails instead of passing; the
+    # preflight asserts that, and every other way this lane could pass while proving
+    # nothing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    env:
+      RUN_HEAVY_SOLVES: "1"
+      ANKUSDRIVE_SUBSTRATE: container
+      # keep in lockstep with heavy-solves-hosted's pin
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:f86cca6b3491ebb995bfde7e91b303921ad76442ad02b794520e6bcfa3f81d8b  # sha-0c4567f
+    defaults:
+      run:
+        shell: bash -el {0}   # login shell so the conda env stays activated
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The HOST: FreeCAD + the driver deps, exactly test.yml's provisioning — which
+      # carries no OpenFOAM, as this lane requires.
+      - name: Set up Miniforge (conda-forge)
+        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: ankusdrive
+          python-version: "3.11"
+
+      - name: Install host FreeCAD 1.1 + CalculiX + suite deps
+        run: |
+          conda install -y "freecad>=1.1,<1.2" calculix
+          python -m pip install -e .
+          echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
+
+      # The SIDECAR: long-running, the host scratch bind-mounted at the same path, and
+      # the runner's uid so container-written case files stay deletable by the host.
+      # Only the SUBSTRATE solvers' in-container paths cross to the host env — the
+      # image's other ANKUSDRIVE_* values (YADE, Bempp, FreeCAD, ...) name container
+      # paths the host must never try to run.
+      - name: Start the solver container
+        run: |
+          scratch="$RUNNER_TEMP/scratch"
+          mkdir -p "$scratch"
+          echo "TMPDIR=$scratch" >> "$GITHUB_ENV"
+          docker pull "$HEAVY_IMAGE"
+          docker run -d --name ankusdrive-solvers --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp -v "$scratch:$scratch" "$HEAVY_IMAGE" sleep infinity
+          docker exec ankusdrive-solvers env \
+            | grep -E '^ANKUSDRIVE_(OPENFOAM_PATH|OPENFOAM_BASHRC|FSI_OPENFOAM_BASHRC|CCX_PRECICE|PRECICE_LIB|OPENFOAM_ADAPTER_LIB|OPENINJMOLDSIM|OPENINJMOLDSIM_BASHRC)=' \
+            | tee -a "$GITHUB_ENV"
+
+      - name: Preflight — the relay is real
+        run: bash scripts/ci-container-preflight.sh
+
+      # The macOS VM lane's files, plus the substrate contracts. run_macos_heavy.sh is
+      # just the "run every file, fail if any did" loop here; its macOS preflight is
+      # skipped because the container preflight above already ran.
+      - name: Live solves through the container substrate
+        env:
+          ANKUSDRIVE_SKIP_PREFLIGHT: "1"
+        run: >-
+          bash tests/run_macos_heavy.sh
+          tests/test_container_substrate.py tests/test_fsi.py tests/test_openfoam.py
+          tests/test_meshbridge.py tests/test_wind_tunnel.py tests/test_molding_fill.py
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs --tail 200 ankusdrive-solvers || true
 
   heavy-solves-macos:
     name: macOS substrate regressions — SU2/Rosetta + FSI/Multipass (self-hosted)

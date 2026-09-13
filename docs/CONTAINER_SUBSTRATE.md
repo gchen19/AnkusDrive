@@ -42,9 +42,14 @@ use:
 2. Create the long-running container, with the scratch mounted at the same path:
 
    ```bash
-   docker run -d --name ankusdrive-solvers -v "$TMPDIR:$TMPDIR" \
+   docker run -d --name ankusdrive-solvers \
+     --user "$(id -u):$(id -g)" -e HOME=/tmp \
+     -v "$TMPDIR:$TMPDIR" \
      ghcr.io/gchen19/ankusdrive-heavy sleep infinity
    ```
+
+   `--user` makes the solvers run as you. Without it, a native Linux engine writes
+   every case file as root, and AnkusDrive can't clean up its own scratch.
 
    On macOS, Docker Desktop shares `/private` and `/var/folders` (where `$TMPDIR`
    lives) by default. With another engine, make sure that path is shared into its VM.
