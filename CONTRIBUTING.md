@@ -202,6 +202,17 @@ For the maintainer, recorded here so it is not folklore:
    release page is a copy of it, not a second draft. The run titles it `X.Y.Z` — add
    the descriptive half by hand. A release you create before the run finishes keeps
    its notes; the run only attaches the bundle.
+5. Publish to Smithery (`ankusdrive/ankusdrive`), by hand — it needs a logged-in
+   Smithery CLI. Until Smithery accepts MCPB `server.type: "uv"`
+   ([smithery-ai/cli#801](https://github.com/smithery-ai/cli/issues/801)), publish a
+   derived copy of the release bundle, not the bundle itself:
+   ```
+   gh release download vX.Y.Z -p 'ankusdrive-X.Y.Z.mcpb' -D dist
+   scripts/smithery_mcpb.py dist/ankusdrive-X.Y.Z.mcpb
+   npx --yes @smithery/cli@4.11.1 mcp publish dist/ankusdrive-X.Y.Z-smithery.mcpb -n ankusdrive/ankusdrive
+   ```
+   The script explains the two fields it changes and why; when #801 ships, delete it
+   and `tests/test_smithery_mcpb.py` and publish the release bundle directly.
 
 ## Code of conduct
 

@@ -26,9 +26,17 @@
 #
 # The bundle source is mcpb/ (manifest.json, a pinned pyproject.toml, and a
 # launcher shim); scripts/build-mcpb.sh packs it, publish.yml attaches
-# ankusdrive-<version>.mcpb to each GitHub release, and the listing is
+# ankusdrive-<version>.mcpb to each GitHub release, and the listing —
+# https://smithery.ai/servers/ankusdrive/ankusdrive, first published 0.5.3 — is
 #
-#   smithery mcp publish ./ankusdrive-<version>.mcpb -n <namespace>/ankusdrive
+#   scripts/smithery_mcpb.py ankusdrive-<version>.mcpb
+#   smithery mcp publish ./ankusdrive-<version>-smithery.mcpb -n ankusdrive/ankusdrive
+#
+# The derived copy is a STOPGAP: Smithery does not accept MCPB server.type "uv"
+# yet (smithery-ai/cli#801), and forwards manifest `tools` as a ServerCard that
+# needs inputSchema (#805). The script relabels uv -> python and drops the sample
+# tools; mcp_config still launches via `uv run`, so Smithery users need uv on PATH.
+# Publish the release bundle directly once #801 ships (CONTRIBUTING, Releasing 5).
 #
 # This file stays as the declarative record of what the bundle launches and
 # which config it collects, and tests/test_mcpb_bundle.py holds the two to one
