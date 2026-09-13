@@ -30,6 +30,8 @@ ARG UBUNTU=ubuntu:24.04
 # ---------------------------------------------------------------------------------
 FROM ${UBUNTU} AS system
 ARG DEBIAN_FRONTEND=noninteractive
+# Set by BuildKit per platform (amd64 | arm64). The image is multi-arch (#363).
+ARG TARGETARCH
 # OpenFOAM's etc/bashrc derives the user dir from $USER, which docker leaves unset.
 ENV USER=root LANG=C.UTF-8
 RUN apt-get update \
@@ -38,11 +40,14 @@ RUN apt-get update \
       python3 python3-venv python3-dev python3-pip \
       build-essential cmake gfortran pkg-config ccache flex bison \
  && curl -fsSL https://dl.openfoam.com/add-debian-repo.sh | bash \
- && add-apt-repository -y ppa:elmer-csc-ubuntu/elmer-csc-ppa \
+ && if [ "$TARGETARCH" = "amd64" ]; then add-apt-repository -y ppa:elmer-csc-ubuntu/elmer-csc-ppa; fi \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       openfoam2512-dev \
-      elmerfem-csc calculix-ccx prusa-slicer \
+      calculix-ccx prusa-slicer \
+      # Elmer: amd64 only (the CSC PPA publishes no arm64 build, noble ships none).
+      # arm64 instead pins gcc-11 for OpenFOAM-7's synthesized linuxArm64 rules (#276).
+      $([ "$TARGETARCH" = "amd64" ] && echo elmerfem-csc || echo gcc-11 g++-11) \
       # YADE (the dem_gpl list in install-solvers.sh)
       libboost-all-dev libgmp-dev libmpfr-dev libcgal-dev libeigen3-dev \
       python3-numpy python3-mpmath libvtk9-dev libgts-dev libmetis-dev \
@@ -57,6 +62,13 @@ RUN apt-get update \
       libopenmpi-dev openmpi-bin \
       # extracted FreeCAD AppImage runtime (headless freecadcmd)
       libgl1 libglib2.0-0t64 libfontconfig1 libxkbcommon0 libdbus-1-3
+# Solvers this ARCH deliberately lacks, one "<solver><TAB><reason>" per line. The
+# preflight reads it (ANKUSDRIVE_HEAVY_EXCLUSIONS): a listed solver is reported as
+# excluded instead of failing, an unlisted one must resolve, and a listed one that
+# DOES resolve fails as a stale exclusion — so no gap is ever a silent SKIP.
+RUN mkdir -p /etc/ankusdrive-heavy \
+ && if [ "$TARGETARCH" = "amd64" ]; then : > /etc/ankusdrive-heavy/exclusions; \
+    else printf 'elmer\tno %s build: the Elmer CSC PPA publishes amd64 only and Ubuntu noble ships no elmer package (#363)\n' "$TARGETARCH" > /etc/ankusdrive-heavy/exclusions; fi
 WORKDIR /src
 
 # ---------------------------------------------------------------------------------
@@ -133,8 +145,11 @@ ARG OF7_SHA=7458f48c2fb109e8dede5d9aec5ecbb904dc1b18
 ARG OIMS_TAG=v7.2
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 COPY tools/build_openinjmoldsim.sh /src/ankusdrive/tools/build_openinjmoldsim.sh
+# OF7_ARM64_CPU_FLAG: never -mcpu=native in a published image — it would bake in the
+# build runner's CPU and SIGILL elsewhere (an Apple-Silicon Docker host, another cloud).
 RUN mkdir -p /opt/of7 \
  && HOME=/opt/of7 PREFIX=/opt/of7/opt JOBS="$JOBS" OIMS_TAG="$OIMS_TAG" \
+    OF7_ARM64_CPU_FLAG=-march=armv8-a \
       bash /src/ankusdrive/tools/build_openinjmoldsim.sh --build \
  && got="$(git -C /opt/of7/OpenFOAM/OpenFOAM-7 rev-parse HEAD)" \
  && { [ "$got" = "$OF7_SHA" ] || { echo "OpenFOAM-7 version-7 moved: $got != pinned $OF7_SHA" >&2; exit 1; }; }
@@ -142,8 +157,9 @@ RUN set -e; export HOME=/opt/of7 \
  ; source /opt/of7/OpenFOAM/OpenFOAM-7/etc/bashrc || true \
  ; user_dir="/opt/of7/OpenFOAM/root-7/platforms/$WM_OPTIONS" \
  ; site_dir="$WM_PROJECT_INST_DIR/site/7/platforms/$WM_OPTIONS" \
- ; test "$site_dir" = /opt/of7/OpenFOAM/site/7/platforms/linux64GccDPInt32Opt \
+ ; case "$site_dir" in /opt/of7/OpenFOAM/site/7/platforms/*Opt) ;; *) echo "unexpected site dir $site_dir" >&2; exit 1 ;; esac \
  ; mkdir -p "$site_dir/bin" "$site_dir/lib" \
+ ; ln -sfn "$WM_OPTIONS" /opt/of7/OpenFOAM/site/7/platforms/current \
  ; cp -a "$user_dir/bin/." "$site_dir/bin/" \
  ; cp -a "$user_dir/lib/." "$site_dir/lib/" \
  ; test -x "$site_dir/bin/openInjMoldSim" \
@@ -173,7 +189,14 @@ RUN python3 -m venv /opt/venv \
  && pip install -q --upgrade pip \
  && pip install -q "/src/ankusdrive[mbd,topology,optics,fluids,optics_gpl]" "ruff==0.15.15" build
 
-# Bempp (dedicated venv — meshio>=5 clashes with solidspy's meshio==3)
+# Bempp (dedicated venv — meshio>=5 clashes with solidspy's meshio==3). Its shape
+# generators shell out to a gmsh CLI, which the pip wheel supplies — except on Linux
+# aarch64, where PyPI has no gmsh wheel, so arm64 takes the CLI from apt (#363).
+# (Here in `final`, not `system`, so adding it did not invalidate every stage's cache.)
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends gmsh && gmsh --version; \
+    fi
 RUN BEMPP_VENV=/opt/venv-bempp bash /src/ankusdrive/scripts/install-solvers.sh acoustics_bem
 
 # FreeCAD from the pinned AppImage, live-verified (worker ping + a CalculiX solve)
@@ -187,6 +210,14 @@ RUN cd /src/ankusdrive && PY=/opt/venv/bin/python3 PREFIX=/opt/freecad BINDIR=/u
 RUN /opt/freecad/squashfs-root/usr/bin/python -m pip install -q "svglib<1.6" reportlab \
  && /opt/freecad/squashfs-root/usr/bin/python -c "import svglib, reportlab"
 
+# Arch-neutral path to the ESI build (linux64… on amd64, linuxARM64… on arm64), so the
+# ANKUSDRIVE_* values below — which lanes and users copy out of the image — are the
+# same on every platform.
+RUN set -e; plat=$(ls -d /usr/lib/openfoam/openfoam2512/platforms/*Opt | head -1) \
+ ; test -x "$plat/bin/simpleFoam" \
+ ; ln -sfn "$(basename "$plat")" /usr/lib/openfoam/openfoam2512/platforms/current \
+ ; test -x /opt/of7/OpenFOAM/site/7/platforms/current/bin/openInjMoldSim
+
 # Absolute wiring. Discovery would find most of these under $HOME, but a GitHub
 # container job runs with HOME=/github/home, so nothing may depend on it.
 ENV ANKUSDRIVE_FREECADCMD=/opt/freecad/squashfs-root/usr/bin/freecadcmd \
@@ -194,7 +225,7 @@ ENV ANKUSDRIVE_FREECADCMD=/opt/freecad/squashfs-root/usr/bin/freecadcmd \
     ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc \
     # is_available("openfoam") — what test_openfoam gates on — needs the BINARY;
     # the apt install puts it on PATH only after the bashrc is sourced
-    ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linux64GccDPInt32Opt/bin/simpleFoam \
+    ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/current/bin/simpleFoam \
     ANKUSDRIVE_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc \
     ANKUSDRIVE_CCX_PRECICE=/opt/fsi/calculix-adapter/bin/ccx_preCICE \
     ANKUSDRIVE_PRECICE_LIB=/opt/fsi/precice/lib \
@@ -202,9 +233,10 @@ ENV ANKUSDRIVE_FREECADCMD=/opt/freecad/squashfs-root/usr/bin/freecadcmd \
     ANKUSDRIVE_YADE=/opt/yade/bin/yade \
     ANKUSDRIVE_OPENEMS_PYTHON=/opt/venv-openems/bin/python \
     ANKUSDRIVE_BEMPP_PYTHON=/opt/venv-bempp/bin/python \
-    ANKUSDRIVE_OPENINJMOLDSIM=/opt/of7/OpenFOAM/site/7/platforms/linux64GccDPInt32Opt/bin/openInjMoldSim \
+    ANKUSDRIVE_OPENINJMOLDSIM=/opt/of7/OpenFOAM/site/7/platforms/current/bin/openInjMoldSim \
     ANKUSDRIVE_OPENINJMOLDSIM_BASHRC=/opt/of7/OpenFOAM/OpenFOAM-7/etc/bashrc \
-    LD_LIBRARY_PATH=/opt/openEMS/lib
+    LD_LIBRARY_PATH=/opt/openEMS/lib \
+    ANKUSDRIVE_HEAVY_EXCLUSIONS=/etc/ankusdrive-heavy/exclusions
 
 COPY docker/heavy-solvers/LICENSES.md /licenses/README.md
 
@@ -214,7 +246,7 @@ RUN cd /src/ankusdrive && bash scripts/ci-linux-preflight.sh \
  && pip uninstall -q -y ankusdrive
 
 LABEL org.opencontainers.image.title="ankusdrive-heavy" \
-      org.opencontainers.image.description="AnkusDrive heavy-solver CI image (OpenFOAM, Elmer, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp, FreeCAD)" \
+      org.opencontainers.image.description="AnkusDrive heavy-solver CI image, amd64 + arm64 (OpenFOAM, Elmer on amd64, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp, FreeCAD)" \
       org.opencontainers.image.source="https://github.com/gchen19/AnkusDrive" \
       org.opencontainers.image.licenses="See /licenses/README.md (bundles GPL-3.0, LGPL-3.0 and other components)"
 WORKDIR /

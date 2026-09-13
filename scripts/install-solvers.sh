@@ -370,10 +370,19 @@ build_bempp() {
   warn "meshio==3 in the shared venv. Installing it in a DEDICATED venv to keep"
   warn "topology optimisation working; AnkusDrive runs it out-of-process."
   local venv="${BEMPP_VENV:-$REPO_ROOT/.venv-bempp}"
-  log "dedicated venv -> $venv  (bempp-cl + gmsh + meshio>=5)"
+  log "dedicated venv -> $venv  (bempp-cl + meshio>=5, and gmsh: pip wheel or the CLI on PATH)"
   python3 -m venv "$venv" || die "venv create failed"
   "$venv/bin/pip" install --quiet --upgrade pip || die "pip upgrade failed"
-  "$venv/bin/pip" install --quiet bempp-cl gmsh "meshio>=5" || die "bempp-cl install failed"
+  "$venv/bin/pip" install --quiet bempp-cl "meshio>=5" || die "bempp-cl install failed"
+  # Bempp's shape generators shell out to a `gmsh` CLI. The pip wheel ships one — but
+  # PyPI publishes NO Linux aarch64 gmsh wheel (#363), so on those hosts use a gmsh
+  # binary already on PATH (Ubuntu/Debian: apt install gmsh). bempp_runner.py only
+  # prepends the venv's bin/, so a system gmsh is found just the same.
+  if ! "$venv/bin/pip" install --quiet gmsh; then
+    command -v gmsh >/dev/null 2>&1 \
+      || die "no gmsh wheel for $(uname -s)/$(uname -m) and no gmsh on PATH — install the CLI (apt install gmsh), then re-run"
+    warn "no pip gmsh wheel for this platform — using the gmsh CLI on PATH: $(command -v gmsh)"
+  fi
   log "smoke-test the engine (sphere mesh + Helmholtz single-layer)"
   PATH="$venv/bin:$PATH" "$venv/bin/python" - <<'PYEOF' || die "bempp smoke-test failed"
 import bempp_cl.api as bem
