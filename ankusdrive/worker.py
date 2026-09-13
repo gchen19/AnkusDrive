@@ -15234,54 +15234,19 @@ _OPTICS_GPL_PY = None  # cache: None=unprobed, False=absent, str=python exe that
 def _optics_gpl_python():
     """The Python interpreter to run the GPL non-sequential engine under — the one
     whose environment can import KrakenOS, NOT this worker's interpreter (which is
-    freecadcmd). Resolution order: ANKUSDRIVE_OPTICS_GPL_PYTHON override → the venv that
-    owns KrakenOS, derived from importlib find_spec's origin (find_spec does NOT import
-    the module, so the copyleft boundary holds) → a repo-local .venv → sys.executable.
-    Each candidate is verified by probing `find_spec('KrakenOS')` in a child, so a hit
-    is guaranteed runnable. Cached. Returns the exe path, or None when nothing works."""
+    freecadcmd); override ANKUSDRIVE_OPTICS_GPL_PYTHON.
+    Resolved by solvers.solver_python("kraken") — the same resolver discovery
+    (solve_capabilities / doctor) reports from, so the two cannot disagree (issue
+    #351): the override, then the venv owning the module, then the dedicated venv
+    beside the repo, each probed with find_spec IN that interpreter (never an
+    import, so the copyleft boundary holds), then this interpreter. Cached.
+    Returns the exe path, or None."""
     global _OPTICS_GPL_PY
     if _OPTICS_GPL_PY is not None:
         return _OPTICS_GPL_PY or None
-    import importlib.util
-    import subprocess
-
-    candidates = []
-    from ankusdrive import config as _config
-    if env := _config.get("ANKUSDRIVE_OPTICS_GPL_PYTHON"):
-        candidates.append(env)
-    try:
-        spec = importlib.util.find_spec("KrakenOS")
-    except Exception:
-        spec = None
-    if spec and spec.origin:                          # ascend toward the venv root
-        d = os.path.dirname(spec.origin)
-        for _ in range(5):
-            d = os.path.dirname(d)
-            candidates += [os.path.join(d, "bin", "python3"),
-                           os.path.join(d, "bin", "python"),
-                           os.path.join(d, "Scripts", "python.exe")]
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidates += [os.path.join(repo, ".venv", "bin", "python3"),
-                   os.path.join(repo, ".venv", "bin", "python"),
-                   os.path.join(repo, ".venv", "Scripts", "python.exe"),
-                   sys.executable]
-
-    seen = set()
-    probe = ("import importlib.util,sys;"
-             "sys.exit(0 if importlib.util.find_spec('KrakenOS') else 1)")
-    for c in candidates:
-        if not c or c in seen or not os.path.isfile(c):
-            continue
-        seen.add(c)
-        try:
-            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
-        except Exception:
-            continue
-        if r.returncode == 0:
-            _OPTICS_GPL_PY = c
-            return c
-    _OPTICS_GPL_PY = False
-    return None
+    from ankusdrive import solvers as _solvers
+    _OPTICS_GPL_PY = _solvers.solver_python("kraken") or False
+    return _OPTICS_GPL_PY or None
 
 
 def _run_optics_gpl(problem, python_exe, timeout=120):
@@ -15395,58 +15360,20 @@ _EM_FULLWAVE_GPL_PY = None  # cache: None=unprobed, False=absent, str=python exe
 
 def _em_fullwave_gpl_python():
     """The Python interpreter to run the GPL full-wave engine (openEMS) under — the
-    one whose environment can import openEMS/CSXCAD, NOT this worker's interpreter.
-    Resolution order mirrors _optics_gpl_python: ANKUSDRIVE_OPENEMS_PYTHON override →
-    the venv that owns openEMS (from find_spec's origin; find_spec does NOT import
-    the module, so the copyleft boundary holds) → a repo-local .venv-openems →
-    sys.executable. Each candidate is verified by probing find_spec('openEMS') in a
-    child, so a hit is guaranteed runnable. Cached. Returns the exe path, or None."""
+    one whose environment can import openEMS/CSXCAD, NOT this worker's interpreter;
+    override ANKUSDRIVE_OPENEMS_PYTHON.
+    Resolved by solvers.solver_python("openems") — the same resolver discovery
+    (solve_capabilities / doctor) reports from, so the two cannot disagree (issue
+    #351): the override, then the venv owning the module, then the dedicated venv
+    beside the repo, each probed with find_spec IN that interpreter (never an
+    import, so the copyleft boundary holds), then this interpreter. Cached.
+    Returns the exe path, or None."""
     global _EM_FULLWAVE_GPL_PY
     if _EM_FULLWAVE_GPL_PY is not None:
         return _EM_FULLWAVE_GPL_PY or None
-    import importlib.util
-    import subprocess
-
-    candidates = []
-    from ankusdrive import config as _config
-    if env := _config.get("ANKUSDRIVE_OPENEMS_PYTHON"):
-        candidates.append(env)
-    try:
-        spec = importlib.util.find_spec("openEMS")
-    except Exception:
-        spec = None
-    if spec and spec.origin:                          # ascend toward the venv root
-        d = os.path.dirname(spec.origin)
-        for _ in range(5):
-            d = os.path.dirname(d)
-            candidates += [os.path.join(d, "bin", "python3"),
-                           os.path.join(d, "bin", "python"),
-                           os.path.join(d, "Scripts", "python.exe")]
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    # the dedicated openEMS venv lives beside the repo or one level up (next to it)
-    for base in (repo, os.path.dirname(repo)):
-        candidates += [os.path.join(base, ".venv-openems", "bin", "python3"),
-                       os.path.join(base, ".venv-openems", "bin", "python"),
-                       os.path.join(base, ".venv-openems", "Scripts", "python.exe")]
-    candidates.append(sys.executable)
-
-    seen = set()
-    probe = ("import importlib.util,sys;"
-             "sys.exit(0 if importlib.util.find_spec('openEMS') and "
-             "importlib.util.find_spec('CSXCAD') else 1)")
-    for c in candidates:
-        if not c or c in seen or not os.path.isfile(c):
-            continue
-        seen.add(c)
-        try:
-            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
-        except Exception:
-            continue
-        if r.returncode == 0:
-            _EM_FULLWAVE_GPL_PY = c
-            return c
-    _EM_FULLWAVE_GPL_PY = False
-    return None
+    from ankusdrive import solvers as _solvers
+    _EM_FULLWAVE_GPL_PY = _solvers.solver_python("openems") or False
+    return _EM_FULLWAVE_GPL_PY or None
 
 
 def _run_em_fullwave_gpl(problem, python_exe, timeout=600):
@@ -15866,57 +15793,20 @@ _BEMPP_PY = None  # cache: None=unprobed, False=absent, str=python exe that impo
 def _bempp_python():
     """The Python interpreter to run the Bempp BEM engine under — the one whose
     environment can import bempp_cl (a dedicated .venv-bempp with meshio>=5), NOT
-    this worker's interpreter (which pins meshio==3 for solidspy). Resolution order
-    mirrors _optics_gpl_python: ANKUSDRIVE_BEMPP_PYTHON override → the venv that owns
-    bempp_cl (from find_spec's origin; find_spec does NOT import it) → a repo-local
-    .venv-bempp beside the repo or one level up → sys.executable. Each candidate is
-    probed with find_spec('bempp_cl') in a child, so a hit is guaranteed runnable.
-    Cached. Returns the exe path, or None."""
+    this worker's interpreter (which pins meshio==3 for solidspy); override
+    ANKUSDRIVE_BEMPP_PYTHON.
+    Resolved by solvers.solver_python("bempp") — the same resolver discovery
+    (solve_capabilities / doctor) reports from, so the two cannot disagree (issue
+    #351): the override, then the venv owning the module, then the dedicated venv
+    beside the repo, each probed with find_spec IN that interpreter (never an
+    import, so the copyleft boundary holds), then this interpreter. Cached.
+    Returns the exe path, or None."""
     global _BEMPP_PY
     if _BEMPP_PY is not None:
         return _BEMPP_PY or None
-    import importlib.util
-    import subprocess
-
-    candidates = []
-    from ankusdrive import config as _config
-    if env := _config.get("ANKUSDRIVE_BEMPP_PYTHON"):
-        candidates.append(env)
-    try:
-        spec = importlib.util.find_spec("bempp_cl")
-    except Exception:
-        spec = None
-    if spec and spec.origin:                          # ascend toward the venv root
-        d = os.path.dirname(spec.origin)
-        for _ in range(5):
-            d = os.path.dirname(d)
-            candidates += [os.path.join(d, "bin", "python3"),
-                           os.path.join(d, "bin", "python"),
-                           os.path.join(d, "Scripts", "python.exe")]
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    # the dedicated bempp venv lives beside the repo or one level up (next to it)
-    for base in (repo, os.path.dirname(repo)):
-        candidates += [os.path.join(base, ".venv-bempp", "bin", "python3"),
-                       os.path.join(base, ".venv-bempp", "bin", "python"),
-                       os.path.join(base, ".venv-bempp", "Scripts", "python.exe")]
-    candidates.append(sys.executable)
-
-    seen = set()
-    probe = ("import importlib.util,sys;"
-             "sys.exit(0 if importlib.util.find_spec('bempp_cl') else 1)")
-    for c in candidates:
-        if not c or c in seen or not os.path.isfile(c):
-            continue
-        seen.add(c)
-        try:
-            r = subprocess.run([c, "-c", probe], capture_output=True, timeout=30)
-        except Exception:
-            continue
-        if r.returncode == 0:
-            _BEMPP_PY = c
-            return c
-    _BEMPP_PY = False
-    return None
+    from ankusdrive import solvers as _solvers
+    _BEMPP_PY = _solvers.solver_python("bempp") or False
+    return _BEMPP_PY or None
 
 
 def _run_bempp(problem, python_exe, timeout=900):

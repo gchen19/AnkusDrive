@@ -61,6 +61,16 @@ that could not reach it. Both land here, with a reproducible FEM mesh behind the
   FreeCAD's; the MCPB launcher announces `mcpb`. A fast-lane test fails any hint
   string that bypasses the routing
   ([#347](https://github.com/gchen19/AnkusDrive/issues/347)).
+- `solve_capabilities`, `setup_status` and `doctor` no longer report openEMS, Bempp
+  and KrakenOS absent on an install where they run. All three run under a dedicated
+  interpreter (`ANKUSDRIVE_OPENEMS_PYTHON` / `_BEMPP_PYTHON` / `_OPTICS_GPL_PYTHON`),
+  but discovery asked whether the module imports in its *own* process, so agents were
+  told the `em_fullwave`, `acoustics_bem` and `optics_nonseq` families could not run.
+  Discovery and the worker now share one resolver, `solvers.solver_python()`: the
+  override, then the venv that owns the module, then the dedicated venv beside the
+  repo, then the current interpreter, each probed with find_spec in that interpreter.
+  An available solver reports that interpreter as `path`
+  ([#351](https://github.com/gchen19/AnkusDrive/issues/351)).
 
 - `fem_mesh` and `fem_cantilever_demo` mesh with serial Gmsh, like the Elmer and
   warpage bridges already did. Gmsh's threaded 3-D Delaunay is nondeterministic, so
