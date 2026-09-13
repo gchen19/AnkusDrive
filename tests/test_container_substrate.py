@@ -224,6 +224,8 @@ def test_container_run_command_mounts_the_scratch_at_the_same_path():
         cmd = solvers.container_run_command()
         assert cmd.startswith("podman run -d --name foam "), cmd
         assert '-v "$TMPDIR:$TMPDIR"' in cmd and "ghcr.io/gchen19/ankusdrive-heavy" in cmd
+        # as the host user, or case files come out root-owned on a native Linux engine
+        assert '--user "$(id -u):$(id -g)"' in cmd and "-e HOME=/tmp" in cmd, cmd
 
 
 # --- opaque trust + host isolation ----------------------------------------------

@@ -880,8 +880,12 @@ def container_state(name: str | None = None) -> str:
 
 def container_run_command() -> str:
     """The one-line command that creates the solver container this substrate expects:
-    detached, the host scratch ($TMPDIR) bind-mounted at the SAME path, kept alive."""
+    detached, the host scratch ($TMPDIR) bind-mounted at the SAME path, kept alive, and
+    running as the HOST user — otherwise every file a solve writes into a case dir is
+    root-owned on a native Linux engine and the host cannot clean it up (#362). HOME
+    points somewhere writable, since that uid has no home inside the image."""
     return (f'{container_engine()} run -d --name {container_name()} '
+            f'--user "$(id -u):$(id -g)" -e HOME=/tmp '
             f'-v "$TMPDIR:$TMPDIR" {_HEAVY_IMAGE} sleep infinity')
 
 
