@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""A stand-in `multipass` CLI for exercising the REAL macOS routing code without a VM
+(issue #364). Hosted Apple-Silicon runners cannot run Multipass (no nested
+virtualization), but most of what the macOS lane checks is host-side: what
+`bash_argv` hands to `multipass exec`, which paths it hands over, what it lets
+cross the relay, and how the host stops or waits on what runs behind it.
+
+This stub runs the `exec` command LOCALLY, but it refuses what a real VM would break
+on, so a regression fails here instead of only on a real Mac:
+
+  * stdin attached (not /dev/null)   -> exit 97. `multipass exec` forwards stdin into
+    the VM, so an inherited stdin lets the relay eat the caller's next JSON-RPC
+    request (#223).
+  * `cd <dir>` outside the mounts     -> exit 98. The VM sees ONLY mounted host dirs,
+    at their literal path; a case dir handed over as a realpath (/private/var/…) when
+    the mount is /var/… does not exist in the VM.
+  * host environment                 -> NOT carried. The command runs with a minimal
+    env in a "VM home", like a real VM; everything must cross in the script text.
+  * relay isolation                  -> the command runs in its own session, so
+    killing this relay does not kill the solver behind it (hence FSI's pidfile sweep).
+
+Subcommands: exec <inst> -- <cmd…> · info <inst> --format json · mount … · version
+Environment (all optional):
+  MULTIPASS_SHIM_STATE   Running (default) | Stopped | Suspended | Starting | absent
+  MULTIPASS_SHIM_MOUNTS  os.pathsep-separated host dirs visible in the VM at the same
+                         path (default: $TMPDIR)
+  MULTIPASS_SHIM_HOME    the VM home exec starts in (default: a fresh temp dir)
+  MULTIPASS_SHIM_HANG    "info" -> `info` hangs (a wedged daemon)
+  MULTIPASS_SHIM_LOG     append one JSON line per invocation
+"""
+import json
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+
+
+def _log(record):
+    path = os.environ.get("MULTIPASS_SHIM_LOG")
+    if path:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+
+
+def _stdin_is_devnull():
+    try:
+        s0, dn = os.fstat(0), os.stat(os.devnull)
+    except OSError:
+        return True                       # stdin closed: nothing can be forwarded
+    return (s0.st_rdev, s0.st_ino) == (dn.st_rdev, dn.st_ino)
+
+
+def _mounts():
+    raw = os.environ.get("MULTIPASS_SHIM_MOUNTS") or os.environ.get("TMPDIR", "")
+    return [m.rstrip("/") for m in raw.split(os.pathsep) if m.strip()]
+
+
+def _under(path, mounts):
+    p = path.rstrip("/")
+    return any(p == m or p.startswith(m + "/") for m in mounts)
+
+
+def cmd_info(args):
+    inst = args[0] if args else "openfoam"
+    if os.environ.get("MULTIPASS_SHIM_HANG") == "info":
+        time.sleep(3600)
+    state = os.environ.get("MULTIPASS_SHIM_STATE", "Running")
+    if state == "absent":
+        print(f'info failed: instance "{inst}" does not exist', file=sys.stderr)
+        return 2
+    # the shape `multipass info <inst> --format json` prints (multipass 1.14)
+    print(json.dumps({"errors": [], "info": {inst: {
+        "state": state, "image_release": "24.04 LTS", "ipv4": ["192.168.64.2"],
+        "mounts": {m: {"source_path": m} for m in _mounts()}}}}))
+    return 0
+
+
+def cmd_exec(args):
+    if "--" not in args:
+        print("exec: expected `exec <instance> -- <command>`", file=sys.stderr)
+        return 2
+    cmd = args[args.index("--") + 1:]
+    stdin_ok = _stdin_is_devnull()
+    _log({"sub": "exec", "cmd": cmd, "stdin_devnull": stdin_ok})
+    if not stdin_ok:
+        print("multipass-shim: stdin is attached to `multipass exec`, which forwards it "
+              "into the VM and steals the caller's input (#223) — launch with "
+              "stdin=DEVNULL", file=sys.stderr)
+        return 97
+    if len(cmd) >= 3 and cmd[0] == "bash" and cmd[1] == "-c":
+        body = cmd[2]
+        if body.startswith("cd "):
+            target = shlex.split(body.split(" && ", 1)[0])[1]
+            if not _under(target, _mounts()):
+                print(f"multipass-shim: cd {target!r} — not under a mounted directory "
+                      f"{_mounts()}, so it does not exist in the VM", file=sys.stderr)
+                return 98
+    home = os.environ.get("MULTIPASS_SHIM_HOME") or tempfile.mkdtemp(prefix="vm-home-")
+    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": home, "LANG": "C.UTF-8"}
+    proc = subprocess.Popen(cmd, cwd=home, env=env, stdin=subprocess.DEVNULL,
+                            start_new_session=True)
+    return proc.wait()
+
+
+def main(argv):
+    if not argv:
+        print(__doc__)
+        return 2
+    sub, rest = argv[0], argv[1:]
+    if sub == "exec":
+        return cmd_exec(rest)
+    if sub == "info":
+        return cmd_info(rest)
+    if sub in ("mount", "start"):
+        _log({"sub": sub, "args": rest})
+        return 0
+    if sub == "version":
+        print("multipass   1.14.0-shim\nmultipassd  1.14.0-shim")
+        return 0
+    print(f"multipass-shim: unsupported subcommand {sub!r}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

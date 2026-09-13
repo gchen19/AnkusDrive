@@ -99,6 +99,7 @@ if (Test-Path $ruff) {
 Test-Module 'Windows FreeCAD resolution + doctor (cross-platform discovery, #191/#198)' 'test_windows_support.py'
 Test-Module 'WSL routing for OpenFOAM families (#193)' 'test_wsl_routing.py'
 Test-Module 'Container substrate + substrate selection (#361)' 'test_container_substrate.py'
+Test-Module 'macOS Multipass relay path via stub (#364; self-skips off POSIX)' 'test_macos_relay_shim.py'
 # The MCP half of the first-run path (#279): the server boots over stdio and lists its
 # tools with FreeCAD deliberately unresolved, so "MCP is broken" is distinguishable from
 # "FreeCAD isn't found" - the confusion that ended #279's install.

@@ -216,6 +216,10 @@ echo "== Container substrate + substrate selection (#361; monkeypatched, runs an
 python3 tests/test_container_substrate.py
 
 echo
+echo "== macOS Multipass relay path against a stub multipass (#364; fakes Darwin off-Mac) =="
+python3 tests/test_macos_relay_shim.py
+
+echo
 echo "== Extracted-AppImage FreeCAD: discovery + installer script (#280; no network, no FreeCAD) =="
 python3 tests/test_freecad_appimage.py
 

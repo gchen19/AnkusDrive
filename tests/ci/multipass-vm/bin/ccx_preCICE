@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stub preCICE CalculiX solid participant (issue #364). Emits exactly what
+# fsi_case's parsers read: "time-window N," lines, "Reached end at", and a watch-point
+# log with Displacement columns growing into the flow. A HANG marker simulates a
+# wedged coupled solve.
+[ -f flap.inp ] || { echo "stub ccx_preCICE: no flap.inp in $(pwd)" >&2; exit 1; }
+if [ -e ../HANG ]; then exec sleep 3600; fi
+log=precice-Solid-watchpoint-Flap-Tip.log
+echo "Time Coordinate0 Coordinate1 Displacement0 Displacement1" > "$log"
+echo "0.0 0.0 1.0 0.0 0.0" >> "$log"
+for w in 1 2 3 4; do
+  echo "---[precice]  time-window $w, time 0.0$w of 0.04"
+  echo "0.0$w 0.0 1.0 0.00$w 0.000$w" >> "$log"
+done
+echo "---[precice]  Reached end at: final time-window"
