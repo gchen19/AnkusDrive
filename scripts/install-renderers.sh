@@ -56,7 +56,7 @@
 #                 pinned arm64 DMG copied to /Applications (or ~/Applications).
 #                 Apple Silicon only (5.x has no Intel build). An existing Blender.app
 #                 is kept unless FORCE=1 (which also lets brew replace a non-brew app).
-#   Windows       scripts/install-solvers.ps1 blender (winget, or the pinned zip).
+#   Windows       scripts/install-solvers.ps1 blender (pinned portable zip; winget is 403-blocked upstream).
 # It is ~1 GB on disk and GPL-3.0 (run only as a subprocess), so the no-arg run skips it.
 set -euo pipefail
 

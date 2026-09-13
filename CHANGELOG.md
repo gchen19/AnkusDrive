@@ -40,8 +40,9 @@ separately, so this file is the source and the release page is the copy.
   `ANKUSDRIVE_BLENDER_PATH`), so `render_capabilities`, `setup_status` / `ankusdrive
   doctor` and a fallback render's `suggestion` all hand out the install command.
   Installers: `scripts/install-renderers.sh blender` (Linux tarball / macOS cask or DMG)
-  and `scripts/install-solvers.ps1 blender` (Windows portable zip; `blender-winget`),
-  pinned to 5.2.1 LTS with SHA-256 checks
+  and `scripts/install-solvers.ps1 blender` (Windows portable zip), pinned to 5.2.1 LTS
+  with SHA-256 checks and official mirrors first — `download.blender.org` returns 403 to
+  scripted clients, which also breaks `winget install BlenderFoundation.Blender`
   ([#335](https://github.com/gchen19/AnkusDrive/issues/335)).
 - An MCPB bundle, `ankusdrive-<version>.mcpb`, attached to every GitHub release — the
   one-click Claude Desktop install and the artifact the Smithery listing distributes.
