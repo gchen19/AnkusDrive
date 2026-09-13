@@ -21,7 +21,15 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
-## [Unreleased]
+## [0.5.3] — 2026-09-12
+
+The release that makes AnkusDrive a one-click install. Every GitHub release now
+carries an `.mcpb` bundle for Claude Desktop, the same file the Smithery listing
+distributes, and it was verified end to end in Claude Desktop — including on a machine
+with no `uv`, where the host downloads its own. Installing that way exposed a quieter
+defect: the install hints assumed a plain venv, and every managed install (the
+extension, `uvx` from the MCP Registry, pipx, `uv tool`) was being told to run a `pip`
+that could not reach it. Both land here, with a reproducible FEM mesh behind them.
 
 ### Added
 
@@ -53,6 +61,23 @@ separately, so this file is the source and the release page is the copy.
   FreeCAD's; the MCPB launcher announces `mcpb`. A fast-lane test fails any hint
   string that bypasses the routing
   ([#347](https://github.com/gchen19/AnkusDrive/issues/347)).
+- `solve_capabilities`, `setup_status` and `doctor` no longer report openEMS, Bempp
+  and KrakenOS absent on an install where they run. All three run under a dedicated
+  interpreter (`ANKUSDRIVE_OPENEMS_PYTHON` / `_BEMPP_PYTHON` / `_OPTICS_GPL_PYTHON`),
+  but discovery asked whether the module imports in its *own* process, so agents were
+  told the `em_fullwave`, `acoustics_bem` and `optics_nonseq` families could not run.
+  Discovery and the worker now share one resolver, `solvers.solver_python()`: the
+  override, then the venv that owns the module, then the dedicated venv beside the
+  repo, then the current interpreter, each probed with find_spec in that interpreter.
+  An available solver reports that interpreter as `path`
+  ([#351](https://github.com/gchen19/AnkusDrive/issues/351)).
+
+- `fem_mesh` and `fem_cantilever_demo` mesh with serial Gmsh, like the Elmer and
+  warpage bridges already did. Gmsh's threaded 3-D Delaunay is nondeterministic, so
+  the same model meshed to a different tet count run to run (390–406 tets, max
+  displacement 0.0497–0.0512 mm on one 24-core box) and a FEM test flaked; the result
+  is now identical across runs, for ~3% more meshing time on a 440k-tet part
+  ([#344](https://github.com/gchen19/AnkusDrive/pull/344)).
 
 ### Changed
 
@@ -463,7 +488,8 @@ Before the first tag, in April 2026: the initial CLI and MCP scaffold over FreeC
 1.1.1, and Phase 2 — the full core mechanical-design surface, roughly 72 MCP tools.
 Those commits are in the git history rather than in this file.
 
-[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/gchen19/AnkusDrive/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/gchen19/AnkusDrive/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/gchen19/AnkusDrive/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/gchen19/AnkusDrive/compare/v0.4.0...v0.5.0

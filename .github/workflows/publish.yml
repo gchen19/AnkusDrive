@@ -201,7 +201,10 @@ jobs:
           version="$(sed -nE 's/^__version__ = "([^"]+)"$/\1/p' ankusdrive/__init__.py)"
           tag="v${version}"
           asset="dist/ankusdrive-${version}.mcpb"
-          sha256sum "$asset" | tee "${asset}.sha256"
+          # Hash from inside dist/ so the checksum line names the bare filename:
+          # `sha256sum -c` run beside a downloaded asset must find it (0.5.3's said
+          # `dist/ankusdrive-0.5.3.mcpb` and failed to verify).
+          (cd dist && sha256sum "ankusdrive-${version}.mcpb" | tee "ankusdrive-${version}.mcpb.sha256")
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$asset" "${asset}.sha256" --clobber
           else

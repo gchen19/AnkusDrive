@@ -38,6 +38,7 @@ import importlib.util
 import os
 import platform
 import shutil
+import sys
 
 from ankusdrive import config as _config
 from ankusdrive import install_kind as _install_kind
@@ -236,14 +237,18 @@ _SOLVERS: dict = {
         "isolation": "subprocess",
         "install_hint": "pip install 'ankusdrive[optics_gpl]'  (pulls KrakenOS, GPL-3.0; "
                         "run out-of-process only), or: pip install KrakenOS 'setuptools<81'",
+        # runs under a DEDICATED interpreter (issue #351): discovery probes the one
+        # the worker will launch, not this process — see solver_python()
+        "interpreter": {"env": "ANKUSDRIVE_OPTICS_GPL_PYTHON", "venv": ".venv",
+                        "requires": ("KrakenOS",)},
     },
     # --- exterior acoustics: Bempp BEM (MIT, but meshio>=4 clashes with solidspy) ---
     # Bempp is MIT — NOT a license boundary. The subprocess isolation is purely a
     # DEPENDENCY clash: bempp needs meshio>=4 (cells_dict) while the shared venv pins
     # meshio==3.0 for solidspy (ankusdrive/analysis/topology.py). So bempp lives in a
     # DEDICATED venv (.venv-bempp) and is invoked out-of-process via
-    # ankusdrive/bempp_runner.py; the worker resolves that interpreter via
-    # _bempp_python() (the find_spec probe below merely reports installability).
+    # ankusdrive/bempp_runner.py; discovery and the worker resolve that interpreter
+    # through the one solver_python() (issue #351).
     "bempp": {
         "kind": "wheel",
         "family": "acoustics_bem",
@@ -258,6 +263,8 @@ _SOLVERS: dict = {
                         ".venv-bempp/bin/pip install bempp-cl gmsh 'meshio>=5'  "
                         "(scripts/install-solvers.sh acoustics_bem); then point "
                         "ANKUSDRIVE_BEMPP_PYTHON at that venv's python.",
+        "interpreter": {"env": "ANKUSDRIVE_BEMPP_PYTHON", "venv": ".venv-bempp",
+                        "requires": ("bempp_cl",)},
         # installed-but-unwired probe (issue #177): bempp lives in the dedicated
         # .venv-bempp (meshio>=5), not this interpreter; the venv beside the repo is
         # the evidence it is installed but ANKUSDRIVE_BEMPP_PYTHON is not set here.
@@ -303,8 +310,8 @@ _SOLVERS: dict = {
     # via ankusdrive/em_fullwave_gpl_runner.py — AnkusDrive never imports openEMS/CSXCAD
     # in-process, so the copyleft does not link into AnkusDrive's permissive code. The
     # python bindings (openEMS, CSXCAD) live in a DEDICATED venv (.venv-openems);
-    # the worker resolves that interpreter via _em_fullwave_gpl_python() (the
-    # find_spec probe below merely reports installability, it does not import).
+    # discovery and the worker resolve that interpreter through the one
+    # solver_python() (issue #351), probing with find_spec — never an import.
     "openems": {
         "kind": "wheel",
         "family": "em_fullwave",
@@ -318,6 +325,9 @@ _SOLVERS: dict = {
                         "runs update_openEMS.sh --python into a dedicated venv); then "
                         "point ANKUSDRIVE_OPENEMS_PYTHON at that venv's python. Run "
                         "out-of-process only via ankusdrive/em_fullwave_gpl_runner.py.",
+        # the runner needs BOTH bindings, so the interpreter must carry both
+        "interpreter": {"env": "ANKUSDRIVE_OPENEMS_PYTHON", "venv": ".venv-openems",
+                        "requires": ("openEMS", "CSXCAD")},
         # installed-but-unwired probe (issue #177): openEMS lives in a dedicated
         # .venv-openems, NOT this interpreter, so the find_spec probe above reports it
         # absent in a bare shell. The venv sitting beside the repo is the evidence
@@ -902,8 +912,9 @@ def _unwired_found(name: str, spec: dict):
         return None
     probe = cfg["probe"]
     if probe == "venv":
-        # the dedicated venv sits beside the repo or one level up (mirrors the worker's
-        # _em_fullwave_gpl_python / _bempp_python resolution)
+        # reached only when solver_python() found no interpreter that imports the
+        # solver: a dedicated venv beside the repo (or one level up) is then evidence
+        # it was installed but is not usable from here yet
         for base in (_repo_root(), os.path.dirname(_repo_root())):
             venv = os.path.join(base, cfg["venv"])
             for rel in ("bin/python3", "bin/python", "Scripts/python.exe"):
@@ -939,6 +950,111 @@ def _unwired_found(name: str, spec: dict):
     return None
 
 
+# --- dedicated-interpreter solvers (issue #351) ----------------------------------
+# openEMS (GPL), KrakenOS (GPL) and Bempp (meshio clash) never run in this process:
+# the worker launches their runner under a DEDICATED interpreter. "Available" for
+# them therefore means "some interpreter the worker would launch can import the
+# modules" — asked of THAT interpreter, not of this one. discovery (find_solver ->
+# capabilities / doctor) and the worker's solves share this one resolver, so the two
+# can never again disagree about whether a family runs.
+
+_INTERP_TTL_S = 10.0
+_interp_cache: dict = {}            # (exe, requires) -> (monotonic_deadline, bool)
+
+
+def _interpreter_imports_exec(exe: str, modules, timeout_s: float) -> bool:
+    """Run ``exe`` on a find_spec probe for every module in ``modules``; True when all
+    resolve. find_spec never imports, so the GPL copyleft boundary holds. Any failure
+    (not executable, hung, nonzero exit) is False."""
+    import subprocess
+    probe = ("import importlib.util,sys;"
+             f"sys.exit(0 if all(importlib.util.find_spec(m) for m in {tuple(modules)!r}) "
+             "else 1)")
+    try:
+        r = subprocess.run([exe, "-c", probe], capture_output=True, timeout=timeout_s,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def _interpreter_imports(exe: str, modules) -> bool:
+    """Cached :func:`_interpreter_imports_exec`. THE INJECTABLE SEAM: tests fake which
+    interpreters carry a solver by replacing this function. The short cache covers one
+    capabilities() sweep plus the doctor's follow-up lookups."""
+    import time as _time
+    key = (exe, tuple(modules))
+    now = _time.monotonic()
+    hit = _interp_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    ok = _interpreter_imports_exec(exe, modules, 30.0)
+    _interp_cache[key] = (now + _INTERP_TTL_S, ok)
+    return ok
+
+
+def _module_origin(module: str):
+    """This interpreter's find_spec origin for ``module`` (a file path), or None."""
+    try:
+        spec = importlib.util.find_spec(module)
+    except (ImportError, ValueError):
+        return None
+    return spec.origin if spec and spec.origin else None
+
+
+def _venv_pythons(venv: str) -> list:
+    return [os.path.join(venv, "bin", "python3"), os.path.join(venv, "bin", "python"),
+            os.path.join(venv, "Scripts", "python.exe")]
+
+
+def _interpreter_candidates(spec: dict) -> list:
+    """Ordered interpreters to probe for a dedicated-interpreter solver: the
+    ``*_PYTHON`` override (env -> config.toml) -> the venv that owns the module here
+    (ascending from find_spec's origin) -> the dedicated ``.venv-<x>`` beside the repo
+    or one level up. No existence check (the caller filters)."""
+    cfg = spec["interpreter"]
+    out = []
+    if env := _config.get(cfg["env"]):
+        out.append(env)
+    if origin := _module_origin(cfg["requires"][0]):
+        d = os.path.dirname(origin)
+        for _ in range(5):                               # ascend toward the venv root
+            d = os.path.dirname(d)
+            out += _venv_pythons(d)
+    for base in (_repo_root(), os.path.dirname(_repo_root())):
+        out += _venv_pythons(os.path.join(base, cfg["venv"]))
+    return out
+
+
+def _interpreter_python(name: str, spec: dict):
+    """The interpreter that runs dedicated-interpreter solver ``name``, or None.
+
+    Each candidate from :func:`_interpreter_candidates`, then ``sys.executable``, is
+    probed IN that interpreter. This process's executable is probed in a child too,
+    never answered in-process: under the worker it is ``freecadcmd``, which a module
+    importable in-process does not make a Python the runner can be launched with."""
+    requires = spec["interpreter"]["requires"]
+    seen = set()
+    for c in [*_interpreter_candidates(spec), sys.executable]:
+        if not c or c in seen or not os.path.isfile(c):
+            continue
+        seen.add(c)
+        if _interpreter_imports(c, requires):
+            return c
+    return None
+
+
+def solver_python(name: str):
+    """Public resolver for a dedicated-interpreter solver (openems / bempp / kraken):
+    the Python executable whose environment imports its modules, or None. The worker's
+    solves and :func:`find_solver` both go through here. Raises ValueError for an
+    unknown solver or one that does not run under a dedicated interpreter."""
+    spec = _spec(name)
+    if "interpreter" not in spec:
+        raise ValueError(f"solver {name!r} does not run under a dedicated interpreter")
+    return _interpreter_python(name, spec)
+
+
 # --- discovery -----------------------------------------------------------------
 
 def known_solvers() -> list:
@@ -958,7 +1074,8 @@ def _spec(name: str) -> dict:
 def find_solver(name: str) -> dict:
     """Side-effect-free probe of a single solver. Returns
     ``{name, kind, family, extra, available, status}`` plus, when available (status
-    ``ok``), ``path`` (a binary) or ``module`` (a resolved wheel module). When it does
+    ``ok``), ``path`` (a binary) or ``module`` (a resolved wheel module) — both for a
+    dedicated-interpreter solver, whose ``path`` is that interpreter. When it does
     not resolve, ``install_hint`` is always present and ``status`` is one of:
 
       * ``unwired`` — not resolvable in *this* shell, but a well-known artifact proves
@@ -984,7 +1101,15 @@ def find_solver(name: str) -> dict:
     }
     if spec.get("prepared_case_only"):
         info["prepared_case_only"] = spec["prepared_case_only"]
-    if spec["kind"] == "wheel":
+    if "interpreter" in spec:
+        # runs out-of-process under a dedicated interpreter (issue #351): ask the
+        # interpreter the worker will launch, not this one
+        exe = _interpreter_python(name, spec)
+        if exe is not None:
+            info["available"] = True
+            info["module"] = spec["interpreter"]["requires"][0]
+            info["path"] = exe
+    elif spec["kind"] == "wheel":
         resolved = next((m for m in spec["modules"] if _module_available(m)), None)
         if resolved is not None:
             info["available"] = True
@@ -1361,8 +1486,9 @@ def su2_case_config(case_dir: str) -> str | None:
 def capabilities() -> dict:
     """Report which P2 solvers (and which families) are usable *right now* —
     the ``solve_capabilities`` tool's payload, the solver twin of
-    ``render_capabilities``. Resolves every solver side-effect-free (no execution,
-    no env mutation).
+    ``render_capabilities``. Resolves every solver side-effect-free (no env mutation;
+    the only execution is read-only probes — a find_spec in a dedicated interpreter,
+    ``multipass info``).
 
     ``any_available`` is the family gate, and it answers "can AnkusDrive actually
     DRIVE this family here?", not merely "did some binary resolve?" (issue #237). A

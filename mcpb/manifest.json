@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "ankusdrive",
   "display_name": "AnkusDrive",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Drive FreeCAD from an agent: CAD modeling, drawings, FEM, CFD, EM, and multiphysics simulation.",
   "long_description": "AnkusDrive wraps FreeCAD's Python API as 280+ MCP tools: parametric CAD (sketches, pads, pockets, gears, threads, sheet metal), TechDraw drawings with GD&T, structural FEM through CalculiX, and a broader simulation surface (thermal, CFD/CHT, EM, acoustics, FSI, injection molding, optics, multibody) plus a design-control layer (part numbers, revisions, change orders).\n\n**Requires FreeCAD 1.1**, installed separately from https://www.freecad.org/. AnkusDrive finds `freecadcmd` on PATH and in the standard install locations; set the FreeCAD command path below only if yours lives elsewhere. Solvers beyond CalculiX and Gmsh (OpenFOAM, Elmer, SU2, openEMS, ...) are optional, and their tools report what is missing and how to install it rather than failing.",
   "author": {
