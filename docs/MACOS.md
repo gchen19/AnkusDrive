@@ -298,8 +298,26 @@ a few hours at `WM_NCOMPPROCS=6` on the 8-core VM.
 `scripts/install-renderers.sh` and `scripts/build-renderers.sh` remain Linux-x86_64
 only: the pinned LuxCore/appleseed/OSPRay tarballs are linux64 **ELF**, which can never
 run on macOS (Rosetta translates x86_64 *macOS* binaries, not Linux ones). POV-Ray is
-the one turnkey renderer here (`brew install povray`). No automated path for the rest
-on any OS yet.
+the one turnkey *add-on* renderer here (`brew install povray`). No automated path for
+the rest on any OS yet.
+
+**Blender is the turnkey photoreal path on macOS** (issue
+[#335](https://github.com/gchen19/AnkusDrive/issues/335)): `brew install --cask blender`
+(or `scripts/install-renderers.sh blender`, whose `blender` target — unlike the rest of
+that script — supports Darwin via the cask or the pinned arm64 DMG). It needs no Render
+add-on, lands in `/Applications/Blender.app` where discovery finds it with no env var,
+and renders with Metal on Apple Silicon. See [`RENDERING.md`](RENDERING.md) §3.
+
+Verified on an M4 Max (macOS 26.5, Blender 5.2.1): the probe reports `METAL` + OIDN and
+the Blender photoreal tests pass. Expect the **first** render to spend ~90 s compiling
+Metal kernels (cached afterwards). Blender 5.x — and the cask — are Apple Silicon only;
+Intel Macs need Blender 4.5 LTS from blender.org.
+
+![Blender studio render on Apple Silicon: meshed brass and steel gears on anodized bosses](../artifacts/rendering/render_blender_studio_macos.png)
+
+*Built and rendered entirely through MCP tool calls (`add_primitive`, `add_bearing`,
+`add_gear`, `transform`, then one `render_photoreal` with nine per-part appearances):
+`quality="final"` (384 samples, OIDN), 1280×960, `device` auto → `METAL`, 15 s on an M4 Max.*
 
 ## CI: the Apple-Silicon lane
 

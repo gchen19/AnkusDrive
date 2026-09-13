@@ -262,6 +262,7 @@ Every result below is a real solve/run on the machine, not a dry check:
 | **slicing** | PrusaSlicer 2.9.6 | portable zip + `ANKUSDRIVE_PRUSASLICER_PATH` | live slice: 20 mm cube → 8.06 cm³ @100% infill (exact 8.0, ratio 1.008), 99 layers, 10/10 |
 | **cfd** | SU2 8.5.0 | portable zip + `ANKUSDRIVE_SU2_PATH` | `SU2_CFD.exe` runs; end-to-end `cfd_*_flow_submit` solve verified native — no bash (#203) |
 | **thermal_transient** | Elmer 26.2 | portable no-GUI zip + `ANKUSDRIVE_ELMER_PATH` | ElmerSolver/ElmerGrid/ViewFactors verified live: thermal, radiation, CHT, EM, acoustic + harmonic FEM, geometry bridge (#205) |
+| **studio_render** | Blender 5.2.1 LTS | portable zip via `install-solvers.ps1 blender` — **no env var** | live Cycles render through the MCP `render_photoreal` tool: 5-part assembly, per-part appearance, `scene='studio'`, `quality='final'` (384 samples, OIDN) at 960×720 in 56 s on the **HIP** GPU (AMD Radeon 780M) — see [`artifacts/rendering/render_blender_studio_windows.png`](../artifacts/rendering/render_blender_studio_windows.png) (#335) |
 | **optics** | optiland + rayoptics | `pip install '.[optics]'` | ready |
 | **topology** | solidspy | `pip install '.[topology]'` | ready |
 | **fluids** | CoolProp 8.0.0 | `pip install '.[fluids]'` | ready (in-process f(T,P)) |
@@ -284,6 +285,7 @@ FreeCAD's bundled `ccx.exe` even though it isn't on PATH.
 | CFD (steady) | SU2 | ✅ fully native: the [Windows binary](https://su2code.github.io/download.html) runs and the CFD runner's SU2 branch is a direct subprocess — no bash/WSL (#203). Set `ANKUSDRIVE_SU2_PATH` (or use the provisioner; `%LOCALAPPDATA%\AnkusDrive\solvers` is auto-discovered) |
 | Transient/radiation thermal | Elmer | ✅ verified native (26.2, portable no-GUI zip via `install-solvers.ps1 elmer` — note: no winget package exists); covers CHT, low-frequency EM, acoustic + harmonic FEM and the geometry bridge (#205) |
 | Slicing | PrusaSlicer | ✅ Windows installer; `ANKUSDRIVE_PRUSASLICER_PATH` |
+| Studio render (photoreal) | Blender (Cycles) | ✅ **verified native** ([#335](https://github.com/gchen19/AnkusDrive/issues/335)): `scripts\install-solvers.ps1 blender` drops the pinned portable zip under `%LOCALAPPDATA%\AnkusDrive\solvers` and `solvers.py` globs `blender.exe` out of it — **no admin, no env var, no PATH entry**. GPU is picked automatically: OptiX/CUDA (NVIDIA), **HIP** (AMD), oneAPI (Intel), else CPU. ⚠️ The `blender-winget` target / `winget install BlenderFoundation.Blender` **does not work**: winget fetches the MSI from `download.blender.org`, which answers 403 to scripted clients (`0x80190193`) — the same challenge that made the portable target try mirrors first. Use `install-solvers.ps1 blender` |
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD; dedicated venv (`ANKUSDRIVE_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ prebuilt Windows binaries exist upstream, but not yet wired into the installer scripts |
 | DEM (granular) | YADE (GPL) | ⚠️ no native Windows build — **WSL** |
@@ -333,6 +335,22 @@ Without WSL (or with an unprovisioned distro), these families still degrade clea
   vars don't survive MCP-host launches; a `%APPDATA%\ankusdrive\config.toml` resolution layer
   is planned so paths persist without `setx`.
 - **Renderers** (LuxCore/appleseed/cycles/OSPRay) — no automated install path on any OS yet.
+  The photoreal path that *is* turnkey on Windows is Blender (issue
+  [#335](https://github.com/gchen19/AnkusDrive/issues/335)):
+  `pwsh scripts\install-solvers.ps1 blender` (pinned portable zip, no admin, auto-discovered
+  under `%LOCALAPPDATA%\AnkusDrive\solvers`). See [`RENDERING.md`](RENDERING.md) §3.
+- **`winget install BlenderFoundation.Blender`** (and so the `blender-winget` target) is
+  **broken upstream, not in AnkusDrive**: the winget manifest points at
+  `download.blender.org`, which returns 403 to scripted clients, so winget aborts with
+  `0x80190193 : Forbidden (403)` after resolving the package. winget cannot be pointed at a
+  mirror. The portable target already works around the same challenge by trying official
+  mirrors first, so use it; the winget target stays in the script and will start working
+  again if Blender's CDN stops challenging winget. If you specifically want the
+  **per-machine** install winget would have done, use `install-solvers.ps1 blender-msi`:
+  the same official `.msi`, fetched from the mirrors with the same pinned SHA-256 and
+  installed with `msiexec /i /qn` into `Program Files\Blender Foundation\Blender 5.2`
+  (auto-discovered, no env var). It needs an **elevated** shell; the portable `blender`
+  target does not.
 
 ## Process cleanup
 

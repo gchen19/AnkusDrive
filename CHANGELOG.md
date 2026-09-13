@@ -33,6 +33,26 @@ that could not reach it. Both land here, with a reproducible FEM mesh behind the
 
 ### Added
 
+- **Blender backend for `render_photoreal`**: whole assemblies (an assembly handle or a
+  `parts` list) with a different appearance per part — the 14 Render card names or a
+  neutral PBR dict (`color`, `metallic`, `roughness`, `emission`, `transmission`,
+  `finish`: `fdm_layers` / `brushed`) — rendered in a `studio` scene (cyclorama, soft
+  area lights, contact shadows) at `quality` `draft`/`preview`/`final` with Cycles, OIDN
+  denoising and GPU when present. Full Blender 4.2+ runs headless on a checked-in scene
+  script, meshing each B-rep face with exact surface normals, and the result carries
+  `blend_path` for refinement in Blender (optionally via Blender's own MCP server,
+  which AnkusDrive does not depend on). **`render_photoreal`'s default `renderer` is now
+  `"auto"`** (was `"Povray"`): Blender when it resolves, else POV-Ray, else any add-on
+  renderer, with `auto_selected` in the result; pass `renderer="Povray"` for the old
+  behaviour. Blender is discovered like a solver (`studio_render` family,
+  `ANKUSDRIVE_BLENDER_PATH`), so `render_capabilities`, `setup_status` / `ankusdrive
+  doctor` and a fallback render's `suggestion` all hand out the install command.
+  Installers: `scripts/install-renderers.sh blender` (Linux tarball / macOS cask or DMG)
+  and `scripts/install-solvers.ps1 blender` (Windows portable zip, no admin; `blender-msi`
+  for the per-machine `Program Files` install, elevated), pinned to 5.2.1 LTS — x64 **and
+  arm64** — with SHA-256 checks and official mirrors first: `download.blender.org` returns
+  403 to scripted clients, which also breaks `winget install BlenderFoundation.Blender`
+  ([#335](https://github.com/gchen19/AnkusDrive/issues/335)).
 - An MCPB bundle, `ankusdrive-<version>.mcpb`, attached to every GitHub release — the
   one-click Claude Desktop install and the artifact the Smithery listing distributes.
   It carries no AnkusDrive code: `mcpb/pyproject.toml` pins the matching PyPI release

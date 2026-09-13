@@ -142,6 +142,10 @@ Test-Module 'SU2 plane-channel case (#237)'           'test_su2_case.py'
 Test-Module 'Main-thread work queue (#260)'          'test_mainthread.py'
 Test-Module 'Random-vibration toys'                  'test_vibration.py'
 Test-Module 'Solver degradation contract'            'test_solve_degradation.py'
+# Blender studio-render contract (#335). Pure: no Blender and no FreeCAD, and it
+# asserts install-solvers.ps1 and install-renderers.sh pin the SAME Blender - a
+# check that is only meaningful if the Windows lane actually runs it.
+Test-Module 'Blender studio-render contract (#335)'  'test_blender_render.py'
 Test-Module 'Persistent config layer'                'test_config.py'
 # mcp-2.0.0 break is injected, never installed; the live half spawns the server.
 Test-Module "doctor's MCP preflight (#278)"          'test_doctor_mcp.py'

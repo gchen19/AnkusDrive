@@ -31,6 +31,18 @@
     * YADE, openEMS, bempp - still need Linux mechanisms; same WSL route works
       manually (see docs/WINDOWS.md).
 
+  STUDIO RENDER (issue #335): the 'blender' target installs full Blender for
+  render_photoreal's studio backend - the pinned official portable zip (SHA-256
+  checked) extracted under -Dir, where ankusdrive/solvers.py discovers blender.exe with
+  NO env var. ~1 GB, GPL-3.0, run only as a subprocess; never part of 'all'.
+  'blender-msi' is the PER-MACHINE variant: the same official .msi, fetched from the
+  mirrors with the pinned SHA-256 and installed silently into Program Files\Blender
+  Foundation\Blender X.Y (also auto-discovered). Needs an ELEVATED shell.
+  'blender-winget' would do the same through winget, but CURRENTLY FAILS: winget fetches
+  the MSI from download.blender.org, which 403s scripted clients, and winget cannot be
+  pointed at a mirror. Prefer 'blender' (no admin) or 'blender-msi'.
+  Both arches are pinned - Blender ships Windows arm64 builds from 5.x.
+
   DISCOVERY: a family resolves its solver via ankusdrive/solvers.py - a wheel must import in
   the venv; a binary is found via ANKUSDRIVE_<SOLVER>_PATH -> PATH -> per-OS dirs -> (for
   ccx) FreeCAD's bundled bin. So the wheel installs MUST target the same venv that runs
@@ -43,7 +55,8 @@
   to it so a user who found only this script isn't stranded.
 
 .PARAMETER Targets
-  Any of: core pip su2 prusaslicer elmer wsl all list. Default (no args) = pip + guidance.
+  Any of: core pip su2 prusaslicer elmer wsl blender blender-msi blender-winget all list.
+  Default (no args) = pip + guidance.
 
 .PARAMETER Dir
   Where portable binaries are extracted. Default: %LOCALAPPDATA%\AnkusDrive\solvers.
@@ -56,6 +69,8 @@
   pwsh scripts\install-solvers.ps1 core                  # -> scripts\install-core.ps1
   pwsh scripts\install-solvers.ps1                       # pip extras + guidance
   pwsh scripts\install-solvers.ps1 su2 prusaslicer -Persist
+  pwsh scripts\install-solvers.ps1 blender               # studio render backend (no admin)
+  pwsh scripts\install-solvers.ps1 blender-msi           # same, per-machine (needs admin)
   pwsh scripts\install-solvers.ps1 list                 # ankusdrive doctor
 #>
 [CmdletBinding()]
@@ -79,6 +94,31 @@ $PRUSA_URL = "https://github.com/prusa3d/PrusaSlicer/releases/download/version_$
 # despite older guidance). nogui-nompi is all AnkusDrive needs: ElmerSolver + ElmerGrid +
 # ViewFactors as plain subprocesses.
 $ELMER_URL = 'https://www.nic.funet.fi/pub/sci/physics/elmer/bin/windows/ElmerFEM-nogui-nompi-Windows-AMD64.zip'
+# Blender 5.2 LTS. The VERSION must match BLENDER_VERSION in scripts/install-renderers.sh
+# (tests/test_blender_render.py::test_installers_pin_the_same_blender); the hashes differ
+# because the two scripts pin different artifacts of the same release.
+$BLENDER_VER = '5.2.1'
+$BLENDER_SERIES = '5.2'
+# Every pinned Windows artifact, straight out of the official blender-5.2.1.sha256
+# manifest (fetched from a mirror; download.blender.org 403s scripted clients). The
+# x64 .msi hash is corroborated by the winget manifest's own Installer SHA256.
+# Blender DOES ship Windows arm64 builds from 5.x, so both arches are pinned.
+$BLENDER_SHA = @{
+    'x64'   = @{
+        zip = '0e631dad7d0cad6d5d18abdd2e2550f6c0213215334eda00ddbd3d22b96ecb2c'
+        msi = 'bebb90fc5bf7e3ec7ab4eb34f4c5a5b54e28e582a722152a47fd4ee66ec3c6fa'
+    }
+    'arm64' = @{
+        zip = '62047464d21ea954b997db94bf5518eac9240b900d98bb324bc02416ad892860'
+        msi = '7c87fadd9611739111b71e2cb6c083d976876aa71cbb1f80e63bfc81d175da25'
+    }
+}
+$BLENDER_MIRRORS = @(
+    'https://mirrors.ocf.berkeley.edu/blender/release',
+    'https://ftp.nluug.nl/pub/graphics/blender/release',
+    'https://mirror.clarkson.edu/blender/release',
+    'https://download.blender.org/release'
+)
 
 $venvPy = Join-Path $repo '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPy)) {
@@ -164,6 +204,147 @@ function Install-Elmer {
     Set-SolverEnv 'ANKUSDRIVE_ELMER_PATH' $exe.FullName
 }
 
+function Get-BlenderArch {
+    # PROCESSOR_ARCHITECTURE reports the *process* arch, so a 32-bit or x64-emulated
+    # PowerShell on an ARM64 box says x86/AMD64; PROCESSOR_ARCHITEW6432 carries the
+    # real machine arch in exactly that case.
+    if ('ARM64' -in @($env:PROCESSOR_ARCHITECTURE, $env:PROCESSOR_ARCHITEW6432)) { return 'arm64' }
+    return 'x64'
+}
+
+function Get-BlenderDownload([string]$file, [string]$expected, [string]$outFile) {
+    # Fetch one official Blender artifact, mirrors first, and verify the pinned SHA-256.
+    # download.blender.org challenges scripted clients (403), hence the mirror list.
+    $ProgressPreference = 'SilentlyContinue'
+    $got = $false
+    foreach ($m in $BLENDER_MIRRORS) {
+        try {
+            Write-Host "  downloading $file from $m"
+            Invoke-WebRequest -Uri "$m/Blender$BLENDER_SERIES/$file" -OutFile $outFile -UserAgent 'ankusdrive-install-solvers'
+            $got = $true; break
+        } catch { Write-Warning "  mirror failed: $m ($($_.Exception.Message))" }
+    }
+    if (-not $got) { throw "could not download $file from any mirror" }
+    $hash = (Get-FileHash -Algorithm SHA256 $outFile).Hash.ToLower()
+    if ($hash -ne $expected) {
+        Remove-Item $outFile
+        throw "checksum mismatch for ${file}: expected $expected, got $hash"
+    }
+    Write-Host "  sha256 $hash"
+}
+
+function Test-Elevated {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Install-Blender {
+    Write-Host "== Blender $BLENDER_VER (studio render backend for render_photoreal) =="
+    $arch = Get-BlenderArch
+    $name = "blender-$BLENDER_VER-windows-$arch"
+    $dest = Join-Path $Dir "blender-$BLENDER_VER"
+    $exe  = Join-Path $dest "$name\blender.exe"
+    if ((Test-Path $exe) -and -not $env:FORCE) {
+        Write-Host "  already installed: $exe  (set FORCE=1 to reinstall)"
+    } else {
+        New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+        $zip = Join-Path $Dir "$name.zip"
+        Get-BlenderDownload "$name.zip" $BLENDER_SHA[$arch].zip $zip
+        if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Write-Host '  extracting (tar is much faster than Expand-Archive for ~20k files)'
+        if (Get-Command tar -ErrorAction SilentlyContinue) { & tar -xf $zip -C $dest }
+        else { Expand-Archive -Path $zip -DestinationPath $dest -Force }
+        Remove-Item $zip
+        if (-not (Test-Path $exe)) { throw "blender.exe not found at $exe after extract" }
+    }
+    Write-Host "  $(Get-BlenderVersion $exe) -> $exe"
+    Write-Host '  auto-discovered under -Dir (no env var needed); verify: render_capabilities or ankusdrive doctor (studio_render)'
+    if ($Dir -ne (Join-Path $env:LOCALAPPDATA 'AnkusDrive\solvers')) {
+        Set-SolverEnv 'ANKUSDRIVE_BLENDER_PATH' $exe          # non-default -Dir is not globbed
+    }
+}
+
+function Get-BlenderVersion([string]$exe) {
+    # Windows PowerShell 5.1 wraps a native command's stderr in an ErrorRecord when it
+    # is redirected, which $ErrorActionPreference='Stop' turns TERMINATING - so a
+    # Blender that prints any driver/GPU warning on startup would fail the install here,
+    # AFTER a perfectly good install. Same guard Install-Pip uses.
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $ver = (& $exe --background --factory-startup --version 2>$null | Select-Object -First 1)
+    $ErrorActionPreference = $prev
+    if (-not $ver) { throw "$exe did not run (missing VC++ runtime? install it, then retry)" }
+    return $ver
+}
+
+function Install-BlenderMsi {
+    # The per-machine install 'blender-winget' was meant to give, without winget: the
+    # SAME official .msi, fetched from the mirrors with the pinned SHA-256 (winget can
+    # only fetch it from download.blender.org, which 403s scripted clients - see
+    # Install-BlenderWinget). Lands in Program Files\Blender Foundation\Blender <series>,
+    # which solvers.py already globs, so no env var. NEEDS ADMIN; never part of 'all'.
+    Write-Host "== Blender $BLENDER_VER per-machine MSI (Program Files) =="
+    $arch = Get-BlenderArch
+    $expected = Join-Path $env:ProgramFiles "Blender Foundation\Blender $BLENDER_SERIES\blender.exe"
+    if ((Test-Path $expected) -and -not $env:FORCE) {
+        Write-Host "  already installed: $expected  (set FORCE=1 to reinstall)"
+        Write-Host "  $(Get-BlenderVersion $expected) -> $expected"
+        return
+    }
+    if (-not (Test-Elevated)) {
+        throw ("a per-machine MSI needs an elevated shell. Either re-run this target from " +
+               "an Administrator PowerShell, or use the no-admin portable target instead " +
+               "(same Blender, auto-discovered):  scripts\install-solvers.ps1 blender")
+    }
+    $name = "blender-$BLENDER_VER-windows-$arch.msi"
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    $msi = Join-Path $Dir $name
+    Get-BlenderDownload $name $BLENDER_SHA[$arch].msi $msi
+    Write-Host '  msiexec /i /qn /norestart (silent, per-machine)'
+    # Not `& msiexec` - msiexec returns immediately and the real exit code only comes
+    # back by waiting on the process.
+    $log = Join-Path $Dir 'blender-msi.log'
+    $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+        '/i', "`"$msi`"", '/qn', '/norestart', '/L*v', "`"$log`"")
+    Remove-Item $msi -ErrorAction SilentlyContinue
+    if ($p.ExitCode -eq 3010) {
+        Write-Warning '  msiexec asked for a reboot (3010); the files are in place'
+    } elseif ($p.ExitCode -ne 0) {
+        throw "msiexec failed ($($p.ExitCode)); verbose log: $log"
+    }
+    if (-not (Test-Path $expected)) {
+        throw "MSI reported success but blender.exe is not at $expected (log: $log)"
+    }
+    Remove-Item $log -ErrorAction SilentlyContinue
+    Write-Host "  $(Get-BlenderVersion $expected) -> $expected"
+    Write-Host '  auto-discovered via the Program Files glob (no env var needed); verify: ankusdrive doctor (studio_render)'
+}
+
+function Install-BlenderWinget {
+    # KNOWN TO FAIL as of 2026-09 (verified on Windows 11): the BlenderFoundation.Blender
+    # manifest points its installer at download.blender.org, the SAME host that answers
+    # 403 to every scripted client (the Cloudflare challenge that made Install-Blender
+    # try mirrors first). winget cannot be pointed at a mirror, so it dies with
+    #   0x80190193 : Forbidden (403)
+    # after resolving the package. Kept because it starts working again the moment
+    # Blender's CDN stops challenging winget, but 'blender' is the target that works
+    # today - so the failure below names it instead of surfacing a bare exit code.
+    Write-Host '== Blender via winget (per-machine install) =='
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw 'winget not available - use the portable target instead: install-solvers.ps1 blender'
+    }
+    & winget install --id BlenderFoundation.Blender --exact --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        throw ("winget install failed ($LASTEXITCODE). winget downloads the MSI from " +
+               "download.blender.org, which returns 403 to scripted clients, so this " +
+               "target is expected to fail until Blender's CDN stops challenging it. " +
+               "Use the portable target, which tries official mirrors first and is " +
+               "auto-discovered all the same:  scripts\install-solvers.ps1 blender")
+    }
+    Write-Host '  installed under Program Files\Blender Foundation - auto-discovered; verify with ankusdrive doctor'
+}
+
 function Install-WslSolvers {
     Write-Host '== OpenFOAM families (CFD / FSI / injection molding) via WSL2 (issue #193) =='
     if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
@@ -199,9 +380,12 @@ foreach ($t in $Targets) {
         'prusa'       { Install-Prusa; $did = $true }
         'elmer'       { Install-Elmer; $did = $true }
         'wsl'         { Install-WslSolvers; $did = $true }
+        'blender'     { Install-Blender; $did = $true }
+        'blender-msi' { Install-BlenderMsi; $did = $true }
+        'blender-winget' { Install-BlenderWinget; $did = $true }
         'all'         { Install-Pip; Install-SU2; Install-Prusa; Install-Elmer; $did = $true }
         'list'        { Show-List; $did = $true }
-        default       { Write-Warning "unknown target '$t' (use: core pip su2 prusaslicer elmer wsl all list)" }
+        default       { Write-Warning "unknown target '$t' (use: core pip su2 prusaslicer elmer wsl blender blender-msi blender-winget all list)" }
     }
 }
 if (-not $did) { Install-Pip }

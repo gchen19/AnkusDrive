@@ -26,6 +26,8 @@
 # USAGE
 #   sudo scripts/install-renderers.sh                 # install all prebuilt renderers
 #   sudo scripts/install-renderers.sh luxcore         # just one (luxcore|appleseed)
+#   scripts/install-renderers.sh blender              # full Blender (Cycles) for the studio backend
+#                                                     # (Linux x86_64 + macOS; never in the no-arg run)
 #   scripts/install-renderers.sh --list               # show what's pinned + status
 #   PREFIX=~/r BINDIR=~/bin scripts/install-renderers.sh   # rootless (PATH must include BINDIR)
 #
@@ -42,6 +44,20 @@
 # Linux x86_64 only for the automated path; macOS/Windows print guidance (the
 # prebuilt layouts differ — a documented follow-on). OSPRay Studio, pbrt-v4 and
 # Cycles have no usable prebuilt CLI and must be built from source (see below).
+#
+# BLENDER (issue #335) is its own target with its own layout, because it is not an
+# add-on renderer: render_photoreal's studio backend runs full Blender headless and
+# discovers it through ankusdrive/solvers.py (`blender` entry), NOT a wrapper on PATH.
+#   Linux x86_64  pinned official tarball (SHA-256 checked) -> /opt/blender-<ver> as
+#                 root, else ~/.local/opt/blender-<ver>; both are globbed by discovery,
+#                 so it resolves with no PATH or env change. A `blender` symlink goes
+#                 in BINDIR as well when that dir is writable (for your own shell).
+#   macOS         `brew install --cask blender` when Homebrew is present, else the
+#                 pinned arm64 DMG copied to /Applications (or ~/Applications).
+#                 Apple Silicon only (5.x has no Intel build). An existing Blender.app
+#                 is kept unless FORCE=1 (which also lets brew replace a non-brew app).
+#   Windows       scripts/install-solvers.ps1 blender (pinned portable zip; winget is 403-blocked upstream).
+# It is ~1 GB on disk and GPL-3.0 (run only as a subprocess), so the no-arg run skips it.
 set -euo pipefail
 
 PREFIX="${PREFIX:-/opt}"
@@ -66,9 +82,26 @@ PINNED_appleseed="appleseed|https://github.com/appleseedhq/appleseed/releases/do
 
 PREBUILT_KEYS="luxcore appleseed"
 
-# Staging dirs to clean on exit (populated by install_prebuilt).
+# Blender: 5.2 LTS (>= 5.1 also satisfies Blender's own MCP server for the .blend
+# hand-off). Hashes are the official blender-<ver>.sha256 manifest. download.blender.org
+# sits behind a bot challenge that rejects scripted downloads, so the official
+# mirrors are tried first and the canonical host last.
+BLENDER_VERSION="5.2.1"
+BLENDER_SERIES="5.2"
+BLENDER_SHA_linux_x64="a31f524fa99a527d3d52b7f5aaa68c34e1a19d5a1c9473f79c5cc610fd5b10e9"
+BLENDER_SHA_macos_arm64="6409e21de80994db5f4c4a34486b6fd43cea21085b912f7491c53e923acb65a3"
+BLENDER_MIRRORS="${BLENDER_MIRRORS:-https://mirrors.ocf.berkeley.edu/blender/release https://ftp.nluug.nl/pub/graphics/blender/release https://mirror.clarkson.edu/blender/release https://download.blender.org/release}"
+
+# Staging dirs to clean on exit (populated by install_prebuilt), and the Blender DMG
+# mount point (install_blender_macos) so a die between attach and detach unmounts it.
 STAGE_DIRS=()
-cleanup() { local d; for d in "${STAGE_DIRS[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done; }
+DMG_MOUNT=""
+cleanup() {
+  local d
+  if [ -n "$DMG_MOUNT" ]; then hdiutil detach -quiet "$DMG_MOUNT" 2>/dev/null || true; rmdir "$DMG_MOUNT" 2>/dev/null || true; fi
+  for d in "${STAGE_DIRS[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done
+  return 0   # an EXIT trap's last status becomes the script's: a false `[ -n "" ]` turned success into exit 1
+}
 trap cleanup EXIT
 
 # --- logging ------------------------------------------------------------------
@@ -205,6 +238,139 @@ EOF
   ok "$key installed; '$wrap' on PATH at $wrapper"
 }
 
+# --- Blender (studio backend, issue #335) ---------------------------------------
+fetch_blender() {  # file dest — try each mirror, keep the first complete download
+  local file="$1" dest="$2" m
+  if [ -f "$dest" ]; then log "using cached $file"; return; fi
+  for m in $BLENDER_MIRRORS; do
+    log "downloading $file from $m"
+    if curl -fL --retry 2 --connect-timeout 30 -A "ankusdrive-install-renderers" \
+         -o "$dest.part" "$m/Blender$BLENDER_SERIES/$file"; then
+      mv "$dest.part" "$dest"; return
+    fi
+    warn "mirror failed: $m"
+  done
+  rm -f "$dest.part"
+  die "could not download $file from any mirror (set BLENDER_MIRRORS=<base url> to add one)"
+}
+
+verify_sha() {  # file expected
+  local got; got="$(sha256_of "$1")"
+  [ "$got" = "$2" ] || die "checksum mismatch for $(basename "$1")
+  expected $2
+  got      $got
+(delete $1 and retry)"
+  ok "sha256 $got"
+}
+
+install_blender_linux() {
+  [ "$(uname -m)" = "x86_64" ] || die "Blender publishes Linux builds for x86_64 only (got $(uname -m)); build from source or use a distro package, then set ANKUSDRIVE_BLENDER_PATH"
+  need_cmd curl; need_cmd tar
+  local root dest file archive
+  if [ "$(id -u)" = "0" ]; then root="${BLENDER_PREFIX:-/opt}"; else root="${BLENDER_PREFIX:-$HOME/.local/opt}"; fi
+  dest="$root/blender-$BLENDER_VERSION"
+  if [ "$FORCE" != "1" ] && [ -x "$dest/blender" ]; then
+    ok "Blender $BLENDER_VERSION already installed ($dest/blender); skipping (FORCE=1 to reinstall)"
+  else
+    file="blender-$BLENDER_VERSION-linux-x64.tar.xz"
+    mkdir -p "$CACHE_DIR" "$root" || die "cannot create $root (set BLENDER_PREFIX=<writable dir>)"
+    archive="$CACHE_DIR/$file"
+    fetch_blender "$file" "$archive"
+    verify_sha "$archive" "$BLENDER_SHA_linux_x64"
+    local stage; stage="$(mktemp -d "${TMPDIR:-/tmp}/ankusdrive-stage.XXXXXX")"
+    STAGE_DIRS+=("$stage")
+    log "extracting into $dest"
+    tar xJf "$archive" -C "$stage"
+    [ -x "$stage/blender-$BLENDER_VERSION-linux-x64/blender" ] || die "unexpected tarball layout"
+    rm -rf "$dest"
+    mv "$stage/blender-$BLENDER_VERSION-linux-x64" "$dest"
+    chmod -R a+rX "$dest"
+  fi
+  # Discovery globs $root/blender-*; the symlink only helps an interactive shell.
+  local bindir="${BINDIR_BLENDER:-}"
+  [ -z "$bindir" ] && { if [ "$(id -u)" = "0" ]; then bindir="$BINDIR"; else bindir="$HOME/.local/bin"; fi; }
+  if mkdir -p "$bindir" 2>/dev/null && [ -w "$bindir" ]; then
+    ln -sfn "$dest/blender" "$bindir/blender"
+    ok "symlinked $bindir/blender"
+  fi
+  blender_postcheck "$dest/blender"
+}
+
+# The macOS app bundles discovery (solvers.py `blender`) looks in, in its order.
+MAC_BLENDER_APPS="/Applications/Blender.app $HOME/Applications/Blender.app"
+
+mac_blender_found() {  # print the first discoverable Blender binary, if any
+  local app
+  for app in $MAC_BLENDER_APPS; do
+    [ -x "$app/Contents/MacOS/Blender" ] && { printf '%s\n' "$app/Contents/MacOS/Blender"; return 0; }
+  done
+  return 1
+}
+
+install_blender_macos() {
+  # Blender 5.x ships macOS builds for Apple Silicon only, and the brew cask carries
+  # no Intel variant (it would install an arm64 app that cannot launch), so gate the
+  # arch before either path.
+  [ "$(uname -m)" = "arm64" ] || die "Blender $BLENDER_SERIES has no Intel macOS build (the cask and the pinned DMG are arm64 only); install Blender 4.5 LTS (the last Intel release) from blender.org, then set ANKUSDRIVE_BLENDER_PATH if it is not in /Applications"
+  local existing
+  if [ "$FORCE" != "1" ] && existing="$(mac_blender_found)"; then
+    ok "Blender already installed ($existing); skipping (FORCE=1 to reinstall)"
+    blender_postcheck "$existing"
+    return
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    # --force replaces an app brew did not install (e.g. a blender.org drag-install),
+    # which a plain `brew install --cask` refuses to overwrite.
+    local force_flag=""; [ "$FORCE" = "1" ] && force_flag="--force"
+    log "brew install --cask $force_flag blender"
+    brew install --cask $force_flag blender || die "brew install --cask blender failed (an existing Blender.app not installed by brew? re-run with FORCE=1)"
+    # The cask honours --appdir / HOMEBREW_CASK_OPTS, so don't assume /Applications.
+    if existing="$(mac_blender_found)"; then
+      blender_postcheck "$existing"
+    elif existing="$(command -v blender)"; then
+      blender_postcheck "$existing"
+      warn "Blender.app is outside /Applications and ~/Applications, so discovery will not find it; set ANKUSDRIVE_BLENDER_PATH to the Blender executable inside the app"
+    else
+      die "brew installed Blender but no Blender.app was found; set ANKUSDRIVE_BLENDER_PATH"
+    fi
+    return
+  fi
+  need_cmd curl; need_cmd hdiutil
+  local file="blender-$BLENDER_VERSION-macos-arm64.dmg"
+  mkdir -p "$CACHE_DIR"
+  fetch_blender "$file" "$CACHE_DIR/$file"
+  verify_sha "$CACHE_DIR/$file" "$BLENDER_SHA_macos_arm64"
+  DMG_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/ankusdrive-dmg.XXXXXX")"   # detached by cleanup()
+  hdiutil attach -nobrowse -readonly -mountpoint "$DMG_MOUNT" "$CACHE_DIR/$file" >/dev/null </dev/null || die "hdiutil attach failed"
+  local apps="/Applications"; [ -w "$apps" ] || { apps="$HOME/Applications"; mkdir -p "$apps"; }
+  log "copying Blender.app to $apps"
+  rm -rf "$apps/Blender.app"
+  cp -R "$DMG_MOUNT/Blender.app" "$apps/" || die "copy to $apps failed"
+  hdiutil detach -quiet "$DMG_MOUNT" && { rmdir "$DMG_MOUNT" 2>/dev/null || true; DMG_MOUNT=""; }
+  blender_postcheck "$apps/Blender.app/Contents/MacOS/Blender"
+}
+
+blender_postcheck() {  # binary — confirm it launches headless and prints its version
+  local v hint
+  v="$("$1" --background --factory-startup --version 2>/dev/null | head -1)" || true
+  case "$(uname -s)" in
+    Darwin) hint="run it directly to see the error, or check the arch with: file $1" ;;
+    *)      hint="missing system libs? try: ldd $1" ;;
+  esac
+  [ -n "$v" ] || die "installed, but '$1 --background --version' did not run ($hint)"
+  ok "$v at $1"
+  [ "$(uname -s)" = "Darwin" ] && log "the first Metal render compiles GPU kernels once (~1-2 min); later renders start in seconds"
+  ok "verify discovery: render_capabilities (renderers.Blender) or 'ankusdrive doctor' (studio_render)"
+}
+
+install_blender() {
+  case "$(uname -s)" in
+    Linux)  install_blender_linux ;;
+    Darwin) install_blender_macos ;;
+    *) die "on Windows run: scripts/install-solvers.ps1 blender  (the winget route is 403-blocked upstream: winget fetches the MSI from download.blender.org)" ;;
+  esac
+}
+
 # --- list / status ------------------------------------------------------------
 record_for() { eval "printf '%s' \"\${PINNED_$1:-}\""; }
 
@@ -222,6 +388,22 @@ EOF
       printf '  %-10s wrapper "%s"  [not installed]\n' "$key" "$wrap"
     fi
   done
+  printf '\nStudio backend (own target, not in the no-arg run):\n\n'
+  local found=""
+  case "$(uname -s)" in
+    Darwin) found="$(mac_blender_found)" || found="" ;;
+    Linux)  for found in /opt/blender-* "$HOME"/.local/opt/blender-*; do
+              [ -x "$found/blender" ] && { found="$found/blender"; break; }
+              found=""
+            done ;;
+  esac
+  if [ -n "$found" ]; then
+    printf '  %-10s Blender %s  [installed: %s]\n' blender "$BLENDER_VERSION" "$found"
+  elif command -v blender >/dev/null 2>&1; then
+    printf '  %-10s Blender %s  [on PATH: %s]\n' blender "$BLENDER_VERSION" "$(command -v blender)"
+  else
+    printf '  %-10s Blender %s  (Linux x86_64 tarball / macOS cask; discovery also globs /opt/blender-* and ~/.local/opt/blender-*)\n' blender "$BLENDER_VERSION"
+  fi
   cat <<'EOF'
 
 Build-from-source only (no usable prebuilt CLI — a separate phase):
@@ -230,6 +412,7 @@ Build-from-source only (no usable prebuilt CLI — a separate phase):
              Build RenderKit/ospray_studio with CMake against the OSPRay SDK.
   pbrt       Build pbrt-v4 (CMake) from https://github.com/mmp/pbrt-v4 (experimental upstream).
   cycles     Build the standalone `cycles` CLI (Blender's engine); no standalone build ships.
+             For Cycles quality without a source build, use the `blender` target instead.
 Drop the resulting binary (or a wrapper) on PATH under the registry name
 (ospStudio / pbrt / cycles), then re-run render_capabilities to confirm.
 EOF
@@ -237,17 +420,22 @@ EOF
 
 # --- main ---------------------------------------------------------------------
 main() {
-  local targets=()
+  local targets=() want_blender=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --list|-l) do_list; exit 0 ;;
-      -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+      -h|--help) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 0 ;;
       luxcore|appleseed) targets+=("$1") ;;
+      blender) want_blender=1 ;;
       ospray|pbrt|cycles) die "$1 has no prebuilt CLI; build from source (scripts/install-renderers.sh --list)" ;;
       *) die "unknown argument: $1 (try --list or --help)" ;;
     esac
     shift
   done
+  if [ "$want_blender" = "1" ]; then
+    install_blender
+    [ ${#targets[@]} -eq 0 ] && exit 0
+  fi
   [ ${#targets[@]} -eq 0 ] && targets=($PREBUILT_KEYS)
 
   platform_guard
