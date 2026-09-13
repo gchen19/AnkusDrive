@@ -285,7 +285,7 @@ FreeCAD's bundled `ccx.exe` even though it isn't on PATH.
 | CFD (steady) | SU2 | ✅ fully native: the [Windows binary](https://su2code.github.io/download.html) runs and the CFD runner's SU2 branch is a direct subprocess — no bash/WSL (#203). Set `ANKUSDRIVE_SU2_PATH` (or use the provisioner; `%LOCALAPPDATA%\AnkusDrive\solvers` is auto-discovered) |
 | Transient/radiation thermal | Elmer | ✅ verified native (26.2, portable no-GUI zip via `install-solvers.ps1 elmer` — note: no winget package exists); covers CHT, low-frequency EM, acoustic + harmonic FEM and the geometry bridge (#205) |
 | Slicing | PrusaSlicer | ✅ Windows installer; `ANKUSDRIVE_PRUSASLICER_PATH` |
-| Studio render (photoreal) | Blender (Cycles) | ✅ **verified native** ([#335](https://github.com/gchen19/AnkusDrive/issues/335)): `scripts\install-solvers.ps1 blender` drops the pinned portable zip under `%LOCALAPPDATA%\AnkusDrive\solvers` and `solvers.py` globs `blender.exe` out of it — **no admin, no env var, no PATH entry**. `winget install BlenderFoundation.Blender` is the alternative (lands in `Program Files\Blender Foundation\Blender X.Y`, also auto-discovered). GPU is picked automatically: OptiX/CUDA (NVIDIA), **HIP** (AMD), oneAPI (Intel), else CPU |
+| Studio render (photoreal) | Blender (Cycles) | ✅ **verified native** ([#335](https://github.com/gchen19/AnkusDrive/issues/335)): `scripts\install-solvers.ps1 blender` drops the pinned portable zip under `%LOCALAPPDATA%\AnkusDrive\solvers` and `solvers.py` globs `blender.exe` out of it — **no admin, no env var, no PATH entry**. GPU is picked automatically: OptiX/CUDA (NVIDIA), **HIP** (AMD), oneAPI (Intel), else CPU. ⚠️ The `blender-winget` target / `winget install BlenderFoundation.Blender` **does not work**: winget fetches the MSI from `download.blender.org`, which answers 403 to scripted clients (`0x80190193`) — the same challenge that made the portable target try mirrors first. Use `install-solvers.ps1 blender` |
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD; dedicated venv (`ANKUSDRIVE_BEMPP_PYTHON`) |
 | Full-wave EM | openEMS | ⚠️ prebuilt Windows binaries exist upstream, but not yet wired into the installer scripts |
 | DEM (granular) | YADE (GPL) | ⚠️ no native Windows build — **WSL** |
@@ -338,8 +338,14 @@ Without WSL (or with an unprovisioned distro), these families still degrade clea
   The photoreal path that *is* turnkey on Windows is Blender (issue
   [#335](https://github.com/gchen19/AnkusDrive/issues/335)):
   `pwsh scripts\install-solvers.ps1 blender` (pinned portable zip, no admin, auto-discovered
-  under `%LOCALAPPDATA%\AnkusDrive\solvers`) or `winget install BlenderFoundation.Blender`.
-  See [`RENDERING.md`](RENDERING.md) §3.
+  under `%LOCALAPPDATA%\AnkusDrive\solvers`). See [`RENDERING.md`](RENDERING.md) §3.
+- **`winget install BlenderFoundation.Blender`** (and so the `blender-winget` target) is
+  **broken upstream, not in AnkusDrive**: the winget manifest points at
+  `download.blender.org`, which returns 403 to scripted clients, so winget aborts with
+  `0x80190193 : Forbidden (403)` after resolving the package. winget cannot be pointed at a
+  mirror. The portable target already works around the same challenge by trying official
+  mirrors first, so use it; the winget target stays in the script and will start working
+  again if Blender's CDN stops challenging winget.
 
 ## Process cleanup
 

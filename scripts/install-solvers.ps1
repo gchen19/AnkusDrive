@@ -34,9 +34,11 @@
   STUDIO RENDER (issue #335): the 'blender' target installs full Blender for
   render_photoreal's studio backend - the pinned official portable zip (SHA-256
   checked) extracted under -Dir, where ankusdrive/solvers.py discovers blender.exe with
-  NO env var. 'blender-winget' uses `winget install BlenderFoundation.Blender` instead
-  (per-machine, lands in Program Files\Blender Foundation\Blender X.Y - also
-  auto-discovered). ~1 GB, GPL-3.0, run only as a subprocess; never part of 'all'.
+  NO env var. ~1 GB, GPL-3.0, run only as a subprocess; never part of 'all'.
+  'blender-winget' would install per-machine into Program Files\Blender Foundation\Blender
+  X.Y (also auto-discovered), but CURRENTLY FAILS: winget fetches the MSI from
+  download.blender.org, which 403s scripted clients, and winget cannot use a mirror.
+  Use the 'blender' target.
 
   DISCOVERY: a family resolves its solver via ankusdrive/solvers.py - a wheel must import in
   the venv; a binary is found via ANKUSDRIVE_<SOLVER>_PATH -> PATH -> per-OS dirs -> (for
@@ -188,7 +190,13 @@ function Install-Elmer {
 function Install-Blender {
     Write-Host "== Blender $BLENDER_VER (studio render backend for render_photoreal) =="
     if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
-        throw 'pinned zip is x64; on Windows ARM64 use: winget install BlenderFoundation.Blender'
+        # Blender ships no Windows ARM64 build; the x64 one runs under emulation. winget
+        # is NOT the way to get it (its download 403s - see Install-BlenderWinget), so
+        # point at the mirror the portable target already uses.
+        throw ("pinned zip is x64 and Blender ships no Windows ARM64 build. Install the " +
+               "x64 build by hand (it runs under emulation): " +
+               "$($BLENDER_MIRRORS[0])/Blender$BLENDER_SERIES/blender-$BLENDER_VER-windows-x64.zip " +
+               "then set ANKUSDRIVE_BLENDER_PATH to its blender.exe")
     }
     $name = "blender-$BLENDER_VER-windows-x64"
     $dest = Join-Path $Dir "blender-$BLENDER_VER"
@@ -238,12 +246,26 @@ function Install-Blender {
 }
 
 function Install-BlenderWinget {
+    # KNOWN TO FAIL as of 2026-09 (verified on Windows 11): the BlenderFoundation.Blender
+    # manifest points its installer at download.blender.org, the SAME host that answers
+    # 403 to every scripted client (the Cloudflare challenge that made Install-Blender
+    # try mirrors first). winget cannot be pointed at a mirror, so it dies with
+    #   0x80190193 : Forbidden (403)
+    # after resolving the package. Kept because it starts working again the moment
+    # Blender's CDN stops challenging winget, but 'blender' is the target that works
+    # today - so the failure below names it instead of surfacing a bare exit code.
     Write-Host '== Blender via winget (per-machine install) =='
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         throw 'winget not available - use the portable target instead: install-solvers.ps1 blender'
     }
     & winget install --id BlenderFoundation.Blender --exact --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) { throw "winget install failed ($LASTEXITCODE)" }
+    if ($LASTEXITCODE -ne 0) {
+        throw ("winget install failed ($LASTEXITCODE). winget downloads the MSI from " +
+               "download.blender.org, which returns 403 to scripted clients, so this " +
+               "target is expected to fail until Blender's CDN stops challenging it. " +
+               "Use the portable target, which tries official mirrors first and is " +
+               "auto-discovered all the same:  scripts\install-solvers.ps1 blender")
+    }
     Write-Host '  installed under Program Files\Blender Foundation - auto-discovered; verify with ankusdrive doctor'
 }
 

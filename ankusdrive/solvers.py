@@ -480,8 +480,11 @@ _SOLVERS: dict = {
                         "official tarball, auto-discovered) or 'sudo snap install blender "
                         "--classic'; macOS (Apple Silicon) 'brew install --cask blender' (or "
                         "'scripts/install-renderers.sh blender'; Intel Macs: Blender 4.5 "
-                        "LTS from blender.org); Windows 'winget install "
-                        "BlenderFoundation.Blender' (or 'scripts/install-solvers.ps1 blender') "
+                        "LTS from blender.org); Windows 'scripts/install-solvers.ps1 blender' "
+                        "(pinned portable zip, no admin, auto-discovered — prefer it: "
+                        "'winget install BlenderFoundation.Blender' currently fails 403 "
+                        "because winget fetches the MSI from download.blender.org, which "
+                        "challenges scripted clients) "
                         "— or set ANKUSDRIVE_BLENDER_PATH to the blender executable",
     },
 }

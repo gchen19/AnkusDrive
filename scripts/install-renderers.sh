@@ -367,7 +367,7 @@ install_blender() {
   case "$(uname -s)" in
     Linux)  install_blender_linux ;;
     Darwin) install_blender_macos ;;
-    *) die "on Windows run: scripts/install-solvers.ps1 blender  (or winget install BlenderFoundation.Blender)" ;;
+    *) die "on Windows run: scripts/install-solvers.ps1 blender  (the winget route is 403-blocked upstream: winget fetches the MSI from download.blender.org)" ;;
   esac
 }
 

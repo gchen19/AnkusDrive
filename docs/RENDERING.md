@@ -38,7 +38,7 @@ is about whether a usable **binary** is obtainable.
 
 | `renderer=` | Status | How to get it | Assemblies · per-part appearance · studio scene · `.blend` |
 |---|---|---|---|
-| **`Blender`**    | ✅ works (preferred by `auto`) | Linux `scripts/install-renderers.sh blender` or `snap install blender --classic` · macOS `brew install --cask blender` · Windows `scripts/install-solvers.ps1 blender` or `winget install BlenderFoundation.Blender` | ✅ · ✅ · ✅ · ✅ — Blender **4.2+** (5.2 LTS pinned). No Render add-on needed. |
+| **`Blender`**    | ✅ works (preferred by `auto`) | Linux `scripts/install-renderers.sh blender` or `snap install blender --classic` · macOS `brew install --cask blender` · Windows `scripts/install-solvers.ps1 blender` (winget route is 403-blocked upstream — §3) | ✅ · ✅ · ✅ · ✅ — Blender **4.2+** (5.2 LTS pinned). No Render add-on needed. |
 | **`Povray`**     | ✅ works (`auto` fallback) | `apt install povray` · `brew install povray` · Windows installer | Assembly fused to one shape, one card, stock template. Fast; lower ceiling. |
 | **`Luxcore`**    | ✅ works | `scripts/install-renderers.sh` (LuxCore **v2.6 SDK**) | One shape/card. Highest add-on quality + PBR; needs the `-sdk` build (`luxcoreconsole`). |
 | **`Appleseed`**  | ✅ works (one material caveat — §6) | `scripts/install-renderers.sh` (Appleseed **2.1.0-beta**, 2019 final build) | One shape/card. Console renderer `appleseed.cli`. |
@@ -91,11 +91,16 @@ as a subprocess running a script AnkusDrive ships (nothing is linked). Any Blend
 | Linux (alt)  | `sudo snap install blender --classic` | `/snap/bin/blender` |
 | macOS        | `brew install --cask blender` (or `scripts/install-renderers.sh blender`) | `/Applications/Blender.app` (or `~/Applications`) |
 | Windows      | `pwsh scripts\install-solvers.ps1 blender` (portable, no admin) | `%LOCALAPPDATA%\AnkusDrive\solvers\blender-5.2.1\…\blender.exe` |
-| Windows (alt)| `winget install BlenderFoundation.Blender` (or the `blender-winget` target) | `Program Files\Blender Foundation\Blender 5.2` |
+| Windows (alt)| ⚠️ `winget install BlenderFoundation.Blender` (the `blender-winget` target) — **currently fails**, see below | `Program Files\Blender Foundation\Blender 5.2` (discovered if you get it installed some other way) |
 
 The scripted downloads verify the official SHA-256 manifest and try the official
 mirrors first — `download.blender.org` challenges scripted clients (HTTP 403), so a
-plain `curl` of it fails. Override with `BLENDER_MIRRORS="<base url> …"`. Linux arm64
+plain `curl` of it fails. **That is also why the Windows `winget` route does not work**:
+the `BlenderFoundation.Blender` manifest points its installer at `download.blender.org`,
+and winget cannot be redirected to a mirror, so it aborts with `0x80190193 : Forbidden
+(403)` right after resolving the package (verified on Windows 11, 2026-09). Use
+`install-solvers.ps1 blender`, which tries the mirrors. Override with
+`BLENDER_MIRRORS="<base url> …"`. Linux arm64
 has no official build (use a distro package + `ANKUSDRIVE_BLENDER_PATH`). Blender 5.x is
 Apple-Silicon-only on macOS, and so is the brew cask (it has no Intel variant); on an
 Intel Mac install Blender 4.5 LTS from blender.org instead. On macOS the script keeps an
