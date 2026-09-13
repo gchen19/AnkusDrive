@@ -283,18 +283,32 @@ jobs:
     # The live in-VM solves themselves are covered by lanes A/B and the hosted image
     # lane; the Multipass daemon itself is #365's question.
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       RUN_HEAVY_SOLVES: "1"
+    defaults:
+      run:
+        shell: bash -el {0}   # login shell so the conda env stays activated
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # FreeCAD on the host: test_su2_case's channel gates drive the real worker. Same
+      # conda-forge pin as the Linux lanes, so every lane tests one FreeCAD line.
+      - name: Set up Miniforge (conda-forge)
+        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
         with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: ankusdrive
           python-version: "3.11"
 
-      - name: Install AnkusDrive
-        run: python -m pip install -e .
+      - name: Install FreeCAD 1.1 + AnkusDrive
+        run: |
+          conda install -y "freecad>=1.1,<1.2"
+          python -m pip install -e .
+          echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
+          freecadcmd --version 2>&1 | head -1 || true
 
       # SU2's official macOS build is x86_64. Provision Rosetta if the image lacks it,
       # then prove translation actually runs before anything depends on it.
