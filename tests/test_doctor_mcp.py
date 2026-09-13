@@ -77,7 +77,7 @@ def _fake_mcp_2_0_0():
 
 def test_pin_fix_is_the_pyproject_pin_verbatim():
     """The remediation string is what the user must type, character for character."""
-    assert doctor.MCP_PIN_FIX == 'pip install "mcp>=1.2,<2"', doctor.MCP_PIN_FIX
+    assert doctor.MCP_PIN_FIX == 'pip install "mcp>=1.10,<2"', doctor.MCP_PIN_FIX
 
 
 def test_python_report_flags_an_untested_interpreter():
@@ -126,7 +126,7 @@ def test_mcp_2_0_0_fails_the_section_with_the_pin_printed_verbatim():
     text = "\n".join(lines)
     assert doctor._MARK["missing"] in text, text
     assert "mcp 2.0.0 installed" in text, text
-    assert 'pip install "mcp>=1.2,<2"' in text, text
+    assert 'pip install "mcp>=1.10,<2"' in text, text
 
 
 def test_serve_probe_is_skipped_when_the_import_is_broken():

@@ -157,6 +157,19 @@ def test_description_is_the_registry_description():
         "mcpb/manifest.json and server.json describe the server differently — keep one sentence"
 
 
+def test_privacy_policy_is_declared_and_exists():
+    """Anthropic's directory rejects a local extension without one (#368): an HTTPS
+    URL in `privacy_policies` that points at a policy actually in the repo."""
+    urls = _manifest().get("privacy_policies")
+    assert isinstance(urls, list) and urls, "mcpb/manifest.json has no privacy_policies"
+    for url in urls:
+        m = re.fullmatch(r"https://github\.com/gchen19/AnkusDrive/blob/main/(.+)", url)
+        assert m, f"privacy policy URL {url!r} is not an HTTPS link into this repo"
+        assert (REPO / m.group(1)).is_file(), f"{url} points at {m.group(1)}, which does not exist"
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert re.search(r"^## Privacy Policy$", readme, re.M), "README.md has no Privacy Policy section"
+
+
 def test_icon_is_a_512px_png():
     data = (REPO / "logo" / "icon" / "ankusdrive-icon-512.png").read_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n", "icon source is not a PNG"

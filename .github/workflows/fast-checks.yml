@@ -93,6 +93,11 @@ jobs:
         # admits them, base digest-pinned. The introspection-image job builds it.
         run: python tests/test_dockerfile.py
 
+      - name: Tool annotations — every tool classified, read-only means read-only (#368)
+        # Clients auto-approve tools marked read-only. Sweeps every @mcp.tool() into
+        # exactly one class and fails a READ_ONLY tool whose handler visibly mutates.
+        run: python tests/test_tool_annotations.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.

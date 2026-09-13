@@ -21,6 +21,29 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
+## [Unreleased]
+
+### Added
+
+- Every MCP tool now carries a display `title` and behaviour hints (`readOnlyHint`,
+  `destructiveHint`, `openWorldHint: false`), so clients can auto-approve the 143
+  read-only tools and ask before the 46 that may change or remove existing state
+  (closing documents, overwriting files, editing objects, `run_script`). The
+  classification lives in one registry, `ankusdrive/tool_annotations.py`, with each
+  destructive mark's reason. The server refuses to import with an unclassified tool,
+  and a fast-lane test fails a read-only tool whose handler visibly mutates
+  ([#368](https://github.com/gchen19/AnkusDrive/issues/368)).
+- `PRIVACY.md`, plus a README Privacy Policy section and `privacy_policies` in the
+  MCPB manifest. AnkusDrive collects nothing and its code makes no network requests;
+  the policy lists exactly what is stored locally and where
+  ([#368](https://github.com/gchen19/AnkusDrive/issues/368)).
+
+### Changed
+
+- The `mcp` floor rises from 1.2 to **1.10**, the first release whose FastMCP tools
+  carry a `title`. Below it the annotations would be silently dropped
+  ([#368](https://github.com/gchen19/AnkusDrive/issues/368)).
+
 ## [0.5.3] — 2026-09-12
 
 The release that makes AnkusDrive a one-click install. Every GitHub release now

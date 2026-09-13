@@ -135,8 +135,8 @@ def test_rewrites_per_kind():
 
 def test_non_extra_pip_hints_become_reinstalls():
     ik = _ik()
-    pin = 'pip install "mcp>=1.2,<2"'
-    assert ik.adapt(pin, {"ANKUSDRIVE_INSTALL_KIND": "pipx"}) == 'pipx runpip ankusdrive install "mcp>=1.2,<2"'
+    pin = 'pip install "mcp>=1.10,<2"'
+    assert ik.adapt(pin, {"ANKUSDRIVE_INSTALL_KIND": "pipx"}) == 'pipx runpip ankusdrive install "mcp>=1.10,<2"'
     assert "reinstall" in ik.adapt(pin, {"ANKUSDRIVE_INSTALL_KIND": "mcpb"})
     assert "--refresh" in ik.adapt(pin, {"ANKUSDRIVE_INSTALL_KIND": "uvx"})
     assert ik.adapt(pin, {"ANKUSDRIVE_INSTALL_KIND": "uv_tool"}) == "uv tool install --reinstall ankusdrive"
