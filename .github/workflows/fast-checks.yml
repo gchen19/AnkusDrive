@@ -82,6 +82,12 @@ jobs:
         # this sweeps for any that bypass it and pins the per-kind rewrites.
         run: python tests/test_install_hints.py
 
+      - name: Smithery stopgap — the Smithery copy changes only what Smithery rejects (#201)
+        # Until smithery-ai/cli#801, scripts/smithery_mcpb.py relabels the release
+        # bundle uv -> python and drops the sample tools. The relabel is only safe
+        # while mcp_config still launches via `uv run`; this pins that.
+        run: python tests/test_smithery_mcpb.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.
