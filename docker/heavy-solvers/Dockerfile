@@ -180,6 +180,13 @@ RUN BEMPP_VENV=/opt/venv-bempp bash /src/ankusdrive/scripts/install-solvers.sh a
 RUN cd /src/ankusdrive && PY=/opt/venv/bin/python3 PREFIX=/opt/freecad BINDIR=/usr/local/bin \
       bash scripts/install-freecad-appimage.sh
 
+# export_drawing's PDF leg rasterises inside FreeCAD's BUNDLED Python, so svglib +
+# reportlab go there, not in the driver venv. svglib<1.6 per pyproject.toml's note
+# (1.6 drags in rlPyCairo -> a native pycairo build). Without them test_worker's PDF
+# leg SKIPs — the one thing the self-hosted box covered that this image did not (#340).
+RUN /opt/freecad/squashfs-root/usr/bin/python -m pip install -q "svglib<1.6" reportlab \
+ && /opt/freecad/squashfs-root/usr/bin/python -c "import svglib, reportlab"
+
 # Absolute wiring. Discovery would find most of these under $HOME, but a GitHub
 # container job runs with HOME=/github/home, so nothing may depend on it.
 ENV ANKUSDRIVE_FREECADCMD=/opt/freecad/squashfs-root/usr/bin/freecadcmd \
