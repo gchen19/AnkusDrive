@@ -72,6 +72,7 @@ on:
       - "tests/test_macos_relay_shim.py"
       - "tests/test_su2_case.py"
       - "tests/ci/**"
+      - "scripts/ci-qemu-vm.sh"
       - ".github/workflows/heavy-solves.yml"
   workflow_dispatch:
     inputs:
@@ -347,6 +348,110 @@ jobs:
           bash tests/run_macos_heavy.sh
           tests/test_wsl_routing.py tests/test_su2_native.py tests/test_su2_case.py
           tests/test_macos_relay_shim.py
+
+  heavy-vmdisk:
+    name: arm64 solver image -> VM disk (for lane D)
+    # Lane D (#365) runs the solvers in a real Linux VM on a hosted Mac. The VM's solver
+    # root is the arm64 half of the same pinned ankusdrive-heavy manifest the other
+    # lanes use, exported to an ext4 disk. `docker export` drops the image's ENV, so it
+    # is saved into the disk (/etc/ankusdrive-heavy/image.env) for lane D to read back.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # keep in lockstep with heavy-solves-hosted's pin
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:5f4f71833daeefa1973144fd84a5be9509cbeb0bde290655958556060a437429  # sha-275a711, linux/amd64 + linux/arm64
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Export the arm64 rootfs + image env into an ext4 qcow2
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq qemu-utils >/dev/null
+          docker pull --platform linux/arm64 "$HEAVY_IMAGE"
+          cid=$(docker create --platform linux/arm64 "$HEAVY_IMAGE")
+          sudo mkdir -p /mnt/root
+          docker export "$cid" | sudo tar -x -C /mnt/root --numeric-owner
+          sudo mkdir -p /mnt/root/etc/ankusdrive-heavy
+          docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cid" \
+            | sudo tee /mnt/root/etc/ankusdrive-heavy/image.env >/dev/null
+          docker rm "$cid" >/dev/null; docker image rm "$HEAVY_IMAGE" >/dev/null || true
+          used=$(sudo du -sm /mnt/root | cut -f1); size=$(( used * 12 / 10 + 2048 ))
+          echo "rootfs ${used} MiB -> disk ${size} MiB"
+          sudo truncate -s "${size}M" heavy.raw
+          sudo mkfs.ext4 -q -L heavy -d /mnt/root heavy.raw
+          sudo rm -rf /mnt/root
+          sudo qemu-img convert -c -O qcow2 heavy.raw heavy.qcow2
+          sudo rm -f heavy.raw
+          sudo chown "$(id -u)" heavy.qcow2; ls -lh heavy.qcow2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: heavy-arm64-vmdisk
+          path: heavy.qcow2
+          compression-level: 0
+          retention-days: 1
+
+  heavy-solves-macos-vm:
+    name: macOS Multipass path into a real Linux VM — live solves under emulation (hosted)
+    # Lane D of #341 (#365). Hosted Apple-Silicon runners cannot run Multipass (no nested
+    # virtualization), but they can run QEMU's pure software emulation: this boots a real
+    # arm64 Linux VM with the solver stack (scripts/ci-qemu-vm.sh) and drives it through
+    # the UNMODIFIED macOS code — bash_argv -> `multipass exec` — via tests/ci/multipass
+    # in its SSH/chroot mode, over a real virtio-9p mount at the same absolute path.
+    # The real macOS lane's own preflight (ci-macos-preflight.sh --fsi) gates it.
+    # Measured in the #365 trial: live solves ~8x native, results identical to 6-7
+    # significant figures, 9p clean over 10 runs. What this still does not exercise is
+    # Multipass's own daemon and its sshfs mount.
+    needs: heavy-vmdisk
+    runs-on: macos-latest
+    timeout-minutes: 240
+    env:
+      RUN_HEAVY_SOLVES: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install AnkusDrive (host side)
+        run: python -m pip install -e .
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: heavy-arm64-vmdisk
+          path: ${{ runner.temp }}/vmdisk
+
+      - name: Boot the solver VM (QEMU TCG, 9p scratch, chroot)
+        env:
+          HEAVY_DISK: ${{ runner.temp }}/vmdisk/heavy.qcow2
+        run: |
+          bash scripts/ci-qemu-vm.sh
+          echo "$GITHUB_WORKSPACE/tests/ci" >> "$GITHUB_PATH"   # `multipass` -> the VM
+
+      - name: Preflight — the real macOS lane's substrate checks, against the VM
+        run: bash scripts/ci-macos-preflight.sh --fsi
+
+      - name: Live solves through the macOS Multipass path
+        env:
+          ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # ran as its own step above
+        run: >-
+          bash tests/run_macos_heavy.sh
+          tests/test_fsi.py tests/test_openfoam.py tests/test_meshbridge.py
+          tests/test_molding_fill.py
+
+      - name: VM console on failure
+        if: failure()
+        run: tail -80 "$RUNNER_TEMP/vm/console.log" || true
 
   heavy-solves-macos:
     name: macOS substrate regressions — SU2/Rosetta + FSI/Multipass (self-hosted)
