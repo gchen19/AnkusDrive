@@ -25,6 +25,7 @@ Docs fall into two kinds:
 | [`SIMULATION_TOOLS.md`](SIMULATION_TOOLS.md) | The analysis-family catalog + result schemas (pure-Python oracle vs external-solver split). |
 | [`SIMULATION_EXAMPLES.md`](SIMULATION_EXAMPLES.md) | Per-family proof harness (toy problems with known answers). Every family in it has shipped; the tier tags now record build cost, not status. |
 | [`SIMULATION_NEXT.md`](SIMULATION_NEXT.md) | The normative `fidelity`/`band_pct` + escalation contract (asserted by `tests/test_cost.py`, `test_dfx.py`, `test_convection.py`), plus the Tier A/B record of why each family was built. Its own sequence is fully executed. |
+| [`CONTAINER_SUBSTRATE.md`](CONTAINER_SUBSTRATE.md) | Running the OpenFOAM-backed families (CFD, FSI, molding fill, meshbridge) inside the prebuilt solver container: `ANKUSDRIVE_SUBSTRATE=container`, the same-path scratch mount, in-container paths. |
 | [`MOLDING_FILL_SOLVER.md`](MOLDING_FILL_SOLVER.md) | Injection-molding fill/pack/cool/warp solver reference + gotchas. |
 | [`RENDERING.md`](RENDERING.md) | Render support matrix, install, limitations. |
 | [`RENDER_WORKBENCH.md`](RENDER_WORKBENCH.md) | Photoreal rendering architecture + operator guide. |

@@ -448,7 +448,8 @@ def _fmt_solvers(caps: dict) -> list[str]:
             # — "ready" on a box with no local OpenFOAM is otherwise baffling.
             via = {solver_states[s].get("via") for s in drivable}
             substrate = (" (in WSL)" if "wsl" in via else
-                         " (in Multipass VM)" if "multipass" in via else "")
+                         " (in Multipass VM)" if "multipass" in via else
+                         " (in container)" if "container" in via else "")
             lines.append(f"{_MARK['ok']} {fam:<16} ready via {ready}{substrate}")
             continue
         # nothing ready: prefer the unwired (installed-but-not-wired) hint if present,
