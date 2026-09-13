@@ -148,7 +148,8 @@ def test_fsi_coupled_plate_deflects():
         case_dir, end_time_s=0.04, time_window_s=0.01, max_iterations=20)
     res = fsi_case.run_coupled_fsi(case_dir, timeout_s=500)
 
-    assert res["ok"], f"coupled solve did not complete cleanly: {res.get('log_tail')}"
+    assert res["ok"], ("coupled solve did not complete cleanly:\n--- fluid ---\n"
+                       f"{res.get('fluid_log_tail')}\n--- solid ---\n{res.get('log_tail')}")
     assert res["returncode_fluid"] == 0 and res["returncode_solid"] == 0, res
     assert res["coupling_converged"], "preCICE did not reach the final time window"
     assert res["time_windows"] >= 4, res["time_windows"]

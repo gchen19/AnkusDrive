@@ -925,6 +925,11 @@ def test_clear_declared_blinds_the_config_file_not_just_the_env():
     declared = "/nonexistent/openfoam/platforms/bin/simpleFoam"
     real_load = adconfig.load
     adconfig.load = lambda: {"solvers": {"openfoam_path": declared}}
+    # The control reads the FILE layer, but env outranks it: on a machine that exports
+    # ANKUSDRIVE_OPENFOAM_PATH (the heavy-solver image does, #340) the control saw the
+    # env value instead. Take the env var out of the way for this test's duration —
+    # the mirror image of the #313 defect, on the other layer.
+    saved_env = os.environ.pop("ANKUSDRIVE_OPENFOAM_PATH", None)
     try:
         # Control: unblinded, the declaration IS honoured — the fake has real teeth.
         seen = adconfig.get("ANKUSDRIVE_OPENFOAM_PATH")
@@ -943,6 +948,8 @@ def test_clear_declared_blinds_the_config_file_not_just_the_env():
         assert adconfig.get("ANKUSDRIVE_OPENFOAM_PATH") == declared, "helper did not restore"
     finally:
         adconfig.load = real_load
+        if saved_env is not None:
+            os.environ["ANKUSDRIVE_OPENFOAM_PATH"] = saved_env
 
 
 def test_clear_declared_leaves_the_env_layer_working():

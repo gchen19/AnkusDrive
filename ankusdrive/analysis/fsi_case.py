@@ -173,7 +173,7 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     log for the final tip displacement.
 
     Returns ``{ok, returncode_fluid, returncode_solid, time_windows, tip_disp_m,
-    tip_history, coupling_converged, log_tail}``. ``ok`` is true when both
+    tip_history, coupling_converged, log_tail (Solid), fluid_log_tail}``. ``ok`` is true when both
     participants exit 0 and preCICE reached the final time window."""
     fluid = os.path.join(case_dir, "fluid-openfoam")
     solid = os.path.join(case_dir, "solid-calculix")
@@ -218,6 +218,14 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     # after the source would drop OF's own libs (libregionFaModels.so etc.) and
     # pimpleFoam fails to load. So we prepend, never clobber. FOAM_USER_LIBBIN
     # exports AFTER the source for the same reason (the bashrc recomputes it).
+    #
+    # The adapter dir goes on LD_LIBRARY_PATH too. The bashrc adds only its DEFAULT
+    # user lib dir ($HOME/OpenFOAM/$USER-v<ver>/.../lib) to the loader path while it
+    # is sourced; re-exporting FOAM_USER_LIBBIN afterwards does not reach dlopen. So an
+    # adapter anywhere else — an ANKUSDRIVE_OPENFOAM_ADAPTER_LIB override, a container
+    # image, a job whose $HOME differs from the build's — failed with "Unknown function
+    # type preciceAdapterFunctionObject", and the Solid then sat at the handshake until
+    # the timeout (#340; reproduced on a native install by changing $HOME alone).
     solid_log = os.path.join(case_dir, "solid.log")
     fluid_log = os.path.join(case_dir, "fluid.log")
 
@@ -226,9 +234,10 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
          'export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"'],
         f"'{ccxbin}' -i flap -precice-participant Solid")
     ofa = solvers.openfoam_adapter_lib_dir()
+    loader = f"'{ofa}':'{lib}'" if ofa else f"'{lib}'"
     fluid_script = _participant_script(
         [f"source '{of_bashrc}' >/dev/null 2>&1",
-         f"export LD_LIBRARY_PATH='{lib}':\"$LD_LIBRARY_PATH\"",
+         f"export LD_LIBRARY_PATH={loader}:\"$LD_LIBRARY_PATH\"",
          (f"export FOAM_USER_LIBBIN='{ofa}'" if ofa else ""),
          'export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"'],
         "pimpleFoam")
@@ -249,7 +258,13 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     rc_fluid = rc_solid = None
     try:
         while time.time() < deadline:
-            if fluid_proc.poll() is not None and solid_proc.poll() is not None:
+            rf, rs = fluid_proc.poll(), solid_proc.poll()
+            if rf is not None and rs is not None:
+                break
+            # A participant that died non-zero can never be joined by its partner,
+            # which would otherwise block at the preCICE handshake for the whole
+            # timeout. Stop now; the logs below say why.
+            if (rf is not None and rf != 0) or (rs is not None and rs != 0):
                 break
             time.sleep(1.0)
         rc_fluid = fluid_proc.poll()
@@ -261,10 +276,11 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     tip = parse_tip_watchpoint(solid)
     windows = _count_time_windows(solid_log)
     converged = _reached_end(solid_log)
-    tail = ""
-    if os.path.exists(solid_log):
-        with open(solid_log, encoding="utf-8") as fh:
-            tail = fh.read()[-1500:]
+    def _tail(path):
+        if not os.path.exists(path):
+            return ""
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()[-1500:]
 
     ok = (rc_fluid == 0 and rc_solid == 0 and converged)
     return {
@@ -275,7 +291,10 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
         "tip_disp_m": tip.get("tip_disp_m") if tip else None,
         "tip_history": tip.get("history") if tip else None,
         "coupling_converged": converged,
-        "log_tail": tail,
+        "log_tail": _tail(solid_log),
+        # the Solid log alone shows only a stalled handshake when the FLUID is what
+        # failed — which is the usual way this solve breaks
+        "fluid_log_tail": _tail(fluid_log),
     }
 
 

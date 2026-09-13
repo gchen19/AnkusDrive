@@ -65,8 +65,14 @@ on:
       - "tests/test_granular.py"
       - "tests/test_warpage.py"
       - "tests/test_molding_fill.py"
+      - "scripts/ci-linux-preflight.sh"
       - ".github/workflows/heavy-solves.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      hosted_only:
+        description: "Run only the GitHub-hosted lane (leave the self-hosted boxes idle)"
+        type: boolean
+        default: false
   schedule:
     - cron: "0 6 * * *"   # 06:00 UTC daily — slow-drift guard
 
@@ -88,6 +94,7 @@ jobs:
     # and the steps are bash + AppImage. The Windows box shares the `ankusdrive` label, so
     # without this an unrelated Windows job could match. OS label is auto-applied.
     runs-on: [self-hosted, ankusdrive, Linux]
+    if: ${{ !inputs.hosted_only }}
     # The full suite plus every live solve — molding (~15 min), the openEMS /
     # Bempp / FSI / Elmer / YADE solves on top. 90 min bounds a wedged solver
     # without cutting a real run.
@@ -120,12 +127,59 @@ jobs:
       - name: Run full suite WITH live external-solver solves
         run: bash tests/run_all.sh
 
+  heavy-solves-hosted:
+    name: Live external-solver regressions (Linux, hosted image)
+    # The same suite as the self-hosted job above, on a GitHub-hosted runner inside
+    # the prebuilt solver image (#339, docker/heavy-solvers/Dockerfile) — #340 of the
+    # move off self-hosted runners (#338). Both jobs run side by side until #342 shows
+    # this one tests the same things; then the self-hosted one is removed (#343).
+    runs-on: ubuntu-latest
+    # Unmeasured on 4 hosted cores (the self-hosted run is ~36 min on 24). Generous
+    # until #342 records real timings, then tighten.
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # Digest-pinned: a rebuild of the image never changes what this lane tests until
+      # this line changes. heavy-image.yml's run summary prints the digest to pin.
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:f86cca6b3491ebb995bfde7e91b303921ad76442ad02b794520e6bcfa3f81d8b  # sha-0c4567f
+    steps:
+      # Not `container:` — that pulls the image before any step, leaving no chance to
+      # free the runner's disk first, and this image plus the suite's case dirs need it.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull solver image
+        run: |
+          docker pull "$HEAVY_IMAGE"
+          df -h /
+
+      # Its own step, so a missing solver is attributed here — by name — instead of
+      # surfacing as a green suite full of SKIPs.
+      - name: Preflight — every heavy solver resolves
+        run: bash scripts/ci-heavy-docker.sh bash scripts/ci-linux-preflight.sh
+
+      - name: Run full suite WITH live external-solver solves
+        run: bash scripts/ci-heavy-docker.sh bash tests/run_all.sh
+
   heavy-solves-macos:
     name: macOS substrate regressions — SU2/Rosetta + FSI/Multipass (self-hosted)
     # Pin `macOS`: the Linux and Windows self-hosted boxes share the `ankusdrive` label,
     # and this job's substrate (Multipass, Rosetta) exists only on the Mac. The OS
     # label is auto-applied by the Actions runner.
     runs-on: [self-hosted, ankusdrive, macOS]
+    if: ${{ !inputs.hosted_only }}
     # Far short of the Linux lane's 90: this is three files, not the whole suite —
     # measured ~10s of solve on the reference box (FSI 8.9s for four preCICE windows,
     # SU2 0.2s). The budget is almost entirely headroom for a WEDGED VM, where
