@@ -88,6 +88,11 @@ jobs:
         # while mcp_config still launches via `uv run`; this pins that.
         run: python tests/test_smithery_mcpb.py
 
+      - name: Introspection image — Dockerfile keeps building for Glama (#201)
+        # Static half: COPYs cover pyproject's readme/license-files, .dockerignore
+        # admits them, base digest-pinned. The introspection-image job builds it.
+        run: python tests/test_dockerfile.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.
@@ -98,6 +103,23 @@ jobs:
         # files from the loaders, and rebuilds once with a trimmed package-data to
         # prove the assertion can fail. Seconds, no FreeCAD, no network.
         run: python tests/test_package_data.py
+
+  introspection-image:
+    # Glama builds the root Dockerfile and reads the tool list over stdio; a failed
+    # build drops the listing from search, and awesome-mcp-servers needs it passing
+    # (#201). Build the same image and prove it serves — no FreeCAD inside, so the
+    # probe tool (setup_status) must answer and report FreeCAD absent, not crash.
+    name: Introspection image (Glama)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build
+        run: docker build -t ankusdrive-introspect .
+
+      - name: Serve over stdio — initialize, list tools, call setup_status
+        run: python3 scripts/mcp_stdio_probe.py --min-tools 250 --call setup_status -- docker run -i --rm ankusdrive-introspect
 
   secrets:
     name: Secret scan (git history)
