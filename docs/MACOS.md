@@ -313,6 +313,12 @@ the Blender photoreal tests pass. Expect the **first** render to spend ~90 s com
 Metal kernels (cached afterwards). Blender 5.x — and the cask — are Apple Silicon only;
 Intel Macs need Blender 4.5 LTS from blender.org.
 
+![Blender studio render on Apple Silicon: meshed brass and steel gears on anodized bosses](../artifacts/rendering/render_blender_studio_macos.png)
+
+*Built and rendered entirely through MCP tool calls (`add_primitive`, `add_bearing`,
+`add_gear`, `transform`, then one `render_photoreal` with nine per-part appearances):
+`quality="final"` (384 samples, OIDN), 1280×960, `device` auto → `METAL`, 15 s on an M4 Max.*
+
 ## CI: the Apple-Silicon lane
 
 Everything above was verified by hand. [`heavy-solves.yml`](../.github/workflows/heavy-solves.yml)
