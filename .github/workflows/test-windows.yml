@@ -98,6 +98,11 @@ jobs:
           .\.venv\Scripts\python.exe -m ankusdrive doctor --no-boot
           # doctor exits nonzero if FreeCAD is unresolved -> the run fails fast here.
 
+      - name: Preflight - SU2 / Elmer / CalculiX resolve (a missing solver fails, not SKIPs)
+        # #316: this lane once ran green for weeks testing neither SU2 nor Elmer. Assert
+        # the predicates the tests gate on, so "absent" is a named failure here.
+        run: .\scripts\ci-windows-preflight.ps1
+
       - name: Run Windows test suite
         run: .\tests\run_all.ps1
 

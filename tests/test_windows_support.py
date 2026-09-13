@@ -335,6 +335,27 @@ def test_readme_has_a_windows_quickstart_pointing_at_the_script():
     assert "claude mcp add ankusdrive" in readme, "README never shows the MCP registration one-liner"
 
 
+def test_bundled_ccx_found_beside_a_root_level_freecadcmd():
+    """#316: the Windows portable 7z has a FreeCADCmd.exe at the archive root AND the real
+    bin\\ (where ccx.exe lives). When freecadcmd resolves to the root one, FreeCAD-bundled
+    solver discovery must still probe <root>\\bin, or calculix goes absent and its tests
+    SKIP green. Real temp dirs, so no path-API patching."""
+    import tempfile
+    from ankusdrive import solvers
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(os.path.join(root, "bin"))
+        fc = os.path.join(root, "FreeCADCmd.exe")
+        ccx = os.path.join(root, "bin", "ccx.exe")
+        for f in (fc, ccx):
+            Path(f).touch()
+        with _patch() as p:
+            p.set(client, "_resolve_freecadcmd", lambda: fc)
+            p.set(client, "_freecadcmd_candidates", lambda: [])
+            dirs = solvers._freecad_bundled_bin_dirs()
+        assert os.path.join(root, "bin") in dirs, dirs
+        assert any(os.path.isfile(os.path.join(d, "ccx.exe")) for d in dirs), dirs
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

@@ -59,6 +59,7 @@ ALLOWED = {
     # when the shims do, in 0.6.
     "scripts/ci-macos-preflight.sh": "fails a runner whose .env is still on the legacy prefix",
     "scripts/ci-linux-preflight.sh": "fails a heavy-lane environment still on the legacy prefix (#339)",
+    "scripts/ci-windows-preflight.ps1": "fails a Windows-lane environment still on the legacy prefix (#316)",
     "docs/MACOS.md":                 "documents the pre-0.5 runner .env + solver dir, and the migration",
     # NOTE: logo/ was exempt while the pre-rename artwork was still tracked — that
     # mark is a drift pin threading a reticle, so the picture and its filenames WERE
