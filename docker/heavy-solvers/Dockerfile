@@ -189,7 +189,14 @@ RUN python3 -m venv /opt/venv \
  && pip install -q --upgrade pip \
  && pip install -q "/src/ankusdrive[mbd,topology,optics,fluids,optics_gpl]" "ruff==0.15.15" build
 
-# Bempp (dedicated venv — meshio>=5 clashes with solidspy's meshio==3)
+# Bempp (dedicated venv — meshio>=5 clashes with solidspy's meshio==3). Its shape
+# generators shell out to a gmsh CLI, which the pip wheel supplies — except on Linux
+# aarch64, where PyPI has no gmsh wheel, so arm64 takes the CLI from apt (#363).
+# (Here in `final`, not `system`, so adding it did not invalidate every stage's cache.)
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends gmsh && gmsh --version; \
+    fi
 RUN BEMPP_VENV=/opt/venv-bempp bash /src/ankusdrive/scripts/install-solvers.sh acoustics_bem
 
 # FreeCAD from the pinned AppImage, live-verified (worker ping + a CalculiX solve)
