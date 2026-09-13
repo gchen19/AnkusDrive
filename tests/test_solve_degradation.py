@@ -41,7 +41,15 @@ _EXPECTED_FAMILIES = {"mbd", "topology", "cfd", "thermal_transient", "optics"}
 # test_helpers_patch_every_resolution_primitive derives the real set from
 # find_solver's AST and fails when this tuple falls behind.
 _RESOLUTION_PRIMITIVES = ("_module_available", "_binary_path", "_vm_binary_path",
-                          "_interpreter_python", "_unwired_found")
+                          "_interpreter_python", "_unwired_found",
+                          "_host_discovery_applies")
+
+
+# Env vars that select WHERE substrate solvers run (#361). _clear_declared always
+# clears them: a host that exports ANKUSDRIVE_SUBSTRATE=container would otherwise
+# route every macOS/Linux resolution test through the container branch.
+_SUBSTRATE_SELECTION = ("ANKUSDRIVE_SUBSTRATE", "ANKUSDRIVE_CONTAINER",
+                        "ANKUSDRIVE_CONTAINER_ENGINE")
 
 
 class _patched_resolution:
@@ -84,6 +92,9 @@ class _force(_patched_resolution):
                             else (lambda name, spec: None),
             # the host path answers when forcing present; nothing answers from a VM
             "_vm_binary_path": lambda name, spec: None,
+            # a host with ANKUSDRIVE_SUBSTRATE=container would otherwise skip host
+            # discovery and ignore the forced _binary_path answer (#361)
+            "_host_discovery_applies": lambda: True,
             # dedicated-interpreter solvers (#351) resolve in their own interpreter
             "_interpreter_python": (lambda name, spec: "/fake/venv/bin/python3")
                                    if self.available else (lambda name, spec: None),
@@ -349,6 +360,9 @@ def _clear_declared(*names):
     Blinding `config.load` — rather than deleting keys — keeps the env layer's real
     behaviour intact, so a test that WANTS to assert env precedence still can.
     """
+    # The substrate selection (#361) decides which resolution branch runs at all, so
+    # an "undeclared" state must never inherit the host's choice of it either.
+    names = (*names, *(n for n in _SUBSTRATE_SELECTION if n not in names))
     saved = {n: os.environ.pop(n, None) for n in names}
     real_load = adconfig.load
     adconfig.load = lambda: {}
@@ -593,6 +607,9 @@ class _only_available(_patched_resolution):
             "_unwired_found": lambda name, spec: None,
             "_binary_path": lambda name, spec: ("/fake/bin/" + name) if name in self.names else None,
             "_vm_binary_path": lambda name, spec: None,
+            # a host with ANKUSDRIVE_SUBSTRATE=container would otherwise skip host
+            # discovery and ignore the forced _binary_path answer (#361)
+            "_host_discovery_applies": lambda: True,
             "_interpreter_python": lambda name, spec: None,
         }
 

@@ -176,6 +176,27 @@ _SOLVERS: dict = {
                 "<that prefix>/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam. "
                 "If OpenFOAM is not installed in the VM yet, `multipass shell {inst}` "
                 "then `bash scripts/install-solvers.sh cfd` first. See docs/MACOS.md"),
+            # ANKUSDRIVE_SUBSTRATE=container (issue #361): the same three states,
+            # read from `<engine> container inspect` instead of `multipass info`.
+            # {engine}/{name}/{run} are filled by _unwired_found.
+            "container": (
+                "no solver container '{name}' — create it from the prebuilt solver "
+                "image, with the host scratch mounted at the same path: {run} "
+                "(needs `{engine}` on PATH; ANKUSDRIVE_CONTAINER_ENGINE=podman|nerdctl "
+                "to use another engine). Then export the IN-CONTAINER paths, which are "
+                "trusted unstat'd — the image publishes them: "
+                "`{engine} exec {name} env | grep ANKUSDRIVE_`. See "
+                "docs/CONTAINER_SUBSTRATE.md"),
+            "container_stopped": (
+                "the solver container '{name}' exists but is not running — "
+                "`{engine} start {name}`. See docs/CONTAINER_SUBSTRATE.md"),
+            "container_running": (
+                "the solver container '{name}' is running — only this shell's env is "
+                "missing. Export the IN-CONTAINER paths (trusted unstat'd): "
+                "`{engine} exec {name} env | grep ANKUSDRIVE_` lists them, at minimum "
+                "ANKUSDRIVE_OPENFOAM_PATH and ANKUSDRIVE_OPENFOAM_BASHRC. Case dirs "
+                "must live under the mounted scratch ($TMPDIR). See "
+                "docs/CONTAINER_SUBSTRATE.md"),
         },
     },
     "su2": {
@@ -612,13 +633,97 @@ def _posix_glob(patterns) -> list:
     return sorted(set(out))
 
 
+# --- substrate selection (issue #361) ------------------------------------------
+# WHERE the OpenFOAM-backed families (CFD, FSI, molding fill, meshbridge) run. It used
+# to be implied by the host OS alone; ANKUSDRIVE_SUBSTRATE makes it a choice, and adds
+# a container backend. Unset keeps the per-OS defaults exactly — no existing install
+# changes behavior.
+#
+#   native     bash on this host                          (default: Linux)
+#   wsl        `wsl -e bash` into the WSL2 distro         (default: Windows)
+#   multipass  `multipass exec` into the OpenFOAM VM      (default: macOS)
+#   container  `<engine> exec` into a running container  (docker / podman / nerdctl)
+#
+# `container` has the same contract as `multipass`, which is why it slots into the
+# same seams: an exec relay, a filesystem the host cannot see (overrides name paths
+# INSIDE it and are trusted, not stat'd), and the host scratch mounted at the SAME
+# absolute path so a case dir means the same thing on both sides.
+
+_SUBSTRATES = ("native", "wsl", "multipass", "container")
+_CONTAINER_ENGINES = ("docker", "podman", "nerdctl")
+_DEFAULT_CONTAINER = "ankusdrive-solvers"
+_HEAVY_IMAGE = "ghcr.io/gchen19/ankusdrive-heavy"
+
+
+def substrate() -> str:
+    """The selected substrate: ``ANKUSDRIVE_SUBSTRATE`` (env -> config.toml) when set,
+    else the host OS default (Windows -> ``wsl``, macOS -> ``multipass``, otherwise
+    ``native``).
+
+    An explicit value is validated rather than silently defaulted — a typo'd
+    substrate that quietly fell back to ``native`` would run (or fail to find) the
+    solvers somewhere the user never chose. Raises ValueError naming the problem."""
+    raw = (_config.get("ANKUSDRIVE_SUBSTRATE") or "").strip().lower()
+    system = platform.system()
+    if not raw:
+        return {"Windows": "wsl", "Darwin": "multipass"}.get(system, "native")
+    if raw not in _SUBSTRATES:
+        raise ValueError(f"ANKUSDRIVE_SUBSTRATE={raw!r} is not a substrate; "
+                         f"expected one of: {', '.join(_SUBSTRATES)}")
+    if raw == "wsl" and system != "Windows":
+        raise ValueError("ANKUSDRIVE_SUBSTRATE=wsl only applies on Windows hosts")
+    if raw == "container" and system == "Windows":
+        # a Windows case dir (C:\...) has no same-path meaning inside a Linux
+        # container; path translation for Docker Desktop on Windows is not built yet
+        raise ValueError("ANKUSDRIVE_SUBSTRATE=container is not supported on Windows "
+                         "hosts yet — use wsl")
+    return raw
+
+
+def container_engine() -> str:
+    """The container CLI for the ``container`` substrate: ``ANKUSDRIVE_CONTAINER_ENGINE``
+    (``docker`` default, ``podman``, ``nerdctl``). Raises ValueError on anything else."""
+    eng = (_config.get("ANKUSDRIVE_CONTAINER_ENGINE") or "docker").strip().lower()
+    if eng not in _CONTAINER_ENGINES:
+        raise ValueError(f"ANKUSDRIVE_CONTAINER_ENGINE={eng!r} is not supported; "
+                         f"expected one of: {', '.join(_CONTAINER_ENGINES)}")
+    return eng
+
+
+def container_name() -> str:
+    """The running container the ``container`` substrate execs into:
+    ``ANKUSDRIVE_CONTAINER`` (env -> config.toml), default ``ankusdrive-solvers``."""
+    return _config.get("ANKUSDRIVE_CONTAINER") or _DEFAULT_CONTAINER
+
+
+def container_available() -> bool:
+    """True when the ``container`` substrate is selected AND its engine CLI is on PATH
+    — the container twin of :func:`multipass_available`, and just as weak a signal:
+    the container's filesystem is opaque from the host, so this proves the substrate
+    can be reached, never that a solver is provisioned inside it."""
+    return substrate() == "container" and shutil.which(container_engine()) is not None
+
+
+def _opaque_substrate_available() -> bool:
+    """A reachable substrate whose filesystem the host cannot see (Multipass VM or
+    container) — where an absolute override path is trusted rather than stat'd."""
+    return multipass_available() or container_available()
+
+
+def _host_discovery_applies() -> bool:
+    """Whether host-filesystem fallbacks (PATH, ~/…, /usr/lib/openfoam/…) may resolve a
+    SUBSTRATE solver. Not under ``container``: whatever is installed on the host is
+    not what `<engine> exec` will run, so only the in-container overrides count."""
+    return substrate() != "container"
+
+
 def multipass_available() -> bool:
-    """True when macOS can reach the Multipass substrate (the ``multipass`` CLI on
-    PATH). The Darwin twin of :func:`wsl_available` and, like it, side-effect-free —
-    but a weaker signal: \\\\wsl$ lets Windows *see* into the distro, while a
-    Multipass VM's filesystem is opaque from the host, so this proves only that the
-    substrate exists, never that a solver is provisioned inside it."""
-    return platform.system() == "Darwin" and shutil.which("multipass") is not None
+    """True when the Multipass substrate is selected (the macOS default) and the
+    ``multipass`` CLI is on PATH. The Darwin twin of :func:`wsl_available` and, like
+    it, side-effect-free — but a weaker signal: \\\\wsl$ lets Windows *see* into the
+    distro, while a Multipass VM's filesystem is opaque from the host, so this proves
+    only that the substrate exists, never that a solver is provisioned inside it."""
+    return substrate() == "multipass" and shutil.which("multipass") is not None
 
 
 def foam_instance() -> str:
@@ -711,9 +816,79 @@ def multipass_vm_state(instance: str | None = None) -> str:
     return "stopped"
 
 
+# --- container state (issue #361) ----------------------------------------------
+# The container twin of the Multipass state read above, with the same discipline:
+# `<engine> container inspect` is a READ, timeout-bounded, cached briefly, and any
+# failure degrades to "absent". Shares the VM-info TTL/timeout knobs.
+
+_ctr_info_cache: dict = {}         # (engine, name) -> (monotonic_deadline, payload|None)
+
+
+def _container_inspect_exec(engine: str, name: str, timeout_s: float):
+    """``<engine> container inspect --format '{{json .State}}' <name>`` -> stdout, or
+    None when the engine is missing, errors (no such container), or hangs."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            [engine, "container", "inspect", "--format", "{{json .State}}", name],
+            capture_output=True, text=True, timeout=timeout_s,
+            stdin=subprocess.DEVNULL)      # never steal the caller's stdin (#223)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _container_inspect(engine: str, name: str):
+    """Cached inspect payload (raw JSON text, or None). THE INJECTABLE SEAM: tests
+    fake a container state by replacing this function, which also bypasses the cache."""
+    import time as _time
+    ttl = float(_config.get("ANKUSDRIVE_MULTIPASS_CACHE_S") or _VM_INFO_TTL_S)
+    now = _time.monotonic()
+    hit = _ctr_info_cache.get((engine, name))
+    if hit and hit[0] > now:
+        return hit[1]
+    timeout_s = float(_config.get("ANKUSDRIVE_MULTIPASS_TIMEOUT_S") or 5.0)
+    payload = _container_inspect_exec(engine, name, timeout_s)
+    _ctr_info_cache[(engine, name)] = (now + ttl, payload)
+    return payload
+
+
+def container_state(name: str | None = None) -> str:
+    """``"absent"`` (substrate not selected, no engine, no such container, unreadable),
+    ``"stopped"`` (exists, not running — the fix is ``<engine> start``) or
+    ``"running"``. Read-only: never starts, stops or creates a container."""
+    if not container_available():
+        return "absent"
+    payload = _container_inspect(container_engine(), name or container_name())
+    if not payload:
+        return "absent"
+    import json as _json
+    try:
+        data = _json.loads(payload)
+    except (ValueError, TypeError):
+        return "absent"
+    if not isinstance(data, dict):
+        return "absent"
+    if data.get("Running") is True:
+        return "running"
+    # docker/podman/nerdctl all report a Status string beside the Running bool
+    status = str(data.get("Status") or "").lower()
+    if status in ("created", "exited", "paused", "stopped", "restarting"):
+        return "stopped"
+    return "absent"
+
+
+def container_run_command() -> str:
+    """The one-line command that creates the solver container this substrate expects:
+    detached, the host scratch ($TMPDIR) bind-mounted at the SAME path, kept alive."""
+    return (f'{container_engine()} run -d --name {container_name()} '
+            f'-v "$TMPDIR:$TMPDIR" {_HEAVY_IMAGE} sleep infinity')
+
+
 def bash_argv(script: str, case_dir: str | None = None) -> list:
     """The argv that runs ``script`` under bash in the caller's ``cwd`` (the case
-    dir). One per-OS substrate, the same bash script inside (issue #193):
+    dir). One launcher per substrate (:func:`substrate`), the same bash script inside
+    (issues #193, #361):
 
       * **POSIX/Linux** — ``["bash", "-c", script]``; the caller's ``cwd`` is used.
       * **Windows** — ``["wsl", "-d", <distro>, "-e", "bash", "-c", script]``.
@@ -726,27 +901,34 @@ def bash_argv(script: str, case_dir: str | None = None) -> list:
         so the case dir is ``cd``'d into *inside* the script — the host scratch is
         expected mounted at the same absolute path in the VM (``multipass mount``),
         so the path lines up. The host ``cwd`` is then irrelevant.
+      * **container** — ``[<engine>, "exec", "-w", <case>, <container>, "bash", "-c",
+        script]``. Same contract as Multipass: the host scratch is bind-mounted at the
+        same absolute path, so ``-w`` names the case dir inside the container. No
+        ``-i``: the container never gets the caller's stdin (#223's stdin-theft class).
 
     The bash-launch twin of :func:`run_argvs` (the no-shell native path SU2 uses)."""
-    system = platform.system()
-    if system == "Windows":
+    sub = substrate()
+    if sub == "wsl":
         d = wsl_distro()
         return ["wsl", *(["-d", d] if d else []), "-e", "bash", "-c", script]
-    if system == "Darwin":
+    if sub == "multipass":
         import shlex
         body = f"cd {shlex.quote(case_dir)} && {script}" if case_dir else script
         return ["multipass", "exec", foam_instance(), "--", "bash", "-c", body]
+    if sub == "container":
+        return [container_engine(), "exec", *(["-w", case_dir] if case_dir else []),
+                container_name(), "bash", "-c", script]
     return ["bash", "-c", script]
 
 
 def runs_in_substrate() -> bool:
     """True when :func:`bash_argv` wraps the script in a separate *relay* process —
-    ``wsl.exe`` on Windows, ``multipass`` on macOS (issue #193) — rather than
+    ``wsl.exe``, ``multipass`` or ``<engine> exec`` (issues #193, #361) — rather than
     launching bash directly. Behind a relay, terminating the launched Popen only
-    reaches the relay, not the solver inside the distro/VM, so callers that must
-    actually stop the solver (FSI's ``_stop_participant``) sweep it by pidfile
-    instead. False on Linux, where the Popen IS the solver's process tree."""
-    return platform.system() in ("Windows", "Darwin")
+    reaches the relay, not the solver inside the distro/VM/container, so callers that
+    must actually stop the solver (FSI's ``_stop_participant``) sweep it by pidfile
+    instead. False for ``native``, where the Popen IS the solver's process tree."""
+    return substrate() != "native"
 
 
 def clean_wsl_text(s: str) -> str:
@@ -766,13 +948,14 @@ def _substrate_override(value: str, *, is_dir: bool) -> str | None:
     path when ``multipass`` is present — the Multipass VM filesystem is opaque from
     the host, so the override (which the provisioning step sets to a VM path) can't
     be stat'd from macOS, and rejecting it would leave every OpenFOAM-exclusive
-    family permanently unresolvable there. Returns the normalized path, or None if
-    it doesn't check out."""
+    family permanently unresolvable there. The ``container`` substrate is trusted the
+    same way, for the same reason (#361). Returns the normalized path, or None if it
+    doesn't check out."""
     p = wsl_posix(value)                     # \\wsl$ overrides normalize to POSIX
     if _posix_isdir(p) if is_dir else _posix_isfile(p):
         return p
-    if multipass_available() and p.startswith("/"):
-        return p                             # in-VM path; host can't confirm it
+    if _opaque_substrate_available() and p.startswith("/"):
+        return p                             # in-VM/container path; host can't confirm
     return None
 
 
@@ -859,9 +1042,10 @@ def _vm_binary_path(name: str, spec: dict):
     VM, whose filesystem the host cannot stat or glob — so unlike WSL there is no
     discovery here, only trust: an absolute POSIX override for a substrate solver
     (``substrate_bins``) is accepted when ``multipass`` is present, because that is
-    exactly the path ``bash_argv`` will hand to ``multipass exec``. Returns the path
-    or None; always None off macOS, where :func:`_binary_path` governs."""
-    if not (spec.get("substrate_bins") and multipass_available()):
+    exactly the path ``bash_argv`` will hand to ``multipass exec``. The ``container``
+    substrate resolves the same way (#361). Returns the path or None; None whenever
+    no opaque substrate is reachable, where :func:`_binary_path` governs."""
+    if not (spec.get("substrate_bins") and _opaque_substrate_available()):
         return None
     for c in _override_candidates(name, spec):
         if r := _substrate_override(c, is_dir=False):
@@ -926,6 +1110,21 @@ def _unwired_found(name: str, spec: dict):
                 if os.path.isfile(os.path.join(venv, *rel.split("/"))):
                     return venv, cfg["hint"].format(found=venv)
     elif probe == "bashrc":
+        # container substrate (#361): a host bashrc is irrelevant — it is not what
+        # `<engine> exec` sources — so the container's state decides the hint, the
+        # same three-way read as the Multipass branch below.
+        if cfg.get("container") and substrate() == "container":
+            eng, name = container_engine(), container_name()
+            state = container_state(name)
+            if state == "absent" and not container_available():
+                found_at = f"container substrate (no `{eng}` on PATH)"
+            elif state == "absent":
+                found_at = "container substrate"
+            else:
+                found_at = f"container {name!r} ({state})"
+            tmpl = cfg.get(f"container_{state}") or cfg["container"]
+            return found_at, tmpl.format(engine=eng, name=name,
+                                         run=container_run_command())
         found = _standard_bashrc(cfg)
         if found:
             # a POSIX hit on Windows came through the \\wsl$ mirror — the wire-up
@@ -1120,7 +1319,10 @@ def find_solver(name: str) -> dict:
             info["available"] = True
             info["module"] = resolved
     else:                                            # binary
-        path = _binary_path(name, spec)
+        # a substrate solver under `container` resolves ONLY from the in-container
+        # override: a host install is not what `<engine> exec` runs (#361)
+        host_ok = not spec.get("substrate_bins") or _host_discovery_applies()
+        path = _binary_path(name, spec) if host_ok else None
         if path is not None:
             info["available"] = True
             info["path"] = path
@@ -1129,13 +1331,13 @@ def find_solver(name: str) -> dict:
                 # `wsl -e bash` (bash_argv), never a native subprocess (issue #193)
                 info["via"] = "wsl"
         elif (vm_path := _vm_binary_path(name, spec)) is not None:
-            # macOS: nothing on the host, but an explicit override names the binary
-            # inside the Multipass VM — launched via `multipass exec` (bash_argv).
-            # Tagged from the resolution branch, not the path shape: a plain macOS
-            # host path is absolute POSIX too (issue #193).
+            # nothing on the host, but an explicit override names the binary inside
+            # the Multipass VM or container — launched via `multipass exec` / `<engine>
+            # exec` (bash_argv). Tagged from the resolution branch, not the path shape:
+            # a plain macOS host path is absolute POSIX too (issues #193, #361).
             info["available"] = True
             info["path"] = vm_path
-            info["via"] = "multipass"
+            info["via"] = substrate()
     if info["available"]:
         info["status"] = "ok"
         return info
@@ -1225,6 +1427,8 @@ def openfoam_bashrc() -> str | None:
         # Windows, host stat on Linux, trusted as an in-VM path on macOS (#193)
         if r := _substrate_override(env, is_dir=False):
             return r
+    if not _host_discovery_applies():      # container: only the in-container override counts (#361)
+        return None
     wm = os.environ.get("WM_PROJECT_DIR")
     if wm:
         cand = os.path.join(wm, "etc", "bashrc")
@@ -1278,6 +1482,8 @@ def precice_lib_dir() -> str | None:
     if env := _config.get("ANKUSDRIVE_PRECICE_LIB"):
         if r := _substrate_override(env, is_dir=True):
             return r
+    if not _host_discovery_applies():      # container: only the in-container override counts (#361)
+        return None
     for base in ("~/precice-serial/lib",
                  "~/miniforge3/envs/precice/lib",
                  "~/miniconda3/envs/precice/lib",
@@ -1295,6 +1501,8 @@ def openfoam_adapter_lib_dir() -> str | None:
     if env := _config.get("ANKUSDRIVE_OPENFOAM_ADAPTER_LIB"):
         if r := _substrate_override(env, is_dir=True):
             return r
+    if not _host_discovery_applies():      # container: only the in-container override counts (#361)
+        return None
     hits = _posix_glob(
         ("~/OpenFOAM/*/platforms/*/lib/libpreciceAdapterFunctionObject.so",))
     if hits:
@@ -1322,6 +1530,8 @@ def fsi_openfoam_bashrc() -> str | None:
     if env := _config.get("ANKUSDRIVE_FSI_OPENFOAM_BASHRC"):
         if r := _substrate_override(env, is_dir=False):
             return r
+    if not _host_discovery_applies():      # container: no host globs, override only (#361)
+        return openfoam_bashrc()
     ofa = openfoam_adapter_lib_dir()
     if ofa:
         import re as _re
@@ -1402,6 +1612,8 @@ def openinjmoldsim_bin() -> str | None:
             # where the OF7-org build is only ever reachable inside the VM (#193)
             if r := _substrate_override(env, is_dir=False):
                 return r
+    if not _host_discovery_applies():      # container: only the in-container override counts (#361)
+        return None
     found = shutil.which("openInjMoldSim")
     if found:
         return found
@@ -1423,6 +1635,8 @@ def openinjmoldsim_bashrc() -> str | None:
     if env:
         if r := _substrate_override(env, is_dir=False):   # \\wsl$ / in-VM (#193)
             return r
+    if not _host_discovery_applies():      # container: only the in-container override counts (#361)
+        return None
     for pat in ("~/OpenFOAM/OpenFOAM-7/etc/bashrc",
                 "~/opt/OpenFOAM-7/etc/bashrc",
                 "/opt/openfoam7/etc/bashrc",
@@ -1504,7 +1718,8 @@ def capabilities() -> dict:
     bare SU2 install, and an agent following ``cfd_pipe_flow``'s ``escalate_to`` hint
     dead-ended: every built-in CFD case mode emits OpenFOAM dictionaries.
 
-    Returns ``{platform, available (sorted ready solver names), unwired (sorted
+    Returns ``{platform, substrate (native|wsl|multipass|container, issue #361),
+    available (sorted ready solver names), unwired (sorted
     installed-but-unwired names, issue #177), prepared_case_only (sorted resolved-but-
     undrivable names, issue #237), solvers: {name: {available, status, kind, family,
     extra, and either path/module or install_hint (+found_at/wire_hint when unwired,
@@ -1536,6 +1751,8 @@ def capabilities() -> dict:
 
     return {
         "platform": platform.system(),
+        # where the OpenFOAM-backed families run: native | wsl | multipass | container
+        "substrate": substrate(),
         "available": sorted(n for n, i in solvers.items() if i["available"]),
         "unwired": sorted(
             n for n, i in solvers.items() if i.get("status") == "unwired"),

@@ -98,6 +98,7 @@ if (Test-Path $ruff) {
 # --- Windows-native contract (the piece unique to this lane) --------------------
 Test-Module 'Windows FreeCAD resolution + doctor (cross-platform discovery, #191/#198)' 'test_windows_support.py'
 Test-Module 'WSL routing for OpenFOAM families (#193)' 'test_wsl_routing.py'
+Test-Module 'Container substrate + substrate selection (#361)' 'test_container_substrate.py'
 # The MCP half of the first-run path (#279): the server boots over stdio and lists its
 # tools with FreeCAD deliberately unresolved, so "MCP is broken" is distinguishable from
 # "FreeCAD isn't found" - the confusion that ended #279's install.

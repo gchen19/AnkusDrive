@@ -208,6 +208,10 @@ echo "== WSL routing for the OpenFOAM families (#193; monkeypatched, runs anywhe
 python3 tests/test_wsl_routing.py
 
 echo
+echo "== Container substrate + substrate selection (#361; monkeypatched, runs anywhere) =="
+python3 tests/test_container_substrate.py
+
+echo
 echo "== Extracted-AppImage FreeCAD: discovery + installer script (#280; no network, no FreeCAD) =="
 python3 tests/test_freecad_appimage.py
 
