@@ -28,7 +28,7 @@ import time
 
 from pathlib import Path
 
-from . import install_kind, solvers, toolsets
+from . import install_kind, script_policy, solvers, toolsets
 from .client import (
     _DEFAULT_FREECADCMD_CANDIDATES,
     _freecadcmd_candidates,
@@ -177,6 +177,8 @@ def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
         # Which tool families this install registers, and how to enable the rest
         # (#377) — a disabled family is reported, never just absent.
         "toolsets": _toolsets_report(),
+        # Whether the run_script tool may execute agent-written code (#378).
+        "run_script": script_policy.report(),
         "solvers": solvers.capabilities(),
     }
 
@@ -571,6 +573,16 @@ def render(report: dict) -> str:
             for fam, d in ts["disabled"].items():
                 out.append(f"{_MARK['absent']} {fam:<16} off ({d['tools']} tools) — {d['label']}")
                 out.append(f"        enable: {d['enable']}")
+        out.append("")
+    rs = report.get("run_script")
+    if rs:
+        if rs.get("error"):
+            out.append(f"{_MARK['missing']} run_script: {rs['error']}")
+        elif rs["allowed"]:
+            out.append("run_script: allowed (executes agent-written Python)")
+        else:
+            out.append(f"{_MARK['absent']} run_script: disabled")
+            out.append(f"        enable: {rs['enable']}")
         out.append("")
     mcp = report.get("mcp")
     if mcp:

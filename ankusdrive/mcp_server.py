@@ -1975,9 +1975,15 @@ def run_script(code: str, auto_register: bool = True) -> Any:
     can address script-created objects via handle without a separate
     register_handle round-trip.
 
+    Disabled unless ANKUSDRIVE_ALLOW_RUN_SCRIPT permits it (the Claude Desktop
+    extension defaults it off); when disabled this tool is not registered at all.
+
     Returns {result, registered}.
     """
-    return _call("run_script", code=code, auto_register=auto_register)
+    # origin="mcp" marks agent-supplied code: the worker refuses it when the switch is
+    # off, while package-internal callers (feature templates, `ankusdrive run`) pass
+    # no origin (#378).
+    return _call("run_script", code=code, auto_register=auto_register, origin="mcp")
 
 
 @mcp.tool()
@@ -3236,7 +3242,8 @@ def setup_status(verify_freecad_boot: bool = False) -> dict:
     version?, fix?}, install: {kind, source} (venv | pipx | uv_tool | uvx | mcpb —
     the install every fix string is written for), toolsets: {enabled, disabled:
     {family: {label, tools, enable}}} (tool families switched off in this install and
-    exactly how to switch each on), solvers: {available, unwired, prepared_case_only, solvers:
+    exactly how to switch each on), run_script: {allowed, enable?} (whether the
+    run_script tool may execute agent-written code here), solvers: {available, unwired, prepared_case_only, solvers:
     {name: {..., install_hint | wire_hint}}, families: {family: {solvers, available,
     unwired, prepared_case_only, any_available}}, extras}} —
     `families[*].any_available` is what gates each *_submit family, and every
@@ -8151,6 +8158,11 @@ _tool_annotations.apply(mcp)
 from ankusdrive import toolsets as _toolsets  # noqa: E402
 
 TOOLSETS = _toolsets.apply(mcp)
+
+# And run_script only when this install allows agent-written code (#378).
+from ankusdrive import script_policy as _script_policy  # noqa: E402
+
+RUN_SCRIPT = _script_policy.apply(mcp)
 
 
 def run():

@@ -35,8 +35,23 @@ separately, so this file is the source and the release page is the copy.
   `solve_capabilities` report each disabled family with exactly how to enable it
   ([#377](https://github.com/gchen19/AnkusDrive/issues/377)).
 
+- **`ANKUSDRIVE_ALLOW_RUN_SCRIPT`** gates the `run_script` tool, which executes
+  agent-written Python with full file and process access. **Unset means allowed**, so
+  pip / pipx / uvx / clone installs keep their current behaviour; `false` unregisters
+  the tool, and `setup_status` / `doctor` report how to enable it. An unparseable
+  value refuses to start. The worker also refuses `run_script` calls from the MCP
+  tool while the switch is off; package-internal callers (feature templates) and
+  `ankusdrive run script.py` are unaffected
+  ([#378](https://github.com/gchen19/AnkusDrive/issues/378)).
+
 ### Changed
 
+- **The Claude Desktop extension's `run_script` is off by default**: it's an
+  install-dialog toggle, and the launcher treats a toggle the host did not pass as
+  off ([#378](https://github.com/gchen19/AnkusDrive/issues/378)).
+- `feature_instantiate` is annotated destructive (was additive): it hides the host
+  body after stamping the feature, which edits an existing object
+  ([#378](https://github.com/gchen19/AnkusDrive/issues/378)).
 - The Claude Desktop extension now defaults to `core`, `drawings` and `fem`: 112 tools,
   ~125k characters of tool list (~31k tokens) instead of all 281 (~457k, ~114k
   tokens). Each other family is an install-dialog toggle. A tools/list budget test

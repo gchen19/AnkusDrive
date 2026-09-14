@@ -100,7 +100,7 @@ acoustic_radiation_submit em_fullwave_submit fsi_pressure_plate_submit
 em_conduction_submit em_induction_submit cfd_mesh_independence_submit
 dem_pack_submit dem_flow_submit mechanism_simulate_submit topology_optimize_submit
 topology_to_solid study_submit optimize_submit slice_gcode_submit async_demo_submit
-recipe feature_instantiate items_new
+recipe items_new
 sheet_base sheet_flange sheet_tab sheet_hem sheet_unfold sheet_refold
 """.split())
 
@@ -152,6 +152,7 @@ DESTRUCTIVE = {
     "cfd_external_flow_submit": "runs the solver inside a caller-supplied case_dir, writing into it",
     "molding_fill_submit": "runs the solver inside a caller-supplied case_dir, writing into it",
     "molding_warpage_submit": "runs the solver inside caller-supplied case dirs, writing into them",
+    "feature_instantiate": "hides the host body (Visibility) after stamping the feature onto it",
     "run_script": "executes caller-supplied Python with full access to the documents and filesystem",
 }
 
