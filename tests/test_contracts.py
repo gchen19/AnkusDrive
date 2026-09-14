@@ -60,11 +60,12 @@ _RETURNS_GRANDFATHERED = {
     'add_part', 'add_projection_group', 'add_sketch_constraint', 'add_sketch_external', 'draft',
     'export_shape', 'fem_add_constraint', 'fem_buckling',
     'fem_mesh_refinement', 'fem_modal', 'fem_set_material', 'fem_set_solver', 'get_object',
-    'hole', 'linear_pattern', 'list_assembly_parts', 'list_documents', 'loft',
+    'linear_pattern', 'list_assembly_parts', 'list_documents', 'loft',
     # partdesign_chamfer / partdesign_fillet came off this list in #283, which
-    # gave both a documented return value (checks / mode / partial).
+    # gave both a documented return value (checks / mode / partial); hole /
+    # pocket came off in #287 (removed_volume / volume_ratio / warnings).
     'make_datum_plane', 'make_drawing_page', 'mirrored', 'pad',
-    'pocket', 'polar_pattern', 'resolve_edge', 'resolve_face', 'revolve',
+    'polar_pattern', 'resolve_edge', 'resolve_face', 'revolve',
     'save_document', 'set_property', 'set_visibility', 'sweep', 'thickness',
     'transaction_abort', 'transaction_commit', 'transaction_open',
 }

@@ -3961,15 +3961,20 @@ def _h_pad(p):
     return {"handle": h, "name": pad.Name, "volume": pad.Shape.Volume}
 
 
-def _annotate_subtractive(out, base_volume, direction, what):
+def _annotate_subtractive(out, base_volume, direction, what, strict=False):
     """Add removed_volume / volume_ratio (and `warnings` when degenerate) to a
     PartDesign subtractive feature's payload — the same interpretation
     boolean_op's cut branch gained in #282, for the same reason: `volume` alone
     cannot distinguish a healthy cut from one that removed everything or
     nothing.
 
+    strict=True raises on the warned cases instead of annotating, exactly as
+    boolean_op does (#287); the feature stays in the document for inspection.
+
     `direction='away_from_body'` is an explicit request for a feature that
-    removes no material, so the miss warning would be noise there, not news."""
+    removes no material, so the miss warning would be noise there, not news —
+    and under strict it is not an error either, or the honest option would be
+    the one that fails."""
     volume = out["volume"]
     out["removed_volume"] = base_volume - volume
     out["volume_ratio"] = (volume / base_volume) if base_volume > 0 else None
@@ -3977,6 +3982,8 @@ def _annotate_subtractive(out, base_volume, direction, what):
         base_volume, volume, what, warn_on_miss=(direction != "away_from_body"),
     )
     if warnings:
+        if strict:
+            raise RuntimeError("; ".join(warnings) + " [strict=True]")
         out["warnings"] = warnings
     return out
 
@@ -4001,10 +4008,12 @@ def _h_pocket(p):
     after the pocket, removed_volume is body-volume-before minus that, and
     volume_ratio is after/before. `warnings` (list of strings) appears only
     when the pocket removed the entire body or removed nothing at all — the
-    key is absent otherwise, and it is never raised (see boolean_op for the
-    same pair of degenerate outcomes, #282). A pocket asked for with
-    direction='away_from_body' is meant to remove nothing, so it is not
-    warned about."""
+    key is absent otherwise (see boolean_op for the same pair of degenerate
+    outcomes, #282). strict=True (default False) raises a RuntimeError on
+    those cases instead, like boolean_op's strict (#287); the pocket stays in
+    the document for inspection. A pocket asked for with
+    direction='away_from_body' is meant to remove nothing, so it is neither
+    warned about nor raised under strict."""
     doc = _active_doc()
     sketch = _resolve_sketch(p["sketch"])
     # Measure the body BEFORE the feature joins it (#282), so "removed nothing"
@@ -4027,7 +4036,7 @@ def _h_pocket(p):
         return _annotate_subtractive({
             "handle": h, "name": pocket.Name, "volume": _body_volume(pocket),
             "through": through, "wall_depth_mm": wall_depth,
-        }, body_volume, "into_body", "pocket")
+        }, body_volume, "into_body", "pocket", strict=bool(p.get("strict")))
 
     if p.get("through_all"):
         pocket.Type = 1  # ThroughAll
@@ -4042,7 +4051,7 @@ def _h_pocket(p):
     h = _register("pocket", pocket)
     return _annotate_subtractive(
         {"handle": h, "name": pocket.Name, "volume": _body_volume(pocket)},
-        body_volume, direction, "pocket",
+        body_volume, direction, "pocket", strict=bool(p.get("strict")),
     )
 
 
@@ -4351,9 +4360,11 @@ def _h_hole(p):
     after the hole, removed_volume is body-volume-before minus that, and
     volume_ratio is after/before. `warnings` (list of strings) appears only
     when the hole consumed the entire body or removed nothing at all — the key
-    is absent otherwise, and it is never raised (same degenerate pair as
-    boolean_op's cut, #282). A hole asked for with direction='away_from_body'
-    is meant to remove nothing, so it is not warned about."""
+    is absent otherwise (same degenerate pair as boolean_op's cut, #282).
+    strict=True (default False) raises a RuntimeError on those cases instead,
+    like boolean_op's strict (#287); the hole stays in the document for
+    inspection. A hole asked for with direction='away_from_body' is meant to
+    remove nothing, so it is neither warned about nor raised under strict."""
     doc = _active_doc()
     sketch = _resolve_sketch(p["sketch"])
     body = _body_of(sketch)
@@ -4422,7 +4433,7 @@ def _h_hole(p):
         return _annotate_subtractive({
             "handle": h, "name": hole.Name, "volume": _body_volume(hole),
             "through": through, "wall_depth_mm": wall_depth,
-        }, body_volume, "into_body", "hole")
+        }, body_volume, "into_body", "hole", strict=bool(p.get("strict")))
 
     direction = p.get("direction")
     if direction is not None:
@@ -4433,7 +4444,7 @@ def _h_hole(p):
     h = _register("hole", hole)
     return _annotate_subtractive(
         {"handle": h, "name": hole.Name, "volume": _body_volume(hole)},
-        body_volume, direction, "hole",
+        body_volume, direction, "hole", strict=bool(p.get("strict")),
     )
 
 

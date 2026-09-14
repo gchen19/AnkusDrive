@@ -14,7 +14,7 @@ broken cut outcomes looked exactly like a healthy one:
 Both now surface as a `warnings` list in the payload — absent on a clean op —
 alongside removed_volume / volume_ratio for all three ops, and strict=True
 turns both into an error. pocket/hole share the pattern and got the same
-treatment (minus strict, which they don't expose).
+treatment, including strict (#287).
 
   test_clean_cut_has_no_warnings_key       : healthy cut → no `warnings` at all
   test_oversized_tool_warns_annihilation   : tool contains base → warning
@@ -28,6 +28,11 @@ treatment (minus strict, which they don't expose).
   test_pocket_that_removes_nothing_warns   : PartDesign shares the pattern
   test_pocket_away_from_body_is_not_warned : ...but an intentional no-op isn't
   test_hole_reports_removed_volume         : hole carries the numbers too
+  test_pocket_strict_raises_on_miss        : #287 — strict reaches pocket
+  test_hole_strict_raises_on_miss          : #287 — strict reaches hole
+  test_strict_exempts_away_from_body       : an intentional no-op never raises
+  test_strict_false_is_byte_identical_...  : strict=False == omitted
+  test_mcp_wrappers_forward_strict         : the MCP surface exposes it
 
 Run: python3 tests/test_boolean_degenerate.py
 """
@@ -311,6 +316,118 @@ def test_hole_reports_removed_volume():
         drilled = 3.14159265 * 3 * 3 * 10
         assert drilled <= r["removed_volume"] <= drilled * 1.10, r
         assert 0.9 < r["volume_ratio"] < 1.0, r
+
+
+# --- pocket/hole strict (#287) ------------------------------------------------
+
+def _hole_kw(**extra):
+    return dict(diameter=6.0, depth_type="Dimension", depth=5.0, **extra)
+
+
+def _feature_call(w, feature, doc, rev, **extra):
+    """Build the 20 mm cube + top-face circle in a fresh doc and apply a
+    pocket or hole with the legacy raw `reversed` flag."""
+    w.call("new_document", name=doc)
+    h = _build_cube_body(w)
+    if feature == "pocket":
+        sk = _top_face_sketch(w, h)
+        return w.call("pocket", sketch=sk, length=5.0, reversed=rev, **extra)
+    sk = _top_face_sketch(w, h, radius=3.0)
+    return w.call("hole", sketch=sk, reversed=rev, **_hole_kw(**extra))
+
+
+def _noop_reversed_value(feature):
+    """Which legacy `reversed` value makes this feature remove nothing. Pocket
+    and Hole disagree on it, so find it empirically rather than hard-code."""
+    for rev in (False, True):
+        with Worker() as w:
+            r = _feature_call(w, feature, f"bd_{feature}_probe_{int(rev)}", rev)
+            if "warnings" in r:
+                return rev
+    raise AssertionError(f"neither reversed value of {feature} was a no-op")
+
+
+def _assert_strict_raises_on_miss(feature):
+    """#287 acceptance: strict=True on a no-op feature raises (naming the miss
+    and the strict gate), the worker survives, and the healthy orientation of
+    the same feature still succeeds under strict."""
+    noop = _noop_reversed_value(feature)
+    with Worker() as w:
+        e = _expect_error(
+            _feature_call, w, feature, f"bd_{feature}_strict_miss", noop, strict=True,
+        )
+        assert "removed nothing" in e.remote_message, e.remote_message
+        assert "[strict=True]" in e.remote_message, e.remote_message
+        assert w.call("ping") == "pong"      # worker survives the strict abort
+    with Worker() as w:
+        r = _feature_call(
+            w, feature, f"bd_{feature}_strict_ok", not noop, strict=True,
+        )
+        assert "warnings" not in r, r
+        assert r["removed_volume"] > 0, r
+
+
+def test_pocket_strict_raises_on_miss():
+    _assert_strict_raises_on_miss("pocket")
+
+
+def test_hole_strict_raises_on_miss():
+    _assert_strict_raises_on_miss("hole")
+
+
+def test_strict_exempts_away_from_body():
+    """direction='away_from_body' asks for a feature that removes nothing, so
+    strict must not turn the honest option into the one that fails."""
+    for feature in ("pocket", "hole"):
+        with Worker() as w:
+            w.call("new_document", name=f"bd_{feature}_strict_away")
+            h = _build_cube_body(w)
+            if feature == "pocket":
+                sk = _top_face_sketch(w, h)
+                r = w.call("pocket", sketch=sk, length=5.0,
+                           direction="away_from_body", strict=True)
+            else:
+                sk = _top_face_sketch(w, h, radius=3.0)
+                r = w.call("hole", sketch=sk, direction="away_from_body",
+                           strict=True, **_hole_kw())
+            assert "warnings" not in r, (feature, r)
+            assert abs(r["removed_volume"]) < 1e-9, (feature, r)
+
+
+def test_strict_false_is_byte_identical_to_omitted():
+    """#287 acceptance: strict=False and no strict at all return the same
+    payload — warnings included — on the degenerate case."""
+    for feature in ("pocket", "hole"):
+        noop = _noop_reversed_value(feature)
+        payloads = []
+        for extra in ({}, {"strict": False}):
+            with Worker() as w:
+                payloads.append(
+                    _feature_call(w, feature, f"bd_{feature}_compat", noop, **extra)
+                )
+        assert payloads[0] == payloads[1], (feature, payloads)
+        assert "warnings" in payloads[0], (feature, payloads[0])
+
+
+def test_mcp_wrappers_forward_strict():
+    """The MCP surface is where #287 was unreachable: the pocket/hole wrappers
+    must accept `strict` and forward it to the worker. No FreeCAD needed —
+    `_call` is stubbed to capture what the wrapper sends."""
+    from ankusdrive import mcp_server as srv
+
+    sent = []
+    real_call = srv._call
+    srv._call = lambda method, **params: sent.append((method, params)) or {}
+    try:
+        srv.pocket(sketch="sk", strict=True)
+        srv.hole(sketch="sk", strict=True)
+        srv.pocket(sketch="sk")
+        srv.hole(sketch="sk")
+    finally:
+        srv._call = real_call
+    assert [(m, p["strict"]) for m, p in sent] == [
+        ("pocket", True), ("hole", True), ("pocket", False), ("hole", False),
+    ], sent
 
 
 # --- runner -------------------------------------------------------------------
