@@ -111,6 +111,8 @@ Test-Module 'Toolset token budget (#377)' 'test_toolsets_budget.py'
 Test-Module 'run_script gate (#378)' 'test_run_script_gate.py'
 # Every tool call journaled for session export, no result changed: static, server, worker tiers (#407).
 Test-Module 'Session journal (#407)' 'test_session_journal.py'
+# Journal -> replay script; the worker tier records, exports and re-runs a real session (#408).
+Test-Module 'Replay (#408)' 'test_replay.py'
 # The other half: the tools actually work over MCP, driving the real worker. Needs
 # FreeCAD, so it belongs to THIS lane and not the hosted core-install one. Could not
 # run on Windows at all until #288 stopped it hardcoding .venv/bin/python3.
