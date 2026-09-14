@@ -113,6 +113,8 @@ Test-Module 'run_script gate (#378)' 'test_run_script_gate.py'
 # FreeCAD, so it belongs to THIS lane and not the hosted core-install one. Could not
 # run on Windows at all until #288 stopped it hardcoding .venv/bin/python3.
 Test-Module 'MCP tool suite driving the worker (#288)' 'test_mcp.py'
+# docs/REVIEWER_GUIDE.md's three example prompts, run in the extension's default configuration (#368).
+Test-Module 'Reviewer scenarios (#368)' 'test_reviewer_scenarios.py'
 
 # --- static contracts + pure-Python toys (all cross-platform, no FreeCAD) -------
 Test-Module 'Static contracts (registry parity + docstrings + determinism coverage)' 'test_contracts.py'

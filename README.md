@@ -649,6 +649,9 @@ MCP host (e.g. Claude Desktop) sends tool inputs and results to its AI model pro
 under the host's own policy. The full policy, including exactly what is stored where, is
 in [`PRIVACY.md`](https://github.com/gchen19/AnkusDrive/blob/main/PRIVACY.md).
 
+Evaluating the Claude Desktop extension? The [reviewer guide](https://github.com/gchen19/AnkusDrive/blob/main/docs/REVIEWER_GUIDE.md)
+covers installation, a setup check, and three example prompts with expected results.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](https://github.com/gchen19/AnkusDrive/blob/main/LICENSE). Contributions

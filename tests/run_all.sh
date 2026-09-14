@@ -124,6 +124,13 @@ echo "== MCP tool suite over stdio, driving the real worker (#288) =="
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_mcp.py; else python3 tests/test_mcp.py; fi
 
 echo
+echo "== Reviewer scenarios: docs/REVIEWER_GUIDE.md's three example prompts (#368) =="
+# The plate, the cantilever-vs-beam-theory FEM, and the drawing + manufacturability
+# gate, driven over MCP in the extension's default configuration; the guide quotes
+# these numbers. Needs FreeCAD and the mcp SDK.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_reviewer_scenarios.py; else python3 tests/test_reviewer_scenarios.py; fi
+
+echo
 echo "== Typed units / quantity layer (pure-Python; no FreeCAD) =="
 python3 tests/test_units.py
 
