@@ -242,7 +242,7 @@ available. If startup hangs or the host reports a closed connection, run
 cleaner error messages.
 
 **Tool families (toolsets).** Every tool definition takes up the client's context, and
-all 282 come to roughly 114k tokens. Tools are grouped into families you can switch on
+all 283 come to roughly 114k tokens. Tools are grouped into families you can switch on
 and off: `core` (always on), `drawings`, `fem`, `components`, `sheet_metal`, `assembly`,
 `intent`, `manufacturing`, `hand_calcs`, `simulation`, `plm`, `rendering`.
 - **pip / pipx / uvx / clone:** every family is on unless you set
