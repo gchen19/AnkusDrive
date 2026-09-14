@@ -12,12 +12,13 @@ linear structural path):
 
       f_c(m,n) = (c / 2√εᵣ) · √((m/a)² + (n/b)²).
 
-  The dominant mode is **TE₁₀**, whose cutoff **f_c = c / (2a√εᵣ)** is EXACT —
-  this is the primary FDTD gate. Below f_c the guide is *evanescent* (the axial
+  The dominant mode is **TE₁₀**, whose cutoff **f_c = c / (2a√εᵣ)** is EXACT.
+  Below f_c the guide is *evanescent* (the axial
   propagation constant β = √(k² − k_c²) is imaginary, the field decays, nothing
-  transmits); above f_c it propagates with guided wavelength λ_g = 2π/β > λ₀.
-  An FDTD drive that straddles f_c must show the transmission collapse to zero
-  below the analytic cutoff and rise to a plateau above it.
+  transmits) with the exact attenuation α = √(k_c² − k²); above f_c it propagates
+  with guided wavelength λ_g = 2π/β > λ₀. The openEMS solve is gated on α: its
+  field probes below cutoff must decay at the exact rate (a transmission step at
+  f_c is NOT a field test — openEMS's port applies the analytic β itself).
 
 * **Half-wave dipole resonance** (``dipole_resonance``) — a thin centre-fed
   dipole is first (series) resonant when its physical length is slightly under a
@@ -60,9 +61,10 @@ def waveguide_cutoff(
     reduces to the EXACT f_c = c / (2a√εᵣ). Below f_c the guide is evanescent
     (axial β imaginary, no propagation); when a probe ``freq_ghz`` is given its
     regime (propagating / evanescent), the free-space wavenumber k, the cutoff
-    wavenumber k_c, the axial phase constant β = √(k² − k_c²) and the guided
-    wavelength λ_g = 2π/β (∞ at and below cutoff) are returned. The FDTD solve
-    must reproduce the propagating↔evanescent transition at f_c.
+    wavenumber k_c, the axial phase constant β = √(k² − k_c²), the guided
+    wavelength λ_g = 2π/β (∞ at and below cutoff) and, below cutoff, the exact
+    evanescent attenuation α = √(k_c² − k²) are returned. That α is what the
+    openEMS solve is gated on: its probes fit the solved field's decay rate.
 
     A real single-mode guide carries TE10 alone between f_c(TE10) and the next
     mode's cutoff (TE20 at 2·f_c for a 2:1 aspect); above that the guide is
@@ -71,8 +73,8 @@ def waveguide_cutoff(
 
     Returns {mode, m, n, a_mm, b_mm, eps_r, cutoff_hz, cutoff_ghz, kc_per_m,
     next_mode_cutoff_ghz, single_mode_band_ghz, probe_freq_ghz, regime, k_per_m,
-    beta_per_m, guided_wavelength_mm, fidelity, band_pct, valid_range_ok,
-    warnings, escalate_to}."""
+    beta_per_m, alpha_per_m, guided_wavelength_mm, fidelity, band_pct,
+    valid_range_ok, warnings, escalate_to}."""
     if a_mm <= 0:
         raise ValueError("a_mm must be > 0")
     b_mm = a_mm / 2.0 if b_mm is None else float(b_mm)
@@ -131,6 +133,7 @@ def waveguide_cutoff(
         "regime": None,
         "k_per_m": None,
         "beta_per_m": None,
+        "alpha_per_m": None,
         "guided_wavelength_mm": None,
         "fidelity": "exact",
         "band_pct": None,
@@ -150,10 +153,12 @@ def waveguide_cutoff(
             beta = math.sqrt(k * k - kc * kc)
             out["regime"] = "propagating"
             out["beta_per_m"] = round(beta, 6)
+            out["alpha_per_m"] = 0.0
             out["guided_wavelength_mm"] = round(2.0 * math.pi / beta * 1e3, 6)
         else:                                        # evanescent: β imaginary, decays
             out["regime"] = "evanescent"
-            out["beta_per_m"] = 0.0                  # no propagation; α = √(kc²−k²)
+            out["beta_per_m"] = 0.0                  # no propagation; the field decays
+            out["alpha_per_m"] = round(math.sqrt(kc * kc - k * k), 6)
             out["guided_wavelength_mm"] = None
     return out
 

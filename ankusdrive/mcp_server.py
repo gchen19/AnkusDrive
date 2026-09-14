@@ -4598,13 +4598,14 @@ def waveguide_cutoff(
     reduces to the EXACT f_c = c/(2a√εᵣ). Below f_c the guide is evanescent
     (axial β imaginary, nothing transmits), above it propagates with guided
     wavelength λ_g = 2π/β. With a probe `freq_ghz` the regime (propagating /
-    evanescent), k, β and λ_g are returned. An FDTD drive straddling f_c must
-    collapse its transmission below the analytic cutoff and rise above it.
+    evanescent), k, β, λ_g and (below cutoff) the exact attenuation
+    α = √(k_c²−k²) are returned — α is what the FDTD solve's field probes are gated
+    against (`alpha_ratio`).
 
     Returns {mode, m, n, a_mm, b_mm, eps_r, cutoff_hz, cutoff_ghz, kc_per_m,
     next_mode_cutoff_ghz, single_mode_band_ghz, probe_freq_ghz, regime, k_per_m,
-    beta_per_m, guided_wavelength_mm, fidelity, band_pct, valid_range_ok,
-    warnings, escalate_to}."""
+    beta_per_m, alpha_per_m, guided_wavelength_mm, fidelity, band_pct,
+    valid_range_ok, warnings, escalate_to}."""
     params = {"a_mm": a_mm, "mode": mode, "eps_r": eps_r}
     for k, v in (("b_mm", b_mm), ("freq_ghz", freq_ghz)):
         if v is not None:
@@ -4652,6 +4653,10 @@ def em_fullwave_submit(
     eps_r: float = 1.0,
     gap_mm: float | None = None,
     radius_mm: float | None = None,
+    mesh_res_mm: float | None = None,
+    mesh_f_ghz: float | None = None,
+    decay_f_ratio: float | None = None,
+    end_criteria: float | None = None,
     timeout: int = 600,
 ) -> dict:
     """Full-wave FDTD EM solve on openEMS, asynchronous (OFF the MCP channel) — the
@@ -4661,24 +4666,38 @@ def em_fullwave_submit(
     when no openEMS venv resolves.
 
     `problem`='waveguide_sweep' (default): hollow rectangular guide, broad wall
-    `a_mm`/narrow wall `b_mm` (default a/2), length `length_mm` (default 60), TE10
+    `a_mm`/narrow wall `b_mm` (default a/2), length `length_mm` (default 120), TE10
     port at each end. Sweep `f_start_ghz`..`f_stop_ghz` (default 4..10 GHz —
     straddling the WR-90 cutoff 6.56 GHz) in `n_freq` points, `nrts` max timesteps,
-    `cells_per_wl` mesh density, `eps_r` fill. The result's `fc_crossing_ghz`
-    (half-power transmission) vs the analytic c/(2a) (`fc_ratio`≈1, evanescent_mean
-    ≈0, propagating_mean≈1) IS the gate. `problem`='dipole_s11': centre-fed thin
-    dipole (`length_mm`, `gap_mm`, `radius_mm`), sweep S11, report first resonance.
+    `cells_per_wl` mesh density, `eps_r` fill, `end_criteria` energy stop (1e-6).
+    THE GATE IS `alpha_ratio`≈1: voltage probes along the guide read the SOLVED
+    field's decay rate below cutoff at `decay_f_ratio`·f_c (default 0.7) against
+    the exact α = sqrt((π/a)² − k²); it degrades under a coarse mesh or a truncated
+    `nrts`. `alpha_ratio` is null with a `decay_note` when the guide is too short
+    for the probe window. `fc_ratio` (half-power crossing vs c/2a) is only a
+    PORT-SETUP CHECK: openEMS's analytic port β zeroes every sub-cutoff sample, so
+    it reads the frequency grid, not the field. A degenerate mesh/length (port
+    blocks overlapping) returns {ok:false, error}.
+    `problem`='dipole_s11': centre-fed thin dipole (`length_mm`, `gap_mm`,
+    `radius_mm`, each resolved by its own mesh lines), sweep S11, report first
+    resonance. Mesh is `mesh_res_mm`, else λ(`mesh_f_ghz`, default f_stop) /
+    `cells_per_wl` (default 30) — pin it to vary the sweep window alone.
 
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result
     for {ok, fc_analytic_ghz, freq_ghz[], s21_db[], transmission_norm[],
-    fc_crossing_ghz, fc_ratio, evanescent_mean, propagating_mean, n_cells, wall_s}
-    (waveguide) or {freq_ghz[], s11_db[], resonance_ghz} (dipole)."""
+    alpha_fdtd, alpha_exact, alpha_ratio, decay_freq_ghz, decay_probe_z_mm[],
+    decay_fit_rms_np, fc_crossing_ghz, fc_ratio, evanescent_mean,
+    propagating_mean, mesh_res_mm, n_cells, wall_s} (waveguide) or
+    {freq_ghz[], s11_db[], resonance_ghz, resonance_s11_db, mesh_res_mm, n_cells}
+    (dipole)."""
     params = {"problem": problem, "a_mm": a_mm, "eps_r": eps_r, "timeout": timeout}
     for k, v in (("b_mm", b_mm), ("length_mm", length_mm),
                  ("f_start_ghz", f_start_ghz), ("f_stop_ghz", f_stop_ghz),
                  ("n_freq", n_freq), ("nrts", nrts),
                  ("cells_per_wl", cells_per_wl), ("gap_mm", gap_mm),
-                 ("radius_mm", radius_mm)):
+                 ("radius_mm", radius_mm), ("mesh_res_mm", mesh_res_mm),
+                 ("mesh_f_ghz", mesh_f_ghz), ("decay_f_ratio", decay_f_ratio),
+                 ("end_criteria", end_criteria)):
         if v is not None:
             params[k] = v
     return _call("em_fullwave_submit", **params)
