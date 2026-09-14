@@ -139,6 +139,7 @@ DESTRUCTIVE = {
     "fem_modal": "reconfigures the analysis's existing solver for a frequency analysis",
     "fem_buckling": "reconfigures the analysis's existing solver for a buckling analysis",
     "fem_run": "purges the analysis's previous results and writes solver files into the workdir",
+    "fem_run_submit": "purges the analysis's previous results and writes solver files into the workdir",
     "fem_cantilever_demo": "writes solver files into a caller-supplied workdir",
     "render_job": "discard=True drops the finished render's result",
     "thermal_transient_submit": "runs the solver inside a caller-supplied case_dir, writing into it",
