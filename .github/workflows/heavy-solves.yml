@@ -413,20 +413,37 @@ jobs:
     # Multipass's own daemon and its sshfs mount.
     needs: heavy-vmdisk
     runs-on: macos-latest
-    # Measured under emulation (#365): test_fsi 56 s, test_openfoam 54 min (~12x native),
-    # test_meshbridge 18 min (~23x), plus ~15 min of disk download + VM boot + preflight.
-    timeout-minutes: 150
+    # Measured under emulation (#365, then 34804804619): test_fsi ~1 min, test_openfoam
+    # 54-82 min (~12-19x native), test_meshbridge 18-21 min (~23-27x), plus ~5-15 min of
+    # disk restore + VM boot + preflight. test_wind_tunnel (97 s native, snappyHexMesh +
+    # RANS) is not yet measured here; 240 leaves it ~2x its ~12-27x estimate.
+    timeout-minutes: 240
     env:
       RUN_HEAVY_SOLVES: "1"
+    defaults:
+      run:
+        shell: bash -el {0}   # login shell so the conda env stays activated
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # FreeCAD on the host, as lane C: test_wind_tunnel drives cfd_external_flow_submit
+      # through the real worker (the solves cross into the VM; the geometry does not).
+      # Same conda-forge pin as every other lane.
+      - name: Set up Miniforge (conda-forge)
+        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
         with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: ankusdrive
           python-version: "3.11"
 
-      - name: Install AnkusDrive (host side)
-        run: python -m pip install -e .
+      - name: Install FreeCAD 1.1 + AnkusDrive (host side)
+        run: |
+          conda install -y "freecad>=1.1,<1.2"
+          python -m pip install -e .
+          echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
+          freecadcmd --version 2>&1 | head -1 || true
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -446,13 +463,17 @@ jobs:
       # test_molding_fill is deliberately NOT here: under emulation it ran past 3 hours
       # (interFoam + openInjMoldSim are ~15 min native). Its solves run live on lanes A/B
       # and the hosted image lane, and its relay path is the one test_openfoam and
-      # test_meshbridge already drive through this VM.
+      # test_meshbridge already drive through this VM (#386).
+      # test_wind_tunnel IS here although test_meshbridge already crosses the same relay:
+      # it is the one file driving cfd_external_flow_submit's job registry end to end
+      # through the macOS path, which the self-hosted Mac job covered (#342).
       - name: Live solves through the macOS Multipass path
         env:
           ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # ran as its own step above
         run: >-
           bash tests/run_macos_heavy.sh
           tests/test_fsi.py tests/test_openfoam.py tests/test_meshbridge.py
+          tests/test_wind_tunnel.py
 
       - name: VM console on failure
         if: failure()
