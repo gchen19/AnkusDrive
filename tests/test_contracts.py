@@ -38,6 +38,8 @@ _NO_DISPATCH = {
     "restart_worker",   # tears down / respawns the worker process itself
     # host-side workspace-pool management (issue #167) — no worker handler
     "use_workspace", "list_workspaces", "close_workspace",
+    # host-side session export (#409) — reads the server's call journal, needs no worker
+    "session_transcript",
     # host-side doctor report (issue #202) — reads discovery state, needs no worker
     "setup_status",
 }
