@@ -21,6 +21,28 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
+## [Unreleased]
+
+### Added
+
+- **Tool families (toolsets).** The 281 tools are grouped into 12 families — `core`
+  (always on), `drawings`, `fem`, `components`, `sheet_metal`, `assembly`, `intent`,
+  `manufacturing`, `hand_calcs`, `simulation`, `plm`, `rendering` — and only enabled
+  families are registered, so a disabled family costs no context. Selected with
+  `ANKUSDRIVE_TOOLSETS` (env, or `toolsets` in config.toml). **Unset keeps every
+  family**, so existing installs are unchanged; an unknown name refuses to start
+  rather than silently dropping a family. `setup_status`, `ankusdrive doctor` and
+  `solve_capabilities` report each disabled family with exactly how to enable it
+  ([#377](https://github.com/gchen19/AnkusDrive/issues/377)).
+
+### Changed
+
+- The Claude Desktop extension now defaults to `core`, `drawings` and `fem`: 112 tools,
+  ~125k characters of tool list (~31k tokens) instead of all 281 (~457k, ~114k
+  tokens). Each other family is an install-dialog toggle. A tools/list budget test
+  holds the default under 140k characters
+  ([#377](https://github.com/gchen19/AnkusDrive/issues/377)).
+
 ## [0.5.4] — 2026-09-13
 
 The release that makes AnkusDrive reviewable as a desktop extension. Every one of the

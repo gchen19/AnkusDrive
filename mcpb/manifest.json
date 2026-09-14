@@ -25,7 +25,18 @@
       "command": "uv",
       "args": ["run", "--directory", "${__dirname}", "src/server.py"],
       "env": {
-        "ANKUSDRIVE_FREECADCMD": "${user_config.freecadcmd}"
+        "ANKUSDRIVE_FREECADCMD": "${user_config.freecadcmd}",
+        "ANKUSDRIVE_TOOLSET_DRAWINGS": "${user_config.toolset_drawings}",
+        "ANKUSDRIVE_TOOLSET_FEM": "${user_config.toolset_fem}",
+        "ANKUSDRIVE_TOOLSET_COMPONENTS": "${user_config.toolset_components}",
+        "ANKUSDRIVE_TOOLSET_SHEET_METAL": "${user_config.toolset_sheet_metal}",
+        "ANKUSDRIVE_TOOLSET_ASSEMBLY": "${user_config.toolset_assembly}",
+        "ANKUSDRIVE_TOOLSET_INTENT": "${user_config.toolset_intent}",
+        "ANKUSDRIVE_TOOLSET_MANUFACTURING": "${user_config.toolset_manufacturing}",
+        "ANKUSDRIVE_TOOLSET_HAND_CALCS": "${user_config.toolset_hand_calcs}",
+        "ANKUSDRIVE_TOOLSET_SIMULATION": "${user_config.toolset_simulation}",
+        "ANKUSDRIVE_TOOLSET_PLM": "${user_config.toolset_plm}",
+        "ANKUSDRIVE_TOOLSET_RENDERING": "${user_config.toolset_rendering}"
       }
     }
   },
@@ -54,6 +65,83 @@
       "description": "Absolute path to FreeCAD 1.1's freecadcmd (freecadcmd.exe on Windows). Leave empty to auto-discover it on PATH and in the standard install locations.",
       "required": false,
       "default": ""
+    },
+    "toolset_drawings": {
+      "type": "boolean",
+      "title": "Tools: Technical drawings, GD&T and first-article inspection",
+      "description": "Register the 16 drawings tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": true
+    },
+    "toolset_fem": {
+      "type": "boolean",
+      "title": "Tools: Structural FEM (CalculiX)",
+      "description": "Register the 18 fem tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": true
+    },
+    "toolset_components": {
+      "type": "boolean",
+      "title": "Tools: Standard components: gears, fasteners, bearings, threads, catalogs",
+      "description": "Register the 15 components tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
+    },
+    "toolset_sheet_metal": {
+      "type": "boolean",
+      "title": "Tools: Sheet metal: flanges, hems, flat patterns",
+      "description": "Register the 8 sheet metal tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
+    },
+    "toolset_assembly": {
+      "type": "boolean",
+      "title": "Tools: Assemblies, interfaces, lockfiles and BOMs",
+      "description": "Register the 13 assembly tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
+    },
+    "toolset_intent": {
+      "type": "boolean",
+      "title": "Tools: Design intent and performance contracts",
+      "description": "Register the 8 intent tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
+    },
+    "toolset_manufacturing": {
+      "type": "boolean",
+      "title": "Tools: Design for manufacturing, cost, CNC, tolerances",
+      "description": "Register the 15 manufacturing tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
+    },
+    "toolset_hand_calcs": {
+      "type": "boolean",
+      "title": "Tools: Engineering hand calculations and quick screens",
+      "description": "Register the 49 hand calcs tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
+    },
+    "toolset_simulation": {
+      "type": "boolean",
+      "title": "Tools: External-solver simulation: CFD, thermal, EM, acoustics, FSI, molding, DEM, optimization",
+      "description": "Register the 27 simulation tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
+    },
+    "toolset_plm": {
+      "type": "boolean",
+      "title": "Tools: Design control: part numbers, recipes, lifecycle, change orders, releases",
+      "description": "Register the 30 plm tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
+    },
+    "toolset_rendering": {
+      "type": "boolean",
+      "title": "Tools: Photorealistic rendering (Blender / Render add-on)",
+      "description": "Register the 4 rendering tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "required": false,
+      "default": false
     }
   }
 }

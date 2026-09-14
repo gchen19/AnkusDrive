@@ -241,6 +241,18 @@ available. If startup hangs or the host reports a closed connection, run
 `ankusdrive ping` directly — that exercises the same worker boot path with
 cleaner error messages.
 
+**Tool families (toolsets).** Every tool definition takes up the client's context, and
+all 281 come to roughly 114k tokens. Tools are grouped into families you can switch on
+and off: `core` (always on), `drawings`, `fem`, `components`, `sheet_metal`, `assembly`,
+`intent`, `manufacturing`, `hand_calcs`, `simulation`, `plm`, `rendering`.
+- **pip / pipx / uvx / clone:** every family is on unless you set
+  `ANKUSDRIVE_TOOLSETS`, e.g. `ANKUSDRIVE_TOOLSETS=drawings,fem,simulation`, or
+  `toolsets = "..."` in `config.toml`.
+- **Claude Desktop extension:** `core`, `drawings` and `fem` are on by default
+  (~31k tokens); turn others on in the extension's settings.
+
+`setup_status` lists the families that are off and exactly how to enable each one.
+
 ## Simulation solvers & review-video demos
 
 The base install (FreeCAD + `pip install ankusdrive`) covers geometry, the analytic

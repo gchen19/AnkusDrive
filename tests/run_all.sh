@@ -103,6 +103,12 @@ echo "== MCP server boots over stdio with FreeCAD unresolved (#279) =="
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_mcp_boot.py; else python3 tests/test_mcp_boot.py; fi
 
 echo
+echo "== Toolset token budget: the bundle default's real tools/list (#377) =="
+# Starts the server over stdio with the Claude Desktop default families and with
+# `all`; needs the `mcp` SDK, not FreeCAD, and SKIPs when mcp is importable nowhere.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_toolsets_budget.py; else python3 tests/test_toolsets_budget.py; fi
+
+echo
 echo "== MCP tool suite over stdio, driving the real worker (#288) =="
 # The other half of the MCP surface: test_mcp_boot proves the server SPEAKS, this
 # proves the tools WORK — documents, primitives, restart-clears-state, a CalculiX

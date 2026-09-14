@@ -34,6 +34,27 @@ def scrub_unsubstituted(environ) -> list:
     return removed
 
 
+def compose_toolsets(environ, families, defaults) -> str:
+    """Fold the install dialog's per-family toggles into ``ANKUSDRIVE_TOOLSETS`` (#377).
+
+    The manifest maps each ``toolset_<family>`` boolean to ``ANKUSDRIVE_TOOLSET_<FAMILY>``
+    ("true"/"false"). A toggle the host did not pass (unset, or scrubbed as an
+    unexpanded placeholder) takes its dialog default, so a host that ignores
+    user_config still gets the lean bundle default rather than all 281 tools. The
+    per-family variables are removed; the composed list is set and returned."""
+    on = []
+    for fam in families:
+        if fam == "core":
+            continue
+        raw = environ.pop(f"ANKUSDRIVE_TOOLSET_{fam.upper()}", None)
+        enabled = (fam in defaults) if raw is None else raw.strip().lower() in ("true", "1", "yes", "on")
+        if enabled:
+            on.append(fam)
+    value = ",".join(["core", *on])
+    environ["ANKUSDRIVE_TOOLSETS"] = value
+    return value
+
+
 def main() -> None:
     removed = scrub_unsubstituted(os.environ)
     # Announce the install kind before the package reads the environment: this
@@ -43,6 +64,12 @@ def main() -> None:
     if removed:
         # stderr only: stdout is the MCP stdio channel.
         print(f"ankusdrive-mcpb: ignoring unset user config {', '.join(sorted(removed))}", file=sys.stderr)
+    # The toolset list must be in the environment before mcp_server registers tools;
+    # ankusdrive.toolsets reads nothing at import, so taking the family list from it
+    # here is safe and keeps one source of truth.
+    from ankusdrive import toolsets
+    chosen = compose_toolsets(os.environ, tuple(toolsets.FAMILIES), toolsets.BUNDLE_DEFAULT)
+    print(f"ankusdrive-mcpb: toolsets {chosen}", file=sys.stderr)
     from ankusdrive.mcp_server import run
     run()
 

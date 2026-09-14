@@ -98,6 +98,12 @@ jobs:
         # exactly one class and fails a READ_ONLY tool whose handler visibly mutates.
         run: python tests/test_tool_annotations.py
 
+      - name: Toolsets — every tool in one family, bundle toggles match (#377)
+        # Disabled families cost no context. Sweeps every tool into exactly one family,
+        # checks selection (unset = all, unknown raises), reporting, and that the .mcpb
+        # toggles and their defaults match toolsets.BUNDLE_DEFAULT.
+        run: python tests/test_toolsets.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.
