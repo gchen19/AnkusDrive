@@ -104,6 +104,9 @@ Test-Module 'macOS Multipass relay path via stub (#364; self-skips off POSIX)' '
 # tools with FreeCAD deliberately unresolved, so "MCP is broken" is distinguishable from
 # "FreeCAD isn't found" - the confusion that ended #279's install.
 Test-Module 'MCP stdio boot without FreeCAD (#279)' 'test_mcp_boot.py'
+# What the Claude Desktop bundle's default tool families cost a client, measured over
+# stdio against a budget; `all` must still serve every tool (#377).
+Test-Module 'Toolset token budget (#377)' 'test_toolsets_budget.py'
 # The other half: the tools actually work over MCP, driving the real worker. Needs
 # FreeCAD, so it belongs to THIS lane and not the hosted core-install one. Could not
 # run on Windows at all until #288 stopped it hardcoding .venv/bin/python3.

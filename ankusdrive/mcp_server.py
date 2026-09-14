@@ -3210,8 +3210,14 @@ def solve_capabilities() -> dict:
     extra, and either path/module (when available) or install_hint, plus
     prepared_case_only when nothing can build it a case}}, families: {family:
     {solvers, available, unwired, prepared_case_only, any_available}}, extras:
-    {extra: [solver names]} for `pip install ankusdrive[<extra>]`}."""
-    return _call("solve_capabilities")
+    {extra: [solver names]} for `pip install ankusdrive[<extra>]`, toolsets: {enabled,
+    disabled: {family: {label, tools, enable}}}}. A family listed under
+    `toolsets.disabled` has no tools registered in this session — tell the user its
+    `enable` instruction rather than concluding the capability does not exist."""
+    out = _call("solve_capabilities")
+    if isinstance(out, dict):
+        out["toolsets"] = TOOLSETS
+    return out
 
 
 @mcp.tool()
@@ -3228,7 +3234,9 @@ def setup_status(verify_freecad_boot: bool = False) -> dict:
 
     Returns {platform: {system, machine}, freecad: {available, path, source,
     version?, fix?}, install: {kind, source} (venv | pipx | uv_tool | uvx | mcpb —
-    the install every fix string is written for), solvers: {available, unwired, prepared_case_only, solvers:
+    the install every fix string is written for), toolsets: {enabled, disabled:
+    {family: {label, tools, enable}}} (tool families switched off in this install and
+    exactly how to switch each on), solvers: {available, unwired, prepared_case_only, solvers:
     {name: {..., install_hint | wire_hint}}, families: {family: {solvers, available,
     unwired, prepared_case_only, any_available}}, extras}} —
     `families[*].any_available` is what gates each *_submit family, and every
@@ -8137,6 +8145,12 @@ def sheet_check(handle: str, k_factor: float | None = None,
 from ankusdrive import tool_annotations as _tool_annotations  # noqa: E402
 
 _tool_annotations.apply(mcp)
+
+# Then drop the tool families this install did not enable (#377). Annotations run
+# first so every tool is classified regardless of which families are on.
+from ankusdrive import toolsets as _toolsets  # noqa: E402
+
+TOOLSETS = _toolsets.apply(mcp)
 
 
 def run():

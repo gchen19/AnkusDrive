@@ -132,7 +132,13 @@ def test_one_name_for_the_freecad_path():
     m = _manifest()
     env = m["server"]["mcp_config"]["env"]
     client = (REPO / "ankusdrive" / "client.py").read_text(encoding="utf-8")
+    shim = (BUNDLE / "src" / "server.py").read_text(encoding="utf-8")
     for var, value in env.items():
+        if var.startswith("ANKUSDRIVE_TOOLSET_"):
+            # Per-family toggles are consumed by the launcher, which folds them into
+            # ANKUSDRIVE_TOOLSETS (#377); tests/test_toolsets.py checks them in detail.
+            assert "compose_toolsets(os.environ" in shim, f"bundle sets {var} but the launcher never composes toolsets"
+            continue
         assert f'"{var}"' in client, f"bundle sets {var} but ankusdrive/client.py never reads it"
         key = PLACEHOLDER.findall(value)[0]
         # config.toml's key for a top-level ANKUSDRIVE_* var is the name, lowercased, minus the prefix.

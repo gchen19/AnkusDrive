@@ -28,7 +28,7 @@ import time
 
 from pathlib import Path
 
-from . import install_kind, solvers
+from . import install_kind, solvers, toolsets
 from .client import (
     _DEFAULT_FREECADCMD_CANDIDATES,
     _freecadcmd_candidates,
@@ -150,6 +150,15 @@ def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> di
     return report
 
 
+def _toolsets_report() -> dict:
+    """toolsets.report(), or the ValueError text when ANKUSDRIVE_TOOLSETS names an
+    unknown family — the server refuses to start then, and doctor must say why."""
+    try:
+        return toolsets.report()
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
     """Full doctor payload: platform, FreeCAD, config, MCP, and solver capabilities.
 
@@ -165,6 +174,9 @@ def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
         # How this AnkusDrive was installed (#347) — every fix string below is
         # already written for it; reported so the assumption is visible.
         "install": install_kind.detect(),
+        # Which tool families this install registers, and how to enable the rest
+        # (#377) — a disabled family is reported, never just absent.
+        "toolsets": _toolsets_report(),
         "solvers": solvers.capabilities(),
     }
 
@@ -549,6 +561,16 @@ def render(report: dict) -> str:
         if inst.get("ignored_env"):
             out.append(f"  ignored {install_kind.ENV}={inst['ignored_env']!r} — not one of "
                        f"{', '.join(install_kind.KINDS)}")
+        out.append("")
+    ts = report.get("toolsets")
+    if ts:
+        if ts.get("error"):
+            out.append(f"{_MARK['missing']} toolsets: {ts['error']}")
+        else:
+            out.append(f"toolsets: {', '.join(ts['enabled'])}")
+            for fam, d in ts["disabled"].items():
+                out.append(f"{_MARK['absent']} {fam:<16} off ({d['tools']} tools) — {d['label']}")
+                out.append(f"        enable: {d['enable']}")
         out.append("")
     mcp = report.get("mcp")
     if mcp:

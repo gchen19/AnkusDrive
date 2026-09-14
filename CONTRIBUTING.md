@@ -143,6 +143,12 @@ the code you wrote.
    the module docstring. When in doubt, pick the less permissive class: wrongly marking a
    tool read-only lets a client run a change without asking. If your handler shows a
    mutation signal but really is read-only, that exemption needs a written reason.
+9. **`ankusdrive/toolsets.py`**: add the tool to exactly one family. `core` only if a
+   session without it is broken (documents, modeling, measurement, status, jobs). Every
+   other family can be switched off, and a disabled family costs no context. The
+   server refuses to import with an unassigned tool, and `tests/test_toolsets.py`
+   fails first. A tool added to `core`, `drawings` or `fem` also counts against the
+   bundle default's token budget in `tests/test_toolsets_budget.py`.
 
 Three more that apply when they apply:
 
