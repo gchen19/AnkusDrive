@@ -13,7 +13,7 @@ revision below. The exact build recipe is `docker/heavy-solvers/Dockerfile` in
 | OpenFOAM (ESI, apt `openfoam2512-dev`) | GPL-3.0 | https://develop.openfoam.com/Development/openfoam | v2512 |
 | OpenFOAM-7 (.org) + ThirdParty-7 | GPL-3.0 | https://github.com/OpenFOAM/OpenFOAM-7 | `7458f48c2fb109e8dede5d9aec5ecbb904dc1b18` |
 | openInjMoldSim | GPL-3.0 | https://github.com/krebeljk/openInjMoldSim | `v7.2` |
-| Elmer FEM (PPA `elmerfem-csc`, **linux/amd64 image only** — no arm64 build exists) | GPL-2.0+ / LGPL-2.1 (ElmerSolver libs) | https://github.com/ElmerCSC/elmerfem | PPA build at image build time |
+| Elmer FEM (amd64: PPA `elmerfem-csc`; arm64: source build, #384) | GPL-2.0+ / LGPL-2.1 (ElmerSolver libs) | https://github.com/ElmerCSC/elmerfem | amd64: PPA build at image build time; arm64: `release-26.2.1` |
 | CalculiX (apt `calculix-ccx`) | GPL-2.0 | http://www.dhondt.de/ | Ubuntu 24.04 package |
 | CalculiX 2.20 source (in `ccx_preCICE`) | GPL-2.0 | http://www.dhondt.de/ccx_2.20.src.tar.bz2 | 2.20 |
 | preCICE | LGPL-3.0 | https://github.com/precice/precice | `v3.4.0` |

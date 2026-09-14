@@ -15,7 +15,7 @@ name: Heavy-solver image
 #
 # The image is not pushed unless its own last build step passes on that architecture:
 # scripts/ci-linux-preflight.sh, which fails if any heavy solver does not resolve —
-# apart from what that architecture's image explicitly excludes (Elmer on arm64: no
+# apart from what that architecture's image explicitly excludes (Blender on arm64: no
 # build exists), which it reports instead.
 #
 # TRIGGERS. A push to main touching the recipe; a PR touching it (built, never
@@ -112,7 +112,7 @@ jobs:
         platform:
           - { arch: amd64, runner: ubuntu-latest }
           - { arch: arm64, runner: ubuntu-24.04-arm }
-        target: [yade, openems, fsi, oims]
+        target: [yade, openems, fsi, oims, elmer]
     steps:
       # The OpenFOAM-7 tree and YADE's objects need more than the image's default
       # free space; these preinstalled toolchains are unused here (absent paths on
@@ -185,6 +185,7 @@ jobs:
             type=registry,ref=${{ env.IMAGE }}:cache-openems-${{ matrix.platform.arch }}
             type=registry,ref=${{ env.IMAGE }}:cache-fsi-${{ matrix.platform.arch }}
             type=registry,ref=${{ env.IMAGE }}:cache-oims-${{ matrix.platform.arch }}
+            type=registry,ref=${{ env.IMAGE }}:cache-elmer-${{ matrix.platform.arch }}
             type=registry,ref=${{ env.IMAGE }}:cache-final-${{ matrix.platform.arch }}
             type=registry,ref=${{ env.IMAGE }}:cache-system
             type=registry,ref=${{ env.IMAGE }}:cache-yade

@@ -94,7 +94,7 @@ REQUIRED = (
     "precice", "prusaslicer", "pybullet", "rayoptics", "topopt", "yade",
 )
 # Per-platform exclusions (#363): the image lists, one "<solver><TAB><reason>" per line,
-# what THIS architecture deliberately lacks (e.g. Elmer on arm64 — no build exists). An
+# what THIS architecture deliberately lacks (e.g. Blender on arm64 — no build exists). An
 # excluded solver is reported, not failed; an exclusion for an unknown solver, or for
 # one that DOES resolve, fails as stale — so the list can never quietly widen.
 EXCLUDED = {}
