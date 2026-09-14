@@ -65,6 +65,7 @@ on:
       - "tests/test_granular.py"
       - "tests/test_warpage.py"
       - "tests/test_molding_fill.py"
+      - "tests/test_molding_relay.py"
       - "scripts/ci-linux-preflight.sh"
       - "scripts/ci-container-preflight.sh"
       - "tests/test_container_substrate.py"
@@ -278,6 +279,7 @@ jobs:
           bash tests/run_macos_heavy.sh
           tests/test_container_substrate.py tests/test_fsi.py tests/test_openfoam.py
           tests/test_meshbridge.py tests/test_wind_tunnel.py tests/test_molding_fill.py
+          tests/test_molding_relay.py
 
       - name: Container logs on failure
         if: failure()
@@ -468,8 +470,8 @@ jobs:
 
       # test_molding_fill is deliberately NOT here: under emulation it ran past 3 hours
       # (interFoam + openInjMoldSim are ~15 min native). Its solves run live on lanes A/B
-      # and the hosted image lane, and its relay path is the one test_openfoam and
-      # test_meshbridge already drive through this VM (#386).
+      # and the hosted image lane; test_molding_relay runs both of its solvers a few dozen
+      # steps through this VM instead, openInjMoldSim's separate OF7 environment included (#386).
       # test_wind_tunnel IS here although test_meshbridge already crosses the same relay:
       # it is the one file driving cfd_external_flow_submit's job registry end to end
       # through the macOS path, which the self-hosted Mac job covered (#342).
@@ -479,7 +481,7 @@ jobs:
         run: >-
           bash tests/run_macos_heavy.sh
           tests/test_fsi.py tests/test_openfoam.py tests/test_meshbridge.py
-          tests/test_wind_tunnel.py
+          tests/test_wind_tunnel.py tests/test_molding_relay.py
 
       - name: VM console on failure
         if: failure()

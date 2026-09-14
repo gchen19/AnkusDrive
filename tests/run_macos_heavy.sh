@@ -38,6 +38,9 @@
 #                                 arm64 source build (#276, tools/build_openinjmoldsim.sh
 #                                 + the ANKUSDRIVE_OPENINJMOLDSIM exports) and SKIP where
 #                                 it doesn't
+#     tests/test_molding_relay.py a seconds-long smoke of those same two solvers through
+#                                 the relay (#386) — what hosted lane D runs, since the
+#                                 full fill does not fit under emulation
 #
 #   Add more files as arguments once their in-VM provisioning is validated:
 #
@@ -75,7 +78,7 @@ if [ "$#" -gt 0 ]; then
 else
   FILES=(tests/test_wsl_routing.py tests/test_su2_native.py tests/test_su2_case.py
          tests/test_fsi.py tests/test_openfoam.py tests/test_meshbridge.py
-         tests/test_wind_tunnel.py tests/test_molding_fill.py)
+         tests/test_wind_tunnel.py tests/test_molding_fill.py tests/test_molding_relay.py)
 fi
 
 FAILED=""
