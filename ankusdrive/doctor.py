@@ -179,8 +179,9 @@ def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
 # filling it in by omission.
 
 # Printed verbatim as the remediation. It is the pyproject pin: the floor is where
-# `mcp.server.fastmcp` first shipped, the ceiling is where it was removed.
-MCP_PIN_FIX = 'pip install "mcp>=1.2,<2"'
+# FastMCP tools gained `title` (1.10, needed by the tool annotations, #368), the
+# ceiling is where `mcp.server.fastmcp` was removed.
+MCP_PIN_FIX = 'pip install "mcp>=1.10,<2"'
 
 
 def _pin_fix() -> str:

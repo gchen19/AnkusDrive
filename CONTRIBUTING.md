@@ -137,6 +137,12 @@ the code you wrote.
    `_producer_specs` or in `_ADD_NOT_SOLID`, or
    `test_every_add_command_has_a_producer_smoke` fails. Anything in
    `_producer_specs` is then asserted to come back as a watertight solid.
+8. **`ankusdrive/tool_annotations.py`** — put the tool in exactly one of `READ_ONLY`,
+   `ADDITIVE` or `DESTRUCTIVE` (with its reason). The server refuses to import with an
+   unclassified tool, and `tests/test_tool_annotations.py` fails first. The rules are in
+   the module docstring. When in doubt, pick the less permissive class: wrongly marking a
+   tool read-only lets a client run a change without asking. If your handler shows a
+   mutation signal but really is read-only, that exemption needs a written reason.
 
 Three more that apply when they apply:
 

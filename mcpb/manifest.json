@@ -40,6 +40,7 @@
   "tools_generated": true,
   "keywords": ["freecad", "cad", "fem", "simulation", "mechanical-engineering", "mcp"],
   "license": "Apache-2.0",
+  "privacy_policies": ["https://github.com/gchen19/AnkusDrive/blob/main/PRIVACY.md"],
   "compatibility": {
     "platforms": ["darwin", "win32", "linux"],
     "runtimes": {
