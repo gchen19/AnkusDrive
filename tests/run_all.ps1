@@ -113,6 +113,8 @@ Test-Module 'run_script gate (#378)' 'test_run_script_gate.py'
 Test-Module 'Session journal (#407)' 'test_session_journal.py'
 # Journal -> replay script; the worker tier records, exports and re-runs a real session (#408).
 Test-Module 'Replay (#408)' 'test_replay.py'
+# session_transcript within the directory policy: read-only, writes nothing, no replay-as-tool (#409).
+Test-Module 'session_transcript tool (#409)' 'test_session_transcript.py'
 # The other half: the tools actually work over MCP, driving the real worker. Needs
 # FreeCAD, so it belongs to THIS lane and not the hosted core-install one. Could not
 # run on Windows at all until #288 stopped it hardcoding .venv/bin/python3.

@@ -34,7 +34,7 @@ CORE = "core"
 
 FAMILIES: dict = {
     "core": """
-        ping version restart_worker use_workspace list_workspaces close_workspace
+        ping version restart_worker use_workspace list_workspaces close_workspace session_transcript
         new_document open_document save_document list_documents set_active_document
         close_document list_objects get_object set_property set_visibility register_handle
         transaction_open transaction_commit transaction_abort run_script export_shape
