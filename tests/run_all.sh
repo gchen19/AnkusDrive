@@ -179,6 +179,9 @@ python3 tests/test_plates.py
 python3 tests/test_buckling.py
 python3 tests/test_molding.py
 python3 tests/test_molding_fill.py
+# Seconds-long smoke of the same two molding solvers; lane D runs it where the full
+# fill cannot fit under emulation (#386).
+python3 tests/test_molding_relay.py
 python3 tests/test_impact.py
 
 echo
