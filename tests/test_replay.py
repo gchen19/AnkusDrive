@@ -181,7 +181,7 @@ def test_every_tool_has_a_signature():
 
 
 def test_paths_redacted():
-    home = "/Users/alice"
+    home = "/Users/you"
     out = R.export([
         E(1, "open_document", {"path": f"{home}/proj/in/base.FCStd"}, {"doc": "base"}),
         E(2, "export_shape", {"path": f"{home}/proj/out/base.step"}),
@@ -190,7 +190,7 @@ def test_paths_redacted():
                                  "out_dir": f"{home}/proj/out"}),
     ])
     body = _body(out)
-    assert "alice" not in out["script"] and "/Users" not in out["script"], out["script"]
+    assert "/Users" not in out["script"], out["script"]
     assert "str(WORKDIR / 'out' / 'base.step')" in body and "out_dir=str(WORKDIR / 'out')" in body, body
     assert out["prerequisites"] == ["in/base.FCStd", "items.json"], out["prerequisites"]
     assert "(WORKDIR / 'out').mkdir(" in out["script"]
@@ -199,13 +199,13 @@ def test_paths_redacted():
 def test_paths_without_common_root_keep_distinct_dirs():
     out = R.export([
         E(1, "export_shape", {"path": "/tmp/a/part.step"}),
-        E(2, "export_shape", {"path": "/Users/bob/b/part.step"}),
+        E(2, "export_shape", {"path": "/Users/user/b/part.step"}),
     ])
-    assert "bob" not in out["script"] and "/tmp" not in out["script"], out["script"]
+    assert "/Users" not in out["script"] and "/tmp" not in out["script"], out["script"]
     body = _body(out)
     assert "WORKDIR / 'dir1' / 'part.step'" in body and "WORKDIR / 'dir2' / 'part.step'" in body, body
-    win = R.export([E(1, "export_shape", {"path": r"C:\Users\carol\proj\x.step"})])
-    assert "carol" not in win["script"] and "WORKDIR / 'x.step'" in _body(win), win["script"]
+    win = R.export([E(1, "export_shape", {"path": r"C:\Users\username\proj\x.step"})])
+    assert "Users" not in win["script"] and "WORKDIR / 'x.step'" in _body(win), win["script"]
     given = R.export([E(1, "export_shape", {"path": "/srv/job/out/x.step"})], workdir="/srv/job")
     assert "WORKDIR / 'out' / 'x.step'" in _body(given)
 
