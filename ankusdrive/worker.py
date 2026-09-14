@@ -15822,16 +15822,22 @@ def _h_em_fullwave_submit(p):
       'waveguide_sweep' (default): drive a hollow rectangular guide with a TE10
         port, sweep transmission over a band STRADDLING the cutoff, and report the
         propagating↔evanescent transition. Knobs: a_mm, b_mm, length_mm,
-        f_start_ghz, f_stop_ghz, n_freq, nrts, cells_per_wl, eps_r. The result's
-        fc_crossing_ghz vs the analytic c/(2a) (fc_ratio≈1) is the gate.
+        f_start_ghz, f_stop_ghz, n_freq, nrts, cells_per_wl, eps_r, decay_f_ratio,
+        end_criteria. The FIELD gate is alpha_ratio: the solved field's decay rate
+        below cutoff (probes along the guide) vs the exact sqrt((pi/a)^2 - k^2)
+        (#401). fc_ratio is only a port-setup check — CalcPort's analytic beta
+        makes the transmission a step at c/(2a) whatever the field does (#398).
+        Default length 120 mm: the decay probes need ~5 broad-walls of guide.
       'dipole_s11': drive a centre-fed thin dipole, sweep S11, report the first
-        resonance. Knobs: length_mm, gap_mm, radius_mm, f_start_ghz, f_stop_ghz.
+        resonance. Knobs: length_mm, gap_mm, radius_mm, f_start_ghz, f_stop_ghz,
+        n_freq, nrts, and the mesh — mesh_res_mm, or cells_per_wl at mesh_f_ghz
+        (default f_stop) — independent of the sweep window (#400).
 
     Geometry is parametric (built inside the runner from the dimensions) — no
     FreeCAD export is needed for these canonical cases, but the submit still runs
     on the worker thread off the MCP channel like every other *_submit. Returns the
     degradation dict, or {job_id, status, cache_hit}; poll job_result for the
-    sweep arrays + fc_ratio / resonance."""
+    sweep arrays + alpha_ratio / fc_ratio (waveguide) or resonance (dipole)."""
     python_exe = _em_fullwave_gpl_python()
     if python_exe is None:
         from ankusdrive import solvers
@@ -15846,13 +15852,15 @@ def _h_em_fullwave_submit(p):
             "problem": "waveguide_sweep",
             "a_mm": float(p.get("a_mm", 22.86)),
             "b_mm": float(p.get("b_mm", p.get("a_mm", 22.86) / 2.0)),
-            "length_mm": float(p.get("length_mm", 60.0)),
+            "length_mm": float(p.get("length_mm", 120.0)),
             "f_start_ghz": float(p.get("f_start_ghz", 4.0)),
             "f_stop_ghz": float(p.get("f_stop_ghz", 10.0)),
             "n_freq": int(p.get("n_freq", 121)),
             "nrts": int(p.get("nrts", 30000)),
             "cells_per_wl": float(p.get("cells_per_wl", 20)),
             "eps_r": float(p.get("eps_r", 1.0)),
+            "decay_f_ratio": float(p.get("decay_f_ratio", 0.7)),
+            "end_criteria": float(p.get("end_criteria", 1e-6)),
         }
     elif kind == "dipole_s11":
         problem = {
@@ -15864,7 +15872,11 @@ def _h_em_fullwave_submit(p):
             "f_stop_ghz": float(p.get("f_stop_ghz", 1.5)),
             "n_freq": int(p.get("n_freq", 201)),
             "nrts": int(p.get("nrts", 60000)),
+            "cells_per_wl": float(p.get("cells_per_wl", 30)),
         }
+        for k in ("mesh_res_mm", "mesh_f_ghz"):
+            if p.get(k) is not None:
+                problem[k] = float(p[k])
     else:
         raise ValueError(f"unknown em_fullwave problem {kind!r} "
                          "(want 'waveguide_sweep' or 'dipole_s11')")
