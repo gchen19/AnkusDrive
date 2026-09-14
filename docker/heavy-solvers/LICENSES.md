@@ -21,6 +21,7 @@ revision below. The exact build recipe is `docker/heavy-solvers/Dockerfile` in
 | preCICE openfoam-adapter | GPL-3.0 | https://github.com/precice/openfoam-adapter | `f6d7928c52df4bf109a4d5abd245531d6eeb136c` |
 | YADE | GPL-2.0+ | https://gitlab.com/yade-dev/trunk | `a48efeefb6318fc82d474f36aa2d97697f0adf8c` |
 | openEMS / CSXCAD (openEMS-Project) | GPL-3.0 / LGPL-3.0 | https://github.com/thliebig/openEMS-Project | `112b5f492c1a3a08ff69338d7ef39a0cf3a5b7bc` (with submodules) |
+| Blender (official tarball, **linux/amd64 image only** — no arm64 Linux build is published) | GPL-3.0 | https://www.blender.org/ | `5.2.1`, SHA-256 pinned in `scripts/install-renderers.sh` |
 | PrusaSlicer (apt `prusa-slicer`) | AGPL-3.0 | https://github.com/prusa3d/PrusaSlicer | Ubuntu 24.04 package |
 | Bempp-cl, Gmsh, meshio (venv) | MIT / GPL-2.0+ / MIT | PyPI | resolved at image build time |
 | KrakenOS (driver venv) | GPL-3.0 | PyPI | resolved at image build time |

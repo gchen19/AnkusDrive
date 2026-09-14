@@ -87,8 +87,10 @@ else:
 # bempp, kraken and openems run under dedicated interpreters; find_solver resolves
 # them through solvers.solver_python() (the resolver the worker and the live tests
 # use), so ok here means the override / .venv-<x> interpreter really imports them.
+# blender is the studio render backend (#335), whose live photoreal tests the image
+# once silently SKIPped while the self-hosted box ran them (#342).
 REQUIRED = (
-    "bempp", "calculix", "elmer", "kraken", "openems", "openfoam", "optiland",
+    "bempp", "blender", "calculix", "elmer", "kraken", "openems", "openfoam", "optiland",
     "precice", "prusaslicer", "pybullet", "rayoptics", "topopt", "yade",
 )
 # Per-platform exclusions (#363): the image lists, one "<solver><TAB><reason>" per line,

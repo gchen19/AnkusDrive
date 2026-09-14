@@ -210,6 +210,23 @@ RUN cd /src/ankusdrive && PY=/opt/venv/bin/python3 PREFIX=/opt/freecad BINDIR=/u
 RUN /opt/freecad/squashfs-root/usr/bin/python -m pip install -q "svglib<1.6" reportlab \
  && /opt/freecad/squashfs-root/usr/bin/python -c "import svglib, reportlab"
 
+# Full Blender for render_photoreal's studio backend (#335). Without it the 7 live
+# test_blender_* photoreal tests SKIP here while the self-hosted box PASSes them, the
+# parity gap scripts/ci_parity_diff.py found (#342). Discovery takes the /usr/local/bin
+# symlink, so no ANKUSDRIVE_BLENDER_PATH: on arm64 it would name a missing file.
+# Blender publishes Linux builds for x86_64 only, so arm64 records an exclusion.
+# The X libs are what the tarball links beyond the FreeCAD runtime (checked with ldd).
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        xz-utils libxrender1 libxfixes3 libxi6 libsm6 libice6 libxxf86vm1 \
+      && rm -rf /var/lib/apt/lists/* \
+      && CACHE_DIR=/tmp/blender-cache BINDIR=/usr/local/bin \
+         bash /src/ankusdrive/scripts/install-renderers.sh blender \
+      && rm -rf /tmp/blender-cache; \
+    else \
+      printf 'blender\tno %s build: Blender publishes Linux binaries for x86_64 only (#342)\n' "$TARGETARCH" >> /etc/ankusdrive-heavy/exclusions; \
+    fi
+
 # Arch-neutral path to the ESI build (linux64… on amd64, linuxARM64… on arm64), so the
 # ANKUSDRIVE_* values below — which lanes and users copy out of the image — are the
 # same on every platform.
@@ -246,7 +263,7 @@ RUN cd /src/ankusdrive && bash scripts/ci-linux-preflight.sh \
  && pip uninstall -q -y ankusdrive
 
 LABEL org.opencontainers.image.title="ankusdrive-heavy" \
-      org.opencontainers.image.description="AnkusDrive heavy-solver CI image, amd64 + arm64 (OpenFOAM, Elmer on amd64, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp, FreeCAD)" \
+      org.opencontainers.image.description="AnkusDrive heavy-solver CI image, amd64 + arm64 (OpenFOAM, Elmer + Blender on amd64, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp, FreeCAD)" \
       org.opencontainers.image.source="https://github.com/gchen19/AnkusDrive" \
       org.opencontainers.image.licenses="See /licenses/README.md (bundles GPL-3.0, LGPL-3.0 and other components)"
 WORKDIR /
