@@ -121,6 +121,12 @@ echo "== run_script gate: unregistered when off, worker refuses agent code (#378
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_run_script_gate.py; else python3 tests/test_run_script_gate.py; fi
 
 echo
+echo "== Session journal: every tool call recorded, no result changed (#407) =="
+# Static wrapper contract, every registered tool journaled through FastMCP, and a real
+# worker build (handles, transaction depth, a new worker pid after restart_worker).
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_session_journal.py; else python3 tests/test_session_journal.py; fi
+
+echo
 echo "== MCP tool suite over stdio, driving the real worker (#288) =="
 # The other half of the MCP surface: test_mcp_boot proves the server SPEAKS, this
 # proves the tools WORK — documents, primitives, restart-clears-state, a CalculiX

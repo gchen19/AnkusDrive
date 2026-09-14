@@ -40,6 +40,7 @@ Everything below stays on your machine:
 | Files you ask it to write: saved documents, exports, drawings, reports, lockfiles, project and item registries | the paths or directories you pass to a tool | until you delete them |
 | Solver working directories and renders | your system temp directory, or a `workdir` / `case_dir` you pass | temp files are cleaned up by the tools or your OS; a directory you supply keeps its files |
 | Background job results and open documents | the running server's memory | until the job is discarded or the server exits |
+| A journal of this session's tool calls (tool names, arguments, trimmed results), kept so the session can be exported as a script | the running server's memory; never written to disk | until the server exits |
 
 ## Sharing and retention
 
