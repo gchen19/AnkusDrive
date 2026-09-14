@@ -21,7 +21,15 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
-## [Unreleased]
+## [0.5.5] — 2026-09-13
+
+The release that answers Anthropic's Software Directory Policy point by point. A
+session used to pay ~114k tokens of tool definitions before its first call; tools now
+come in families an install switches on, and the Claude Desktop extension starts with
+the model → drawing → analysis loop at ~31k. `run_script`, which runs agent-written
+Python with full file access, is off in the extension unless the user turns it on.
+And a reviewer guide gives three example prompts whose results are checked against
+the real server on every change, including an FEM run held to beam theory.
 
 ### Added
 
@@ -60,9 +68,9 @@ separately, so this file is the source and the release page is the copy.
 - `feature_instantiate` is annotated destructive (was additive): it hides the host
   body after stamping the feature, which edits an existing object
   ([#378](https://github.com/gchen19/AnkusDrive/issues/378)).
-- The Claude Desktop extension now defaults to `core`, `drawings` and `fem`: 112 tools,
-  ~125k characters of tool list (~31k tokens) instead of all 281 (~457k, ~114k
-  tokens). Each other family is an install-dialog toggle. A tools/list budget test
+- The Claude Desktop extension now defaults to `core`, `drawings` and `fem`: 111 tools
+  (`run_script` is off by default), ~125k characters of tool list (~31k
+  tokens) instead of all 281 (~457k, ~114k tokens). Each other family is an install-dialog toggle. A tools/list budget test
   holds the default under 140k characters
   ([#377](https://github.com/gchen19/AnkusDrive/issues/377)).
 
@@ -613,7 +621,8 @@ Before the first tag, in April 2026: the initial CLI and MCP scaffold over FreeC
 1.1.1, and Phase 2 — the full core mechanical-design surface, roughly 72 MCP tools.
 Those commits are in the git history rather than in this file.
 
-[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/gchen19/AnkusDrive/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/gchen19/AnkusDrive/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/gchen19/AnkusDrive/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/gchen19/AnkusDrive/compare/v0.5.1...v0.5.2
