@@ -19,7 +19,8 @@
 #   openems install-solvers.sh em_gpl      -> /opt/openEMS + /opt/venv-openems
 #   fsi     serial preCICE + calculix-adapter + openfoam-adapter -> /opt/fsi
 #   oims    tools/build_openinjmoldsim.sh  -> /opt/of7 (OpenFOAM-7 .org + openInjMoldSim)
-#   final   system + the four prefixes + FreeCAD AppImage + Bempp venv + driver venv
+#   elmer   install-solvers.sh elmer       -> /opt/elmer (arm64 only; amd64 uses the PPA)
+#   final   system + the five prefixes + FreeCAD AppImage + Bempp venv + driver venv
 #
 # Build locally:  docker build -f docker/heavy-solvers/Dockerfile --build-arg JOBS=8 .
 #
@@ -168,12 +169,31 @@ RUN set -e; export HOME=/opt/of7 \
           /opt/of7/OpenFOAM/root-7 /opt/of7/opt/openInjMoldSim/.git
 
 # ---------------------------------------------------------------------------------
+# Elmer from source (#384). The CSC PPA the system stage uses publishes amd64 only and
+# noble ships no elmer package, so arm64 builds a pinned release; amd64 keeps the PPA
+# binaries and this stage leaves an empty prefix. /opt/elmer/bin is on discovery's
+# Linux search path, so no ANKUSDRIVE_ELMER_PATH (which would differ per arch).
+FROM system AS elmer
+ARG JOBS=4
+ARG TARGETARCH
+COPY scripts/install-solvers.sh /src/ankusdrive/scripts/install-solvers.sh
+RUN if [ "$TARGETARCH" = "amd64" ]; then mkdir -p /opt/elmer; \
+    else ELMER_PREFIX=/opt/elmer ELMER_SRC=/src/elmerfem ELMER_JOBS="$JOBS" \
+           bash /src/ankusdrive/scripts/install-solvers.sh elmer \
+      && rm -rf /src/elmerfem; fi
+
+# ---------------------------------------------------------------------------------
 FROM system AS final
 COPY --from=yade    /opt/yade          /opt/yade
 COPY --from=openems /opt/openEMS       /opt/openEMS
 COPY --from=openems /opt/venv-openems  /opt/venv-openems
 COPY --from=fsi     /opt/fsi           /opt/fsi
 COPY --from=oims    /opt/of7           /opt/of7
+COPY --from=elmer   /opt/elmer         /opt/elmer
+# arm64 now has Elmer, so the system stage's exclusion for it is lifted here rather
+# than there (editing the system stage would rebuild every stage on both arches).
+# The preflight fails a stale exclusion, so leaving it would fail the build.
+RUN sed -i '/^elmer\t/d' /etc/ankusdrive-heavy/exclusions
 
 # Only what provisioning reads — a broader COPY would rebuild this stage on every
 # unrelated commit. CI installs its own checkout over this with --no-deps.
@@ -263,7 +283,7 @@ RUN cd /src/ankusdrive && bash scripts/ci-linux-preflight.sh \
  && pip uninstall -q -y ankusdrive
 
 LABEL org.opencontainers.image.title="ankusdrive-heavy" \
-      org.opencontainers.image.description="AnkusDrive heavy-solver CI image, amd64 + arm64 (OpenFOAM, Elmer + Blender on amd64, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp, FreeCAD)" \
+      org.opencontainers.image.description="AnkusDrive heavy-solver CI image, amd64 + arm64 (OpenFOAM, Elmer, Blender on amd64 only, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp, FreeCAD)" \
       org.opencontainers.image.source="https://github.com/gchen19/AnkusDrive" \
       org.opencontainers.image.licenses="See /licenses/README.md (bundles GPL-3.0, LGPL-3.0 and other components)"
 WORKDIR /

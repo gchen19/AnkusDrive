@@ -59,6 +59,8 @@
 #   scripts/install-solvers.sh acoustics_bem    # opt-in exterior-acoustics BEM (bempp-cl, dedicated venv)
 #   scripts/install-solvers.sh em_gpl           # opt-in GPL-3.0 full-wave FDTD (openEMS, source-built)
 #   scripts/install-solvers.sh --optics-gallery # bootstrap: install BOTH optics lanes + render every gallery figure
+#   scripts/install-solvers.sh elmer            # Elmer from source (Linux any arch, macOS; #384)
+#   scripts/install-solvers.sh thermal          # print Elmer package guidance (no auto-install)
 #   scripts/install-solvers.sh cfd              # print OpenFOAM/SU2 install guidance (no auto-install)
 #   scripts/install-solvers.sh multipass        # macOS: the OpenFOAM families via a Multipass VM
 #                                               # (the twin of install-solvers.ps1's `wsl` target, #193)
@@ -156,10 +158,10 @@ EOF
     cat <<'EOF'
 
 Transient/radiation thermal (Elmer) — system package:
-  Linux:   sudo apt-get install -y elmerfem-csc
+  Linux amd64: sudo apt-get install -y elmerfem-csc
+  Linux arm64 / macOS: no package exists — scripts/install-solvers.sh elmer
+           (source build of a pinned release; auto-discovered, #384)
   Windows: pwsh scripts/install-solvers.ps1 elmer   (portable no-GUI zip)
-  macOS:   no prebuilt binaries exist (no Homebrew formula or conda-forge
-           package) — source build from https://www.elmerfem.org/
   Verify:  ElmerSolver -v  (or set ANKUSDRIVE_ELMER_PATH)
 EOF
   fi
@@ -443,6 +445,71 @@ build_dem_gpl() {
   ok "YADE installed to $prefix ($(basename "$exe"), linked as yade) — verify: $prefix/bin/yade --version  (or set ANKUSDRIVE_YADE)"
 }
 
+# --- Elmer from source (issue #384) --------------------------------------------
+# The PPA (`elmerfem-csc`) publishes amd64 only, Ubuntu noble ships no elmer package,
+# and macOS has no Homebrew formula or conda-forge build, so arm64 Linux and every
+# Mac had no Elmer at all. This builds the solver alone (no GUI, no MPI: AnkusDrive
+# runs ElmerSolver serial, out-of-process) from a pinned release tag, with Elmer's
+# bundled UMFPACK (the direct method the thermal/EM/acoustic cases use). ~2 min on 16
+# cores. GPL-2.0+; the same arm's-length boundary as the packaged binaries.
+#   Linux   -> /opt/elmer (ELMER_PREFIX), which discovery already searches
+#   macOS   -> $SOLVERS_DIR/elmer-<version>, which discovery globs (no env var needed)
+ELMER_TAG="${ELMER_TAG:-release-26.2.1}"
+
+build_elmer() {
+  local jobs="${ELMER_JOBS:-8}"   # cap parallelism — do NOT use -j$(nproc) on a CI host
+  local src="${ELMER_SRC:-${TMPDIR:-/tmp}/elmerfem-$ELMER_TAG}"
+  local prefix install_sudo="" openmp=ON extra=()
+  case "$OS" in
+    Linux)
+      prefix="${ELMER_PREFIX:-/opt/elmer}"
+      [ -w "$(dirname "$prefix")" ] || install_sudo="$SUDO"
+      log "build deps (apt) — cmake, gfortran, BLAS/LAPACK"
+      $SUDO apt-get install -y --no-install-recommends ca-certificates cmake git \
+          build-essential gfortran libblas-dev liblapack-dev || die "apt build-deps failed"
+      ;;
+    Darwin)
+      prefix="${ELMER_PREFIX:-$SOLVERS_DIR/elmer-${ELMER_TAG#release-}}"
+      command -v brew >/dev/null || die "Homebrew is required for the Elmer build (cmake + gfortran)"
+      log "build deps (brew) — cmake, gcc (gfortran); BLAS/LAPACK from Accelerate"
+      # Only what is missing: a blanket `brew install` upgrades the user's existing ones.
+      local f
+      for f in cmake gcc; do brew list --formula "$f" >/dev/null 2>&1 || brew install "$f" \
+        || die "brew install $f failed"; done
+      # HOMEBREW_PREFIX explicitly: Elmer's CMake refuses a box with MacPorts AND
+      # Homebrew unless one is named. Apple clang has no OpenMP; Elmer runs serial here.
+      openmp=OFF
+      extra=(-DHOMEBREW_PREFIX="$(brew --prefix)" -DBLA_VENDOR=Apple
+             -DCMAKE_Fortran_COMPILER="$(brew --prefix)/bin/gfortran")
+      ;;
+    *) die "build_elmer supports Linux and macOS (Windows: scripts/install-solvers.ps1 elmer)" ;;
+  esac
+  if [ "$FORCE" != "1" ] && [ -x "$prefix/bin/ElmerSolver" ]; then
+    ok "Elmer already installed ($prefix/bin/ElmerSolver); skipping (FORCE=1 to rebuild)"
+    return
+  fi
+  if [ ! -d "$src/.git" ]; then
+    log "clone ElmerCSC/elmerfem @ $ELMER_TAG -> $src"
+    git clone -q --depth 1 --branch "$ELMER_TAG" https://github.com/ElmerCSC/elmerfem.git "$src" \
+      || die "git clone failed"
+  fi
+  log "cmake configure (prefix=$prefix, MPI off, GUI off, OpenMP $openmp)"
+  cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+      -DWITH_MPI=OFF -DWITH_OpenMP="$openmp" -DWITH_ELMERGUI=OFF -DWITH_LUA=OFF \
+      ${extra[@]+"${extra[@]}"} || die "cmake configure failed"
+  log "cmake build -j$jobs"
+  cmake --build "$src/build" -j"$jobs" || die "cmake build failed"
+  $install_sudo cmake --install "$src/build" >/dev/null || die "cmake install failed"
+  local b
+  for b in ElmerSolver ElmerGrid ViewFactors; do   # the worker resolves all three as siblings
+    [ -x "$prefix/bin/$b" ] || die "no $b under $prefix/bin after install"
+  done
+  # Captured, not piped to `grep -q`: under pipefail its early exit SIGPIPEs ElmerSolver.
+  local banner; banner="$("$prefix/bin/ElmerSolver" -v 2>&1 || true)"
+  case "$banner" in *"ELMER SOLVER"*) ;; *) die "installed, but '$prefix/bin/ElmerSolver -v' did not run" ;; esac
+  ok "Elmer ($ELMER_TAG) installed to $prefix — verify: scripts/install-solvers.sh --list  (elmer)"
+}
+
 # --- freecad: the CORE dependency, not a solver (issue #280) -------------------
 # Every other target here provisions an OPTIONAL solver; this one provisions FreeCAD
 # itself, because on Ubuntu 24.04+ there is no package to install (dropped from
@@ -544,7 +611,8 @@ main() {
       em_gpl|openems)    build_openems; exit 0 ;;
       fsi|precice)       build_fsi; exit 0 ;;
       cfd)               systems+=("cfd"); do_all=0 ;;
-      thermal|elmer)     systems+=("thermal"); do_all=0 ;;
+      thermal)           systems+=("thermal"); do_all=0 ;;
+      elmer)             build_elmer; exit 0 ;;         # source build (#384)
       openfoam)          systems+=("cfd"); do_all=0 ;;
       su2)               if [ "$OS" = "Darwin" ]; then install_su2_darwin; exit 0
                          else systems+=("cfd"); do_all=0; fi ;;

@@ -91,11 +91,11 @@ _SOLVERS: dict = {
         },
         # NB: there is NO conda-forge/Homebrew Elmer package (issue #194, same class
         # of stale hint as the brew calculix one in #192) — don't suggest conda.
-        "install_hint": "'apt install elmerfem-csc' (Linux), the portable no-GUI zip "
-                        "via scripts/install-solvers.ps1 elmer (Windows), or a source "
-                        "build from https://www.elmerfem.org/ (macOS ships no prebuilt "
-                        "binaries) — then ensure ElmerSolver is on PATH or set "
-                        "ANKUSDRIVE_ELMER_PATH",
+        "install_hint": "'apt install elmerfem-csc' (Linux amd64), the portable no-GUI "
+                        "zip via scripts/install-solvers.ps1 elmer (Windows), or "
+                        "scripts/install-solvers.sh elmer — a source build of a pinned "
+                        "release for arm64 Linux and macOS, where no package exists — "
+                        "then ensure ElmerSolver is on PATH or set ANKUSDRIVE_ELMER_PATH",
     },
     # --- M5 CFD: OpenFOAM / SU2 (apt/conda, not vendored), heaviest, last ----
     "openfoam": {
