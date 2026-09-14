@@ -1411,6 +1411,7 @@ def pocket(
     direction: str | None = None,
     reversed: bool = False,
     name: str = "Pocket",
+    strict: bool = False,
 ) -> dict:
     """Subtract a pad of `length` mm from the body. through_all ignores length.
 
@@ -1424,10 +1425,19 @@ def pocket(
     remove material; 'away_from_body' extrudes outside the body. The tool
     probes both Reversed values and picks the one matching intent.
     reversed: legacy raw flag, used only if neither `through` nor `direction`
-    is set."""
+    is set.
+    strict: raise instead of warning on a degenerate pocket (see below).
+
+    Returns {handle, name, volume, removed_volume, volume_ratio}, plus
+    `warnings` ONLY when the pocket removed the whole body or removed nothing
+    (the same two degenerate outcomes as boolean_op's cut). Warn-don't-fail is
+    the default; pass strict=True in a scripted recipe to turn both into an
+    error instead. direction='away_from_body' is an explicit request to remove
+    nothing, so it never warns and never raises."""
     params = {
         "sketch": sketch, "length": length,
         "through_all": through_all, "reversed": reversed, "name": name,
+        "strict": strict,
     }
     if direction is not None:
         params["direction"] = direction
@@ -1521,6 +1531,7 @@ def hole(
     direction: str | None = None,
     reversed: bool = False,
     name: str = "Hole",
+    strict: bool = False,
 ) -> dict:
     """Drill a parametric Hole from a sketch (one or more circles).
 
@@ -1551,11 +1562,19 @@ def hole(
     removes none. Hole and Pocket interpret the raw flag differently.
     reversed: legacy raw flag, used only if neither `through` nor `direction`
     is set.
+    strict: raise instead of warning on a degenerate hole (see below).
+
+    Returns {handle, name, volume, removed_volume, volume_ratio}, plus
+    `warnings` ONLY when the hole consumed the whole body or removed nothing
+    (the same two degenerate outcomes as boolean_op's cut). Warn-don't-fail is
+    the default; pass strict=True in a scripted recipe to turn both into an
+    error instead. direction='away_from_body' is an explicit request to remove
+    nothing, so it never warns and never raises.
     """
     params = {
         "sketch": sketch, "diameter": diameter, "depth_type": depth_type,
         "depth": depth, "cut_type": cut_type, "threaded": threaded,
-        "reversed": reversed, "name": name,
+        "reversed": reversed, "name": name, "strict": strict,
     }
     if model_thread is not None:
         params["model_thread"] = model_thread
