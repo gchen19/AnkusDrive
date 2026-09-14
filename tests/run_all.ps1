@@ -109,6 +109,8 @@ Test-Module 'MCP stdio boot without FreeCAD (#279)' 'test_mcp_boot.py'
 Test-Module 'Toolset token budget (#377)' 'test_toolsets_budget.py'
 # run_script only where ANKUSDRIVE_ALLOW_RUN_SCRIPT allows it: static, server and worker tiers (#378).
 Test-Module 'run_script gate (#378)' 'test_run_script_gate.py'
+# Every tool call journaled for session export, no result changed: static, server, worker tiers (#407).
+Test-Module 'Session journal (#407)' 'test_session_journal.py'
 # The other half: the tools actually work over MCP, driving the real worker. Needs
 # FreeCAD, so it belongs to THIS lane and not the hosted core-install one. Could not
 # run on Windows at all until #288 stopped it hardcoding .venv/bin/python3.

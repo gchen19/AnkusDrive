@@ -8260,6 +8260,19 @@ from ankusdrive import script_policy as _script_policy  # noqa: E402
 
 RUN_SCRIPT = _script_policy.apply(mcp)
 
+# Last, journal every tool still registered, so a session can be exported as a script
+# that regenerates it (#407, epic #309). Memory only; never changes a result.
+from ankusdrive import journal as _journal  # noqa: E402
+
+
+def _worker_pid(name: str):
+    w = _workers.get(name)
+    return w.proc.pid if w is not None else None
+
+
+JOURNAL = _journal.apply(mcp, workspace_of=lambda: _current_workspace,
+                         worker_pid_of=_worker_pid)
+
 
 def run():
     mcp.run()
