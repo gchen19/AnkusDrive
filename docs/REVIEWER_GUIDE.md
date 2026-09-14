@@ -125,7 +125,7 @@ them, those two formats fail with a clear error naming the missing package.
 ## 4. Configuration a reviewer may notice
 
 - **Tool families.** To keep context use low, the extension enables only `core`,
-  `drawings` and `fem` (113 tools, about 32k tokens) instead of all 282 tools. Other
+  `drawings` and `fem` (114 tools, about 33k tokens) instead of all 283 tools. Other
   families can be turned on under **Settings → Extensions → AnkusDrive**:
   components, sheet metal, assemblies, design intent, manufacturing, hand
   calculations, external-solver simulation, design control/PLM, and rendering.
