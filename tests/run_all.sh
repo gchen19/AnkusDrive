@@ -133,6 +133,10 @@ echo "== Replay: journal -> script that regenerates the session (#408) =="
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_replay.py; else python3 tests/test_replay.py; fi
 
 echo
+echo "== session_transcript tool: read-only, writes nothing, no replay-as-tool (#409) =="
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_session_transcript.py; else python3 tests/test_session_transcript.py; fi
+
+echo
 echo "== MCP tool suite over stdio, driving the real worker (#288) =="
 # The other half of the MCP surface: test_mcp_boot proves the server SPEAKS, this
 # proves the tools WORK — documents, primitives, restart-clears-state, a CalculiX

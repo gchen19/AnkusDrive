@@ -242,7 +242,7 @@ available. If startup hangs or the host reports a closed connection, run
 cleaner error messages.
 
 **Tool families (toolsets).** Every tool definition takes up the client's context, and
-all 281 come to roughly 114k tokens. Tools are grouped into families you can switch on
+all 283 come to roughly 114k tokens. Tools are grouped into families you can switch on
 and off: `core` (always on), `drawings`, `fem`, `components`, `sheet_metal`, `assembly`,
 `intent`, `manufacturing`, `hand_calcs`, `simulation`, `plm`, `rendering`.
 - **pip / pipx / uvx / clone:** every family is on unless you set
@@ -430,6 +430,7 @@ every day.
 | Tolerance ↔ cost | `tolerance_cost_check` (per-dimension IT grade, the cheapest process that holds it naturally, a relative cost index, and a flag when a dimension is tighter than the declared process can hold without a secondary operation), `suggest_loosening` (*the loosest tolerance that works* — greedy loosening, every step re-verified against `tolerance_stackup`'s cpk); `cost_estimate(tolerance_class=…)` puts the same curve in the rollup |
 | Design control / PLM | items & part numbers (`items_new`, `items_validate`, `items_resolve`, `items_check_manifest`), recipes (`recipe`, `recipe_list`, `recipe_schema`, `recipe_validate`), feature templates (`feature_instantiate`, `feature_list`, `feature_schema`, `feature_validate`), variant families (`family_materialize`, `family_validate`), lifecycle/revision (`lifecycle_transition`, `lifecycle_editable`, `lifecycle_classify_change`, `lifecycle_apply_change`), change control (`eco_create`, `eco_validate`, `change_impact`, `where_used`, `baseline_create`, `baseline_verify`), interface registry + substitutability (`get_interface`, `substitutability_check`), projects (`scaffold_project`, `project_validate`, `project_check_references`, `project_resolve_manifest`) |
 | Operations | `transaction_open`, `transaction_commit`, `transaction_abort` |
+| Session transcripts | `session_transcript`: the session so far as a Python script that regenerates it (model, drawings, simulations) through these same tools. Handles are variables, job polls are one `s.wait(job)`, measured results are `s.check()` lines that stop a drifted replay, and paths are relative to `WORKDIR`. Read-only: it returns the script as text. Tool calls are kept in server memory only ([PRIVACY.md](PRIVACY.md)) |
 
 All tools return JSON; geometry-creating tools return a `handle` (e.g.
 `pad_1`) that subsequent calls reference. The heavy simulation families return
@@ -475,6 +476,29 @@ The escape hatch costs more (the agent has to write FreeCAD Python) but
 makes the entire FreeCAD API reachable. The Phase 2 plan's "After Phase 2"
 section calls out which run_script patterns deserve promotion to typed
 tools — that's how the surface grows over time.
+
+### Regenerating a session
+
+`session_transcript()` returns the session so far as a script:
+
+```python
+with Session() as s:
+    r2 = s.add_primitive(kind='box', w=40.0, d=20.0, h=5.0)
+    box_1 = r2['handle']
+    r3 = s.add_primitive(kind='cylinder', h=5.0, r=3.0)
+    cylinder_1 = r3['handle']
+    r4 = s.boolean_op(op='cut', base=box_1, tool=cylinder_1)
+    s.check(r4, 'volume', 3964.657082647114)
+    s.save_document(path=str(WORKDIR / 'bracket.FCStd'))
+```
+
+Save it and run `python transcript.py [WORKDIR]` to rebuild the session in a fresh
+worker. `ankusdrive.replay.Session` calls the same functions the MCP server serves,
+so a transcript can call no tool the server doesn't have. `run_script` stays behind
+its switch, and a missing solver stops the run at that step. Each `s.check()` stops
+the run at the first result that differs from the recording. The script's header
+lists what it can't reproduce: failed calls, `run_script` code, and files the session
+read, which you copy into `WORKDIR` first.
 
 ### What the CLI is (and isn't)
 
