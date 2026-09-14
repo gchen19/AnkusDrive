@@ -29,7 +29,7 @@ that script. It is pure Python (no FreeCAD, no ``mcp``):
   ``mcp_server.py`` by ``ast``, so the exporter never imports the server).
 * **Checkpoints:** numeric volume / area / mass / ``max_*`` / ``min_*`` / frequency
   results become ``s.check(...)``. Relative tolerance is 1e-6 for geometry and 1e-3
-  for solver job results.
+  for solver output (job results, and ``*_results`` / ``*_result_probe`` reads).
 * **Paths are redacted.** Absolute paths become ``WORKDIR / "<relative>"``, so a shared
   script carries no ``/Users/<name>/…``. Paths the session read but did not write are
   listed as prerequisites.
@@ -183,6 +183,7 @@ _LINK_KEYS = {"handle", "job_id", "doc", "analysis"}
 _CHECK_KEY = re.compile(r"^((volume|area|surface_area|mass)(_[a-z0-9]+)?|max_[a-z0-9_]+|"
                         r"min_[a-z0-9_]+|frequenc[a-z0-9_]*)$")
 _ABS_PATH = re.compile(r"^(/|~[/\\]|[A-Za-z]:[\\/])")
+_SOLVER_READ = re.compile(r"(_results|_result_probe)$")
 _INPUT_PARAMS = {"registry", "manifest", "manifest_path", "input", "source", "src", "file",
                  "lockfile"}
 _RESERVED = {"s", "sys", "Path", "Session", "WORKDIR"}
@@ -502,8 +503,11 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
         body.append(f"s.step = {seq}")
         if kind[seq] == "fail":
             call = _call_text(tool, args, expr)
-            body.append(f"# FAILED in the session, not replayed: {e.get('error', '')}"[:300])
-            body.append(f"# {call}")
+            err = " ".join(str(e.get("error", "")).split())      # one line: it sits in a comment
+            if len(err) > 240:
+                err = err[:239] + "…"
+            body.append(f"# FAILED in the session, not replayed: {err}")
+            body.append("# " + " ".join(call.split()))
             warnings.append(f"step {seq}: {tool} failed in the session and is left as a comment")
             continue
 
@@ -520,7 +524,7 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
             tol = job_tol
         else:
             call = _call_text(tool, args, expr)
-            tol = geometry_tol
+            tol = job_tol if _SOLVER_READ.search(tool) else geometry_tol
 
         result = e.get("result")
         binds = [(v, p) for v, p in _bindings(e) if (seq, v) not in var_of_binder]
