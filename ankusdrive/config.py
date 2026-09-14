@@ -165,10 +165,10 @@ def load() -> dict:
 
 def _config_key(env_var: str):
     """Map a ``ANKUSDRIVE_*`` env var to its config location: ``FREECADCMD`` and
-    ``TOOLSETS`` (#377) are top-level ``freecadcmd`` / ``toolsets``; everything else
+    ``TOOLSETS`` (#377) and ``ALLOW_RUN_SCRIPT`` (#378) are top-level keys; everything else
     lives lowercased under ``[solvers]``."""
     name = env_var[len(_ENV_PREFIX):] if env_var.startswith(_ENV_PREFIX) else env_var
-    if name in ("FREECADCMD", "TOOLSETS"):
+    if name in ("FREECADCMD", "TOOLSETS", "ALLOW_RUN_SCRIPT"):
         return (name.lower(),)
     return ("solvers", name.lower())
 

@@ -26,6 +26,7 @@
       "args": ["run", "--directory", "${__dirname}", "src/server.py"],
       "env": {
         "ANKUSDRIVE_FREECADCMD": "${user_config.freecadcmd}",
+        "ANKUSDRIVE_ALLOW_RUN_SCRIPT": "${user_config.allow_run_script}",
         "ANKUSDRIVE_TOOLSET_DRAWINGS": "${user_config.toolset_drawings}",
         "ANKUSDRIVE_TOOLSET_FEM": "${user_config.toolset_fem}",
         "ANKUSDRIVE_TOOLSET_COMPONENTS": "${user_config.toolset_components}",
@@ -65,6 +66,13 @@
       "description": "Absolute path to FreeCAD 1.1's freecadcmd (freecadcmd.exe on Windows). Leave empty to auto-discover it on PATH and in the standard install locations.",
       "required": false,
       "default": ""
+    },
+    "allow_run_script": {
+      "type": "boolean",
+      "title": "Allow run_script (execute agent-written Python)",
+      "description": "Off by default. When on, the run_script tool lets Claude run Python it writes inside FreeCAD, with full access to your files and processes. Leave off unless you need an operation no other tool covers.",
+      "required": false,
+      "default": false
     },
     "toolset_drawings": {
       "type": "boolean",

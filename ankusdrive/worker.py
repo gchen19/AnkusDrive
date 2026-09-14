@@ -4948,6 +4948,16 @@ def _h_run_script(p):
     register_handle round-trip.
     """
     global _SCRIPT_GLOBALS
+    if p.get("origin") == "mcp":
+        # Agent-supplied code: honour ANKUSDRIVE_ALLOW_RUN_SCRIPT (#378). The server
+        # already leaves the tool unregistered when it is off; this is the second line.
+        from ankusdrive import script_policy
+        try:
+            permitted = script_policy.current()
+        except ValueError:
+            permitted = False                     # an unparseable switch never enables exec
+        if not permitted:
+            return script_policy.refusal()
     if _SCRIPT_GLOBALS is None:
         _SCRIPT_GLOBALS = {
             "App": App,

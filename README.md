@@ -253,6 +253,15 @@ and off: `core` (always on), `drawings`, `fem`, `components`, `sheet_metal`, `as
 
 `setup_status` lists the families that are off and exactly how to enable each one.
 
+**`run_script`** executes Python the agent writes, with full access to your files and
+processes. It's controlled by `ANKUSDRIVE_ALLOW_RUN_SCRIPT` (env, or `allow_run_script`
+in `config.toml`):
+- **pip / pipx / uvx / clone:** allowed unless set to `false`.
+- **Claude Desktop extension:** **off by default**; turn it on in the extension's
+  settings.
+
+When it's off, the tool isn't offered at all, and `setup_status` says how to enable it.
+
 ## Simulation solvers & review-video demos
 
 The base install (FreeCAD + `pip install ankusdrive`) covers geometry, the analytic

@@ -107,6 +107,8 @@ Test-Module 'MCP stdio boot without FreeCAD (#279)' 'test_mcp_boot.py'
 # What the Claude Desktop bundle's default tool families cost a client, measured over
 # stdio against a budget; `all` must still serve every tool (#377).
 Test-Module 'Toolset token budget (#377)' 'test_toolsets_budget.py'
+# run_script only where ANKUSDRIVE_ALLOW_RUN_SCRIPT allows it: static, server and worker tiers (#378).
+Test-Module 'run_script gate (#378)' 'test_run_script_gate.py'
 # The other half: the tools actually work over MCP, driving the real worker. Needs
 # FreeCAD, so it belongs to THIS lane and not the hosted core-install one. Could not
 # run on Windows at all until #288 stopped it hardcoding .venv/bin/python3.

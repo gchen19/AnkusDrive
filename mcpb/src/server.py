@@ -55,12 +55,24 @@ def compose_toolsets(environ, families, defaults) -> str:
     return value
 
 
+def default_run_script_off(environ) -> bool:
+    """The extension's run_script toggle defaults off (#378). If the host did not pass
+    it (unset, or scrubbed as an unexpanded placeholder), make that explicit: an
+    absent switch means *allowed* to the package, which is right for a pip install and
+    wrong for this bundle. Returns True when the default was applied."""
+    if environ.get("ANKUSDRIVE_ALLOW_RUN_SCRIPT", "").strip():
+        return False
+    environ["ANKUSDRIVE_ALLOW_RUN_SCRIPT"] = "false"
+    return True
+
+
 def main() -> None:
     removed = scrub_unsubstituted(os.environ)
     # Announce the install kind before the package reads the environment: this
     # interpreter lives in a host-managed, pinned .venv, so a `pip install` hint is
     # wrong here, and ankusdrive.install_kind rewrites hints on seeing this (#347).
     os.environ["ANKUSDRIVE_INSTALL_KIND"] = "mcpb"
+    default_run_script_off(os.environ)
     if removed:
         # stderr only: stdout is the MCP stdio channel.
         print(f"ankusdrive-mcpb: ignoring unset user config {', '.join(sorted(removed))}", file=sys.stderr)

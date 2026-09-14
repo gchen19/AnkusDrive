@@ -139,7 +139,8 @@ def test_one_name_for_the_freecad_path():
             # ANKUSDRIVE_TOOLSETS (#377); tests/test_toolsets.py checks them in detail.
             assert "compose_toolsets(os.environ" in shim, f"bundle sets {var} but the launcher never composes toolsets"
             continue
-        assert f'"{var}"' in client, f"bundle sets {var} but ankusdrive/client.py never reads it"
+        readers = [f for f in (REPO / "ankusdrive").rglob("*.py") if f'"{var}"' in f.read_text(encoding="utf-8")]
+        assert readers, f"bundle sets {var} but no module in ankusdrive/ reads it"
         key = PLACEHOLDER.findall(value)[0]
         # config.toml's key for a top-level ANKUSDRIVE_* var is the name, lowercased, minus the prefix.
         assert key == var.removeprefix("ANKUSDRIVE_").lower(), \

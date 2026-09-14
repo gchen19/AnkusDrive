@@ -145,7 +145,7 @@ def test_launcher_composes_toggles():
 
 def test_config_key_is_top_level():
     cfg = (PKG / "config.py").read_text(encoding="utf-8")
-    assert re.search(r'name in \("FREECADCMD", "TOOLSETS"\)', cfg), "toolsets should be a top-level config.toml key"
+    assert re.search(r'name in \("FREECADCMD", "TOOLSETS"', cfg), "toolsets should be a top-level config.toml key"
 
 
 def _discover():
