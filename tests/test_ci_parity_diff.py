@@ -107,6 +107,7 @@ def test_pass_on_a_skip_on_b_is_a_gap_and_whole_missing_suites_collapse():
     rep = pd.diff(a, b)
     rows = {(s, w) for s, _, _, w in rep["gaps"]}
     assert rows == {("Photoreal render tests", "not PASS on B"),
+                    ("Photoreal render tests", "SKIP only on B"),
                     ("Elmer", "suite not run on B")}, rows
     elmer = [r for r in rep["gaps"] if r[0] == "Elmer"]
     assert elmer == [("Elmer", "(whole suite: 1 PASS)", 1, "suite not run on B")], elmer
@@ -115,7 +116,20 @@ def test_pass_on_a_skip_on_b_is_a_gap_and_whole_missing_suites_collapse():
 def test_accept_moves_a_gap_out_of_the_failure_set():
     a, b = _sides()
     rep = pd.diff(a, b, accept=[r"^Elmer :: ", r"test_blender_"])
-    assert rep["gaps"] == [] and len(rep["accepted"]) == 2, rep
+    assert rep["gaps"] == [] and len(rep["accepted"]) == 3, rep
+
+
+def test_an_inner_skip_behind_a_matching_pass_is_still_a_gap():
+    # The arm64 image's absent Elmer: every PASS line matched, but the live gate
+    # inside each test printed a SKIP the baseline did not.
+    a, b = pd.Side(), pd.Side()
+    a.add_log("== Elmer transient-thermal ==\n  PASS test_plane_wall (2.00s)\n")
+    b.add_log("== Elmer transient-thermal ==\n    SKIP — ElmerSolver not installed\n"
+              "  PASS test_plane_wall (0.01s)\n")
+    rep = pd.diff(a, b)
+    assert rep["gaps"] == [("Elmer transient-thermal", "SKIP — ElmerSolver not installed", 1,
+                            "SKIP only on B")], rep["gaps"]
+    assert pd.diff(a, b, accept=["ElmerSolver not installed"])["gaps"] == []
 
 
 def test_b_extra_coverage_is_reported_not_failed():

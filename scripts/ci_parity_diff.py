@@ -19,8 +19,9 @@ absolute and masked ``***`` paths) and compared as multisets per suite.
 Reported, as markdown ready to paste into the issue:
   * totals per side;
   * **coverage gaps**: outcomes that PASS on the baseline side (A) but do not PASS
-    on the candidate side (B), including whole suites B never ran;
-  * SKIP lines unique to either side, and anything B covers that A does not;
+    on the candidate side (B), whole suites B never ran, and SKIP lines only B prints
+    (a suite can print PASS around a live gate that skipped);
+  * SKIP lines only A prints, and anything B covers that A does not;
   * FAIL lines on either side.
 
 ``--accept REGEX`` (repeatable) marks a gap as an explicit, recorded decision
@@ -154,11 +155,18 @@ def diff(a, b, accept=()):
                 out.append((suite, line, n))
         return out
 
+    # A SKIP only B prints is a gap too, even when every PASS line matched: several
+    # suites print `PASS test_x` around an inner live gate that skipped (the arm64
+    # image's absent Elmer read as 0 PASS gaps and 27 SKIP lines).
+    for suite, line, n in only("SKIP", b, a):
+        if suite not in a.suites:
+            continue   # a suite A never ran cannot lose coverage
+        (ok if accepted(suite, line) else gaps).append((suite, line, n, "SKIP only on B"))
+
     return {
         "gaps": gaps,
         "accepted": ok,
         "skip_only_a": only("SKIP", a, b),
-        "skip_only_b": only("SKIP", b, a),
         "pass_only_b": only("PASS", b, a),
         "fail_a": [(s, l, n) for (s, _), c in sorted(a.lines("FAIL").items()) for l, n in c.items()],
         "fail_b": [(s, l, n) for (s, _), c in sorted(b.lines("FAIL").items()) for l, n in c.items()],
@@ -185,11 +193,10 @@ def render(a, b, rep, label_a, label_b, times=False):
             count = f" ×{r[2]}" if r[2] > 1 else ""
             out.append(f"- `{r[0]}` :: {r[1]}{count}{extra}")
 
-    section("Coverage gaps: PASS on A, not on B", rep["gaps"])
+    section("Coverage gaps: PASS on A, not on B; or SKIP only on B", rep["gaps"])
     section("Accepted gaps (--accept)", rep["accepted"])
     section("FAIL on B", rep["fail_b"])
     section("FAIL on A", rep["fail_a"])
-    section("SKIP only on B", rep["skip_only_b"])
     section("SKIP only on A", rep["skip_only_a"])
     out.extend(["", f"**PASS only on B** ({sum(r[2] for r in rep['pass_only_b'])} lines, "
                     f"{len({r[0] for r in rep['pass_only_b']})} suites)"])
