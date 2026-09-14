@@ -313,7 +313,10 @@ def test_em_dipole_scale_invariance():
     ks = [_implied_k(r) for r in runs]
     depths = [r["resonance_s11_db"] for r in runs]
     assert max(ks) - min(ks) < 1e-4, ks
-    assert max(depths) - min(depths) < 0.01, depths
+    # The resonance depth is not bit-stable run to run: openEMS's threaded engine gives
+    # spreads of 0.046 and 0.023 dB on 4-core hosted amd64 (two runs), 0.001 on 16
+    # cores, 0 on arm64. 0.1 dB is ~2x the worst; the scale-free claim is k, above.
+    assert max(depths) - min(depths) < 0.1, depths
     print(f"    scale invariance: k {ks[0]:.5f} at L=60/100/160 mm, S11 {depths[0]:.3f} dB")
 
 
