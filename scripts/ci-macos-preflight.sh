@@ -67,6 +67,11 @@ fail() { printf '%s%s\n' "$(_gha error)" "$*"; FAILED=$((FAILED + 1)); }
 step() { printf '\n== %s ==\n' "$*"; }
 
 INSTANCE="${ANKUSDRIVE_OPENFOAM_INSTANCE:-openfoam}"
+# Every `multipass exec` below reads </dev/null: multipass forwards stdin into the VM,
+# so an inherited stdin (a CI step's, or a pipeline this script runs inside) would be
+# consumed by the relay — the #223 stdin-theft class the product launchers guard
+# against. Lane D's stub `multipass` refuses an attached stdin, which is how this
+# surfaced (#365).
 
 # --- 1. host ------------------------------------------------------------------
 step "Host"
@@ -114,7 +119,7 @@ if [ "$WANT_FSI" = 1 ]; then
         fail "instance '$INSTANCE' is '$state' after 'multipass start' — the VM is down; check 'multipass info $INSTANCE'"
       # A Running instance can still be unreachable (agent wedged after a host
       # sleep), which is exactly the state that hangs a solve. Exec is the honest probe.
-      elif ! multipass exec "$INSTANCE" -- true >/dev/null 2>&1; then
+      elif ! multipass exec "$INSTANCE" -- true </dev/null >/dev/null 2>&1; then
         fail "'multipass exec $INSTANCE' does not respond though the instance reports Running — try:  multipass restart $INSTANCE"
       else
         VM_UP=1
@@ -140,7 +145,7 @@ if [ "$WANT_FSI" = 1 ]; then
         local sentinel="$MOUNT/.ankusdrive-preflight-$$"
         : > "$sentinel" 2>/dev/null || return 1
         local rc=0
-        multipass exec "$INSTANCE" -- test -f "$sentinel" >/dev/null 2>&1 || rc=1
+        multipass exec "$INSTANCE" -- test -f "$sentinel" </dev/null >/dev/null 2>&1 || rc=1
         rm -f "$sentinel"
         return $rc
       }
@@ -177,7 +182,7 @@ if [ "$WANT_FSI" = 1 ]; then
     esac
     if [ "$VM_UP" != 1 ]; then
       skip "$var=$val (VM down — cannot verify in-VM)"
-    elif multipass exec "$INSTANCE" -- test "$flag" "$val" >/dev/null 2>&1; then
+    elif multipass exec "$INSTANCE" -- test "$flag" "$val" </dev/null >/dev/null 2>&1; then
       ok "$var -> $val"
     else
       fail "$var=$val does not exist in '$INSTANCE' ($what) — reprovision:  scripts/install-solvers.sh fsi  (run the printed recipe inside 'multipass shell $INSTANCE')"

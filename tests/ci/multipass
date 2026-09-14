@@ -27,6 +27,9 @@ Environment (all optional):
   MULTIPASS_SHIM_HOME    the VM home exec starts in (default: a fresh temp dir)
   MULTIPASS_SHIM_HANG    "info" -> `info` hangs (a wedged daemon)
   MULTIPASS_SHIM_LOG     append one JSON line per invocation
+  MULTIPASS_SHIM_SSH     REAL-VM mode (#365 trial): an ssh command line; `exec` then runs
+                         in that Linux guest instead of locally (same stdin/mount checks)
+  MULTIPASS_SHIM_CHROOT  with _SSH: a solver root inside the guest to chroot into
 """
 import json
 import os
@@ -70,6 +73,13 @@ def cmd_info(args):
     if state == "absent":
         print(f'info failed: instance "{inst}" does not exist', file=sys.stderr)
         return 2
+    if "csv" in args:
+        # `multipass info <inst> --format csv` (what ci-macos-preflight.sh parses)
+        print("Name,State,Ipv4,Ipv6,Release,Image hash,Image release,Load,Disk usage,"
+              "Disk total,Memory usage,Memory total,Mounts,AllIPv4,CPU(s)")
+        print(f"{inst},{state},192.168.64.2,,Ubuntu 24.04 LTS,shim,24.04 LTS,0 0 0,"
+              "0,0,0,0,,192.168.64.2,3")
+        return 0
     # the shape `multipass info <inst> --format json` prints (multipass 1.14)
     print(json.dumps({"errors": [], "info": {inst: {
         "state": state, "image_release": "24.04 LTS", "ipv4": ["192.168.64.2"],
@@ -97,6 +107,19 @@ def cmd_exec(args):
                 print(f"multipass-shim: cd {target!r} — not under a mounted directory "
                       f"{_mounts()}, so it does not exist in the VM", file=sys.stderr)
                 return 98
+    ssh = os.environ.get("MULTIPASS_SHIM_SSH")
+    if ssh:
+        # REAL-VM mode (#365 trial): run the command inside a Linux guest over SSH,
+        # optionally chroot'ed into a solver root, as the guest's own (host-mapped) uid,
+        # with a minimal env — what `multipass exec` does, minus multipassd itself.
+        root = os.environ.get("MULTIPASS_SHIM_CHROOT")
+        inner = ("env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
+                 "HOME=/tmp USER=runner LANG=C.UTF-8 " + shlex.join(cmd))
+        remote = (f"sudo chroot --userspec=$(id -u):$(id -g) {shlex.quote(root)} {inner}"
+                  if root else f"cd ~ && {inner}")
+        proc = subprocess.Popen([*shlex.split(ssh), remote], stdin=subprocess.DEVNULL,
+                                start_new_session=True)
+        return proc.wait()
     home = os.environ.get("MULTIPASS_SHIM_HOME") or tempfile.mkdtemp(prefix="vm-home-")
     env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": home, "LANG": "C.UTF-8"}
     proc = subprocess.Popen(cmd, cwd=home, env=env, stdin=subprocess.DEVNULL,

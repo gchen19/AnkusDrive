@@ -130,7 +130,7 @@ def _run_fill(case_dir):
     return subprocess.run(
         solvers.bash_argv(src + "blockMesh > log.bm 2>&1 && interFoam > log.if 2>&1",
                           case_dir),
-        cwd=case_dir, capture_output=True, text=True)
+        cwd=case_dir, stdin=subprocess.DEVNULL, capture_output=True, text=True)
 
 
 def test_fillable_cavity_reaches_far_end():
@@ -428,7 +428,8 @@ def test_openinjmoldsim_generated_case_fills():
     script = (f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n"
               "blockMesh > log.bm 2>&1 && setFields > log.sf 2>&1 && "
               f"'{binp}' -fillEnd 0.98 > log.oims 2>&1")
-    proc = subprocess.run(solvers.bash_argv(script, d), cwd=d, capture_output=True,
+    proc = subprocess.run(solvers.bash_argv(script, d), cwd=d, stdin=subprocess.DEVNULL,
+                          capture_output=True,
                           text=True)
     assert proc.returncode == 0, proc.stderr[-1500:]
     parsed = mf.parse_fill(d, nx=60, ny=8, length_m=0.02)
@@ -461,6 +462,7 @@ def test_openinjmoldsim_fill_pack_cools_and_densifies():
         script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
         with open(os.path.join(d, log), "w", encoding="utf-8") as f:
             return subprocess.run(solvers.bash_argv(script, d), cwd=d, stdout=f,
+                                  stdin=subprocess.DEVNULL,
                                   stderr=subprocess.STDOUT).returncode
 
     assert run([["blockMesh"], ["setFields"], [binp, "-fillEnd", "0.98"]],
@@ -580,6 +582,7 @@ def test_openinjmoldsim_asymmetric_cooling_warps():
         script = f"source '{bashrc}' >/dev/null 2>&1\nunset FOAM_SIGFPE\n{chain}"
         with open(os.path.join(d, log), "w", encoding="utf-8") as f:
             return subprocess.run(solvers.bash_argv(script, d), cwd=d, stdout=f,
+                                  stdin=subprocess.DEVNULL,
                                   stderr=subprocess.STDOUT).returncode
 
     assert run([["blockMesh"], ["setFields"], [binp, "-fillEnd", "0.98"]],

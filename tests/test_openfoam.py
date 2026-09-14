@@ -156,7 +156,7 @@ def _solve_pipe(D_mm, L_mm, U, nu, rho, na=120, nr=15, et=4000):
     src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
     # bash_argv routes through the WSL distro on Windows (issue #193)
     subprocess.run(solvers.bash_argv(src + "blockMesh > log.bm 2>&1 && simpleFoam > log.sf 2>&1", d),
-                   cwd=d, capture_output=True, text=True)
+                   cwd=d, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     return openfoam.parse_pressure_drop(d, rho_kg_m3=rho)
 
 
@@ -207,7 +207,7 @@ def _solve_flat_plate(U, nu, rho, L=0.1):
     src = f"source '{bashrc}' >/dev/null 2>&1\n" if bashrc else ""
     # bash_argv routes through the WSL distro on Windows (issue #193)
     subprocess.run(solvers.bash_argv(src + "blockMesh > log.bm 2>&1 && simpleFoam > log.sf 2>&1", d),
-                   cwd=d, capture_output=True, text=True)
+                   cwd=d, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     got = openfoam.parse_flat_plate_drag(
         d, rho_kg_m3=rho, nu_m2_s=nu, velocity_m_s=U, plate_length_m=L,
         thickness_m=built["thickness_m"], nx_plate=built["nx_plate"],
@@ -370,7 +370,7 @@ def _run_case(case_dir):
     return subprocess.run(
         solvers.bash_argv(f"source '{bashrc}' >/dev/null 2>&1; blockMesh && simpleFoam",
                           case_dir),
-        cwd=case_dir, capture_output=True, text=True).returncode
+        cwd=case_dir, stdin=subprocess.DEVNULL, capture_output=True, text=True).returncode
 
 
 # --- runner -------------------------------------------------------------------
