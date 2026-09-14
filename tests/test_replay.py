@@ -210,6 +210,22 @@ def test_paths_without_common_root_keep_distinct_dirs():
     assert "WORKDIR / 'out' / 'x.step'" in _body(given)
 
 
+def test_path_mapping_is_host_independent():
+    win = R.export([
+        E(1, "export_shape", {"path": r"C:\Users\username\proj\out\a.step"}),
+        E(2, "save_document", {"path": r"c:\users\username\proj\a.FCStd"}),
+    ])
+    body = _body(win)
+    assert "WORKDIR / 'out' / 'a.step'" in body and "str(WORKDIR / 'a.FCStd')" in body, body
+    home = _body(R.export([E(1, "export_shape", {"path": "~/proj/out/a.step"}),
+                           E(2, "export_shape", {"path": "~/proj/b.step"})]))
+    assert "WORKDIR / 'out' / 'a.step'" in home and "WORKDIR / 'b.step'" in home, home
+    src = (PKG / "replay.py").read_text(encoding="utf-8")
+    cls = next(n for n in ast.parse(src).body if isinstance(n, ast.ClassDef) and n.name == "_Paths")
+    used = [ast.unparse(n) for n in ast.walk(cls) if isinstance(n, ast.Attribute) and ast.unparse(n).startswith("os.")]
+    assert not used, f"_Paths uses {used}: the exporting host's os.path would reinterpret recorded paths"
+
+
 def test_failures_and_run_script_are_stated():
     out = R.export([
         E(1, "add_primitive", {"kind": "box"}, {"handle": "box_1"}),

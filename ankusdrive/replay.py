@@ -48,7 +48,6 @@ import difflib
 import functools
 import keyword
 import math
-import os
 import re
 import time
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -273,31 +272,34 @@ def _ident(value: str, key: str) -> str:
 
 
 class _Paths:
-    """Map absolute paths onto ``WORKDIR`` without keeping the recording machine's layout."""
+    """Map absolute paths onto ``WORKDIR`` without keeping the recording machine's layout.
+
+    Pure path arithmetic in the *recorded* paths' flavor, never ``os.path``: a session
+    recorded on macOS can be exported on Windows and the other way round, and ``~`` is
+    kept as a component rather than expanded to the exporting machine's home."""
 
     def __init__(self, paths, workdir=None):
         self.paths = sorted(set(paths))
         self.root = None
-        flavor = PureWindowsPath if any(re.match(r"^[A-Za-z]:", p) for p in self.paths) \
-            else PurePosixPath
-        self.flavor = flavor
+        windows = any(re.match(r"^([A-Za-z]:|~\\)", p) for p in self.paths)
+        self.flavor = flavor = PureWindowsPath if windows else PurePosixPath
         if workdir:
-            self.root = flavor(os.path.expanduser(workdir))
+            self.root = flavor(workdir)
         elif self.paths:
-            try:
-                common = flavor(os.path.commonpath([str(flavor(os.path.expanduser(p)))
-                                                    for p in self.paths]))
-            except ValueError:
-                common = None
-            if common is not None and len(common.parts) > 1:
-                # a single file's own path is its common path: root at its directory
-                if len(self.paths) == 1:
-                    common = common.parent
-                self.root = common
+            parts = [flavor(p).parts for p in self.paths]
+            if len(parts) == 1:                 # one file: root at its own folder
+                parts = [parts[0][:-1]]
+            common = []
+            for group in zip(*parts):
+                if len({g.lower() if windows else g for g in group}) != 1:
+                    break
+                common.append(group[0])
+            if len(common) > 1:                 # never the bare filesystem root
+                self.root = flavor(*common)
         self.dirs: dict = {}
 
     def rel(self, p: str) -> tuple:
-        pp = self.flavor(os.path.expanduser(p))
+        pp = self.flavor(p)
         if self.root is not None:
             try:
                 return pp.relative_to(self.root).parts
