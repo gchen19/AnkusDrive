@@ -163,7 +163,7 @@ jobs:
       # Digest-pinned multi-arch manifest: a rebuild of the image never changes what
       # these lanes test until this line changes. heavy-image.yml's `manifest` job
       # summary prints the digest to pin. Keep heavy-solves-container's pin in lockstep.
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:5f4f71833daeefa1973144fd84a5be9509cbeb0bde290655958556060a437429  # sha-275a711, linux/amd64 + linux/arm64
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:016d21998f6cced0db98ce33c17ff20f2512252e507f149ae87611892b8b9abb  # sha-1ccf60c, linux/amd64 + linux/arm64
     steps:
       # Not `container:` — that pulls the image before any step, leaving no chance to
       # free the runner's disk first, and this image plus the suite's case dirs need it.
@@ -212,7 +212,7 @@ jobs:
       RUN_HEAVY_SOLVES: "1"
       ANKUSDRIVE_SUBSTRATE: container
       # keep in lockstep with heavy-solves-hosted's pin
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:5f4f71833daeefa1973144fd84a5be9509cbeb0bde290655958556060a437429  # sha-275a711, linux/amd64 + linux/arm64
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:016d21998f6cced0db98ce33c17ff20f2512252e507f149ae87611892b8b9abb  # sha-1ccf60c, linux/amd64 + linux/arm64
     defaults:
       run:
         shell: bash -el {0}   # login shell so the conda env stays activated
@@ -362,7 +362,7 @@ jobs:
       packages: read
     env:
       # keep in lockstep with heavy-solves-hosted's pin
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:5f4f71833daeefa1973144fd84a5be9509cbeb0bde290655958556060a437429  # sha-275a711, linux/amd64 + linux/arm64
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:016d21998f6cced0db98ce33c17ff20f2512252e507f149ae87611892b8b9abb  # sha-1ccf60c, linux/amd64 + linux/arm64
     steps:
       - name: Free disk space
         run: |
