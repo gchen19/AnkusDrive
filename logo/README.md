@@ -24,6 +24,7 @@ icon/       Primary square icon. SVG + PNG 512/256/128. Light, dark, and transpa
 favicon/    Stripped reduction (two rings + line) for 16–48px. SVG, PNG, .ico. Light + dark.
 wordmark/   Horizontal lockups: full (with tagline) and compact, light + dark.
             *-alt versions set "Ankus" in slate instead of "Drive".
+social/     GitHub repo social-preview card, 1280x640. SVG + PNG, light + dark.
 ankusdrive-brand-sheet.png   One-page overview.
 ```
 
@@ -61,6 +62,8 @@ A few things you might reach for first:
 | The dimension callout | `DIM_LABEL` |
 | Texture density / arrangement | `GRID_ROWS`, `CLOUD_N`, and the `*_SEED` values |
 | Wordmark text or tagline | `WORD_1`, `WORD_2`, `TAGLINE` |
+| Social card sizing | `SOCIAL_CONTENT_W` / `SOCIAL_CONTENT_H` |
+| How big the mark is on the social card | `SOCIAL_ICON_SC` |
 
 ## Usage
 
@@ -83,6 +86,17 @@ A few things you might reach for first:
   because raw.githubusercontent serves SVG as `text/plain`, which browsers refuse to
   render as an image. PyPI strips `<source>` and falls through to the `<img>`, so the
   light variant is what shows there; GitHub honours both.
+
+- **GitHub social preview:** `social/ankusdrive-social-1280x640.png`, uploaded under
+  Settings -> General -> Social preview. It is 1280x640 (GitHub's 2:1 slot) with the
+  lockup centered on its *ink* and sized to leave at least ~100px of clear space on every side,
+  well inside the 40px border GitHub recommends keeping clear of crops. The card has
+  more room than a README header, so it carries the mark larger relative to the type
+  than the standard lockup does (`SOCIAL_ICON_SC`); at any icon scale other than the
+  lockup default the mark is placed by its ink, not the fixed `WM_ICON_XY` origin. GitHub shows
+  one image regardless of theme, so upload the light card; the dark variant is there
+  for other surfaces. `build_social()` warns at generation time if a config change
+  ever pushes the artwork inside the safe border.
 
 - **Favicon / docs:** `favicon/favicon.ico` or the sized PNGs.
 - Prefer the **SVG** wherever possible — resolution-independent, and the wordmark text is
