@@ -300,6 +300,11 @@ keep the three together — the same layout `install-solvers.ps1` checks for on 
 
 ## Recipe (serial, no GUI)
 
+**Automated since #384:** `scripts/install-solvers.sh elmer` runs this recipe from a pinned
+release tag, with both macOS traps below handled, and installs to
+`~/Library/Application Support/AnkusDrive/solvers/elmer-<version>`, which discovery globs
+(no env var). The manual steps stay as the reference.
+
 MPI is not needed: `ElmerSolver_mpi` is accepted but the serial `ElmerSolver` is what the
 Windows package ships (`nogui-nompi`), so match it.
 
@@ -483,6 +488,12 @@ print(solvers.capabilities()['families']['thermal_transient'])"
 ```
 
 ## Status of this recipe
+
+**Superseded 2026-09-14 (#384):** compile and install are now proven too.
+`scripts/install-solvers.sh elmer` built `release-26.2.1` on this machine (macOS arm64,
+Accelerate, OpenMP off), `ElmerSolver -v` runs, and `test_elmer`, `test_cht`, `test_em`,
+`test_acoustic_fem` and `test_harmonic_fem` pass live with no SKIPs. The same target builds
+arm64 Linux for the heavy CI image. The notes below record the state before that.
 
 **Configure is verified end-to-end on this machine** against `release-26.2`
 (macOS 26.5, arm64, CMake 4.2.3, gfortran 15.2.0): it exits 0, reports
