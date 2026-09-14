@@ -83,6 +83,7 @@ WM_TEXT_X   = 168     # left edge of the wordmark text
 WM_BASELINE = 110     # text baseline
 WM_ICON_XY  = (12, 26)
 WM_ICON_SC  = 1.28
+WM_ICON_GAP = 42      # ink gap between mark and text, when the icon is re-scaled
 
 # Font search order for outlining the wordmark. First hit wins.
 FONT_CANDIDATES_BOLD = [
@@ -101,6 +102,21 @@ FONT_CANDIDATES_REG = [
 ]
 # CSS fallback used if text cannot be outlined (see WORDMARK note below).
 FONT_CSS = "Helvetica Neue, Helvetica, Inter, Arial, sans-serif"
+
+# ---- social preview card --------------------------------------------------
+# GitHub's repo "social preview" slot is 1280x640 (2:1). GitHub's own template
+# advises keeping everything important inside a 40px border, because the card is
+# re-cropped for different surfaces (link unfurls, cards in feeds). The lockup is
+# sized to SOCIAL_CONTENT_W/H and then centered on its ink, which at the defaults
+# leaves at least ~100px of clear space on every side.
+#
+# The card has far more room than a README header, so it carries the mark larger
+# relative to the type than the standard lockup does (SOCIAL_ICON_SC).
+SOCIAL_W, SOCIAL_H = 1280, 640
+SOCIAL_SAFE        = 40     # GitHub's recommended safe border, px
+SOCIAL_CONTENT_W   = 1080   # target ink width; the rest is clear space
+SOCIAL_CONTENT_H   = 420    # ...and the height cap, whichever binds first
+SOCIAL_ICON_SC     = 2.05   # icon scale on the card (vs WM_ICON_SC in the lockup)
 
 # ---- export ---------------------------------------------------------------
 PNG_ICON_SIZES    = (512, 256, 128)
@@ -262,6 +278,40 @@ def build_icon(pal, tile=True, favicon=False, detail=True):
             f'<defs>{defs}</defs>{bg}{body}</svg>')
 
 
+def icon_ink_extent():
+    """Bounding box of the icon's actual ink, in the 100x100 icon frame.
+
+    The icon viewBox is square for tiling, but the artwork inside it is not
+    centered and does not fill it -- the point cloud and the dimension callout
+    push out asymmetrically. Anything that centers the mark has to center this
+    box, not the viewBox.
+    """
+    cx = cy = SIZE / 2
+    t = math.radians(ANGLE)
+    dx, dy = math.cos(t), math.sin(t)
+    sep = RADIUS * (2 - 2 * OVERLAP)
+    g1x, g1y = cx - sep / 2 * dx, cy - sep / 2 * dy       # generative hole
+    g2x, g2y = cx + sep / 2 * dx, cy + sep / 2 * dy       # CAD hole
+
+    # generative side: the sampled cloud reaches furthest -- ring at r*1.15, the
+    # jitter adds at most +1.6, and the dots themselves are at most r=2.0
+    # (see point_cloud)
+    cloud_r = RADIUS * 1.15 + 1.6 + 2.0
+    # CAD side: dash-dot centerlines run to r+6; the dimension line, its gap and
+    # the label run further right (see cad_dimensions)
+    cl = RADIUS + 6
+    dim_r = RADIUS + 5.5 + 2.6 + len(DIM_LABEL) * DIM_FONT_SZ * 0.62
+    # the pin itself
+    pin = sep / 2 + RADIUS + max(BACK_EXT, TIP_EXT) + LINE_W / 2
+
+    return dict(
+        x0=min(g1x - cloud_r, g2x - cl, cx - pin * dx),
+        y0=min(g1y - cloud_r, g2y - cl, cy - pin * dy),
+        x1=max(g1x + cloud_r, g2x + dim_r, cx + pin * dx),
+        y1=max(g1y + cloud_r, g2y + cl, cy + pin * dy),
+    )
+
+
 # ============================================================================
 # wordmark
 # ============================================================================
@@ -301,27 +351,38 @@ def _outline_text(text, font_file, size, x, y, color):
             d.append("Z"); i += 1
         else:
             i += 1
+    # width is the ink width, used as the inter-word advance; x_ink is the
+    # absolute right edge of the ink, which sits a left-side-bearing further
+    # right than x + width and is what a bounding box has to use.
+    ext = tp.get_extents()
     return (f'<path d="{" ".join(d)}" fill="{color}" fill-rule="nonzero"/>',
-            tp.get_extents().width)
+            ext.width, x + ext.x1)
 
 
 def _live_text(text, size, x, y, color, weight):
     approx = len(text) * size * 0.56   # rough advance, only used for fallback layout
     return (f'<text x="{f(x)}" y="{f(y)}" font-family="{FONT_CSS}" '
             f'font-size="{size}" font-weight="{weight}" fill="{color}">{text}</text>',
-            approx)
+            approx, x + approx)
 
 
-def build_wordmark(pal, tagline=True, accent="second", outline=True):
+def build_wordmark(pal, tagline=True, accent="second", outline=True, bg=True,
+                   with_extent=False, icon_scale=None):
     """Horizontal lockup: icon + AnkusDrive + optional tagline.
 
     accent="second" -> "Drive" in the pin colour (default)
     accent="first"  -> "Ankus" in the pin colour
+    bg=False        -> omit the background rect (for compositing, e.g. the
+                       social card, which paints its own ground)
+    with_extent     -> return (svg, inner_body, ink_extent) instead of just svg
+    icon_scale      -> override WM_ICON_SC. The fixed WM_ICON_XY origin only
+                       works for the default scale, so when this is given the
+                       mark is instead placed by its *ink*: WM_ICON_GAP to the
+                       left of the text, vertically centered on the text block.
+                       Leave it None to reproduce the standard lockup exactly.
     """
     icon = build_icon(pal, tile=False)
-    inner = icon.split('xmlns="http://www.w3.org/2000/svg">', 1)[1].rsplit("</svg>", 1)[0]
-    ig = (f'<g transform="translate({WM_ICON_XY[0]},{WM_ICON_XY[1]}) '
-          f'scale({WM_ICON_SC})">{inner}</g>')
+    icon_inner = icon.split('xmlns="http://www.w3.org/2000/svg">', 1)[1].rsplit("</svg>", 1)[0]
 
     c1 = pal["line"] if accent == "first" else pal["word"]
     c2 = pal["word"] if accent == "first" else pal["line"]
@@ -331,27 +392,90 @@ def build_wordmark(pal, tagline=True, accent="second", outline=True):
     use_outline = outline and bold is not None
     if use_outline:
         try:
-            p1, w1 = _outline_text(WORD_1, bold, WM_FONT_SZ, WM_TEXT_X, WM_BASELINE, c1)
-            p2, _  = _outline_text(WORD_2, bold, WM_FONT_SZ, WM_TEXT_X + w1 + 1,
-                                   WM_BASELINE, c2)
-            tag = ""
+            p1, w1, _ = _outline_text(WORD_1, bold, WM_FONT_SZ, WM_TEXT_X, WM_BASELINE, c1)
+            p2, w2, x2 = _outline_text(WORD_2, bold, WM_FONT_SZ, WM_TEXT_X + w1 + 1,
+                                       WM_BASELINE, c2)
+            tag, xtag = "", 0.0
             if tagline:
-                tag, _ = _outline_text(TAGLINE, reg or bold, WM_TAG_SZ,
-                                       WM_TEXT_X + 2, WM_BASELINE + 26, pal["gen"])
+                tag, _, xtag = _outline_text(TAGLINE, reg or bold, WM_TAG_SZ,
+                                             WM_TEXT_X + 2, WM_BASELINE + 26, pal["gen"])
         except Exception as exc:                       # noqa: BLE001
             print(f"  ! outlining failed ({exc}); falling back to live text")
             use_outline = False
     if not use_outline:
-        p1, w1 = _live_text(WORD_1, WM_FONT_SZ, WM_TEXT_X, WM_BASELINE, c1, "bold")
-        p2, _  = _live_text(WORD_2, WM_FONT_SZ, WM_TEXT_X + w1 + 1, WM_BASELINE, c2, "bold")
-        tag = ""
+        p1, w1, _ = _live_text(WORD_1, WM_FONT_SZ, WM_TEXT_X, WM_BASELINE, c1, "bold")
+        p2, w2, x2 = _live_text(WORD_2, WM_FONT_SZ, WM_TEXT_X + w1 + 1, WM_BASELINE, c2, "bold")
+        tag, xtag = "", 0.0
         if tagline:
-            tag, _ = _live_text(TAGLINE, WM_TAG_SZ, WM_TEXT_X + 2,
-                                WM_BASELINE + 26, pal["gen"], "normal")
+            tag, _, xtag = _live_text(TAGLINE, WM_TAG_SZ, WM_TEXT_X + 2,
+                                      WM_BASELINE + 26, pal["gen"], "normal")
 
-    bg = f'<rect width="{WM_W}" height="{WM_H}" fill="{pal["bg"]}"/>'
-    return (f'<svg viewBox="0 0 {WM_W} {WM_H}" xmlns="http://www.w3.org/2000/svg">'
-            f'{bg}{ig}{p1}{p2}{tag}</svg>')
+    # Ink extent, in wordmark units. The viewBox is deliberately roomier than
+    # the artwork; anything that needs to *center* the lockup (the social card)
+    # has to center this box, not the viewBox.
+    txt_right = max(x2, xtag if tagline else 0)
+    txt_top = WM_BASELINE - WM_FONT_SZ * 0.73
+    txt_bot = WM_BASELINE + (26 + WM_TAG_SZ * 0.25 if tagline else 0)
+
+    ie = icon_ink_extent()
+    sc = WM_ICON_SC if icon_scale is None else icon_scale
+    if icon_scale is None:
+        ox, oy = WM_ICON_XY
+    else:
+        # right ink edge WM_ICON_GAP before the text, ink centered on the text block
+        ox = WM_TEXT_X - WM_ICON_GAP - ie["x1"] * sc
+        oy = (txt_top + txt_bot) / 2 - (ie["y0"] + ie["y1"]) / 2 * sc
+    ig = f'<g transform="translate({f(ox)},{f(oy)}) scale({f(sc)})">{icon_inner}</g>'
+
+    ix0, iy0 = ox + ie["x0"] * sc, oy + ie["y0"] * sc
+    ix1, iy1 = ox + ie["x1"] * sc, oy + ie["y1"] * sc
+    extent = dict(
+        x0=ix0,
+        y0=min(iy0, txt_top),
+        x1=max(ix1, txt_right),
+        y1=max(iy1, txt_bot),
+    )
+
+    ground = (f'<rect width="{WM_W}" height="{WM_H}" fill="{pal["bg"]}"/>'
+              if bg else "")
+    body = f'{ground}{ig}{p1}{p2}{tag}'
+    svg = (f'<svg viewBox="0 0 {WM_W} {WM_H}" xmlns="http://www.w3.org/2000/svg">'
+           f'{body}</svg>')
+    return (svg, body, extent) if with_extent else svg
+
+
+# ============================================================================
+# social preview card (GitHub 1280x640)
+# ============================================================================
+
+def build_social(pal, tagline=True, accent="second", outline=True):
+    """The repo social-preview card: the wordmark lockup centered on a
+    1280x640 ground.
+
+    GitHub crops this card differently across surfaces, so the lockup is sized
+    to SOCIAL_CONTENT_W/H and centered on its *ink*, which leaves far more than
+    the recommended 40px safe border on every side.
+    """
+    _, inner, ext = build_wordmark(pal, tagline=tagline, accent=accent,
+                                   outline=outline, bg=False, with_extent=True,
+                                   icon_scale=SOCIAL_ICON_SC)
+
+    bw, bh = ext["x1"] - ext["x0"], ext["y1"] - ext["y0"]
+    scale = min(SOCIAL_CONTENT_W / bw, SOCIAL_CONTENT_H / bh)
+
+    # translate so the ink box lands centered on the card
+    tx = (SOCIAL_W - bw * scale) / 2 - ext["x0"] * scale
+    ty = (SOCIAL_H - bh * scale) / 2 - ext["y0"] * scale
+    margin = min((SOCIAL_W - bw * scale) / 2, (SOCIAL_H - bh * scale) / 2)
+    if margin < SOCIAL_SAFE:
+        print(f"  ! social card: artwork within {SOCIAL_SAFE}px of the crop edge "
+              f"(margin {margin:.0f}px); lower SOCIAL_CONTENT_W/H")
+
+    return (f'<svg viewBox="0 0 {SOCIAL_W} {SOCIAL_H}" width="{SOCIAL_W}" '
+            f'height="{SOCIAL_H}" xmlns="http://www.w3.org/2000/svg">'
+            f'<rect width="{SOCIAL_W}" height="{SOCIAL_H}" fill="{pal["bg"]}"/>'
+            f'<g transform="translate({f(tx)},{f(ty)}) scale({f(scale)})">'
+            f'{inner}</g></svg>')
 
 
 # ============================================================================
@@ -367,7 +491,7 @@ def main():
     args = ap.parse_args()
 
     base = args.out
-    for sub in ("icon", "favicon", "wordmark"):
+    for sub in ("icon", "favicon", "wordmark", "social"):
         os.makedirs(os.path.join(base, sub), exist_ok=True)
 
     def write(rel, svg):
@@ -390,6 +514,8 @@ def main():
         "wordmark/ankusdrive-wordmark-compact-dark.svg": build_wordmark(DARK,  tagline=False),
         "wordmark/ankusdrive-wordmark-alt.svg":          build_wordmark(LIGHT, accent="first"),
         "wordmark/ankusdrive-wordmark-alt-dark.svg":     build_wordmark(DARK,  accent="first"),
+        "social/ankusdrive-social.svg":                  build_social(LIGHT),
+        "social/ankusdrive-social-dark.svg":             build_social(DARK),
     }
     for rel, svg in svgs.items():
         write(rel, svg)
@@ -426,6 +552,10 @@ def main():
     for rel in [k for k in svgs if k.startswith("wordmark/")]:
         out = os.path.join(base, rel.replace(".svg", f"-{PNG_WORDMARK_W}.png"))
         png(svgs[rel], out, PNG_WORDMARK_W)
+        n += 1
+    for rel in [k for k in svgs if k.startswith("social/")]:
+        out = os.path.join(base, rel.replace(".svg", f"-{SOCIAL_W}x{SOCIAL_H}.png"))
+        png(svgs[rel], out, SOCIAL_W, SOCIAL_H)
         n += 1
     print(f"wrote {n} PNG files")
 
