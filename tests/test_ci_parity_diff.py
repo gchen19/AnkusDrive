@@ -79,6 +79,18 @@ def test_suites_open_on_headers_not_footers():
     assert a.total("PASS") == 5 and a.total("SKIP") == 2, (a.total("PASS"), a.total("SKIP"))
 
 
+def test_wall_time_closes_the_last_suite_on_its_last_outcome():
+    s = pd.Side()
+    s.add_log("\n".join((
+        "2026-09-13T10:00:00.0Z == First ==",
+        "2026-09-13T10:00:05.0Z   PASS test_a (5.00s)",
+        "2026-09-13T10:00:10.0Z == Last ==",
+        "2026-09-13T10:01:10.0Z   PASS test_b (60.0s)",
+        "2026-09-13T10:09:00.0Z Post job cleanup.",
+    )))
+    assert s.wall["First"] == 10 and s.wall["Last"] == 60, dict(s.wall)
+
+
 def test_timings_ansi_and_masked_paths_normalize_away():
     a, b = _sides()
     rep = pd.diff(a, b)
