@@ -415,7 +415,8 @@ jobs:
     runs-on: macos-latest
     # Measured under emulation (#365): test_fsi 56 s, test_openfoam 54 min (~12x native),
     # test_meshbridge 18 min (~23x), plus ~15 min of disk download + VM boot + preflight.
-    timeout-minutes: 150
+    # test_wind_tunnel (97 s native, snappyHexMesh + RANS) adds an estimated 20-40 min.
+    timeout-minutes: 180
     env:
       RUN_HEAVY_SOLVES: "1"
     steps:
@@ -446,13 +447,17 @@ jobs:
       # test_molding_fill is deliberately NOT here: under emulation it ran past 3 hours
       # (interFoam + openInjMoldSim are ~15 min native). Its solves run live on lanes A/B
       # and the hosted image lane, and its relay path is the one test_openfoam and
-      # test_meshbridge already drive through this VM.
+      # test_meshbridge already drive through this VM (#386).
+      # test_wind_tunnel IS here although test_meshbridge already crosses the same relay:
+      # it is the one file driving cfd_external_flow_submit's job registry end to end
+      # through the macOS path, which the self-hosted Mac job covered (#342).
       - name: Live solves through the macOS Multipass path
         env:
           ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # ran as its own step above
         run: >-
           bash tests/run_macos_heavy.sh
           tests/test_fsi.py tests/test_openfoam.py tests/test_meshbridge.py
+          tests/test_wind_tunnel.py
 
       - name: VM console on failure
         if: failure()
