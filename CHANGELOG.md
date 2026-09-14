@@ -21,7 +21,15 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
-## [Unreleased]
+## [0.5.4] — 2026-09-13
+
+The release that makes AnkusDrive reviewable as a desktop extension. Every one of the
+281 tools now says what it is and whether it can change your work, so clients can run
+the read-only ones unasked and confirm the rest; the package ships a privacy policy
+backed by an audit that found no network access in its code; and the `.mcpb` carries
+both, which Anthropic's extension directory requires. Two capabilities arrive with it:
+a Blender studio backend for photoreal renders, and a container backend for the
+OpenFOAM-backed solver families.
 
 ### Added
 
@@ -37,9 +45,38 @@ separately, so this file is the source and the release page is the copy.
   MCPB manifest. AnkusDrive collects nothing and its code makes no network requests;
   the policy lists exactly what is stored locally and where
   ([#368](https://github.com/gchen19/AnkusDrive/issues/368)).
+- A **Blender (Cycles) backend for `render_photoreal`**: assemblies with per-part
+  appearance (the 14 Render card names or a neutral PBR dict), a studio scene
+  (cyclorama plus key/fill/rim/top lights scaled to the model), `quality` draft /
+  preview / final with OIDN denoising, GPU `device` auto-selection with CPU fallback,
+  and a `.blend` alongside the PNG for refinement in Blender. Blender is discovered
+  like a solver (`ANKUSDRIVE_BLENDER_PATH`, PATH, per-OS dirs), reported by
+  `setup_status` / `render_capabilities` with an install hint, and installable with
+  `scripts/install-renderers.sh blender` / `install-solvers.ps1 blender`
+  ([#357](https://github.com/gchen19/AnkusDrive/pull/357)).
+- A **container substrate** for the OpenFOAM-backed families: `ANKUSDRIVE_SUBSTRATE`
+  = `native | wsl | multipass | container`, with docker / podman / nerdctl via
+  `ANKUSDRIVE_CONTAINER_ENGINE`. Unset keeps each OS's existing default; an invalid
+  selection raises a named error rather than silently defaulting. See
+  `docs/CONTAINER_SUBSTRATE.md` ([#366](https://github.com/gchen19/AnkusDrive/pull/366)).
+
+### Fixed
+
+- `solve_capabilities`, `setup_status` and `doctor` reported openEMS, Bempp and KrakenOS
+  as absent on installs where the worker actually runs them: discovery checked the
+  module in its own process, not the dedicated interpreter the solve uses. One
+  resolver, `solvers.solver_python`, now probes each candidate interpreter in a child
+  process (find_spec only, so the GPL boundary holds) and is shared by discovery and
+  the worker ([#353](https://github.com/gchen19/AnkusDrive/pull/353)).
+- The release's `.mcpb.sha256` named `dist/ankusdrive-<version>.mcpb`, so
+  `sha256sum -c` beside a downloaded bundle failed; it now names the bare filename
+  ([#355](https://github.com/gchen19/AnkusDrive/pull/355)).
 
 ### Changed
 
+- `render_photoreal`'s default `renderer` is now `"auto"` (was `"Povray"`): Blender,
+  else POV-Ray, else any add-on renderer, reported as `auto_selected`
+  ([#357](https://github.com/gchen19/AnkusDrive/pull/357)).
 - The `mcp` floor rises from 1.2 to **1.10**, the first release whose FastMCP tools
   carry a `title`. Below it the annotations would be silently dropped
   ([#368](https://github.com/gchen19/AnkusDrive/issues/368)).
@@ -531,7 +568,8 @@ Before the first tag, in April 2026: the initial CLI and MCP scaffold over FreeC
 1.1.1, and Phase 2 — the full core mechanical-design surface, roughly 72 MCP tools.
 Those commits are in the git history rather than in this file.
 
-[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/gchen19/AnkusDrive/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/gchen19/AnkusDrive/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/gchen19/AnkusDrive/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/gchen19/AnkusDrive/compare/v0.5.0...v0.5.1
