@@ -73,6 +73,7 @@ on:
       - "tests/test_su2_case.py"
       - "tests/ci/**"
       - "scripts/ci-qemu-vm.sh"
+      - "scripts/ci-vmdisk.sh"
       - ".github/workflows/heavy-solves.yml"
   workflow_dispatch:
     inputs:
@@ -353,8 +354,10 @@ jobs:
     name: arm64 solver image -> VM disk (for lane D)
     # Lane D (#365) runs the solvers in a real Linux VM on a hosted Mac. The VM's solver
     # root is the arm64 half of the same pinned ankusdrive-heavy manifest the other
-    # lanes use, exported to an ext4 disk. `docker export` drops the image's ENV, so it
-    # is saved into the disk (/etc/ankusdrive-heavy/image.env) for lane D to read back.
+    # lanes use, exported to an ext4 disk by scripts/ci-vmdisk.sh.
+    # The disk is a pure function of the pin and that script, so it is cached under both
+    # (#385): a run with an unchanged pin only looks the key up (~seconds) instead of the
+    # ~10 min export, and lane D restores it directly, with no artifact round trip.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     permissions:
@@ -363,42 +366,42 @@ jobs:
     env:
       # keep in lockstep with heavy-solves-hosted's pin
       HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:016d21998f6cced0db98ce33c17ff20f2512252e507f149ae87611892b8b9abb  # sha-1ccf60c, linux/amd64 + linux/arm64
+    outputs:
+      key: ${{ steps.key.outputs.key }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cache key (image digest + disk recipe)
+        id: key
+        run: echo "key=heavy-arm64-vmdisk-${{ hashFiles('scripts/ci-vmdisk.sh') }}-${HEAVY_IMAGE##*@sha256:}" >> "$GITHUB_OUTPUT"
+      - name: Look up the cached disk
+        id: lookup
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .vmdisk/heavy.qcow2
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+          enableCrossOsArchive: true
       - name: Free disk space
+        if: steps.lookup.outputs.cache-hit != 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: steps.lookup.outputs.cache-hit != 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Export the arm64 rootfs + image env into an ext4 qcow2
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq qemu-utils >/dev/null
-          docker pull --platform linux/arm64 "$HEAVY_IMAGE"
-          cid=$(docker create --platform linux/arm64 "$HEAVY_IMAGE")
-          sudo mkdir -p /mnt/root
-          docker export "$cid" | sudo tar -x -C /mnt/root --numeric-owner
-          sudo mkdir -p /mnt/root/etc/ankusdrive-heavy
-          docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cid" \
-            | sudo tee /mnt/root/etc/ankusdrive-heavy/image.env >/dev/null
-          docker rm "$cid" >/dev/null; docker image rm "$HEAVY_IMAGE" >/dev/null || true
-          used=$(sudo du -sm /mnt/root | cut -f1); size=$(( used * 12 / 10 + 2048 ))
-          echo "rootfs ${used} MiB -> disk ${size} MiB"
-          sudo truncate -s "${size}M" heavy.raw
-          sudo mkfs.ext4 -q -L heavy -d /mnt/root heavy.raw
-          sudo rm -rf /mnt/root
-          sudo qemu-img convert -c -O qcow2 heavy.raw heavy.qcow2
-          sudo rm -f heavy.raw
-          sudo chown "$(id -u)" heavy.qcow2; ls -lh heavy.qcow2
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.lookup.outputs.cache-hit != 'true'
+        run: bash scripts/ci-vmdisk.sh .vmdisk/heavy.qcow2
+      # enableCrossOsArchive: saved on Linux, restored on macOS.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.lookup.outputs.cache-hit != 'true'
         with:
-          name: heavy-arm64-vmdisk
-          path: heavy.qcow2
-          compression-level: 0
-          retention-days: 1
+          path: .vmdisk/heavy.qcow2
+          key: ${{ steps.key.outputs.key }}
+          enableCrossOsArchive: true
 
   heavy-solves-macos-vm:
     name: macOS Multipass path into a real Linux VM — live solves under emulation (hosted)
@@ -415,7 +418,7 @@ jobs:
     runs-on: macos-latest
     # Measured under emulation (#365, then 34804804619): test_fsi ~1 min, test_openfoam
     # 54-82 min (~12-19x native), test_meshbridge 18-21 min (~23-27x), plus ~5-15 min of
-    # disk restore + VM boot + preflight. test_wind_tunnel (97 s native, snappyHexMesh +
+    # disk restore (cached, #385) + VM boot + preflight. test_wind_tunnel (97 s native, snappyHexMesh +
     # RANS) is not yet measured here; 240 leaves it ~2x its ~12-27x estimate.
     timeout-minutes: 240
     env:
@@ -445,14 +448,17 @@ jobs:
           echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
           freecadcmd --version 2>&1 | head -1 || true
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Restore the solver disk (cached by heavy-vmdisk, #385)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: heavy-arm64-vmdisk
-          path: ${{ runner.temp }}/vmdisk
+          path: .vmdisk/heavy.qcow2
+          key: ${{ needs.heavy-vmdisk.outputs.key }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
 
       - name: Boot the solver VM (QEMU TCG, 9p scratch, chroot)
         env:
-          HEAVY_DISK: ${{ runner.temp }}/vmdisk/heavy.qcow2
+          HEAVY_DISK: ${{ github.workspace }}/.vmdisk/heavy.qcow2
         run: |
           bash scripts/ci-qemu-vm.sh
           echo "$GITHUB_WORKSPACE/tests/ci" >> "$GITHUB_PATH"   # `multipass` -> the VM
