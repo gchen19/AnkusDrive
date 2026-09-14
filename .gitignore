@@ -36,3 +36,8 @@ docs/*.docx
 # Ignore the directory outright, repo-local so it holds on every clone rather
 # than only where a global ignore happens to be configured.
 .claude/
+
+# Session kickoff docs: briefs written at the repo root for another agent session to
+# pick up, not project documentation. Root-anchored, so archived kickoff records under
+# docs/archive/ stay tracked.
+/KICKOFF_*.md
