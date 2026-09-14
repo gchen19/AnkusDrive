@@ -145,6 +145,17 @@ def test_job_polls_collapse():
     assert out["exported"] == 3, out
 
 
+def test_solver_reads_get_solver_tolerance():
+    body = _body(R.export([
+        E(1, "fem_results", {"job_id": "job_1"}, {"max_vonmises_mpa": 3.25, "max_displacement_mm": 0.01}),
+        E(2, "fem_result_probe", {"analysis": "analysis_1"}, {"max_vonmises_mpa": 1.5}),
+        E(3, "mass_properties", {"handle": "box_1"}, {"volume_mm3": 8.0}),
+    ]))
+    assert "s.check(r1, 'max_vonmises_mpa', 3.25, rel=0.001)" in body, body
+    assert "s.check(r2, 'max_vonmises_mpa', 1.5, rel=0.001)" in body, body
+    assert "s.check(r3, 'volume_mm3', 8.0)" in body, "geometry keeps the tight tolerance"
+
+
 def test_prune_aborted():
     entries = [
         E(1, "add_primitive", {"kind": "box"}, {"handle": "box_1"}),
@@ -238,6 +249,14 @@ def test_failures_and_run_script_are_stated():
     assert "s.run_script(code=\"x = '''a'''\\n__result__ = 1\")" in body, body
     w = " | ".join(out["warnings"])
     assert "failed in the session" in w and "ANKUSDRIVE_ALLOW_RUN_SCRIPT" in w and "entry cap" in w, w
+
+
+def test_multiline_error_stays_in_its_comment():
+    err = "RuntimeError: first line\nimport os; os.remove('x')\n" + "y" * 1000
+    body = _body(R.export([E(1, "fillet_edges", {"handle": "h_1", "note": "a\nb"}, ok=False, error=err)]))
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    assert all(ln.startswith("#") or ln.startswith("s.step") for ln in lines), lines
+    assert any(ln.endswith("…") for ln in lines), "a long error should be shortened"
 
 
 def test_pid_change_without_restart_is_made_explicit():
