@@ -55,7 +55,8 @@ FAMILIES: dict = {
     """,
     "fem": """
         fem_new_analysis fem_set_solver fem_set_material fem_set_nonlinear_material
-        fem_add_constraint contact_setup fem_mesh fem_mesh_refinement fem_run fem_results
+        fem_add_constraint contact_setup fem_mesh fem_mesh_refinement fem_run fem_run_submit
+        fem_results
         fem_result_probe fem_modal fem_modal_results fem_buckling fem_buckling_results
         fem_thermal_results fem_cantilever_demo render_fem_results
     """,

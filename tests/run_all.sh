@@ -378,6 +378,10 @@ echo "== Nonlinear structural FEM (plastic/elastica/Hertz oracles always; ccx ga
 python3 tests/test_fem_nonlinear.py
 
 echo
+echo "== fem_run_submit — CalculiX off the MCP channel (#308; slow-ccx wrapper proves the channel stays free) =="
+python3 tests/test_fem_run_submit.py
+
+echo
 echo "== Laminate / composite stack (CLT/transformed-section/Timoshenko oracles always; layered FEM gate when present) =="
 python3 tests/test_laminate.py
 

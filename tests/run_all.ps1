@@ -197,6 +197,7 @@ Test-Module 'Release package: vendor/RFQ bundle (worker)' 'test_release_package_
 Test-Module 'Orderable parts: designations + catalog'    'test_orderable.py'
 Test-Module 'Orderable parts: catalog (worker)'          'test_orderable_worker.py'
 Test-Module 'Nonlinear structural FEM (oracles; ccx.exe bundled)' 'test_fem_nonlinear.py'
+Test-Module 'fem_run_submit (#308; wrapper legs POSIX-only)' 'test_fem_run_submit.py'
 Test-Module 'Laminate / composite stack (oracles; layered FEM gated)' 'test_laminate.py'
 Test-Module 'Golden fixtures (issue #19)'                'test_golden_issue19.py'
 Test-Module 'Mating-dimension golden table'              'test_mating_dims.py'

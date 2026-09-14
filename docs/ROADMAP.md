@@ -322,9 +322,10 @@ test. Old monolithic version stays for backwards compat until callers move.
 **Deferred (TODO):**
 - Constraint kinds beyond static + thermal: tie, spring, bearing, transform.
   (Contact shipped separately as `contact_setup`.)
-- Streaming/async `fem_run` so long solves don't block the MCP channel. (The
-  long-running external solvers already use the async `*_submit` + `job_result`
-  job pattern; `fem_run` itself is still synchronous.)
+- ~~Streaming/async `fem_run` so long solves don't block the MCP channel.~~ ✓
+  shipped (issue #308): `fem_run_submit` — the .inp is written on the request
+  thread, ccx runs as a background job, and the result import rides the #260
+  main-thread queue on the client's next poll. The result readers take `job_id`.
 - ~~Result interpolation: "stress at point (x, y, z)" or "stress on this face
   tag" — currently we only return globals + top-N.~~ ✓ shipped (issue #124):
   `fem_result_probe(analysis, point=[x,y,z] | handle+face, field)` —
@@ -544,7 +545,7 @@ a backlog nobody reads:
 
 - **"Session transcript" tool** — dump the call history as a re-runnable Python
   script, for reproducibility and human audit. → **#309**
-- **Async `fem_run`** so long solves don't block the MCP channel. → **#308**
+- ~~**Async `fem_run`** so long solves don't block the MCP channel.~~ → **#308** ✓ `fem_run_submit`
 - **Verify the macOS Gatekeeper / quarantine path** under non-interactive launch.
   → **#310**
 - ~~`mass_properties`, `bounding_box` — useful enough to pull in earlier than

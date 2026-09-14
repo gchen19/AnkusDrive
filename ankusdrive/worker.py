@@ -13176,9 +13176,49 @@ def _default_fem_workdir():
     return os.path.join(_tempfile.gettempdir(), "ankusdrive_fem")
 
 
-@handler("fem_run")
-def _h_fem_run(p):
-    """Run the CalculiX solver attached to an analysis. Returns workdir + status."""
+# A ccx solve is three phases with different threading needs, split so fem_run and
+# fem_run_submit share every line of them (#308):
+#   _fem_prepare  MAIN thread — walks the document, purges old results, writes the .inp
+#   _fem_ccx_exec ANY thread  — the ccx subprocess only; never touches FreeCAD
+#   _fem_finish   MAIN thread — imports the .frd/.dat back into the analysis
+# fem_run runs all three inline. fem_run_submit runs the first on the request thread,
+# backgrounds the second, and hands the third to the main-thread queue (#260), so it
+# runs on the client's next poll.
+#
+# ccx is launched directly rather than through FemToolsCcx.ccx_run: that path changes
+# the PROCESS cwd (QDir.setCurrent) and OMP_NUM_THREADS (os.putenv) around the solve,
+# which from a job thread would pull the working directory out from under whatever
+# request the main thread is handling at the time.
+
+# (document name, analysis name) and abspath(workdir) -> job_id of a running solve
+_FEM_INFLIGHT: dict = {}
+
+
+def _fem_inflight_job(analysis, workdir):
+    """The job_id of a still-running fem_run_submit that owns this analysis or this
+    workdir, else None. Entries whose job has finished are pruned on the way past."""
+    from ankusdrive import jobs
+    keys = [("analysis", analysis.Document.Name, analysis.Name),
+            ("workdir", os.path.abspath(workdir))]
+    for k in keys:
+        jid = _FEM_INFLIGHT.get(k)
+        if jid is None:
+            continue
+        try:
+            running = jobs.status(jid)["status"] == "running"
+        except jobs.JobNotFound:
+            running = False
+        if running:
+            return jid
+        _FEM_INFLIGHT.pop(k, None)
+    return None
+
+
+def _fem_prepare(p):
+    """Main-thread setup for a ccx solve. Returns the state _fem_ccx_exec and
+    _fem_finish need. Raises before anything is purged if the analysis cannot run, or
+    if a background solve already owns this analysis or workdir — a second solve
+    would purge the first one's results mid-flight or overwrite its .inp."""
     from femtools import ccxtools
     analysis = _resolve_analysis(p["analysis"])
     solver = None
@@ -13190,18 +13230,154 @@ def _h_fem_run(p):
         raise RuntimeError("no solver attached to analysis; call fem_set_solver first")
 
     workdir = p.get("workdir") or _default_fem_workdir()
+    busy = _fem_inflight_job(analysis, workdir)
+    if busy is not None:
+        raise RuntimeError(
+            f"a background solve ({busy}) is still running on analysis "
+            f"{analysis.Name!r} or in workdir {workdir!r}; poll job_status until it "
+            "finishes, or pass a different workdir for a different analysis")
     os.makedirs(workdir, exist_ok=True)
     fea = ccxtools.FemToolsCcx(analysis, solver)
-    fea.purge_results()
+    fea.purge_results()               # first: a stale result mesh confuses mesh detection
     fea.update_objects()
     fea.setup_working_dir(workdir)
     prereq = fea.check_prerequisites()
     if prereq:
         raise RuntimeError(f"FEM prereq check failed: {prereq}")
+    fea.setup_ccx()
+    if not fea.ccx_binary_present:
+        raise RuntimeError(
+            f"CalculiX binary ccx not usable (resolved to {fea.ccx_binary!r}); install "
+            "CalculiX or set its path in the FEM preferences — see setup_status")
     fea.write_inp_file()
-    fea.ccx_run()
-    fea.load_results()
-    return {"workdir": workdir, "status": "ok"}
+    if not fea.inp_file_name:
+        raise RuntimeError("CalculiX input file was not written")
+    return {
+        "fea": fea,
+        "handle": p["analysis"],
+        "analysis": analysis,
+        "workdir": workdir,
+        "ccx": fea.ccx_binary,
+        "inp": fea.inp_file_name,
+        "analysis_type": solver.AnalysisType,
+        "omp_threads": _fem_omp_threads(),
+    }
+
+
+def _fem_omp_threads():
+    """The OMP_NUM_THREADS ccx is launched with — the same rule FemToolsCcx.start_ccx
+    uses: the FEM preference when it names more than one CPU, else every core. Read on
+    the main thread (FreeCAD parameters) and passed to the job as a plain int."""
+    import multiprocessing
+    prefs = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Ccx")
+    n = prefs.GetInt("AnalysisNumCPUs", 1)
+    return n if n > 1 else multiprocessing.cpu_count()
+
+
+def _fem_ccx_exec(ccx, inp, omp_threads):
+    """Run ccx on a written .inp and wait. Background-safe: no FreeCAD, no process-wide
+    cwd or environment change. Returns {returncode, stdout, stderr}."""
+    import subprocess
+    env = dict(os.environ, OMP_NUM_THREADS=str(omp_threads))
+    proc = subprocess.run(
+        [ccx, "-i", os.path.splitext(os.path.basename(inp))[0]],
+        cwd=os.path.dirname(inp), env=env, capture_output=True, text=True,
+    )
+    return {"returncode": proc.returncode, "stdout": proc.stdout or "",
+            "stderr": proc.stderr or ""}
+
+
+def _fem_finish(state, run):
+    """Main-thread tail of a ccx solve: fail loudly on a ccx error, otherwise import
+    the results into the analysis. Returns the fem_run result dict."""
+    rc = run["returncode"]
+    if rc == 201 and state["analysis_type"] == "check":
+        rc = 0                          # ccx's *NOANALYSIS exit code (as ccxtools treats it)
+    if rc != 0:
+        errors = [ln.strip() for ln in run["stdout"].splitlines() if "*ERROR" in ln]
+        detail = "; ".join(errors[:5]) or (run["stderr"] or run["stdout"])[-800:].strip()
+        raise RuntimeError(
+            f"CalculiX exited with code {rc} ({state['analysis_type']} analysis, "
+            f"workdir {state['workdir']!r}): {detail}")
+    analysis = state["analysis"]
+    try:
+        analysis.Document                # the document may have closed during the solve
+    except Exception as e:  # noqa: BLE001 - a deleted FreeCAD object raises on access
+        raise RuntimeError(
+            f"the analysis was deleted or its document closed while ccx ran: {e}") from e
+    state["fea"].load_results()
+    n_results = sum(1 for o in analysis.Group if o.isDerivedFrom("Fem::FemResultObject"))
+    return {
+        "workdir": state["workdir"],
+        "status": "ok",
+        "returncode": run["returncode"],
+        "analysis_type": state["analysis_type"],
+        "result_objects": n_results,
+        "analysis": state["handle"],
+    }
+
+
+@handler("fem_run")
+def _h_fem_run(p):
+    """Run the CalculiX solver attached to an analysis, blocking until it finishes.
+    Raises when ccx exits non-zero. Returns {workdir, status, returncode,
+    analysis_type, result_objects, analysis}."""
+    state = _fem_prepare(p)
+    return _fem_finish(state, _fem_ccx_exec(state["ccx"], state["inp"],
+                                            state["omp_threads"]))
+
+
+@handler("fem_run_submit")
+def _h_fem_run_submit(p):
+    """fem_run off the MCP channel (#308). The .inp is written here, on the request
+    thread, so a missing solver/material/mesh fails at the door exactly as fem_run
+    does. The ccx subprocess runs in a background job; the result import is queued for
+    the main thread and runs on the client's next poll (the #260 queue), after which
+    the analysis holds the results just as if fem_run had run.
+
+    No content-hash cache: a hit would return a job whose results were loaded into the
+    analysis before this call purged them. Returns {job_id, status, cache_hit}; poll
+    job_status, then job_result for the fem_run result dict."""
+    from ankusdrive import jobs, mainthread
+    state = _fem_prepare(p)
+    analysis = state["analysis"]
+    ccx, inp, omp = state["ccx"], state["inp"], state["omp_threads"]
+
+    def _work():
+        run = _fem_ccx_exec(ccx, inp, omp)
+        return mainthread.call(lambda: _fem_finish(state, run))
+
+    sub = jobs.submit("fem_run", _work, meta={
+        "analysis": analysis.Name, "document": analysis.Document.Name,
+        "analysis_type": state["analysis_type"], "workdir": state["workdir"],
+    })
+    _FEM_INFLIGHT[("analysis", analysis.Document.Name, analysis.Name)] = sub["job_id"]
+    _FEM_INFLIGHT[("workdir", os.path.abspath(state["workdir"]))] = sub["job_id"]
+    return sub
+
+
+def _resolve_fem_result_analysis(p):
+    """The analysis a fem_*_results / fem_result_probe call reads: `analysis` as
+    before, or `job_id` of a fem_run_submit job, whose finished result names it.
+    A running or failed job is an error that says so — never a silent read of
+    whatever (possibly purged) results the analysis holds right now."""
+    has_a, has_j = p.get("analysis") is not None, p.get("job_id") is not None
+    if has_a == has_j:
+        raise ValueError("pass exactly one of `analysis` or `job_id`")
+    if has_a:
+        return _resolve_analysis(p["analysis"])
+    from ankusdrive import jobs
+    jid = p["job_id"]
+    st = jobs.status(jid)
+    if st["kind"] != "fem_run":
+        raise ValueError(f"job {jid!r} is a {st['kind']!r} job, not a fem_run_submit solve")
+    if st["status"] == "running":
+        raise RuntimeError(
+            f"job {jid!r} is still running ({st['elapsed_s']}s); poll job_status until "
+            "it is done — the results are imported on a poll once ccx finishes")
+    if st["status"] == "failed":
+        raise RuntimeError(f"job {jid!r} failed, so it has no results: {st.get('error')}")
+    return _resolve_analysis(jobs.result(jid)["result"]["analysis"])
 
 
 @handler("fem_results")
@@ -13210,7 +13386,7 @@ def _h_fem_results(p):
     (+location + vector), top-N hot nodes by stress. A nonlinear ccx run writes
     one result object per converged increment (named CCX_Time_<t>_Results); the
     FINAL increment (highest time = full applied load) is the one summarized."""
-    analysis = _resolve_analysis(p["analysis"])
+    analysis = _resolve_fem_result_analysis(p)
     result = _select_final_mech_result(analysis)
 
     stress = list(result.vonMises)
@@ -13276,7 +13452,7 @@ def _h_fem_modal_results(p):
     """Extract natural frequencies (Hz) from a completed modal run. Returns
     {frequencies_hz: [...], modes: [{mode, frequency_hz, max_displacement_mm}, ...]}.
     Each eigenmode produces its own ResultMechanical object in the analysis."""
-    analysis = _resolve_analysis(p["analysis"])
+    analysis = _resolve_fem_result_analysis(p)
     modes = []
     for o in analysis.Group:
         if not o.isDerivedFrom("Fem::FemResultObject"):
@@ -13563,7 +13739,7 @@ def _h_fem_buckling_results(p):
     multiplier in the object's name (e.g. 'CCX_BucklingFactor_1234_56_Results'
     means a factor of 1234.56). Returns {buckling_factors: [...], modes: [...]}.
     The factor of zero placeholder result is filtered out."""
-    analysis = _resolve_analysis(p["analysis"])
+    analysis = _resolve_fem_result_analysis(p)
     factors = []
     for o in analysis.Group:
         if not o.isDerivedFrom("Fem::FemResultObject"):
@@ -13583,7 +13759,7 @@ def _h_fem_buckling_results(p):
 def _h_fem_thermal_results(p):
     """Extract temperature-field results from a completed steady-state thermal
     run. Returns {temperatures_c: {min, max, mean}, top_n_hot_nodes: [...]}."""
-    analysis = _resolve_analysis(p["analysis"])
+    analysis = _resolve_fem_result_analysis(p)
     result = None
     for o in analysis.Group:
         if o.isDerivedFrom("Fem::FemResultObject"):
@@ -13716,7 +13892,7 @@ def _h_fem_result_probe(p):
     'displacement' | 'temperature'. Scalar fields are keyed
     vonmises_mpa/displacement_mm/temperature_c; point mode also returns the
     displacement_vector when displacement is included."""
-    analysis = _resolve_analysis(p["analysis"])
+    analysis = _resolve_fem_result_analysis(p)
     field = p.get("field", "auto")
     result = _select_final_mech_result(analysis)
     femmesh = _result_femmesh(analysis, result)

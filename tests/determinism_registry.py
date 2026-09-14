@@ -178,7 +178,7 @@ NOT_YET_CLASSIFIED = {
     'family_materialize', 'family_validate', 'fem_add_constraint',
     'fem_buckling', 'fem_buckling_results', 'fem_cantilever_demo', 'fem_mesh',
     'fem_mesh_refinement', 'fem_modal', 'fem_modal_results', 'fem_new_analysis',
-    'fem_result_probe', 'fem_results', 'fem_run', 'fem_set_material',
+    'fem_result_probe', 'fem_results', 'fem_run', 'fem_run_submit', 'fem_set_material',
     'fem_set_nonlinear_material', 'fem_set_solver', 'fem_thermal_results', 'fillet_edges',
     'fit_page', 'fluid_props', 'get_interface', 'get_object', 'granular_screen',
     'harmonic_response',

@@ -3446,10 +3446,11 @@ def fem_modal(
 
 
 @mcp.tool()
-def fem_modal_results(analysis: str) -> dict:
+def fem_modal_results(analysis: str | None = None, job_id: str | None = None) -> dict:
     """Extract natural frequencies from a completed modal run.
+    Pass `analysis`, or the `job_id` of a finished fem_run_submit solve.
     Returns {frequencies_hz: [...], modes: [{mode, frequency_hz, max_displacement_mm}, ...]}."""
-    return _call("fem_modal_results", analysis=analysis)
+    return _call("fem_modal_results", **_fem_source(analysis, job_id))
 
 
 @mcp.tool()
@@ -3533,17 +3534,21 @@ def fem_buckling(analysis: str, n_factors: int = 1) -> dict:
 
 
 @mcp.tool()
-def fem_buckling_results(analysis: str) -> dict:
+def fem_buckling_results(analysis: str | None = None, job_id: str | None = None) -> dict:
     """Extract buckling load multipliers from a completed buckling run.
+    Pass `analysis`, or the `job_id` of a finished fem_run_submit solve.
     Returns {buckling_factors: [...], modes: [{mode, factor}, ...]}."""
-    return _call("fem_buckling_results", analysis=analysis)
+    return _call("fem_buckling_results", **_fem_source(analysis, job_id))
 
 
 @mcp.tool()
-def fem_thermal_results(analysis: str, top_n: int = 5) -> dict:
+def fem_thermal_results(
+    analysis: str | None = None, top_n: int = 5, job_id: str | None = None,
+) -> dict:
     """Extract temperature field summary from a completed thermal run.
+    Pass `analysis`, or the `job_id` of a finished fem_run_submit solve.
     Returns {temperatures_c: {min, max, mean}, top_n_hot_nodes: [...]}."""
-    return _call("fem_thermal_results", analysis=analysis, top_n=top_n)
+    return _call("fem_thermal_results", top_n=top_n, **_fem_source(analysis, job_id))
 
 
 @mcp.tool()
@@ -3591,10 +3596,32 @@ def fem_mesh(
     return _call("fem_mesh", **params)
 
 
+def _fem_source(analysis: str | None, job_id: str | None) -> dict:
+    """The `analysis` / `job_id` pair a FEM result reader forwards. The worker insists
+    on exactly one, so both-or-neither reaches it and fails there with the reason."""
+    out: dict = {}
+    if analysis is not None:
+        out["analysis"] = analysis
+    if job_id is not None:
+        out["job_id"] = job_id
+    return out
+
+
 @mcp.tool()
 def fem_run(analysis: str, workdir: str | None = None) -> dict:
-    """Run the CalculiX solver on an analysis. Blocks until the solve finishes.
-    `workdir` defaults to `<TMPDIR>/ankusdrive_fem`. Returns {workdir, status}."""
+    """Run the CalculiX solver on an analysis. BLOCKS the MCP channel until the solve
+    finishes (up to 600 s).
+
+    Which to reach for: fem_run for small solves — a coarse mesh, linear static, a few
+    thousand nodes — that finish in seconds, where a poll round-trip only adds latency.
+    fem_run_submit for anything that may take a minute or more (fine or 2nd-order
+    meshes, modal/buckling with many modes, nonlinear material or geometry), so the
+    channel stays free while ccx runs.
+
+    `workdir` defaults to `<TMPDIR>/ankusdrive_fem`. Raises if ccx exits non-zero
+    (with its *ERROR lines), or if a fem_run_submit solve is still running on this
+    analysis or workdir. Returns {workdir, status: 'ok', returncode, analysis_type,
+    result_objects, analysis}."""
     params = {"analysis": analysis}
     if workdir is not None:
         params["workdir"] = workdir
@@ -3602,22 +3629,51 @@ def fem_run(analysis: str, workdir: str | None = None) -> dict:
 
 
 @mcp.tool()
-def fem_results(analysis: str, top_n: int = 5) -> dict:
+def fem_run_submit(analysis: str, workdir: str | None = None) -> dict:
+    """Run the CalculiX solver on an analysis OFF the MCP channel — the submit→poll
+    form of fem_run, for solves long enough to stall the channel (see fem_run for which
+    to use).
+
+    The solver input is written before this returns, so a missing solver, material or
+    mesh fails here, synchronously, exactly as fem_run would. ccx then runs in the
+    background. Poll job_status: once ccx exits, the results are imported into the
+    analysis on your NEXT poll (FreeCAD work runs on the worker's main thread, which a
+    poll gives a turn) — so keep polling until status is 'done'; a job nobody polls
+    never finishes. A ccx error fails the job with its *ERROR lines.
+
+    When done, read results with fem_results / fem_result_probe / fem_modal_results /
+    fem_buckling_results / fem_thermal_results passing either `analysis` or this
+    `job_id` (don't job_result(discard=True) first if you plan to use the job_id).
+    While the job runs, fem_run or another submit on the same analysis or workdir is
+    refused. Returns {job_id, status, cache_hit}; job_result's `result` is fem_run's
+    return dict."""
+    params = {"analysis": analysis}
+    if workdir is not None:
+        params["workdir"] = workdir
+    return _call("fem_run_submit", _timeout=120.0, **params)
+
+
+@mcp.tool()
+def fem_results(analysis: str | None = None, top_n: int = 5, job_id: str | None = None) -> dict:
     """Extract summary results from an analysis.
+
+    Pass `analysis`, or the `job_id` of a finished fem_run_submit solve (a running or
+    failed job is an error that says so).
 
     Returns {max_vonmises_mpa, max_displacement_mm, max_displacement_vector,
     top_stress_nodes: [{node, vonmises_mpa, displacement_mm}, ...]}.
     """
-    return _call("fem_results", analysis=analysis, top_n=top_n)
+    return _call("fem_results", top_n=top_n, **_fem_source(analysis, job_id))
 
 
 @mcp.tool()
 def fem_result_probe(
-    analysis: str,
+    analysis: str | None = None,
     point: list | None = None,
     handle: str | None = None,
     face: str | None = None,
     field: str = "auto",
+    job_id: str | None = None,
 ) -> dict:
     """Probe FEM results at a specific location, instead of only the global
     max + top-N that `fem_results` returns. Answers "what is the stress at this
@@ -3634,12 +3690,14 @@ def fem_result_probe(
     field: 'auto' (default — every field present in the result) | 'vonmises' |
     'displacement' | 'temperature'.
 
+    Pass `analysis`, or the `job_id` of a finished fem_run_submit solve.
+
     Returns (point mode) {mode:'point', query_point, method, element_id?, node?,
     distance_mm, vonmises_mpa?, displacement_mm?, displacement_vector?,
     temperature_c?}; (face mode) {mode:'face', face, node_count,
     vonmises_mpa?:{min,max,mean}, displacement_mm?:{...}, temperature_c?:{...}}.
     """
-    params: dict = {"analysis": analysis, "field": field}
+    params: dict = {"field": field, **_fem_source(analysis, job_id)}
     if point is not None:
         params["point"] = point
     if handle is not None:
