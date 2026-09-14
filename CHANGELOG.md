@@ -44,6 +44,14 @@ separately, so this file is the source and the release page is the copy.
   `ankusdrive run script.py` are unaffected
   ([#378](https://github.com/gchen19/AnkusDrive/issues/378)).
 
+- `docs/REVIEWER_GUIDE.md`, for anyone evaluating the Claude Desktop extension:
+  install, a `setup_status` check, three example prompts (a modeled plate's volume and
+  mass, a cantilever FEM checked against beam theory, a drawing exported to DXF with an
+  honest manufacturability gate), the default configuration, and troubleshooting. Each
+  prompt's tool sequence runs in the extension's default configuration as
+  `tests/test_reviewer_scenarios.py`, which asserts the numbers the guide quotes
+  ([#368](https://github.com/gchen19/AnkusDrive/issues/368)).
+
 ### Changed
 
 - **The Claude Desktop extension's `run_script` is off by default**: it's an
