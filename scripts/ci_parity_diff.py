@@ -76,7 +76,7 @@ class Side:
         self.wall = collections.Counter()  # suite -> seconds
 
     def add_log(self, text):
-        suite, opened = None, None
+        suite, opened, last = None, None, None
         for raw in text.splitlines():
             m = _TS.match(raw)
             stamp = _parse_ts(m.group(0)) if m else None
@@ -95,6 +95,11 @@ class Side:
             kind = o.group(1) if o else ("SKIP" if _SKIP.search(body) else None)
             if kind:
                 self.outcomes[(suite, kind)][normalize(body)] += 1
+                last = stamp or last
+        # The final suite has no next header; its last outcome closes it, not the
+        # runner's post-job cleanup.
+        if suite and opened and last and last > opened:
+            self.wall[suite] += (last - opened).total_seconds()
 
     def lines(self, kind):
         return {(s, k): c for (s, k), c in self.outcomes.items() if k == kind}
