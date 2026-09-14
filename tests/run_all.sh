@@ -74,6 +74,12 @@ echo "== PII: nobody's machine gets into the tree (#303; no FreeCAD) =="
 python3 tests/test_pii.py
 
 echo
+echo "== CI parity diff: a green job's untested coverage is reported (#342; no FreeCAD) =="
+# The gate on retiring the self-hosted runners (#343). A parser that matched
+# nothing would report perfect parity, so the vacuous log is asserted too.
+python3 tests/test_ci_parity_diff.py
+
+echo
 echo "== Rename compatibility shims: legacy env / config / DP_* props (#295) =="
 # The shims that keep a <=0.4.x install working. Every one of them fails SILENTLY
 # if it regresses (an unset override auto-discovers; an unread property reads as

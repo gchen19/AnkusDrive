@@ -121,6 +121,7 @@ Test-Module 'Static contracts (registry parity + docstrings + determinism covera
 # needs no FreeCAD, and SKIPs cleanly if that interpreter has no build backend.
 Test-Module 'Naming: the pre-rename name stays gone (#295)' 'test_naming.py'
 Test-Module 'PII: nobody''s machine gets into the tree (#303)' 'test_pii.py'
+Test-Module 'CI parity diff reports untested coverage (#342)' 'test_ci_parity_diff.py'
 Test-Module 'Rename compatibility shims: env / config / DP_* props (#295)' 'test_compat_rename.py'
 Test-Module 'Packaging: built wheel/sdist carries its data corpora (#249)' 'test_package_data.py'
 Test-Module 'Typed units / quantity layer'          'test_units.py'
