@@ -1,41 +1,32 @@
-name: Heavy solver regressions (self-hosted)
+name: Heavy solver regressions
 
 # The CPU-intensive LIVE external-solver test cases — OpenFOAM CFD/molding,
 # standalone Elmer (CHT / transient thermal / radiation / acoustic / harmonic /
-# EM), openEMS FDTD, Bempp BEM, YADE DEM, preCICE↔CalculiX FSI, CalculiX warpage
-# — are EXCLUDED from the per-push suite (test.yml). On the self-hosted box every
-# one of those solvers is installed, so they used to run on every push; several
-# take minutes, a few are flaky under load, and run_all.sh's `set -e` means one
-# slow/flaky live solve could blow the 20-minute cap or abort the rest of the
-# suite. The cheap analytic-oracle / case-structure halves still run every push.
+# EM), openEMS FDTD, Bempp BEM, YADE DEM, preCICE↔CalculiX FSI, CalculiX warpage,
+# SU2, Blender — are EXCLUDED from the per-push suite (test.yml): several take
+# minutes, and run_all.sh's `set -e` means one slow live solve could blow the
+# per-push cap or abort the rest of the suite. The cheap analytic-oracle /
+# case-structure halves still run every push.
 #
-# This workflow runs the full suite WITH the live solves enabled
-# (RUN_HEAVY_SOLVES=1) only when it's actually needed to confirm a change hasn't
-# regressed a solver:
-#   - a push to main whose paths touch solver / analysis code (the filter below)
-#     — i.e. post-merge regression validation; a docs or unrelated change never
-#     triggers it;
+# This workflow runs them live (RUN_HEAVY_SOLVES=1, read via tests/heavy_solve.py):
+#   - a push to main whose paths touch solver / analysis code (the filter below);
 #   - on demand (workflow_dispatch) — e.g. to validate a solver PR pre-merge;
-#   - nightly, as a slow-drift guard against solver / host changes.
+#   - nightly, as a slow-drift guard against solver / image changes.
+# Deliberately NOT on `pull_request`: minutes-long solves would gate every PR.
 #
-# Deliberately NOT on `pull_request`: these live solves are minutes-long and a
-# couple are flaky under load, so gating PRs on them would re-introduce exactly
-# the merge-blocking flakiness this split removes. PRs run the fast per-push
-# suite (test.yml); the heavy regression runs land on main + nightly, and a dev
-# touching a solver can dispatch this workflow on their branch on demand.
-#
-# The gate is RUN_HEAVY_SOLVES, read via tests/heavy_solve.py: unset (the default
-# in test.yml) every live solve skips even where the solver is installed; set
-# they run. Same self-hosted FreeCAD box as test.yml.
-#
-# TWO LANES (issue #220). The Linux job runs the whole suite. A second job runs on a
-# self-hosted Apple-Silicon box and covers only what is macOS-SPECIFIC and therefore
-# invisible to the Linux lane: the Darwin substrate routing (bash_argv ->
-# `multipass exec`), the LIVE preCICE FSI solve executed inside the Multipass VM, and
-# the LIVE SU2 solve through Rosetta 2 (issue #193 / #189 — both were verified by hand
-# and gated by nothing until now). The two jobs are independent: neither `needs` the
-# other, so a down Multipass VM never blocks the Linux regression report and a Linux
-# solver regression is still reported when the Mac is offline.
+# Every lane is GitHub-hosted (#338). The self-hosted Linux and macOS jobs this
+# workflow started with were retired in #343 after #342 showed the hosted lanes
+# cover what they did (scripts/ci_parity_diff.py):
+#   A  heavy-solves-hosted        the full suite inside ghcr.io/gchen19/ankusdrive-heavy,
+#                                 amd64 + arm64 (#363)
+#   B  heavy-solves-container     the container substrate: solves cross `docker exec`
+#                                 into a sidecar of that image (#362)
+#   C  heavy-solves-macos-hosted  macOS host: SU2 under Rosetta, routing contracts, the
+#                                 relay against tests/ci/multipass (#364)
+#   D  heavy-vmdisk +             the unmodified macOS `multipass exec` path into a real
+#      heavy-solves-macos-vm      arm64 Linux VM under QEMU (#365)
+# What no hosted lane can run — Multipass's own daemon and its sshfs mount — is a
+# manual pre-release check on a real Mac (docs/MACOS.md).
 
 on:
   push:
@@ -77,18 +68,11 @@ on:
       - "scripts/ci-vmdisk.sh"
       - ".github/workflows/heavy-solves.yml"
   workflow_dispatch:
-    inputs:
-      hosted_only:
-        description: "Run only the GitHub-hosted lane (leave the self-hosted boxes idle)"
-        type: boolean
-        default: false
   schedule:
     - cron: "0 6 * * *"   # 06:00 UTC daily — slow-drift guard
 
-# Each lane has exactly one self-hosted box, and the macOS lane's Multipass VM is
-# stateful (a single shared case-dir mount), so two concurrent runs on the same ref
-# would fight over it. Workflow-level, so both jobs are superseded together rather
-# than queueing behind the old run.
+# A newer run on the same ref supersedes the older one: every lane is minutes to
+# hours long, and only the latest commit's result matters.
 concurrency:
   group: heavy-solves-${{ github.ref }}
   cancel-in-progress: true
@@ -97,51 +81,11 @@ permissions:
   contents: read
 
 jobs:
-  heavy-solves:
-    name: Live external-solver regressions (Linux, self-hosted)
-    # Pin `Linux`: these live solvers (OpenFOAM/YADE/openEMS/bempp/preCICE) are Linux-only
-    # and the steps are bash + AppImage. The Windows box shares the `ankusdrive` label, so
-    # without this an unrelated Windows job could match. OS label is auto-applied.
-    runs-on: [self-hosted, ankusdrive, Linux]
-    if: ${{ !inputs.hosted_only }}
-    # The full suite plus every live solve — molding (~15 min), the openEMS /
-    # Bempp / FSI / Elmer / YADE solves on top. 90 min bounds a wedged solver
-    # without cutting a real run.
-    timeout-minutes: 90
-    env:
-      RUN_HEAVY_SOLVES: "1"
-    steps:
-      # A self-hosted job's logs go public with the repo, and tool paths under the
-      # service user's home print into them (FreeCAD's Mod loader, checkout's
-      # .gitconfig copy, solver discovery). Masking $HOME and the username FIRST —
-      # before checkout, which is the first printer — redacts every later
-      # occurrence to *** (#303).
-      - name: Mask runner-local identity in logs
-        run: |
-          echo "::add-mask::$HOME"
-          echo "::add-mask::$(whoami)"
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Wire local FreeCAD (no download; reuses installed AppImage)
-        run: |
-          bash tests/setup_local.sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Sanity check — freecadcmd reachable
-        run: |
-          which freecadcmd
-          freecadcmd --version 2>&1 | head -1 || true
-
-      - name: Run full suite WITH live external-solver solves
-        run: bash tests/run_all.sh
-
   heavy-solves-hosted:
     name: Live external-solver regressions (Linux ${{ matrix.platform.arch }}, hosted image)
-    # The same suite as the self-hosted job above, on GitHub-hosted runners inside the
-    # prebuilt solver image (#339, docker/heavy-solvers/Dockerfile) — #340 of the move
-    # off self-hosted runners (#338). Both run side by side until #342 shows this one
-    # tests the same things; then the self-hosted one is removed (#343).
+    # The full suite, on GitHub-hosted runners inside the prebuilt solver image (#339,
+    # docker/heavy-solvers/Dockerfile) — #340 of the move off self-hosted runners (#338),
+    # which replaced the self-hosted Linux job after #342 (#343).
     #
     # Per architecture (#363): amd64, and arm64 — lane A of #341 — which is the only
     # place arm64 Linux solver builds (OpenFOAM-7 on linuxArm64, preCICE on aarch64)
@@ -479,7 +423,7 @@ jobs:
       # steps through this VM instead, openInjMoldSim's separate OF7 environment included (#386).
       # test_wind_tunnel IS here although test_meshbridge already crosses the same relay:
       # it is the one file driving cfd_external_flow_submit's job registry end to end
-      # through the macOS path, which the self-hosted Mac job covered (#342).
+      # through the macOS path, which the retired self-hosted Mac job covered (#342).
       - name: Live solves through the macOS Multipass path
         env:
           ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # ran as its own step above
@@ -491,49 +435,3 @@ jobs:
       - name: VM console on failure
         if: failure()
         run: tail -80 "$RUNNER_TEMP/vm/console.log" || true
-
-  heavy-solves-macos:
-    name: macOS substrate regressions — SU2/Rosetta + FSI/Multipass (self-hosted)
-    # Pin `macOS`: the Linux and Windows self-hosted boxes share the `ankusdrive` label,
-    # and this job's substrate (Multipass, Rosetta) exists only on the Mac. The OS
-    # label is auto-applied by the Actions runner.
-    runs-on: [self-hosted, ankusdrive, macOS]
-    if: ${{ !inputs.hosted_only }}
-    # Far short of the Linux lane's 90: this is three files, not the whole suite —
-    # measured ~10s of solve on the reference box (FSI 8.9s for four preCICE windows,
-    # SU2 0.2s). The budget is almost entirely headroom for a WEDGED VM, where
-    # `multipass exec` blocks instead of failing; 30 min bounds that without any risk
-    # of cutting a real run.
-    timeout-minutes: 30
-    env:
-      RUN_HEAVY_SOLVES: "1"
-      # The FSI stack lives INSIDE the Multipass VM, so the four ANKUSDRIVE_* overrides
-      # and TMPDIR are absolute paths on that specific box — they come from the
-      # runner's own environment (~/actions-runner/.env), NOT from this file. The
-      # preflight step below fails with the exact `.env` lines when they are missing;
-      # docs/MACOS.md ("Self-hosted CI runner") has the setup.
-      ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # the preflight is its own step, below
-    steps:
-      # A self-hosted job's logs go public with the repo, and tool paths under the
-      # service user's home print into them (FreeCAD's Mod loader, checkout's
-      # .gitconfig copy, solver discovery). Masking $HOME and the username FIRST —
-      # before checkout, which is the first printer — redacts every later
-      # occurrence to *** (#303).
-      - name: Mask runner-local identity in logs
-        run: |
-          echo "::add-mask::$HOME"
-          echo "::add-mask::$(whoami)"
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Fail here, not four minutes into a coupled solve. A stopped VM, a dropped
-      # multipass-sshfs mount, or a stale in-VM override otherwise surfaces as an
-      # OpenFOAM abort or a preCICE handshake timeout that says nothing about the
-      # real cause. This also catches the silent-no-op case: if the FSI stack does
-      # not resolve, test_fsi.py's live case SKIPs and the job would pass green
-      # having tested nothing.
-      - name: Preflight — Multipass VM, case-dir mount, in-VM stack, Rosetta + SU2
-        run: bash scripts/ci-macos-preflight.sh
-
-      - name: Live macOS heavy solves (SU2 under Rosetta, FSI in the VM)
-        run: bash tests/run_macos_heavy.sh

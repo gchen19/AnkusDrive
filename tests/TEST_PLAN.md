@@ -449,18 +449,17 @@ RUN_RELIABILITY=1 .venv/bin/python3 tests/test_reliability.py  # gated
 file. Keep the `_discover()` + `main()` pattern. Don't introduce a test
 framework dependency without a real reason.
 
-**CI runs on a self-hosted runner.** `test.yml` runs the suite on every push
-to `main` and every PR — but on a **self-hosted** GitHub Actions runner, not a
-GitHub-hosted `ubuntu-latest` one. The runner machine already has FreeCAD 1.1
-installed, so CI reuses it instead of downloading FreeCAD via conda:
-`tests/setup_local.sh` symlinks `freecadcmd` onto PATH (so ankusdrive's worker
-resolves it via `shutil.which`) and points `.venv/bin/python3` at FreeCAD's
-bundled python, which already ships numpy + Pillow. That feeds `run_all.sh`'s
-two-interpreter split — system `python3` for the worker tests, `.venv` python3
-for the numpy/Pillow tests — with no second install. Perf and reliability stay
-gated behind `RUN_PERF=1` / `RUN_RELIABILITY=1`. The same `setup_local.sh` is
-what makes any machine a runner host; see it for the one-time wiring.
-(Publishing still runs on a GitHub-hosted runner via `publish.yml`.)
+**CI runs on GitHub-hosted runners only.** `test.yml` runs the suite on every
+push to `main` and every PR on `ubuntu-latest`, with FreeCAD 1.1 + CalculiX from
+conda-forge in one env. With no `.venv` in the tree, `run_all.sh`'s
+two-interpreter split collapses onto that env. `test-windows.yml` runs
+`run_all.ps1` on `windows-latest`. The live external-solver solves run in
+`heavy-solves.yml`: on pushes to `main` that touch solver code, nightly, and on
+dispatch, inside the prebuilt `ghcr.io/gchen19/ankusdrive-heavy` image (amd64 +
+arm64) plus two hosted macOS lanes. Perf and reliability stay gated behind
+`RUN_PERF=1` / `RUN_RELIABILITY=1`. The self-hosted runners that used to host
+these suites were retired in #303 and #343. `tests/setup_local.sh` remains the
+one-time wiring for a local AppImage install.
 
 ---
 

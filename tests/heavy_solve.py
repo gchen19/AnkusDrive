@@ -2,11 +2,11 @@
 
 A handful of test files pair a cheap analytic-oracle half (always run) with a
 heavy half that shells out to a real external solver — OpenFOAM, Elmer,
-openEMS, Bempp, preCICE/CalculiX FSI, the openInjMoldSim molding build. On the
-self-hosted CI box every one of those solvers IS installed, so the heavy half
-runs on every push. Several take minutes, a few are flaky (multi-process
-coupling under load), and run_all.sh uses `set -e` — so one slow/flaky live
-solve can blow the 20-minute cap or abort the rest of the suite.
+openEMS, Bempp, preCICE/CalculiX FSI, the openInjMoldSim molding build. Where
+those solvers are installed (the CI heavy image, a provisioned dev box) the heavy
+half would otherwise run on every suite run. Several take minutes, a few are flaky
+(multi-process coupling under load), and run_all.sh uses `set -e` — so one
+slow/flaky live solve can blow the per-push cap or abort the rest of the suite.
 
 These live solves are a regression guard for the *solvers*; they add nothing to
 an unrelated change. So they run only when RUN_HEAVY_SOLVES=1 — set by the

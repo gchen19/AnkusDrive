@@ -38,9 +38,10 @@
 #   bash scripts/ci-macos-preflight.sh --fsi    # FSI substrate only (skip SU2/Rosetta)
 #   bash scripts/ci-macos-preflight.sh --su2    # SU2/Rosetta only (skip the VM)
 #
-# Runner setup lives in docs/MACOS.md ("Self-hosted CI runner"). The env vars are
-# expected from the runner's own environment (<runner-dir>/.env), NOT from the
-# workflow — they are box-specific absolute paths.
+# Used by CI lane D (heavy-solves.yml, where scripts/ci-qemu-vm.sh exports the env)
+# and by the pre-release check on a real Mac — docs/MACOS.md ("Pre-release check on a
+# real Mac"). The env vars are machine-specific absolute paths, so they come from the
+# calling environment, never from this script.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -85,13 +86,13 @@ ok "macOS $(sw_vers -productVersion 2>/dev/null || echo '?') on $(uname -m)"
 # The 0.5 rename (#295) moved every override to ANKUSDRIVE_*. ankusdrive's own
 # import-time shim still promotes a DRIFTPIN_* var in-process, so Python-side
 # resolution keeps working and `doctor` looks healthy -- but this script reads the
-# job environment DIRECTLY, and so does everything else outside Python. A runner
-# whose .env was never renamed therefore fails below as six separate "is unset"
+# environment DIRECTLY, and so does everything else outside Python. A machine
+# whose env was never renamed therefore fails below as six separate "is unset"
 # errors that each name the wrong fix. Say the real one, once, up front.
 step "Environment naming"
 legacy=$(env | sed -n 's/^\(DRIFTPIN_[A-Za-z0-9_]*\)=.*/\1/p' | sort | tr '\n' ' ')
 if [ -n "$legacy" ]; then
-  fail "legacy DRIFTPIN_* vars are set in the runner environment: ${legacy% }. They were renamed to ANKUSDRIVE_* in 0.5 (#295) and this script reads only the new names, so the overrides below will report as unset. Fix, on the runner box:  sed -i '' 's/^DRIFTPIN_/ANKUSDRIVE_/' <runner-dir>/.env  then restart it:  ./svc.sh stop && ./svc.sh start"
+  fail "legacy DRIFTPIN_* vars are set in this environment: ${legacy% }. They were renamed to ANKUSDRIVE_* in 0.5 (#295) and this script reads only the new names, so the overrides below will report as unset. Rename them wherever they are exported (shell profile, launchd plist, or CI env)"
 else
   ok "no legacy DRIFTPIN_* vars in the environment"
 fi

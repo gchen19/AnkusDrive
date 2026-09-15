@@ -28,6 +28,6 @@ your suite.
 
 ## Anything the reviewer should run
 
-<!-- Especially if this needs a lane your PR does not get: the self-hosted suites
-     skip fork PRs on purpose, and the heavy solver regressions are not on
-     pull_request for anyone. Say so and they can be dispatched. -->
+<!-- Especially if this needs a lane your PR does not get: the heavy solver
+     regressions are not on pull_request for anyone. Say so and they can be
+     dispatched. -->

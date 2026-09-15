@@ -5,10 +5,9 @@ name: Tests
 # the public flip (#303): a hosted runner is always available, holds no home
 # directory or keys, and makes the fork-PR arbitrary-code-execution class
 # structurally impossible instead of trigger-guarded — no fork-skip `if`, no
-# log masking, nothing for a future edit to get wrong. The provisioned live
-# solver stack (OpenFOAM, openEMS, Bempp, YADE, preCICE FSI, ...) stays on the
-# self-hosted boxes in heavy-solves.yml, which is schedule/dispatch-only and
-# never runs anyone else's code.
+# log masking, nothing for a future edit to get wrong. The live solver stack
+# (OpenFOAM, openEMS, Bempp, YADE, preCICE FSI, ...) runs in heavy-solves.yml,
+# also GitHub-hosted since #343, inside the prebuilt ankusdrive-heavy image.
 #
 # Provisioning mirrors hosted-freecad.yml — FreeCAD 1.1 + CalculiX from
 # conda-forge on py3.11 (tests/test_worker.py asserts both; see that workflow's
