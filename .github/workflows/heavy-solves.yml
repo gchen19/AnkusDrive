@@ -155,9 +155,10 @@ jobs:
         platform:
           - { arch: amd64, runner: ubuntu-latest }
           - { arch: arm64, runner: ubuntu-24.04-arm }
-    # Unmeasured on 4 hosted cores (the self-hosted run is ~36 min on 24). Generous
-    # until #342 records real timings, then tighten.
-    timeout-minutes: 240
+    # Measured whole-job, image pull included (#387): amd64 38-52 min, arm64 42-48 min
+    # across four runs on 4 hosted cores. ~2.3x the slowest, so a hung solve fails in
+    # two hours instead of four.
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: read
@@ -206,7 +207,8 @@ jobs:
     # preflight asserts that, and every other way this lane could pass while proving
     # nothing.
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Measured 44-45 min whole-job (#387); ~2x.
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: read
@@ -300,7 +302,9 @@ jobs:
     # The live in-VM solves themselves are covered by lanes A/B and the hosted image
     # lane; the Multipass daemon itself is #365's question.
     runs-on: macos-latest
-    timeout-minutes: 60
+    # Measured 3-4 min whole-job, conda FreeCAD included (#387); 20 bounds a wedged
+    # Rosetta or a stuck shim relay without cutting a slow conda solve.
+    timeout-minutes: 20
     env:
       RUN_HEAVY_SOLVES: "1"
     defaults:
@@ -361,7 +365,8 @@ jobs:
     # (#385): a run with an unchanged pin only looks the key up (~seconds) instead of the
     # ~10 min export, and lane D restores it directly, with no artifact round trip.
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    # Cache hit: seconds. Miss: 10-12 min, export + 4.6 GiB cache save (#387); ~2.5x.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read
@@ -418,10 +423,10 @@ jobs:
     # Multipass's own daemon and its sshfs mount.
     needs: heavy-vmdisk
     runs-on: macos-latest
-    # Measured under emulation (#365, then 34804804619): test_fsi ~1 min, test_openfoam
-    # 54-82 min (~12-19x native), test_meshbridge 18-21 min (~23-27x), plus ~5-15 min of
-    # disk restore (cached, #385) + VM boot + preflight. test_wind_tunnel (97 s native, snappyHexMesh +
-    # RANS) is not yet measured here; 240 leaves it ~2x its ~12-27x estimate.
+    # Measured under emulation (#387): the full file set (fsi, openfoam, meshbridge,
+    # wind_tunnel, molding_relay) took 125 and 101 min whole-job. test_openfoam alone
+    # swings 63-87 min between runs (~15-20x native) and test_wind_tunnel ran 35 min,
+    # so 240 stays: ~2x the slow run, below the hosted 6 h cap.
     timeout-minutes: 240
     env:
       RUN_HEAVY_SOLVES: "1"
