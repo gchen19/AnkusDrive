@@ -52,7 +52,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
-    # Windows is a first-class target (docs/WINDOWS.md, the self-hosted CI lane in
+    # Windows is a first-class target (docs/WINDOWS.md, the hosted CI lane in
     # .github/workflows/test-windows.yml) but was missing from this list, so PyPI
     # advertised AnkusDrive as Unix-only to exactly the users #279 came from.
     "Operating System :: Microsoft :: Windows",

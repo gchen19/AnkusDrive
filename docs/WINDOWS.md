@@ -218,15 +218,13 @@ pwsh tests\run_all.ps1       # the Windows suite (single interpreter)
 ### CI: the Windows lane
 
 [`.github/workflows/test-windows.yml`](../.github/workflows/test-windows.yml) runs this
-suite on a **self-hosted Windows runner** (label `[self-hosted, ankusdrive, Windows]`) with
-FreeCAD 1.1 preinstalled. It is a separate workflow from the Linux `test.yml` /
-`heavy-solves.yml`, which are now pinned to the `Linux` label — every self-hosted runner
-shares the `ankusdrive` label, so the OS label keeps a job from landing on the wrong box and
-running another OS's shell scripts. `heavy-solves.yml` also carries a `macOS`-pinned job
-for the Apple-Silicon substrate (see [MACOS.md](MACOS.md#ci-the-apple-silicon-lane)). The
-`Windows`/`Linux`/`macOS` labels are applied automatically by the Actions runner from the
-host OS. The FreeCAD-free `fast-checks.yml` (ruff + contracts) stays on a GitHub-hosted
-Ubuntu runner and covers all three.
+suite on a **GitHub-hosted `windows-latest` runner**. It provisions FreeCAD from the
+portable 7z and SU2 + Elmer through `scripts/install-solvers.ps1`, the same commands a user
+runs, so a green run also certifies the documented install path. A second job installs the
+package across a matrix of CPython versions and boots the MCP server with no FreeCAD. Every
+AnkusDrive lane is GitHub-hosted; the self-hosted runners were retired in #303 (Windows)
+and #343 (Linux, macOS). The heavy solver lanes, including the macOS ones, are described in
+[MACOS.md](MACOS.md#ci-the-macos-lanes-github-hosted).
 
 ## Installing the extra solvers (one script)
 

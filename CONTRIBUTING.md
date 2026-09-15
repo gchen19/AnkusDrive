@@ -6,9 +6,10 @@ the reason this file exists; everything else is a link to the README.
 1. **FreeCAD is a prerequisite you install by hand.** There is no pip dependency
    that gives you one. The reflex `pip install -e '.[dev]' && pytest` will not
    work here, and the failure is confusing rather than informative.
-2. **CI is five lanes, three of them on self-hosted machines.** A pull request from
-   a fork will see checks on `main` that never appear on the PR. That is deliberate
-   and is explained below, so you do not have to wonder whether something is broken.
+2. **Every CI lane is GitHub-hosted, but the heavy solver lanes do not run on pull
+   requests.** You will see checks on `main` that never appear on your PR. That is
+   deliberate, and it is explained below, so you do not have to wonder whether
+   something is broken.
 
 If you only want to file a bug or ask a question, none of this applies — open an
 issue. For a **security** problem, do not open an issue: see
@@ -76,30 +77,29 @@ specifically working on them:
 | `Lint + contracts (no FreeCAD)` | hosted | `ruff check ankusdrive tests`, `python3 -m compileall -q ankusdrive tests`, then `python3 tests/test_contracts.py`, `tests/test_naming.py`, `tests/test_compat_rename.py`, `tests/test_package_data.py` |
 | `Secret scan (git history)` | hosted | `gitleaks git --log-opts="--all" --config .gitleaks.toml --redact --exit-code 1` |
 | `Worker suite (hosted FreeCAD)` | hosted | `bash tests/run_all.sh` (the FreeCAD-side subset) |
-| `Test suite (FreeCAD 1.1, self-hosted)` | self-hosted Linux | `bash tests/run_all.sh` |
-| `Test suite (FreeCAD 1.1, self-hosted Windows)` | self-hosted Windows | the suite on a Windows box with FreeCAD 1.1 |
-| `Live external-solver regressions` | self-hosted | `RUN_HEAVY_SOLVES=1 bash tests/run_all.sh` |
+| `Test suite (hosted FreeCAD 1.1)` | hosted Linux | `bash tests/run_all.sh` |
+| `Test suite (hosted Windows, FreeCAD 1.1)` | hosted Windows | `pwsh tests\run_all.ps1` |
+| `Core install (hosted Windows, Python 3.x)` | hosted Windows | `pip install -e .`, then the MCP stdio boot |
+| `Heavy solver regressions` (lanes A–D) | hosted Linux amd64/arm64 + macOS, inside `ghcr.io/gchen19/ankusdrive-heavy` | `RUN_HEAVY_SOLVES=1 bash tests/run_all.sh` with the solvers installed; `tests/run_macos_heavy.sh` on a Mac |
 
-The first three are hosted, always available, and are the ones branch protection
-requires. Nothing that runs on a machine in someone's house can block a merge.
+Every lane runs on a GitHub-hosted runner; the project uses no self-hosted machines
+(retired in #343). Branch protection requires the lint, secret-scan, hosted worker,
+hosted Linux and hosted Windows suites.
 
 ### Why your fork's PR sees fewer checks
 
 Two separate mechanisms, and it is worth knowing which is which:
 
-- **`Tests` and `Tests (Windows)` skip fork PRs on purpose.** They run on
-  self-hosted runners — real machines with a home directory, keys, and a network —
-  and a `pull_request` workflow runs the *fork's* code. Letting an arbitrary PR
-  reach them is arbitrary code execution. Fork PRs get their FreeCAD signal from
-  the hosted lane instead, which covers the same worker tests.
+- **Workflows that need approval.** GitHub holds workflow runs on a first-time
+  contributor's PR until a maintainer approves them. If your checks sit at
+  "waiting", that is what is happening.
 - **`Heavy solver regressions` is not on `pull_request` for anyone**, fork or not.
   Those solves take minutes and a couple are flaky under load, so gating merges on
   them would re-introduce exactly the flakiness the split removed. They run on
   pushes to `main`, nightly, and on demand via `workflow_dispatch`.
 
 So: fewer checks on a fork PR is not a judgement about you. If a change needs the
-self-hosted or heavy lanes to be believed, say so in the PR and the maintainer will
-run them.
+heavy lanes to be believed, say so in the PR and the maintainer will run them.
 
 ## Adding a tool
 

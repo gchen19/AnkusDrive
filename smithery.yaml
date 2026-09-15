@@ -94,9 +94,10 @@ license: Apache-2.0
 # two-interpreter venv split, CalculiX, Gmsh, OpenFOAM (plus WSL2 on Windows /
 # Multipass on macOS), Elmer, SU2, openEMS, YADE, bempp-cl, KrakenOS, preCICE,
 # openInjMoldSim, six renderers — is this project's single largest source of
-# friction, and it is already installed and green on one machine: the
-# [self-hosted, ankusdrive, Linux] box behind .github/workflows/heavy-solves.yml.
-# That box is the prototype of the product #296 proposes.
+# friction, and it is already built, pinned and green in one artifact: the
+# ghcr.io/gchen19/ankusdrive-heavy image behind .github/workflows/heavy-solves.yml
+# (docker/heavy-solvers/Dockerfile). That image is the prototype of the product #296
+# proposes.
 #
 # The shape, concretely:
 #

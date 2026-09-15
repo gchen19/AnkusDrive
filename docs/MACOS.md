@@ -201,8 +201,8 @@ RUN_HEAVY_SOLVES=1 python3 tests/test_fsi.py
 # PASS test_fsi_coupled_plate_deflects — 4 windows converged, tip 0 → 3.47 mm (monotone into the flow)
 ```
 
-This solve is now gated in CI on a self-hosted Apple-Silicon runner — see
-[CI: the Apple-Silicon lane](#ci-the-apple-silicon-lane) below.
+This solve's macOS path is gated in CI on GitHub-hosted runners (a real VM under
+emulation) — see [CI: the macOS lanes](#ci-the-macos-lanes-github-hosted) below.
 
 ### Plain CFD (pipe, flat plate, mesh bridge, wind tunnel) in the VM
 
@@ -319,95 +319,67 @@ Intel Macs need Blender 4.5 LTS from blender.org.
 `add_gear`, `transform`, then one `render_photoreal` with nine per-part appearances):
 `quality="final"` (384 samples, OIDN), 1280×960, `device` auto → `METAL`, 15 s on an M4 Max.*
 
-## CI: the Apple-Silicon lane
+## CI: the macOS lanes (GitHub-hosted)
 
-Everything above was verified by hand. [`heavy-solves.yml`](../.github/workflows/heavy-solves.yml)
-now carries a second job — `heavy-solves-macos`, label `[self-hosted, ankusdrive, macOS]` —
-so a regression in the Darwin substrate is caught automatically instead of on the next
-manual run (issue [#220](https://github.com/gchen19/AnkusDrive/issues/220)). It shares the
-Linux lane's triggers (solver-path push to `main`, `workflow_dispatch`, the 06:00 UTC
-cron) and its `RUN_HEAVY_SOLVES: "1"`, but the two jobs are independent — a stopped
-Multipass VM never blocks the Linux regression report, and vice versa.
+Everything above was verified by hand first. [`heavy-solves.yml`](../.github/workflows/heavy-solves.yml)
+now gates it automatically on **GitHub-hosted** runners. A self-hosted Apple-Silicon runner
+did this until [#343](https://github.com/gchen19/AnkusDrive/issues/343) retired it, after
+[#342](https://github.com/gchen19/AnkusDrive/issues/342) showed the hosted lanes cover what
+it did. Both lanes share the workflow's triggers (a solver-path push to `main`,
+`workflow_dispatch`, the 06:00 UTC cron) and `RUN_HEAVY_SOLVES: "1"`.
 
-**What it runs** — deliberately not the whole suite. Most heavy solvers aren't reachable
-on macOS at all (see the table above), so a full run would spend 90 minutes reconfirming
-skips. `tests/run_macos_heavy.sh` runs only the macOS-*specific* paths, the ones the
-Linux lane cannot see:
+Hosted macOS runners are VMs without nested virtualization, so they cannot run Multipass.
+The macOS path is covered in two halves instead:
 
-| File | What would otherwise go untested |
-|---|---|
-| `tests/test_wsl_routing.py` | the Darwin routing contracts — `bash_argv` → `multipass exec`, `runs_in_substrate`, `_fsi_override`'s in-VM path trust, FSI participant routing (pure Python, seconds) |
-| `tests/test_su2_native.py` | the **live** SU2 channel solve — official x86_64 binary under Rosetta 2, through `solvers.run_argvs` |
-| `tests/test_fsi.py` | the **live** preCICE OpenFOAM↔CalculiX coupled solve, executed inside the VM |
-| `tests/test_su2_case.py` | the **live** NATIVE SU2 plane-Poiseuille gate (#237 item 3) — no VM at all, so it is the one CFD path that still works when Multipass is down |
-| `tests/test_molding_fill.py` | the **live** `interFoam` cavity-fill gates in the VM (#193's last checkbox) — fillable cavity reaches the far end, short shot stalls |
+| Lane | Runner | What it proves |
+|---|---|---|
+| **C** `heavy-solves-macos-hosted` | `macos-latest` | the **live** SU2 channel solve under Rosetta 2 (`test_su2_native.py`, `test_su2_case.py`), the Darwin routing contracts (`test_wsl_routing.py`), and the relay behaviour against the stub `tests/ci/multipass` (`test_macos_relay_shim.py`) |
+| **D** `heavy-vmdisk` + `heavy-solves-macos-vm` | `ubuntu-24.04-arm` → `macos-latest` | the **unmodified** `bash_argv` → `multipass exec` path into a real arm64 Linux VM under QEMU emulation (`scripts/ci-qemu-vm.sh`), gated by the real `ci-macos-preflight.sh --fsi`: the **live** `test_fsi`, `test_openfoam`, `test_meshbridge`, `test_wind_tunnel` and `test_molding_relay` |
 
-Add files as arguments once their in-VM provisioning is validated:
+`tests/run_macos_heavy.sh` is the runner for both, and for a real Mac. With no arguments it
+runs the full macOS set, `test_molding_fill.py` included. Lane D passes an explicit list,
+because the full molding fill ran past 3 h under emulation;
+`test_molding_relay.py` exercises the same two molding solvers through the relay instead.
+
+### Pre-release check on a real Mac
+
+No hosted lane runs **Multipass's own daemon or its sshfs mount**. Lane D stands in a
+QEMU VM and a stub `multipass` for them. So before a release, run the macOS set once
+on an Apple-Silicon Mac provisioned as the sections above describe: SU2
+(`install-solvers.sh su2`) + Rosetta, and Multipass with a persistent `openfoam` instance
+carrying the FSI stack (`install-solvers.sh fsi`) and the host scratch dir mounted at a
+matching path.
 
 ```bash
-bash tests/run_macos_heavy.sh tests/test_some_new_gate.py
+export TMPDIR=/Users/<you>/fsi-run          # host side of the `multipass mount`
+export ANKUSDRIVE_CCX_PRECICE=/home/ubuntu/calculix-adapter/bin/ccx_preCICE
+export ANKUSDRIVE_PRECICE_LIB=/home/ubuntu/precice-serial/lib
+export ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
+export ANKUSDRIVE_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+export ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
+export ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
+
+bash scripts/ci-macos-preflight.sh           # every substrate problem, reported at once
+RUN_HEAVY_SOLVES=1 bash tests/run_macos_heavy.sh
 ```
 
-### One-time runner setup
+`TMPDIR` must be the host side of the mount, so the `mkdtemp` case dirs land somewhere the
+VM can `cd` into at the same absolute path. The other six are in-VM paths. The last two
+are the plain-CFD pair from
+[Plain CFD … in the VM](#plain-cfd-pipe-flat-plate-mesh-bridge-wind-tunnel-in-the-vm):
+the built-in CFD builders resolve through `ANKUSDRIVE_OPENFOAM_*`, *not* the FSI pair.
+Omitting them leaves `test_openfoam` / `test_meshbridge` / `test_wind_tunnel` skipping
+their live halves, which is exactly what the preflight refuses to let pass.
 
-1. **Provision the box** exactly as the sections above describe: SU2 (`install-solvers.sh su2`)
-   + Rosetta, Multipass with a persistent `openfoam` instance carrying the FSI stack
-   (`install-solvers.sh fsi`), and the host scratch dir mounted at a matching path.
-2. **Register the runner** with the `ankusdrive` label (the `macOS` and `self-hosted` labels
-   are applied automatically from the host OS):
-
-   ```bash
-   # token from  Settings -> Actions -> Runners -> New self-hosted runner
-   ./config.sh --url https://github.com/gchen19/AnkusDrive --token <TOKEN> --labels ankusdrive
-   ./svc.sh install && ./svc.sh start      # run as a service so the cron lane fires unattended
-   ```
-
-3. **Put the box-specific paths in the runner's own environment**, `<runner-dir>/.env`
-   — *not* in the workflow, which must stay portable. The Actions runner applies this file
-   to every job it runs:
-
-   ```
-   TMPDIR=/Users/<you>/fsi-run
-   ANKUSDRIVE_CCX_PRECICE=/home/ubuntu/calculix-adapter/bin/ccx_preCICE
-   ANKUSDRIVE_PRECICE_LIB=/home/ubuntu/precice-serial/lib
-   ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=/home/ubuntu/OpenFOAM/ubuntu-v2512/platforms/linuxARM64GccDPInt32Opt/lib
-   ANKUSDRIVE_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
-   ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc
-   ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/linuxARM64GccDPInt32Opt/bin/simpleFoam
-   ```
-
-   `TMPDIR` is the host side of the `multipass mount`, so the `mkdtemp` case dirs land
-   somewhere the VM can `cd` into at the same absolute path. The other six are in-VM
-   paths. The last two are the plain-CFD pair from
-   [Plain CFD … in the VM](#plain-cfd-pipe-flat-plate-mesh-bridge-wind-tunnel-in-the-vm):
-   the built-in CFD builders resolve through `ANKUSDRIVE_OPENFOAM_*`, *not* the FSI pair
-   above, so omitting them leaves `test_openfoam` / `test_meshbridge` / `test_wind_tunnel`
-   skipping their live halves — which is exactly what the preflight refuses to let pass.
-   Restart the service after editing (`./svc.sh stop && ./svc.sh start`) — the runner
-   reads `.env` at service start, so an edit alone changes nothing.
-
-   > **If this box predates 0.5**, its `.env` still names these `DRIFTPIN_*`. The
-   > in-process shim (`config.adopt_legacy_env`) promotes them, so `doctor` and every
-   > Python-side probe look healthy — but the preflight, and everything else outside
-   > Python, reads the job environment directly and sees them as unset. That is what
-   > broke this lane on every run for the week after the rename. Fix it on the box and
-   > restart:
-   >
-   > ```bash
-   > sed -i '' 's/^DRIFTPIN_/ANKUSDRIVE_/' <runner-dir>/.env
-   > ./svc.sh stop && ./svc.sh start
-   > ```
-   >
-   > Solvers provisioned before 0.5 also sit under
-   > `~/Library/Application Support/DriftPin/solvers`. `find_solver` still probes that
-   > directory, but only until 0.6 — move it to `.../AnkusDrive/solvers` now rather than
-   > discover it when the fallback is deleted.
-4. **Keep the Mac awake** — `sudo pmset -a sleep 0 disablesleep 1`, or the 06:00 UTC cron
-   lane finds the VM suspended.
+> A Mac provisioned before 0.5 may still name these `DRIFTPIN_*` in a shell profile. The
+> in-process shim (`config.adopt_legacy_env`) promotes them, so `doctor` looks healthy, but
+> the preflight reads the environment directly and sees them as unset. Rename them. Solvers
+> under `~/Library/Application Support/DriftPin/solvers` resolve only until 0.6; move them
+> to `.../AnkusDrive/solvers`.
 
 ### The preflight step
 
-The job's first step is [`scripts/ci-macos-preflight.sh`](../scripts/ci-macos-preflight.sh),
+Lane D and the pre-release check both start with [`scripts/ci-macos-preflight.sh`](../scripts/ci-macos-preflight.sh),
 which health-checks the whole substrate *before* any solve and reports every problem it
 finds at once:
 

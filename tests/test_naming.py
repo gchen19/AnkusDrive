@@ -57,7 +57,7 @@ ALLOWED = {
     # Migration aids. These do not keep anything working — they DETECT the
     # pre-rename state and say how to move off it, so they must name it. All go
     # when the shims do, in 0.6.
-    "scripts/ci-macos-preflight.sh": "fails a runner whose .env is still on the legacy prefix",
+    "scripts/ci-macos-preflight.sh": "fails an environment still on the legacy prefix",
     "scripts/ci-linux-preflight.sh": "fails a heavy-lane environment still on the legacy prefix (#339)",
     "scripts/ci-windows-preflight.ps1": "fails a Windows-lane environment still on the legacy prefix (#316)",
     "docs/MACOS.md":                 "documents the pre-0.5 runner .env + solver dir, and the migration",

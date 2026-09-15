@@ -2,9 +2,9 @@ name: Hosted FreeCAD
 
 # The FreeCAD-backed lane that runs on a stock GitHub-hosted ubuntu runner:
 # installs FreeCAD 1.1 + CalculiX from conda-forge and runs the FreeCAD-side
-# worker tests. It exists so CI is not a single point of failure on the one
-# self-hosted FreeCAD box (test.yml), and it now gates pull requests for two
-# reasons the self-hosted lane cannot satisfy:
+# worker tests. It was added when test.yml still ran on a self-hosted FreeCAD
+# box (every AnkusDrive lane is GitHub-hosted now, #303 / #343), and it gated
+# pull requests for two reasons that self-hosted lane could not satisfy:
 #
 #   1. AVAILABILITY. A hosted runner is always there. A self-hosted one queues
 #      behind whatever else that machine is doing (observed: 30 minutes) or is
@@ -22,7 +22,7 @@ name: Hosted FreeCAD
 # SCOPE — deliberately not the whole suite. `tests/run_all.sh` wires a
 # two-interpreter split (system python3 for FreeCAD, .venv python3 for the
 # Pillow/numpy render and integration tests) that this minimal conda env does
-# not provide, so those stay on the self-hosted suite. Broadening this lane
+# not provide, so those stay in test.yml's full suite. Broadening this lane
 # means provisioning that venv here, which is its own change with its own
 # verification — not a rename.
 #
