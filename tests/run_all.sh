@@ -462,6 +462,10 @@ echo "== Degenerate subtractions (issue #282 — cut that ate the base / cut tha
 python3 tests/test_boolean_degenerate.py
 
 echo
+echo "== Default shape selection (issue #414 — export/save/release/add_part: consumed base picked, crash after FEM mesh) =="
+python3 tests/test_export_shape_default.py
+
+echo
 echo "== Multi-agent partition+merge (Layer M1) =="
 $VENV_PY tests/test_multiagent_m1.py
 

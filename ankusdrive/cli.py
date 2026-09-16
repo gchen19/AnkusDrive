@@ -186,7 +186,7 @@ def build_parser():
     pe = sub.add_parser("export", help="Export a shape from a .FCStd to STEP/IGES/BREP/STL.")
     pe.add_argument("input", help="input .FCStd path")
     pe.add_argument("-o", "--out", required=True, help="output path (format inferred from extension)")
-    pe.add_argument("--object", default=None, help="object name (defaults to first shaped object)")
+    pe.add_argument("--object", default=None, help="object name (defaults to the single final shape; errors if ambiguous)")
     pe.set_defaults(func=cmd_export)
 
     pr = sub.add_parser("run", help="Run a Python script in a live worker. Set __result__ to return a value.")

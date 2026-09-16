@@ -2009,7 +2009,10 @@ def export_shape(
     """Export a shape to STEP/IGES/BREP/STL. Format inferred from path extension.
 
     object: FreeCAD object name (NOT a AnkusDrive handle). If omitted, exports
-    the first shaped object in the active document.
+    the document's single final shape: inputs consumed by another feature (a
+    cut's base/tool, Body features) are skipped, and solids win over sketches.
+    If more than one final shape remains, it raises and lists them. It never
+    picks one for you.
     """
     return _call("export_shape", path=path, object=object)
 
