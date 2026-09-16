@@ -127,6 +127,12 @@ echo "== Session journal: every tool call recorded, no result changed (#407) =="
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_session_journal.py; else python3 tests/test_session_journal.py; fi
 
 echo
+echo "== Replay: journal -> script that regenerates the session (#408) =="
+# Exporter on synthetic journals, Session against a stub server, and a real round trip:
+# record through the MCP tool layer, export, run in a fresh interpreter, compare.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_replay.py; else python3 tests/test_replay.py; fi
+
+echo
 echo "== MCP tool suite over stdio, driving the real worker (#288) =="
 # The other half of the MCP surface: test_mcp_boot proves the server SPEAKS, this
 # proves the tools WORK — documents, primitives, restart-clears-state, a CalculiX

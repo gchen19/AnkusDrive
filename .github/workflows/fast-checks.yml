@@ -116,6 +116,12 @@ jobs:
         # and run in run_all.sh / run_all.ps1.
         run: python tests/test_session_journal.py
 
+      - name: Replay — a session journal becomes a script that regenerates it (#408)
+        # Static tier here (the exporter on synthetic journals: handle linking, job-poll
+        # collapse, pruning, path redaction; Session against a stub). The record ->
+        # export -> re-run tier SKIPs without mcp + FreeCAD and runs in run_all.
+        run: python tests/test_replay.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.
