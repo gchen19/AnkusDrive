@@ -86,6 +86,10 @@ Every lane runs on a GitHub-hosted runner; the project uses no self-hosted machi
 (retired in #343). Branch protection requires the lint, secret-scan, hosted worker,
 hosted Linux and hosted Windows suites.
 
+Green CI is not "everything ran": a live test whose solver is absent SKIPs. What CI
+deliberately does **not** exercise, and what covers each gap instead, is listed in
+[`tests/TEST_PLAN.md`](tests/TEST_PLAN.md#what-ci-does-not-cover).
+
 ### Why your fork's PR sees fewer checks
 
 Two separate mechanisms, and it is worth knowing which is which:
