@@ -222,6 +222,39 @@ def close_workspace(name: str) -> dict:
 
 
 @mcp.tool()
+def session_transcript(workspace: str | None = None, include_read_only: bool = False,
+                       checkpoints: bool = True, prune_aborted: bool = False) -> dict:
+    """Export this session as a Python script that regenerates it (model, drawings,
+    simulations) by calling these same tools in a fresh worker. Read-only: returns
+    the script as text and writes nothing.
+
+    Covers one workspace (default: the current one). In the script, handles are
+    variables, job polls are one s.wait(job), and inspection calls are dropped unless
+    a later call used their result. Measured volumes, areas and max_*/min_* values
+    become s.check() lines that stop a replay that drifted. Absolute paths become
+    WORKDIR-relative. The header lists failed calls, run_script use and input files.
+
+    include_read_only: keep every inspection call. checkpoints: emit s.check().
+    prune_aborted: drop calls a transaction_abort undid.
+
+    Returns {workspace, script, calls, exported, skipped: {reason: count}, warnings,
+    prerequisites, truncated}. Run it as `python transcript.py [WORKDIR]`."""
+    from . import journal as _j, replay as _replay
+    ws = workspace or _current_workspace
+    snap = _j.snapshot(ws)
+    out = _replay.export(snap["entries"], workspace=ws, include_read_only=include_read_only,
+                         checkpoints=checkpoints, prune_aborted=prune_aborted,
+                         truncated=snap["truncated"])
+    skipped: dict = {}
+    for s in out["skipped"]:
+        skipped[s["reason"]] = skipped.get(s["reason"], 0) + 1
+    result = {"workspace": ws, **out, "skipped": skipped, "truncated": snap["truncated"]}
+    if not snap["entries"]:
+        result["note"] = f"no tool calls recorded in workspace {ws!r} yet"
+    return result
+
+
+@mcp.tool()
 def version() -> dict:
     """Return FreeCAD and bundled Python versions from the worker."""
     return _call("version")
