@@ -463,6 +463,37 @@ one-time wiring for a local AppImage install.
 
 ---
 
+## What CI does not cover
+
+Green CI is not "everything ran". A live test whose solver is absent **SKIPs**, which is
+the right contract on a partly provisioned machine and the wrong one for a lane that is
+supposed to be the proof — that is the failure `scripts/ci_parity_diff.py` (#342) and the
+image preflights exist to catch. This is the current list, so a reader never has to infer
+it from a log.
+
+**Enforced mechanically** (a stale entry fails the build, it cannot rot quietly):
+
+| Not exercised | Where | Why | Covered instead by |
+|---|---|---|---|
+| `blender` / the studio photoreal tests | Linux **arm64** image | Blender publishes no arm64 Linux build; recorded in the image's `/etc/ankusdrive-heavy/exclusions`, which `scripts/ci-linux-preflight.sh` reports and fails if it ever resolves | the amd64 image lane |
+| `su2` | Linux lanes | not installed in the heavy image; deliberately outside the preflight's `REQUIRED` | macOS lane C (official binary under Rosetta 2) and the Windows lane (native) |
+| `mujoco` | everywhere | the Darwin alternative for the `mbd` family; never installed in CI | `pybullet` on Linux and Windows |
+
+**Recorded decisions** (prose — check them when the surrounding code changes):
+
+| Not exercised | Where | Why | Covered instead by |
+|---|---|---|---|
+| `tests/test_molding_fill.py` | lane D (hosted macOS VM) | ran past 3 h under QEMU emulation | its physics on lanes A/B; the macOS relay path by `tests/test_molding_relay.py` (#386) |
+| Multipass's own daemon and its sshfs mount | every lane | hosted macOS runners are VMs without nested virtualization; lane D substitutes QEMU + the `tests/ci/multipass` stub | a **manual pre-release check on a real Mac** — `docs/MACOS.md` |
+| The FreeCAD **Render workbench** add-on renderers (appleseed, LuxCore, Cycles, OSPRay, pbrt) — ~14 tests in `test_render_photoreal.py` | every lane | the add-on is not installed on any runner, so they SKIP everywhere | nothing automated. The `render_photoreal` **studio backend** (full Blender, #357) *is* covered on the amd64 lane |
+| `test_engrave_text` | every lane | no system TrueType font on the hosted images | nothing; the engrave path is otherwise unit-tested |
+| The Linux-only solver families (OpenFOAM, YADE, openEMS, bempp, preCICE) | the Windows lane | no native Windows build; `tests/run_all.ps1` skips those modules outright rather than running them to crash | the Linux lanes |
+| Perf baselines and the paid reliability layers | every lane | noisy / cost API credits | run by hand: `RUN_PERF=1`, `RUN_RELIABILITY=1` |
+
+If you add a heavy family, add its solver to `REQUIRED` in `scripts/ci-linux-preflight.sh`.
+Otherwise its live tests can go absent and **nothing turns red** — the whole point of that
+list.
+
 ## What's explicitly NOT in this plan
 
 - **Snapshot / pixel-exact tests.** They rot, false-fail on any library

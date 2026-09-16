@@ -268,9 +268,12 @@ Resolved (were open questions in the proposal):
   invariants (valid PNG, non-blank, `view=` changes the image, a `material=` card
   changes the color, unknown material errors cleanly, live doc untouched).
 - **CI.** The tests **skip** when the addon/binary is absent (exit 0), so they're safe
-  everywhere; they only do real work on a box that provisions a renderer. They run in
-  the self-hosted suite (`tests/run_all.sh`), alongside `test_render.py` — *not* the
-  hosted nightly, which has neither Pillow nor a renderer.
+  everywhere; they only do real work on a box that provisions a renderer. **No CI lane
+  provisions one**, so ~14 of them SKIP on every lane — including the self-hosted suite
+  this section used to claim ran them, which skipped them too. Tracked as
+  [#421](https://github.com/gchen19/AnkusDrive/issues/421) and listed in
+  [`tests/TEST_PLAN.md`](../tests/TEST_PLAN.md#what-ci-does-not-cover). The separate
+  **studio backend** (full Blender, #357) *is* covered live on the amd64 heavy lane.
 - **Worker blocking.** Resolved (§5.3). `render_photoreal_submit` + `render_job` give a
   non-blocking job API — the external renderer runs in the workbench's headless
   `threading.Thread`, the worker stays responsive (verified: `ping` mid-render), and
