@@ -110,6 +110,12 @@ jobs:
         # FreeCAD and run in run_all.sh / run_all.ps1.
         run: python tests/test_run_script_gate.py
 
+      - name: Session journal — every tool call recorded, no result changed (#407)
+        # Static tier here (the wrapper against stub tools, memory-only, applied after
+        # every tool filter); the server and worker tiers SKIP without mcp / FreeCAD
+        # and run in run_all.sh / run_all.ps1.
+        run: python tests/test_session_journal.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.
