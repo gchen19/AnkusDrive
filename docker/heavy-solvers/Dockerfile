@@ -20,7 +20,8 @@
 #   fsi     serial preCICE + calculix-adapter + openfoam-adapter -> /opt/fsi
 #   oims    tools/build_openinjmoldsim.sh  -> /opt/of7 (OpenFOAM-7 .org + openInjMoldSim)
 #   elmer   install-solvers.sh elmer       -> /opt/elmer (arm64 only; amd64 uses the PPA)
-#   final   system + the five prefixes + FreeCAD AppImage + Bempp venv + driver venv
+#   final   system + the five prefixes + FreeCAD AppImage (+ Render add-on, POV-Ray)
+#           + Bempp venv + driver venv
 #
 # Build locally:  docker build -f docker/heavy-solvers/Dockerfile --build-arg JOBS=8 .
 #
@@ -247,6 +248,18 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
       printf 'blender\tno %s build: Blender publishes Linux binaries for x86_64 only (#342)\n' "$TARGETARCH" >> /etc/ankusdrive-heavy/exclusions; \
     fi
 
+# The FreeCAD Render workbench + POV-Ray, so the add-on half of test_render_photoreal.py
+# runs instead of SKIPping on every lane (#421). One renderer proves the add-on import,
+# scene export, material cards and the render_job API; the other five add-on renderers
+# are hand-fetched builds of hundreds of MB and stay SKIPs here. The add-on goes in the
+# FreeCAD install's own Mod/ (loaded like a bundled workbench), not the user data dir,
+# which follows $HOME. POV-Ray is packaged for both arches; povray-includes is only a
+# Recommends, and without it every add-on scene dies parsing `#include "colors.inc"`.
+RUN apt-get update && apt-get install -y --no-install-recommends povray povray-includes \
+ && rm -rf /var/lib/apt/lists/* \
+ && RENDER_ADDON_DIR=/opt/freecad/squashfs-root/usr/Mod/Render \
+      bash /src/ankusdrive/scripts/install-renderers.sh render-addon
+
 # Arch-neutral path to the ESI build (linux64… on amd64, linuxARM64… on arm64), so the
 # ANKUSDRIVE_* values below — which lanes and users copy out of the image — are the
 # same on every platform.
@@ -283,7 +296,7 @@ RUN cd /src/ankusdrive && bash scripts/ci-linux-preflight.sh \
  && pip uninstall -q -y ankusdrive
 
 LABEL org.opencontainers.image.title="ankusdrive-heavy" \
-      org.opencontainers.image.description="AnkusDrive heavy-solver CI image, amd64 + arm64 (OpenFOAM, Elmer, Blender on amd64 only, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp, FreeCAD)" \
+      org.opencontainers.image.description="AnkusDrive heavy-solver CI image, amd64 + arm64 (OpenFOAM, Elmer, Blender on amd64 only, FreeCAD Render workbench + POV-Ray, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp, FreeCAD)" \
       org.opencontainers.image.source="https://github.com/gchen19/AnkusDrive" \
       org.opencontainers.image.licenses="See /licenses/README.md (bundles GPL-3.0, LGPL-3.0 and other components)"
 WORKDIR /

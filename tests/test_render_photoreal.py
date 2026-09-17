@@ -319,6 +319,37 @@ def test_render_job_eviction():
             "a recent job should still be retained"
 
 
+def test_render_addon_pin_is_consistent():
+    """The heavy CI image installs the Render add-on + POV-Ray so the tests above run
+    there instead of skipping (#421). No FreeCAD needed: the installer's pinned commit
+    is the one the docs and the image's licence table name, the Dockerfile still calls
+    the render-addon target with POV-Ray, and the preflight still fails a lane where
+    either stops resolving."""
+    import re
+    sh = (REPO / "scripts" / "install-renderers.sh").read_text(encoding="utf-8")
+    m = re.search(r'^RENDER_ADDON_REV="([0-9a-f]{40})"$', sh, re.M)
+    assert m, "install-renderers.sh lost its pinned RENDER_ADDON_REV"
+    assert re.search(r"^\s+render-addon\) want_addon=1", sh, re.M), "render-addon target missing"
+    licences = (REPO / "docker" / "heavy-solvers" / "LICENSES.md").read_text(encoding="utf-8")
+    for where, text in (
+        ("docs/RENDER_WORKBENCH.md", (REPO / "docs" / "RENDER_WORKBENCH.md").read_text(encoding="utf-8")),
+        ("docs/RENDERING.md", (REPO / "docs" / "RENDERING.md").read_text(encoding="utf-8")),
+        ("LICENSES.md", next(ln for ln in licences.splitlines() if "FreeCAD-render" in ln)),
+    ):
+        pins = set(re.findall(r"\b[0-9a-f]{40}\b", text))
+        assert pins == {m.group(1)}, f"{where} pins {pins}, installer pins {m.group(1)}"
+
+    dockerfile = (REPO / "docker" / "heavy-solvers" / "Dockerfile").read_text(encoding="utf-8")
+    step = re.search(r"install-renderers\.sh render-addon", dockerfile)
+    assert step, "heavy image no longer installs the Render add-on"
+    run = dockerfile[dockerfile.rfind("RUN ", 0, step.start()):step.end()]
+    assert "povray" in run and "RENDER_ADDON_DIR=/opt/freecad/" in run, run
+
+    preflight = (REPO / "scripts" / "ci-linux-preflight.sh").read_text(encoding="utf-8")
+    assert '"addon_importable"' in preflight and '"Povray"' in preflight, \
+        "ci-linux-preflight.sh no longer requires the add-on + POV-Ray"
+
+
 def test_render_capabilities():
     """render_capabilities reports per-renderer availability + addon import status
     WITHOUT rendering, so unlike the render tests it never skips — it's a pure probe

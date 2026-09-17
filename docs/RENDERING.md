@@ -65,6 +65,16 @@ Install the workbench into the Mod dir FreeCAD reads (derive it from
 - macOS: `~/Library/Application Support/FreeCAD/Mod/Render`
 - Windows: `%APPDATA%\FreeCAD\Mod\Render`
 
+FreeCAD 1.1 adds a version dir (`…/FreeCAD/v1-1/Mod/Render`). The installer asks
+FreeCAD for the right place and fetches the pinned commit:
+
+```bash
+scripts/install-renderers.sh render-addon                            # any OS with git + bash
+RENDER_ADDON_DIR=/path/to/Mod/Render scripts/install-renderers.sh render-addon   # elsewhere
+```
+
+or by hand:
+
 ```bash
 git clone https://github.com/FreeCAD/FreeCAD-render "<Mod dir>/Render"
 git -C "<Mod dir>/Render" checkout 08be2fe94b8a998323c8a5443f7f0afd0d05bed5   # pinned

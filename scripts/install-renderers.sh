@@ -28,6 +28,7 @@
 #   sudo scripts/install-renderers.sh luxcore         # just one (luxcore|appleseed)
 #   scripts/install-renderers.sh blender              # full Blender (Cycles) for the studio backend
 #                                                     # (Linux x86_64 + macOS; never in the no-arg run)
+#   scripts/install-renderers.sh render-addon         # the FreeCAD Render workbench (any OS; see below)
 #   scripts/install-renderers.sh --list               # show what's pinned + status
 #   PREFIX=~/r BINDIR=~/bin scripts/install-renderers.sh   # rootless (PATH must include BINDIR)
 #
@@ -58,6 +59,16 @@
 #                 is kept unless FORCE=1 (which also lets brew replace a non-brew app).
 #   Windows       scripts/install-solvers.ps1 blender (pinned portable zip; winget is 403-blocked upstream).
 # It is ~1 GB on disk and GPL-3.0 (run only as a subprocess), so the no-arg run skips it.
+#
+# RENDER-ADDON (issue #421) is the FreeCAD Render workbench itself — the add-on every
+# renderer above is driven through. It is a pinned git checkout, not a binary, and
+# goes where FreeCAD loads modules from:
+#   default       <App.getUserAppDataDir()>/Mod/Render, asked of freecadcmd
+#                 ($ANKUSDRIVE_FREECADCMD, else `freecadcmd` on PATH)
+#   RENDER_ADDON_DIR=<dir>  anywhere FreeCAD scans for Mod/, e.g. the install's own
+#                 <prefix>/usr/Mod/Render, which (unlike the user dir) does not move with
+#                 $HOME — the heavy CI image puts it there.
+# Any OS with git and bash; LGPL-2.1, loaded in-process by FreeCAD. Not in the no-arg run.
 set -euo pipefail
 
 PREFIX="${PREFIX:-/opt}"
@@ -90,6 +101,11 @@ BLENDER_VERSION="5.2.1"
 BLENDER_SERIES="5.2"
 BLENDER_SHA_linux_x64="a31f524fa99a527d3d52b7f5aaa68c34e1a19d5a1c9473f79c5cc610fd5b10e9"
 BLENDER_SHA_macos_arm64="6409e21de80994db5f4c4a34486b6fd43cea21085b912f7491c53e923acb65a3"
+# FreeCAD Render workbench (#421). Upstream has no releases; this is the commit the
+# live tests in tests/test_render_photoreal.py passed against (FreeCAD 1.1, all six renderers).
+RENDER_ADDON_REPO="${RENDER_ADDON_REPO:-https://github.com/FreeCAD/FreeCAD-render}"
+RENDER_ADDON_REV="08be2fe94b8a998323c8a5443f7f0afd0d05bed5"
+
 BLENDER_MIRRORS="${BLENDER_MIRRORS:-https://mirrors.ocf.berkeley.edu/blender/release https://ftp.nluug.nl/pub/graphics/blender/release https://mirror.clarkson.edu/blender/release https://download.blender.org/release}"
 
 # Staging dirs to clean on exit (populated by install_prebuilt), and the Blender DMG
@@ -371,6 +387,39 @@ install_blender() {
   esac
 }
 
+# --- FreeCAD Render workbench add-on (#421) -----------------------------------
+render_addon_default_dir() {  # <App.getUserAppDataDir()>/Mod/Render, as FreeCAD reports it
+  local fc="${ANKUSDRIVE_FREECADCMD:-}" out
+  [ -n "$fc" ] || fc="$(command -v freecadcmd || command -v FreeCADCmd || true)"
+  [ -n "$fc" ] && [ -x "$fc" ] || die "cannot find freecadcmd to ask where FreeCAD loads add-ons from; set ANKUSDRIVE_FREECADCMD, or RENDER_ADDON_DIR=<.../Mod/Render>"
+  out="$("$fc" -c 'import FreeCAD; print("USERAPPDATA=" + FreeCAD.getUserAppDataDir())' 2>/dev/null | sed -n 's/^USERAPPDATA=//p' | tail -1)"
+  [ -n "$out" ] || die "$fc did not report its user data dir; set RENDER_ADDON_DIR=<.../Mod/Render>"
+  printf '%s/Mod/Render\n' "${out%/}"
+}
+
+install_render_addon() {
+  need_cmd git
+  local dest="${RENDER_ADDON_DIR:-}"
+  [ -n "$dest" ] || dest="$(render_addon_default_dir)"
+  if [ "$FORCE" != "1" ] && [ "$(git -C "$dest" rev-parse HEAD 2>/dev/null)" = "$RENDER_ADDON_REV" ]; then
+    ok "Render workbench already at ${RENDER_ADDON_REV:0:12} in $dest; skipping (FORCE=1 to reinstall)"
+    return
+  fi
+  log "Render workbench ${RENDER_ADDON_REV:0:12} -> $dest"
+  mkdir -p "$(dirname "$dest")" 2>/dev/null || die "cannot create $(dirname "$dest") (set RENDER_ADDON_DIR=<writable dir>)"
+  local stage; stage="$(mktemp -d "$(dirname "$dest")/.render-addon.XXXXXX")"
+  STAGE_DIRS+=("$stage")
+  # Fetch exactly the pinned commit (GitHub serves any reachable sha), no history.
+  git -C "$stage" init -q
+  git -C "$stage" fetch -q --depth 1 "$RENDER_ADDON_REPO" "$RENDER_ADDON_REV" || die "git fetch of $RENDER_ADDON_REV from $RENDER_ADDON_REPO failed"
+  git -C "$stage" -c advice.detachedHead=false checkout -q FETCH_HEAD
+  [ -f "$stage/Render/__init__.py" ] || die "unexpected add-on layout: no Render/__init__.py at ${RENDER_ADDON_REV:0:12}"
+  rm -rf "$dest"
+  mv "$stage" "$dest"
+  chmod -R a+rX "$dest"
+  ok "installed; verify with render_capabilities (addon_importable: true)"
+}
+
 # --- list / status ------------------------------------------------------------
 record_for() { eval "printf '%s' \"\${PINNED_$1:-}\""; }
 
@@ -404,6 +453,8 @@ EOF
   else
     printf '  %-10s Blender %s  (Linux x86_64 tarball / macOS cask; discovery also globs /opt/blender-* and ~/.local/opt/blender-*)\n' blender "$BLENDER_VERSION"
   fi
+  printf '\nFreeCAD Render workbench (own target, not in the no-arg run):\n\n'
+  printf '  %-10s FreeCAD-render @ %s  (RENDER_ADDON_DIR, else <FreeCAD user data>/Mod/Render)\n' render-addon "${RENDER_ADDON_REV:0:12}"
   cat <<'EOF'
 
 Build-from-source only (no usable prebuilt CLI — a separate phase):
@@ -420,20 +471,24 @@ EOF
 
 # --- main ---------------------------------------------------------------------
 main() {
-  local targets=() want_blender=0
+  local targets=() want_blender=0 want_addon=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --list|-l) do_list; exit 0 ;;
       -h|--help) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 0 ;;
       luxcore|appleseed) targets+=("$1") ;;
       blender) want_blender=1 ;;
+      render-addon) want_addon=1 ;;
       ospray|pbrt|cycles) die "$1 has no prebuilt CLI; build from source (scripts/install-renderers.sh --list)" ;;
       *) die "unknown argument: $1 (try --list or --help)" ;;
     esac
     shift
   done
+  [ "$want_addon" = "1" ] && install_render_addon
   if [ "$want_blender" = "1" ]; then
     install_blender
+  fi
+  if [ "$want_addon" = "1" ] || [ "$want_blender" = "1" ]; then
     [ ${#targets[@]} -eq 0 ] && exit 0
   fi
   [ ${#targets[@]} -eq 0 ] && targets=($PREBUILT_KEYS)
