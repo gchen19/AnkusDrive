@@ -22,9 +22,11 @@
 #   2. container_state() == "running"
 #   3. the host scratch ($TMPDIR) round-trips host->container AND container->host at
 #      the same absolute path, and a container-written file is deletable by the host
-#   4. the host has NO OpenFOAM of its own (no foam binary on PATH, no apt layout)
+#   4. the host has NO OpenFOAM, YADE, Elmer, openEMS or Bempp of its own
 #   5. through the container: openfoam resolves via:container, the FSI stack is
-#      complete, openInjMoldSim + its OF-7 bashrc resolve
+#      complete, openInjMoldSim + its OF-7 bashrc resolve, and YADE / Elmer (with its
+#      ElmerGrid + ViewFactors siblings) / openEMS / Bempp resolve via:container by
+#      probing — with NO export for them, the path a macOS user takes (#419)
 #   6. freecadcmd resolves on the host (test_wind_tunnel drives the real worker)
 #
 # USAGE
@@ -127,6 +129,17 @@ if native:
 else:
     ok("no native OpenFOAM on the host")
 
+print("\n== Host has no YADE / Elmer / openEMS / Bempp of its own (#419) ==")
+import importlib.util  # noqa: E402
+native = [b for b in ("yade", "ElmerSolver", "ElmerGrid", "ViewFactors") if shutil.which(b)]
+native += [m for m in ("openEMS", "CSXCAD", "bempp_cl") if importlib.util.find_spec(m)]
+native += [v for v in (".venv-openems", ".venv-bempp") if os.path.isdir(v)]
+if native:
+    fail(f"the host has its own {native} — a solve that bypassed the relay would still "
+         "pass, so this lane would not be testing the relay")
+else:
+    ok("no native YADE / Elmer / openEMS / Bempp on the host")
+
 print("\n== Stack through the container ==")
 of = solvers.find_solver("openfoam")
 if of.get("available") and of.get("via") == "container":
@@ -144,6 +157,21 @@ if oims and oims_rc:
     ok(f"openInjMoldSim -> {oims}")
 else:
     fail(f"openInjMoldSim does not resolve (bin={oims!r}, bashrc={oims_rc!r})")
+
+for solver in ("yade", "elmer", "openems", "bempp"):
+    info = solvers.find_solver(solver)
+    if info.get("available") and info.get("via") == "container":
+        ok(f"{solver} via container -> {info['path']}")
+    else:
+        fail(f"{solver} does not resolve via the container: status={info.get('status')} "
+             f"hint={info.get('wire_hint') or info.get('install_hint')!r}")
+elmer = solvers.find_solver("elmer").get("path")
+for sib in ("ElmerGrid", "ViewFactors"):
+    path = solvers.sibling_bin(elmer, sib, "elmer") if elmer else None
+    if path and solvers.container_file_exists(path):
+        ok(f"{sib} in container -> {path}")
+    else:
+        fail(f"{sib} is not beside ElmerSolver in the container ({path!r})")
 
 print("\n== Host FreeCAD ==")
 fc = client.FREECADCMD

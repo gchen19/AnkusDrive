@@ -20,6 +20,13 @@ monkeypatches ``platform.system`` / ``shutil.which`` / the filesystem probes / t
     shapes, degrading to absent on garbage; the inspect read itself never takes stdin.
   * The unwired hint tracks the container's state, the capabilities payload names
     the substrate, and doctor says "(in container)".
+  * Beyond OpenFOAM (#419): YADE and Elmer resolve by PROBING the running container
+    (or from a trusted absolute override), openEMS and Bempp by a find_spec asked of
+    the in-container interpreter; host installs of all four are ignored, an image
+    lacking one reports it unresolved with a container-state hint, and the unset
+    substrate never probes. ``solver_argv`` wraps direct launches (``-i`` only for an
+    owned pipe), ``stage_runner`` puts the runner where the container can read it,
+    Elmer's siblings are in-container paths, and the worker has no direct launch left.
 
 Run:  python3 tests/test_container_substrate.py
 """
@@ -54,7 +61,9 @@ _ISOLATE = ("ANKUSDRIVE_SUBSTRATE", "ANKUSDRIVE_CONTAINER", "ANKUSDRIVE_CONTAINE
             "ANKUSDRIVE_PRECICE_PATH", "ANKUSDRIVE_PRECICE_LIB",
             "ANKUSDRIVE_OPENFOAM_ADAPTER_LIB", "ANKUSDRIVE_OPENINJMOLDSIM",
             "ANKUSDRIVE_OPENINJMOLDSIM_PATH", "ANKUSDRIVE_OPENINJMOLDSIM_BASHRC",
-            "ANKUSDRIVE_WSL_DISTRO", "WM_PROJECT_DIR", "ANKUSDRIVE_CONFIG")
+            "ANKUSDRIVE_WSL_DISTRO", "WM_PROJECT_DIR", "ANKUSDRIVE_CONFIG",
+            "ANKUSDRIVE_ELMER_PATH", "ANKUSDRIVE_YADE", "ANKUSDRIVE_YADE_PATH",
+            "ANKUSDRIVE_OPENEMS_PYTHON", "ANKUSDRIVE_BEMPP_PYTHON")
 
 
 class _patch:
@@ -80,6 +89,7 @@ class _patch:
         os.environ["ANKUSDRIVE_CONFIG"] = os.path.join(
             os.path.dirname(__file__), "no-such-config.toml")
         solvers._ctr_info_cache.clear()
+        solvers._ctr_probe_cache.clear()
         return self
 
     def __exit__(self, *exc):
@@ -91,6 +101,7 @@ class _patch:
             if v is not None:
                 os.environ[n] = v
         solvers._ctr_info_cache.clear()
+        solvers._ctr_probe_cache.clear()
         return False
 
 
@@ -441,6 +452,215 @@ def test_fsi_sweeps_participants_through_the_container():
     sweeps = [c for c in calls if c[0] == "run" and "kill -TERM" in c[1][-1]]
     assert {c[1][3] for c in sweeps} == {fluid, solid}, sweeps
     assert all(c[1][:2] == ["docker", "exec"] for c in sweeps), sweeps
+
+
+# --- beyond OpenFOAM: YADE / Elmer / openEMS / Bempp (#419) -----------------------
+
+_RUNNING = json.dumps({"Status": "running", "Running": True})
+_C_ELMER = "/opt/elmer/bin/ElmerSolver"
+_C_YADE = "/opt/yade/bin/yade"
+_C_OPENEMS_PY = "/opt/venv-openems/bin/python"
+_C_BEMPP_PY = "/opt/venv-bempp/bin/python"
+
+
+def _fake_container(p, *, holds=(), pythons=(), state=_RUNNING):
+    """A container whose filesystem holds the executables ``holds`` and whose
+    interpreters ``pythons`` import their solver's modules. Records every probe."""
+    probes = []
+
+    def probe(engine, name, argv):
+        probes.append(argv)
+        if argv[0] == "sh":                          # _container_binary's command -v scan
+            script = argv[2]
+            for path in holds:
+                if f" {os.path.basename(path)}" in script.split(";")[0]:
+                    return 0, path + "\n"
+            return 1, ""
+        if argv[0] == "test":
+            return (0, "") if argv[2] in holds else (1, "")
+        if len(argv) == 3 and argv[1] == "-c":       # find_spec in an interpreter
+            return (0, "") if argv[0] in pythons else (1, "")
+        raise AssertionError(f"unexpected probe {argv}")
+    p.set(solvers, "_container_inspect", lambda eng, name, _s=state: _s)
+    p.set(solvers, "_container_probe", probe)
+    return probes
+
+
+def test_yade_and_elmer_resolve_by_probing_the_container():
+    with _patch() as p:
+        _container_host(p)
+        probes = _fake_container(p, holds=(_C_ELMER, _C_YADE))
+        for name, path in (("elmer", _C_ELMER), ("yade", _C_YADE)):
+            info = solvers.find_solver(name)
+            assert info["available"] and info["path"] == path, info
+            assert info["via"] == "container", info
+            assert solvers.routes_through_container(name) is True
+        assert all(a[:2] == ("sh", "-c") for a in probes), probes
+
+
+def test_a_trusted_override_skips_the_probe():
+    with _patch() as p:
+        _container_host(p)
+        probes = _fake_container(p)
+        p.env(ANKUSDRIVE_ELMER_PATH="/usr/bin/ElmerSolver", ANKUSDRIVE_YADE=_C_YADE)
+        assert solvers.find_solver("elmer")["path"] == "/usr/bin/ElmerSolver"
+        assert solvers.find_solver("yade")["path"] == _C_YADE     # the image's own env name
+        assert probes == [], probes
+
+
+def test_host_elmer_and_yade_are_ignored_under_container_but_not_natively():
+    host = {"/usr/bin/ElmerSolver", "/usr/bin/yade"}
+    with _patch() as p:
+        _container_host(p, host_files=host)
+        os.environ.pop("ANKUSDRIVE_SUBSTRATE")                  # control: native Linux
+        p.set(solvers, "_container_probe",
+              lambda *a: (_ for _ in ()).throw(AssertionError("probed natively")))
+        for name in ("elmer", "yade"):
+            info = solvers.find_solver(name)
+            assert info["available"] and "via" not in info, info
+            assert solvers.routes_through_container(name) is False
+        p.env(ANKUSDRIVE_SUBSTRATE="container")
+        _fake_container(p)                                      # running, holds nothing
+        for name in ("elmer", "yade"):
+            info = solvers.find_solver(name)
+            assert info["available"] is False, ("host install leaked", info)
+
+
+def test_an_image_without_the_solver_says_so_per_container_state():
+    """Absent / stopped / running-but-missing each get their own fix; a host install
+    hint (apt, source build) never answers a container-substrate miss."""
+    needles = {None: "docker run -d --name ankusdrive-solvers",
+               json.dumps({"Status": "exited", "Running": False}): "docker start",
+               _RUNNING: "did not resolve inside it"}
+    for state, needle in needles.items():
+        for name, env in (("elmer", "ANKUSDRIVE_ELMER_PATH"),
+                          ("openems", "ANKUSDRIVE_OPENEMS_PYTHON")):
+            with _patch() as p:
+                _container_host(p)
+                _fake_container(p, state=state)
+                info = solvers.find_solver(name)
+                assert info["status"] == "unwired", (state, info)
+                assert needle in info["wire_hint"], (state, info["wire_hint"])
+                if state == _RUNNING:
+                    assert env in info["wire_hint"], info["wire_hint"]
+
+
+def test_openems_and_bempp_are_asked_inside_the_container():
+    with _patch() as p:
+        _container_host(p)
+        probes = _fake_container(p, pythons=(_C_OPENEMS_PY, _C_BEMPP_PY))
+        for name, py in (("openems", _C_OPENEMS_PY), ("bempp", _C_BEMPP_PY)):
+            info = solvers.find_solver(name)
+            assert info["available"] and info["path"] == py, info
+            assert info["via"] == "container", info
+        assert {a[0] for a in probes} == {_C_OPENEMS_PY, _C_BEMPP_PY}, probes
+        assert all("find_spec" in a[2] for a in probes), probes
+        # the override is tried first, and a relative one is never trusted
+        probes.clear()
+        p.env(ANKUSDRIVE_OPENEMS_PYTHON="venv/bin/python")
+        assert solvers.solver_python("openems") == _C_OPENEMS_PY
+        assert [a[0] for a in probes] == [_C_OPENEMS_PY], probes
+        # kraken is not container-routed: the host decides, the container is never asked
+        probes.clear()
+        solvers.find_solver("kraken")
+        assert probes == [], probes
+
+
+def test_solver_argv_wraps_only_routed_solvers_and_takes_stdin_only_when_asked():
+    with _patch() as p:
+        _container_host(p)
+        assert solvers.solver_argv("elmer", ["/opt/elmer/bin/ElmerSolver", "case.sif"],
+                                   "/tmp/c") == [
+            "docker", "exec", "-w", "/tmp/c", "ankusdrive-solvers",
+            "/opt/elmer/bin/ElmerSolver", "case.sif"]
+        argv = solvers.solver_argv("bempp", [_C_BEMPP_PY, "/tmp/r.py"], stdin=True)
+        assert argv == ["docker", "exec", "-i",
+                        "-e", "NUMBA_CACHE_DIR=/tmp/ankusdrive-numba-cache",
+                        "ankusdrive-solvers", _C_BEMPP_PY, "/tmp/r.py"], argv
+        assert "-t" not in argv
+        assert solvers.solver_argv("kraken", ["py", "r.py"]) == ["py", "r.py"]
+        os.environ.pop("ANKUSDRIVE_SUBSTRATE")                  # native: identity
+        assert solvers.solver_argv("elmer", ["ElmerSolver", 1], "/c", stdin=True) == [
+            "ElmerSolver", "1"]
+
+
+def test_stage_runner_puts_the_runner_under_the_mounted_scratch():
+    runner = Path(__file__).resolve().parent.parent / "ankusdrive" / "bempp_runner.py"
+    with tempfile.TemporaryDirectory() as scratch, _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Linux"))
+        p.set(solvers.shutil, "which", lambda n: "/usr/bin/docker" if n == "docker" else None)
+        p.set(tempfile, "tempdir", scratch)
+        assert solvers.stage_runner("bempp", str(runner)) == str(runner)   # native
+        p.env(ANKUSDRIVE_SUBSTRATE="container")
+        staged = solvers.stage_runner("bempp", str(runner))
+        assert staged.startswith(os.path.join(scratch, "ankusdrive-runners")), staged
+        assert Path(staged).read_bytes() == runner.read_bytes()
+        assert solvers.stage_runner("bempp", str(runner)) == staged        # idempotent
+        # a planted/tampered copy at the predictable path is never executed
+        Path(staged).write_text("import os; os.system('evil')\n")
+        restaged = solvers.stage_runner("bempp", str(runner))
+        assert Path(restaged).read_bytes() == runner.read_bytes(), restaged
+        if os.name != "posix" or os.getuid() == 0:
+            return                           # dir modes don't bind on Windows or for root
+        os.chmod(os.path.dirname(staged), 0o500)                 # can't rewrite in place
+        try:
+            Path(staged).chmod(0o600)
+            os.chmod(os.path.dirname(staged), 0o700)
+            Path(staged).write_text("tampered\n")
+            os.chmod(os.path.dirname(staged), 0o500)
+            fallback = solvers.stage_runner("bempp", str(runner))
+            assert fallback != staged and "ankusdrive-runner-" in fallback, fallback
+            assert Path(fallback).read_bytes() == runner.read_bytes()
+        finally:
+            os.chmod(os.path.dirname(staged), 0o700)
+        assert solvers.stage_runner("kraken", str(runner)) == str(runner)  # not routed
+
+
+def test_elmer_siblings_are_in_container_paths():
+    with _patch() as p:
+        _container_host(p, engine_on_path=("docker", "ElmerGrid"))   # a HOST ElmerGrid
+        probes = _fake_container(p, holds=(_C_ELMER, "/opt/elmer/bin/ViewFactors"))
+        vf = solvers.sibling_bin(_C_ELMER, "ViewFactors", "elmer")
+        assert vf == "/opt/elmer/bin/ViewFactors"
+        assert solvers.sibling_bin(_C_ELMER, "ElmerGrid", "elmer") == "/opt/elmer/bin/ElmerGrid"
+        assert solvers.container_file_exists(vf) is True
+        assert solvers.container_file_exists("/opt/elmer/bin/ElmerGrid") is False
+        assert ("test", "-x", vf) in probes, probes
+
+
+def test_container_probe_is_bounded_and_never_takes_stdin():
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"], seen["kw"] = argv, kw
+
+        class R:
+            returncode, stdout = 0, "/opt/yade/bin/yade\n"
+        return R()
+    with _patch() as p:
+        p.set(subprocess, "run", fake_run)
+        out = solvers._container_probe_exec("podman", "foam", ("sh", "-c", "x"), 7.0)
+    assert out == (0, "/opt/yade/bin/yade\n")
+    assert seen["argv"] == ["podman", "exec", "foam", "sh", "-c", "x"], seen["argv"]
+    assert seen["kw"].get("stdin") is subprocess.DEVNULL and seen["kw"]["timeout"] == 7.0
+
+
+def test_worker_launches_routed_solvers_only_through_solver_argv():
+    """worker.py needs FreeCAD to import, so this pins the wiring at the source: no
+    ElmerSolver / ElmerGrid / ViewFactors / yade / runner launch bypasses solver_argv,
+    and every runner is staged where the container can read it."""
+    src = (Path(__file__).resolve().parent.parent / "ankusdrive" / "worker.py").read_text()
+    for bypass in ("subprocess.run([elmer_bin", "subprocess.run([vf_bin",
+                   "subprocess.run(grid_argv", "[yade_exe, \"-x\"",
+                   "os.path.isfile(elmergrid)"):
+        hits = [ln for ln in src.splitlines()
+                if bypass in ln and "solver_argv" not in ln]
+        assert not hits, (bypass, hits)
+    for name, runner in (("yade", "dem_gpl_runner.py"), ("openems", "em_fullwave_gpl_runner.py"),
+                         ("bempp", "bempp_runner.py")):
+        assert f'solvers.stage_runner("{name}"' in src, name
+        assert f'solvers.solver_argv("{name}"' in src, name
+    assert src.count('_run_solver("elmer"') >= 20, src.count('_run_solver("elmer"')
 
 
 # --- runner ---------------------------------------------------------------------

@@ -144,15 +144,16 @@ jobs:
     name: Container-substrate regressions (hosted Linux, solvers in a sidecar)
     # Lane B of #341 (#362). The RELAY half of what the macOS VM lane verifies, with real
     # solves: the test process runs on the runner HOST with ANKUSDRIVE_SUBSTRATE=container
-    # (#361), and every OpenFOAM-backed solve crosses `docker exec` into a sidecar built
-    # from the same pinned image — opaque in-container paths, the case dir at the same
-    # absolute path, no stdin, pidfile stop. The host has FreeCAD but deliberately NO
-    # OpenFOAM, so a solve that bypassed the relay fails instead of passing; the
-    # preflight asserts that, and every other way this lane could pass while proving
-    # nothing.
+    # (#361), and every OpenFOAM, YADE, Elmer, openEMS and Bempp solve (#419) crosses
+    # `docker exec` into a sidecar built from the same pinned image — opaque in-container
+    # paths, the case dir at the same absolute path, no stdin, pidfile stop. The host has
+    # FreeCAD but deliberately none of those solvers, so a solve that bypassed the relay
+    # fails instead of passing; the preflight asserts that, and every other way this lane
+    # could pass while proving nothing.
     runs-on: ubuntu-latest
-    # Measured 44-45 min whole-job (#387); ~2x.
-    timeout-minutes: 90
+    # Measured 44-45 min whole-job with the OpenFOAM files alone (#387); the #419 files
+    # add the Elmer/YADE/openEMS/Bempp suites, so re-measure and keep ~2x.
+    timeout-minutes: 150
     permissions:
       contents: read
       packages: read
@@ -197,9 +198,11 @@ jobs:
 
       # The SIDECAR: long-running, the host scratch bind-mounted at the same path, and
       # the runner's uid so container-written case files stay deletable by the host.
-      # Only the SUBSTRATE solvers' in-container paths cross to the host env — the
-      # image's other ANKUSDRIVE_* values (YADE, Bempp, FreeCAD, ...) name container
-      # paths the host must never try to run.
+      # Only the OpenFOAM-backed solvers' in-container paths cross to the host env. YADE,
+      # Elmer, openEMS and Bempp are deliberately NOT exported: they must resolve by
+      # probing the container, the zero-config path a macOS user gets (#419). The
+      # image's other ANKUSDRIVE_* values (FreeCAD, CalculiX, ...) name container paths
+      # the host must never try to run.
       - name: Start the solver container
         run: |
           scratch="$RUNNER_TEMP/scratch"
@@ -226,6 +229,9 @@ jobs:
           tests/test_container_substrate.py tests/test_fsi.py tests/test_openfoam.py
           tests/test_meshbridge.py tests/test_wind_tunnel.py tests/test_molding_fill.py
           tests/test_molding_relay.py
+          tests/test_granular.py tests/test_elmer.py tests/test_cht.py tests/test_em.py
+          tests/test_acoustic_fem.py tests/test_harmonic_fem.py tests/test_em_fullwave.py
+          tests/test_acoustics_bem.py
 
       - name: Container logs on failure
         if: failure()

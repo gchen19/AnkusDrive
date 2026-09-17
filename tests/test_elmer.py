@@ -169,7 +169,7 @@ def _run_slab(half_mm, h, dur, k, rho, cp, ti=100.0, ta=25.0, ne=40, ns=120):
         d, half_thickness_m=half_mm / 1000.0, k=k, rho=rho, cp=cp, h_conv=h,
         t_initial_c=ti, t_ambient_c=ta, duration_s=dur, n_elements=ne, n_steps=ns)
     binpath = solvers.find_solver("elmer")["path"]
-    subprocess.run([binpath, built["sif"]], cwd=d, capture_output=True, text=True)
+    subprocess.run(solvers.solver_argv("elmer", [binpath, built["sif"]], d), cwd=d, capture_output=True, text=True)
     return elmer.parse_slab_scalars(d, built["scalars"])
 
 
@@ -214,6 +214,15 @@ def test_solve_agrees_with_lumped_at_small_biot():
     assert abs(got["t_center_c"] - orc["t_center_lumped_c"]) < 0.2, (got, orc)
 
 
+def _viewfactors_present():
+    """ViewFactors next to the resolved ElmerSolver — asked inside the container when
+    Elmer is container-routed (#419), where the host cannot stat it."""
+    vf = solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ViewFactors", "elmer")
+    if solvers.routes_through_container("elmer"):
+        return solvers.container_file_exists(vf)
+    return os.path.isfile(vf)
+
+
 def _run_radiation(t1_c, t2_c, e1, e2, width_m=1.0, gap_m=0.01, n_x=80):
     """Build + run the two-plate radiation case (ViewFactors then ElmerSolver), return
     (parse_radiation_flux dict, area). Returns (None, area) when the solve produced no
@@ -223,9 +232,9 @@ def _run_radiation(t1_c, t2_c, e1, e2, width_m=1.0, gap_m=0.01, n_x=80):
         d, t1_c=t1_c, t2_c=t2_c, emissivity_1=e1, emissivity_2=e2,
         width_m=width_m, gap_m=gap_m, n_x=n_x)
     elmer_bin = solvers.find_solver("elmer")["path"]
-    vf_bin = solvers.sibling_bin(elmer_bin, "ViewFactors")
-    subprocess.run([vf_bin, built["sif"]], cwd=d, capture_output=True, text=True)
-    subprocess.run([elmer_bin, built["sif"]], cwd=d, capture_output=True, text=True)
+    vf_bin = solvers.sibling_bin(elmer_bin, "ViewFactors", "elmer")
+    subprocess.run(solvers.solver_argv("elmer", [vf_bin, built["sif"]], d), cwd=d, capture_output=True, text=True)
+    subprocess.run(solvers.solver_argv("elmer", [elmer_bin, built["sif"]], d), cwd=d, capture_output=True, text=True)
     return elmer.parse_radiation_flux(d, built["scalars"], built["area_1_m2"]), built["area_1_m2"]
 
 
@@ -238,8 +247,7 @@ def test_radiation_matches_two_plate_oracle():
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
-    if not os.path.isfile(solvers.sibling_bin(
-            solvers.find_solver("elmer")["path"], "ViewFactors")):
+    if not _viewfactors_present():
         print("    SKIP — Elmer ViewFactors binary not found")
         return
     for t1, t2, e1, e2 in ((500, 100, 0.8, 0.8), (450, 50, 0.5, 0.9), (300, 20, 0.9, 1.0)):
@@ -259,8 +267,7 @@ def test_radiation_emissivity_lowers_flux():
     if not solvers.is_available("elmer"):
         print("    SKIP — ElmerSolver not installed")
         return
-    if not os.path.isfile(solvers.sibling_bin(
-            solvers.find_solver("elmer")["path"], "ViewFactors")):
+    if not _viewfactors_present():
         print("    SKIP — Elmer ViewFactors binary not found")
         return
     hi, _a = _run_radiation(500, 100, 0.9, 0.9)

@@ -60,7 +60,10 @@ def _openems_python():
 
 
 def _run(problem, python_exe, timeout=600):
-    proc = subprocess.run([python_exe, RUNNER], input=json.dumps(problem),
+    from ankusdrive import solvers
+    argv = solvers.solver_argv("openems", [python_exe, solvers.stage_runner("openems", RUNNER)],
+                               stdin=True)
+    proc = subprocess.run(argv, input=json.dumps(problem),
                           capture_output=True, text=True, timeout=timeout)
     body = proc.stdout.partition("@@JSON@@")[2].partition("@@END@@")[0]
     assert body, f"runner produced no JSON (rc={proc.returncode}); stderr: {proc.stderr[-400:]}"

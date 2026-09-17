@@ -15972,10 +15972,12 @@ def _run_em_fullwave_gpl(problem, python_exe, timeout=600):
     the subprocess emits no sentinel-delimited JSON."""
     import json as _json
     import subprocess
-    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "em_fullwave_gpl_runner.py")
+
+    from ankusdrive import solvers
+    runner = solvers.stage_runner("openems", os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "em_fullwave_gpl_runner.py"))
     proc = subprocess.run(
-        [python_exe, runner],
+        solvers.solver_argv("openems", [python_exe, runner], stdin=True),
         input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
     _, _, rest = proc.stdout.partition("@@JSON@@")
     body, _, _ = rest.partition("@@END@@")
@@ -16166,25 +16168,31 @@ def _yade_exec():
         return _DEM_YADE or None
     import subprocess
 
-    candidates = []
-    for env in ("ANKUSDRIVE_YADE", "ANKUSDRIVE_YADE_PATH"):
-        if v := os.environ.get(env):
-            candidates.append(v)
-    candidates.append(os.path.expanduser("~/opt/yade/bin/yade"))
     from ankusdrive import solvers
+    # container substrate (#419): only the in-container yade discovery resolved counts;
+    # a host install or a host-path env var is not what `<engine> exec` would run
+    routed = solvers.routes_through_container("yade")
+    candidates = []
+    if not routed:
+        for env in ("ANKUSDRIVE_YADE", "ANKUSDRIVE_YADE_PATH"):
+            if v := os.environ.get(env):
+                candidates.append(v)
+        candidates.append(os.path.expanduser("~/opt/yade/bin/yade"))
     info = solvers.find_solver("yade")
     if info.get("path"):
         candidates.append(info["path"])
 
-    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "dem_gpl_runner.py")
+    runner = solvers.stage_runner("yade", os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "dem_gpl_runner.py"))
     seen = set()
     for c in candidates:
-        if not c or c in seen or not os.path.isfile(c):
+        if not c or c in seen or not (routed or os.path.isfile(c)):
             continue
         seen.add(c)
         try:  # YADE runs the script then exits (-x), reads {"problem":"ping"} on stdin
-            r = subprocess.run([c, "-x", "-n", runner], input='{"problem":"ping"}',
+            r = subprocess.run(solvers.solver_argv("yade", [c, "-x", "-n", runner],
+                                                   stdin=True),
+                               input='{"problem":"ping"}',
                                capture_output=True, text=True, timeout=90)
         except Exception:
             continue
@@ -16204,10 +16212,12 @@ def _run_dem_gpl(problem, yade_exe, timeout=600):
     Raises RuntimeError if the subprocess emits no sentinel-delimited JSON."""
     import json as _json
     import subprocess
-    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "dem_gpl_runner.py")
+
+    from ankusdrive import solvers
+    runner = solvers.stage_runner("yade", os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "dem_gpl_runner.py"))
     proc = subprocess.run(
-        [yade_exe, "-x", "-n", runner],
+        solvers.solver_argv("yade", [yade_exe, "-x", "-n", runner], stdin=True),
         input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
     _, _, rest = proc.stdout.partition("@@JSON@@")
     body, _, _ = rest.partition("@@END@@")
@@ -16416,9 +16426,12 @@ def _run_bempp(problem, python_exe, timeout=900):
     subprocess emits no sentinel-delimited JSON."""
     import json as _json
     import subprocess
-    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bempp_runner.py")
+
+    from ankusdrive import solvers
+    runner = solvers.stage_runner("bempp", os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "bempp_runner.py"))
     proc = subprocess.run(
-        [python_exe, runner],
+        solvers.solver_argv("bempp", [python_exe, runner], stdin=True),
         input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
     _, _, rest = proc.stdout.partition("@@JSON@@")
     body, _, _ = rest.partition("@@END@@")
@@ -16897,12 +16910,31 @@ def _resolve_thermal_props(p):
     return k, rho, cp
 
 
-def _sibling_bin(main_bin, name):
+def _sibling_bin(main_bin, name, solver=None):
     """Companion executable next to ``main_bin`` (ElmerGrid/ViewFactors next to
     ElmerSolver) — delegates to ``solvers.sibling_bin`` (which handles the ``.exe``
-    suffix Windows needs; issue #205)."""
+    suffix Windows needs, issue #205, and the in-container path, #419)."""
     from ankusdrive import solvers
-    return solvers.sibling_bin(main_bin, name)
+    return solvers.sibling_bin(main_bin, name, solver)
+
+
+def _solver_file_exists(solver, path):
+    """``os.path.isfile`` for a solver's companion binary — asked inside the container
+    when ``solver`` is container-routed, where the host cannot stat it (#419)."""
+    from ankusdrive import solvers
+    if solvers.routes_through_container(solver):
+        return solvers.container_file_exists(path)
+    return os.path.isfile(path)
+
+
+def _run_solver(solver, argv, cwd=None, **kw):
+    """``subprocess.run`` for one direct solver launch (ElmerSolver, ElmerGrid,
+    ViewFactors): through ``<engine> exec -w <cwd>`` when ``solver`` is
+    container-routed (#419), else ``argv`` as-is. ``cwd`` stays the host case dir,
+    which the container sees at the same path."""
+    import subprocess
+    from ankusdrive import solvers
+    return subprocess.run(solvers.solver_argv(solver, argv, cwd), cwd=cwd, **kw)
 
 
 def _ensure_unv_face_groups(unv_path, femmesh):
@@ -16960,8 +16992,8 @@ def _thermal_body_submit(p, info):
     from ankusdrive.analysis import meshbridge as _mb
 
     elmer_bin = info["path"]
-    elmergrid = _sibling_bin(elmer_bin, "ElmerGrid")
-    if not os.path.isfile(elmergrid):
+    elmergrid = _sibling_bin(elmer_bin, "ElmerGrid", "elmer")
+    if not _solver_file_exists("elmer", elmergrid):
         return {"ok": False,
                 "reason": "ElmerGrid not found (converts the Gmsh UNV mesh for Elmer)",
                 "install": "ElmerGrid ships with Elmer — apt install elmerfem-csc, "
@@ -17053,8 +17085,7 @@ def _thermal_body_submit(p, info):
         "ta": t_ambient_c, "t": duration_s, "ns": n_steps}})
 
     def _work():
-        import subprocess
-        grid = subprocess.run(grid_argv, cwd=case_dir, capture_output=True, text=True)
+        grid = _run_solver("elmer", grid_argv, cwd=case_dir, capture_output=True, text=True)
         if grid.returncode != 0:
             return {"ok": False, "returncode": grid.returncode, "solver": "elmergrid",
                     "mode": "body", "case_dir": case_dir,
@@ -17079,7 +17110,7 @@ def _thermal_body_submit(p, info):
             _mb.retarget_convection_boundaries(
                 case_dir, built["sif"],
                 [name_map.get(f"Face{i}", i) for i in conv])
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=case_dir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=case_dir,
                               capture_output=True, text=True)
         out = {
             "ok": proc.returncode == 0,
@@ -17363,8 +17394,7 @@ def _h_thermal_transient_submit(p):
                                {"case_dir": os.path.abspath(case_dir), "sif": sif})
 
         def _work():
-            import subprocess
-            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+            proc = _run_solver("elmer", [elmer_bin, sif], cwd=case_dir,
                                   capture_output=True, text=True)
             return {
                 "ok": proc.returncode == 0,
@@ -17400,12 +17430,11 @@ def _h_thermal_transient_submit(p):
     key = jobs.content_key("thermal_transient", {"slab": slab})
 
     def _work():
-        import subprocess
         import tempfile
         from ankusdrive.analysis import elmer as _elmer
         cdir = tempfile.mkdtemp(prefix="elmer_slab_")
         built = _elmer.write_slab_transient_case(cdir, **slab)
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
         out = {
             "ok": proc.returncode == 0,
@@ -17456,7 +17485,7 @@ def _h_thermal_radiation_submit(p):
         return info
     from ankusdrive import jobs
     elmer_bin = info["path"]
-    vf_bin = _sibling_bin(elmer_bin, "ViewFactors")
+    vf_bin = _sibling_bin(elmer_bin, "ViewFactors", "elmer")
     case_dir = p.get("case_dir")
 
     if case_dir:                                     # --- prepared case directory ---
@@ -17468,10 +17497,9 @@ def _h_thermal_radiation_submit(p):
                                {"case_dir": os.path.abspath(case_dir), "sif": sif})
 
         def _work():
-            import subprocess
             if not _glob.glob(os.path.join(case_dir, "*ViewFactors*")):
-                subprocess.run([vf_bin, sif], cwd=case_dir, capture_output=True, text=True)
-            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+                _run_solver("elmer", [vf_bin, sif], cwd=case_dir, capture_output=True, text=True)
+            proc = _run_solver("elmer", [elmer_bin, sif], cwd=case_dir,
                                   capture_output=True, text=True)
             return {
                 "ok": proc.returncode == 0,
@@ -17506,15 +17534,14 @@ def _h_thermal_radiation_submit(p):
     key = jobs.content_key("thermal_radiation", {"plates": plates})
 
     def _work():
-        import subprocess
         import tempfile
         from ankusdrive.analysis import elmer as _elmer
         from ankusdrive.analysis import thermal as _thermal
         cdir = tempfile.mkdtemp(prefix="elmer_rad_")
         built = _elmer.write_radiation_plates_case(cdir, **plates)
-        vf = subprocess.run([vf_bin, built["sif"]], cwd=cdir,
+        vf = _run_solver("elmer", [vf_bin, built["sif"]], cwd=cdir,
                             capture_output=True, text=True)
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
         out = {
             "ok": proc.returncode == 0,
@@ -17588,7 +17615,6 @@ def _h_cht_channel_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import subprocess
     import tempfile
 
     from ankusdrive import jobs
@@ -17604,7 +17630,7 @@ def _h_cht_channel_submit(p):
                                {"case_dir": os.path.abspath(case_dir), "sif": sif})
 
         def _work_prepared():
-            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+            proc = _run_solver("elmer", [elmer_bin, sif], cwd=case_dir,
                                   capture_output=True, text=True)
             return {
                 "ok": proc.returncode == 0,
@@ -17630,7 +17656,7 @@ def _h_cht_channel_submit(p):
     def _work():
         cdir = tempfile.mkdtemp(prefix="elmer_cht_")
         built = _cht.write_cht_channel_case(cdir, **params)
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
         orc = built["oracle"]
         out = {
@@ -17674,7 +17700,6 @@ def _h_cht_graetz_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import subprocess
     import tempfile
 
     from ankusdrive import jobs
@@ -17690,7 +17715,7 @@ def _h_cht_graetz_submit(p):
                                {"case_dir": os.path.abspath(case_dir), "sif": sif})
 
         def _work_prepared():
-            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+            proc = _run_solver("elmer", [elmer_bin, sif], cwd=case_dir,
                                   capture_output=True, text=True)
             return {
                 "ok": proc.returncode == 0,
@@ -17714,7 +17739,7 @@ def _h_cht_graetz_submit(p):
     def _work():
         cdir = tempfile.mkdtemp(prefix="elmer_graetz_")
         built = _cht.write_graetz_channel_case(cdir, **params)
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
         out = {
             "ok": proc.returncode == 0,
@@ -17760,7 +17785,6 @@ def _h_acoustic_fem_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import subprocess
     import tempfile
 
     from ankusdrive import jobs
@@ -17776,7 +17800,7 @@ def _h_acoustic_fem_submit(p):
                                {"case_dir": os.path.abspath(case_dir), "sif": sif})
 
         def _work_prepared():
-            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+            proc = _run_solver("elmer", [elmer_bin, sif], cwd=case_dir,
                                   capture_output=True, text=True)
             return {
                 "ok": proc.returncode == 0,
@@ -17800,7 +17824,7 @@ def _h_acoustic_fem_submit(p):
         def _work():
             cdir = tempfile.mkdtemp(prefix="elmer_ac_duct_")
             built = _ac.write_helmholtz_duct_case(cdir, **params)
-            proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+            proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                                   capture_output=True, text=True)
             out = {
                 "ok": proc.returncode == 0,
@@ -17836,7 +17860,7 @@ def _h_acoustic_fem_submit(p):
         def _work_cavity():
             cdir = tempfile.mkdtemp(prefix="elmer_ac_cav_")
             built = _ac.write_helmholtz_cavity_case(cdir, **params)
-            proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+            proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                                   capture_output=True, text=True)
             out = {
                 "ok": proc.returncode == 0,
@@ -17892,7 +17916,6 @@ def _h_harmonic_response_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import subprocess
     import tempfile
 
     from ankusdrive import jobs
@@ -17908,7 +17931,7 @@ def _h_harmonic_response_submit(p):
                                {"case_dir": os.path.abspath(case_dir), "sif": sif})
 
         def _work_prepared():
-            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+            proc = _run_solver("elmer", [elmer_bin, sif], cwd=case_dir,
                                   capture_output=True, text=True)
             return {
                 "ok": proc.returncode == 0,
@@ -17932,7 +17955,7 @@ def _h_harmonic_response_submit(p):
     def _work():
         cdir = tempfile.mkdtemp(prefix="elmer_frf_")
         built = _vib.write_harmonic_beam_case(cdir, **params)
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
         out = {
             "ok": proc.returncode == 0,
@@ -18028,7 +18051,6 @@ def _h_em_conduction_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import subprocess
     import tempfile
 
     from ankusdrive import jobs
@@ -18046,7 +18068,7 @@ def _h_em_conduction_submit(p):
     def _work():
         cdir = tempfile.mkdtemp(prefix="elmer_dc_")
         built = _em.write_dc_strip_case(cdir, **params)
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
         orc = built["oracle"]
         out = {
@@ -18084,7 +18106,6 @@ def _h_em_induction_heating_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import subprocess
     import tempfile
 
     from ankusdrive import jobs
@@ -18100,7 +18121,7 @@ def _h_em_induction_heating_submit(p):
                                {"case_dir": os.path.abspath(case_dir), "sif": sif})
 
         def _work_prepared():
-            proc = subprocess.run([elmer_bin, sif], cwd=case_dir,
+            proc = _run_solver("elmer", [elmer_bin, sif], cwd=case_dir,
                                   capture_output=True, text=True)
             return {
                 "ok": proc.returncode == 0,
@@ -18128,7 +18149,7 @@ def _h_em_induction_heating_submit(p):
     def _work():
         cdir = tempfile.mkdtemp(prefix="elmer_indheat_")
         built = _em.write_induction_heating_case(cdir, **params)
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
         out = {
             "ok": proc.returncode == 0,
@@ -18175,7 +18196,6 @@ def _h_em_induction_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import subprocess
     import tempfile
 
     from ankusdrive import jobs
@@ -18193,7 +18213,7 @@ def _h_em_induction_submit(p):
     def _work():
         cdir = tempfile.mkdtemp(prefix="elmer_skin_")
         built = _em.write_skin_effect_case(cdir, **params)
-        proc = subprocess.run([elmer_bin, built["sif"]], cwd=cdir,
+        proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
         delta = built["oracle"]["skin_depth_m"]
         out = {

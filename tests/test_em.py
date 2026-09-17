@@ -184,7 +184,7 @@ def test_dc_strip_is_machine_exact():
         return
     with tempfile.TemporaryDirectory() as d:
         built = em.write_dc_strip_case(d)
-        proc = subprocess.run([solvers.find_solver("elmer")["path"], built["sif"]],
+        proc = subprocess.run(solvers.solver_argv("elmer", [solvers.find_solver("elmer")["path"], built["sif"]], d),
                               cwd=d, capture_output=True, text=True)
         assert proc.returncode == 0, proc.stdout[-800:]
         parsed = em.parse_dc_scalars(d, built["scalars"])
@@ -210,7 +210,7 @@ def test_skin_effect_decays_at_the_exact_skin_depth():
         return
     with tempfile.TemporaryDirectory() as d:
         built = em.write_skin_effect_case(d)
-        proc = subprocess.run([solvers.find_solver("elmer")["path"], built["sif"]],
+        proc = subprocess.run(solvers.solver_argv("elmer", [solvers.find_solver("elmer")["path"], built["sif"]], d),
                               cwd=d, capture_output=True, text=True)
         assert proc.returncode == 0, proc.stdout[-800:]
         pts = em.parse_line_profile(d, built["line_file"])
@@ -275,7 +275,7 @@ def test_induction_heating_solve_closes_energy_balance():
     d = tempfile.mkdtemp(prefix="indheat_live_")
     built = em.write_induction_heating_case(d)
     binary = solvers.find_solver("elmer")["path"]
-    proc = subprocess.run([binary, built["sif"]], cwd=d,
+    proc = subprocess.run(solvers.solver_argv("elmer", [binary, built["sif"]], d), cwd=d,
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout[-500:]
     r = em.parse_induction_scalars(d, built["scalars"])

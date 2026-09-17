@@ -42,7 +42,7 @@ _EXPECTED_FAMILIES = {"mbd", "topology", "cfd", "thermal_transient", "optics"}
 # find_solver's AST and fails when this tuple falls behind.
 _RESOLUTION_PRIMITIVES = ("_module_available", "_binary_path", "_vm_binary_path",
                           "_interpreter_python", "_unwired_found",
-                          "_host_discovery_applies")
+                          "_container_routed")
 
 
 # Env vars that select WHERE substrate solvers run (#361). _clear_declared always
@@ -93,8 +93,8 @@ class _force(_patched_resolution):
             # the host path answers when forcing present; nothing answers from a VM
             "_vm_binary_path": lambda name, spec: None,
             # a host with ANKUSDRIVE_SUBSTRATE=container would otherwise skip host
-            # discovery and ignore the forced _binary_path answer (#361)
-            "_host_discovery_applies": lambda: True,
+            # discovery and ignore the forced _binary_path answer (#361, #419)
+            "_container_routed": lambda spec: False,
             # dedicated-interpreter solvers (#351) resolve in their own interpreter
             "_interpreter_python": (lambda name, spec: "/fake/venv/bin/python3")
                                    if self.available else (lambda name, spec: None),
@@ -608,8 +608,8 @@ class _only_available(_patched_resolution):
             "_binary_path": lambda name, spec: ("/fake/bin/" + name) if name in self.names else None,
             "_vm_binary_path": lambda name, spec: None,
             # a host with ANKUSDRIVE_SUBSTRATE=container would otherwise skip host
-            # discovery and ignore the forced _binary_path answer (#361)
-            "_host_discovery_applies": lambda: True,
+            # discovery and ignore the forced _binary_path answer (#361, #419)
+            "_container_routed": lambda spec: False,
             "_interpreter_python": lambda name, spec: None,
         }
 
