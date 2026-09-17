@@ -597,7 +597,7 @@ def test_stage_runner_puts_the_runner_under_the_mounted_scratch():
         assert Path(staged).read_bytes() == runner.read_bytes()
         assert solvers.stage_runner("bempp", str(runner)) == staged        # idempotent
         # a planted/tampered copy at the predictable path is never executed
-        Path(staged).write_text("import os; os.system('evil')\n")
+        Path(staged).write_text("import os; os.system('evil')\n", encoding="utf-8")
         restaged = solvers.stage_runner("bempp", str(runner))
         assert Path(restaged).read_bytes() == runner.read_bytes(), restaged
         if os.name != "posix" or os.getuid() == 0:
@@ -606,7 +606,7 @@ def test_stage_runner_puts_the_runner_under_the_mounted_scratch():
         try:
             Path(staged).chmod(0o600)
             os.chmod(os.path.dirname(staged), 0o700)
-            Path(staged).write_text("tampered\n")
+            Path(staged).write_text("tampered\n", encoding="utf-8")
             os.chmod(os.path.dirname(staged), 0o500)
             fallback = solvers.stage_runner("bempp", str(runner))
             assert fallback != staged and "ankusdrive-runner-" in fallback, fallback
@@ -649,7 +649,7 @@ def test_worker_launches_routed_solvers_only_through_solver_argv():
     """worker.py needs FreeCAD to import, so this pins the wiring at the source: no
     ElmerSolver / ElmerGrid / ViewFactors / yade / runner launch bypasses solver_argv,
     and every runner is staged where the container can read it."""
-    src = (Path(__file__).resolve().parent.parent / "ankusdrive" / "worker.py").read_text()
+    src = (Path(__file__).resolve().parent.parent / "ankusdrive" / "worker.py").read_text(encoding="utf-8")
     for bypass in ("subprocess.run([elmer_bin", "subprocess.run([vf_bin",
                    "subprocess.run(grid_argv", "[yade_exe, \"-x\"",
                    "os.path.isfile(elmergrid)"):
