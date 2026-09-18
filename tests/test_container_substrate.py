@@ -661,6 +661,20 @@ def test_worker_launches_routed_solvers_only_through_solver_argv():
         assert f'solvers.stage_runner("{name}"' in src, name
         assert f'solvers.solver_argv("{name}"' in src, name
     assert src.count('_run_solver("elmer"') >= 20, src.count('_run_solver("elmer"')
+    # A gate that stats a sibling on the HOST answers False for every in-container
+    # binary, so the leg it guards SKIPs while the solver is right there (the
+    # meshbridge Elmer leg did exactly that in Lane B). solver_file_exists asks
+    # wherever the solver runs.
+    tests = Path(__file__).resolve().parent
+    for f in sorted(tests.glob("test_*.py")):
+        text = f.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines()):
+            if "sibling_bin" not in line:
+                continue
+            window = "\n".join(text.splitlines()[max(0, i - 2):i + 1])
+            assert "os.path.isfile" not in window, (
+                f"{f.name}:{i + 1} stats a sibling on the host — use "
+                "solvers.solver_file_exists(<solver>, …)")
 
 
 # --- runner ---------------------------------------------------------------------

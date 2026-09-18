@@ -16922,9 +16922,7 @@ def _solver_file_exists(solver, path):
     """``os.path.isfile`` for a solver's companion binary — asked inside the container
     when ``solver`` is container-routed, where the host cannot stat it (#419)."""
     from ankusdrive import solvers
-    if solvers.routes_through_container(solver):
-        return solvers.container_file_exists(path)
-    return os.path.isfile(path)
+    return solvers.solver_file_exists(solver, path)
 
 
 def _run_solver(solver, argv, cwd=None, **kw):

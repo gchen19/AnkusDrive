@@ -1032,6 +1032,16 @@ def container_file_exists(path: str) -> bool:
     return bool(r) and r[0] == 0
 
 
+def solver_file_exists(solver: str, path: str) -> bool:
+    """Whether ``path`` is an executable file where solver ``solver`` runs: inside the
+    container when it is routed there (#419), else on the host. A plain
+    ``os.path.isfile`` would answer False for every in-container binary, which is how
+    a gate meant to skip an absent solver silently skips a present one."""
+    if routes_through_container(solver):
+        return container_file_exists(path)
+    return os.path.isfile(path)
+
+
 def solver_argv(name: str, argv, cwd: str | None = None, *, stdin: bool = False) -> list:
     """The argv that launches solver ``name``'s process: ``argv`` unchanged unless the
     solver is container-routed (:func:`routes_through_container`), then

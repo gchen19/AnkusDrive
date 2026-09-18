@@ -218,9 +218,7 @@ def _viewfactors_present():
     """ViewFactors next to the resolved ElmerSolver — asked inside the container when
     Elmer is container-routed (#419), where the host cannot stat it."""
     vf = solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ViewFactors", "elmer")
-    if solvers.routes_through_container("elmer"):
-        return solvers.container_file_exists(vf)
-    return os.path.isfile(vf)
+    return solvers.solver_file_exists("elmer", vf)
 
 
 def _run_radiation(t1_c, t2_c, e1, e2, width_m=1.0, gap_m=0.01, n_x=80):
