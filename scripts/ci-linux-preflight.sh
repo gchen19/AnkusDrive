@@ -20,6 +20,9 @@
 #      dedicated-interpreter solvers (bempp, openems, kraken) probed in that interpreter
 #   4. the four-part FSI stack resolves (fsi_stack_status().ok)
 #   5. openInjMoldSim and its OpenFOAM-7 bashrc resolve
+#   6. the FreeCAD Render workbench imports in the worker, POV-Ray resolves, and a tiny
+#      render through both returns a PNG (#421) — resolving is not enough: without
+#      povray-includes the binary is found and every scene fails to parse
 #
 #   All checks run; the exit is non-zero if any failed, and each failure names itself.
 #
@@ -151,6 +154,41 @@ if oims and oims_rc:
 else:
     fail(f"openInjMoldSim does not resolve (bin={oims!r}, bashrc={oims_rc!r}) — "
          "set ANKUSDRIVE_OPENINJMOLDSIM / ANKUSDRIVE_OPENINJMOLDSIM_BASHRC")
+
+print("\n== Render workbench add-on ==")
+# The add-on renderers are not solvers.py entries: the worker imports the add-on and
+# resolves each renderer binary itself, so ask it. POV-Ray is the one renderer the
+# image bundles; the other five add-on renderers are not required (#421).
+try:
+    with client.Worker() as w:
+        rcaps = w.call("render_capabilities", _timeout=180.0)
+except Exception as e:  # noqa: BLE001 — any failure to get the report is the failure
+    fail(f"render_capabilities did not answer: {e!r}")
+else:
+    if rcaps["addon_importable"]:
+        ok("FreeCAD Render workbench importable in the worker")
+    else:
+        fail(f"FreeCAD Render workbench not importable — {rcaps.get('addon_error')}; "
+             "scripts/install-renderers.sh render-addon")
+    povray = rcaps["renderers"].get("Povray", {})
+    if povray.get("available"):
+        ok(f"Povray      {povray.get('path')}")
+    else:
+        fail(f"Povray: absent — {povray.get('install_hint')}")
+    if rcaps["addon_importable"] and povray.get("available"):
+        import base64
+        try:
+            with client.Worker() as w:
+                w.call("new_document", name="preflight_render")
+                box = w.call("add_primitive", kind="box", w=20, d=20, h=10)["handle"]
+                res = w.call("render_photoreal", handle=box, renderer="Povray",
+                             width=48, height=36, _timeout=180.0)
+            if base64.b64decode(res["png_base64"])[:8] != b"\x89PNG\r\n\x1a\n":
+                fail("Povray render through the add-on returned something that is not a PNG")
+            else:
+                ok("Povray render through the add-on returned a PNG")
+        except Exception as e:  # noqa: BLE001
+            fail(f"Povray render through the add-on failed: {e}")
 
 if failed:
     print(f"\nPreflight FAILED: {failed} check(s). The heavy suite would have SKIPped these, not failed.")

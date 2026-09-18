@@ -241,6 +241,11 @@ non-blocking job API runs alongside the blocking `render_photoreal`:
    - Linux: `~/.local/share/FreeCAD/Mod/Render` (or `$XDG_DATA_HOME/FreeCAD/Mod/Render`)
    - macOS: `~/Library/Application Support/FreeCAD/Mod/Render`
    - Windows: `%APPDATA%\FreeCAD\Mod\Render`
+
+   FreeCAD 1.1 inserts a version dir (`…/FreeCAD/v1-1/Mod/Render`), one more reason to
+   ask FreeCAD. `scripts/install-renderers.sh render-addon` does that and fetches the
+   pinned commit; `RENDER_ADDON_DIR=<…/Mod/Render>` puts it elsewhere FreeCAD scans,
+   e.g. the install's own `usr/Mod/` (what the heavy CI image does, #421). By hand:
    ```bash
    git clone https://github.com/FreeCAD/FreeCAD-render \
      "$(<derived Mod dir>)/Render"
@@ -268,12 +273,15 @@ Resolved (were open questions in the proposal):
   invariants (valid PNG, non-blank, `view=` changes the image, a `material=` card
   changes the color, unknown material errors cleanly, live doc untouched).
 - **CI.** The tests **skip** when the addon/binary is absent (exit 0), so they're safe
-  everywhere; they only do real work on a box that provisions a renderer. **No CI lane
-  provisions one**, so ~14 of them SKIP on every lane — including the self-hosted suite
-  this section used to claim ran them, which skipped them too. Tracked as
-  [#421](https://github.com/gchen19/AnkusDrive/issues/421) and listed in
+  on any box. The heavy-solver image (amd64 + arm64) bundles the addon and **POV-Ray**
+  (#421), and `scripts/ci-linux-preflight.sh` fails the image build and the lane if
+  either stops resolving, so on the heavy lanes the POV-Ray tests (PNG/size, non-blank,
+  view, material, isolation, async `render_photoreal_submit` → `render_job`, discard,
+  eviction, ignored Blender args) run for real. The other five add-on renderers
+  (LuxCore, Appleseed, Cycles, OSPRay, pbrt) are hand-fetched builds of hundreds of MB
+  and still SKIP there; that gap is listed in
   [`tests/TEST_PLAN.md`](../tests/TEST_PLAN.md#what-ci-does-not-cover). The separate
-  **studio backend** (full Blender, #357) *is* covered live on the amd64 heavy lane.
+  **studio backend** (full Blender, #357) is covered live on the amd64 heavy lane.
 - **Worker blocking.** Resolved (§5.3). `render_photoreal_submit` + `render_job` give a
   non-blocking job API — the external renderer runs in the workbench's headless
   `threading.Thread`, the worker stays responsive (verified: `ping` mid-render), and
