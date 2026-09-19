@@ -22,6 +22,9 @@ on, so a regression fails here instead of only on a real Mac:
 Subcommands: exec <inst> -- <cmd…> · info <inst> --format json · mount … · version
 Environment (all optional):
   MULTIPASS_SHIM_STATE   Running (default) | Stopped | Suspended | Starting | absent
+  MULTIPASS_SHIM_INSTANCES  os.pathsep-separated instance names that exist (default:
+                         $ANKUSDRIVE_OPENFOAM_INSTANCE, else `openfoam`). `info` on any
+                         other name fails rc 2, as a real multipass does (#314)
   MULTIPASS_SHIM_MOUNTS  os.pathsep-separated host dirs visible in the VM at the same
                          path (default: $TMPDIR)
   MULTIPASS_SHIM_HOME    the VM home exec starts in (default: a fresh temp dir)
@@ -60,6 +63,12 @@ def _mounts():
     return [m.rstrip("/") for m in raw.split(os.pathsep) if m.strip()]
 
 
+def _instances():
+    raw = (os.environ.get("MULTIPASS_SHIM_INSTANCES")
+           or os.environ.get("ANKUSDRIVE_OPENFOAM_INSTANCE") or "openfoam")
+    return {n.strip() for n in raw.split(os.pathsep) if n.strip()}
+
+
 def _under(path, mounts):
     p = path.rstrip("/")
     return any(p == m or p.startswith(m + "/") for m in mounts)
@@ -70,7 +79,7 @@ def cmd_info(args):
     if os.environ.get("MULTIPASS_SHIM_HANG") == "info":
         time.sleep(3600)
     state = os.environ.get("MULTIPASS_SHIM_STATE", "Running")
-    if state == "absent":
+    if state == "absent" or inst not in _instances():
         print(f'info failed: instance "{inst}" does not exist', file=sys.stderr)
         return 2
     if "csv" in args:
