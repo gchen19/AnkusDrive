@@ -714,7 +714,10 @@ def _posix_glob(patterns) -> list:
 _SUBSTRATES = ("native", "wsl", "multipass", "container")
 _CONTAINER_ENGINES = ("docker", "podman", "nerdctl")
 _DEFAULT_CONTAINER = "ankusdrive-solvers"
-_HEAVY_IMAGE = "ghcr.io/gchen19/ankusdrive-heavy"
+# The image `container_run_command()` hands a user: the SLIM solver image (#422) —
+# solvers and their runtime libraries only. ankusdrive-heavy is the CI image and works
+# here too, at roughly four times the download for the same solvers.
+_SOLVER_IMAGE = "ghcr.io/gchen19/ankusdrive-solvers"
 
 
 def substrate() -> str:
@@ -945,10 +948,14 @@ def container_run_command() -> str:
     detached, the host scratch ($TMPDIR) bind-mounted at the SAME path, kept alive, and
     running as the HOST user — otherwise every file a solve writes into a case dir is
     root-owned on a native Linux engine and the host cannot clean it up (#362). HOME
-    points somewhere writable, since that uid has no home inside the image."""
+    points somewhere writable, since that uid has no home inside the image, and
+    ``--tmpfs /tmp`` gives the solvers their own scratch: OpenMPI session files,
+    openEMS simulation dirs and numba's cache all land there, and on a host whose
+    Docker disk is full each one fails looking like a solver bug (#422)."""
     return (f'{container_engine()} run -d --name {container_name()} '
             f'--user "$(id -u):$(id -g)" -e HOME=/tmp '
-            f'-v "$TMPDIR:$TMPDIR" {_HEAVY_IMAGE} sleep infinity')
+            f'--tmpfs /tmp:rw,exec,size=2g '
+            f'-v "$TMPDIR:$TMPDIR" {_SOLVER_IMAGE} sleep infinity')
 
 
 # --- container-routed solvers beyond OpenFOAM (issue #419) ------------------------
@@ -1424,7 +1431,7 @@ def _unwired_found(name: str, spec: dict):
                    or f"ANKUSDRIVE_{name.upper()}_PATH")
             hint = (f"the solver container {cname!r} is running but {name} did not "
                     f"resolve inside it — the image may not include it (the full "
-                    f"{_HEAVY_IMAGE} does), or it lives elsewhere: set {env} to its "
+                    f"{_SOLVER_IMAGE} does), or it lives elsewhere: set {env} to its "
                     f"IN-CONTAINER path. See docs/CONTAINER_SUBSTRATE.md")
         return found_at, hint
     cfg = spec.get("unwired")

@@ -28,6 +28,10 @@
 # Licences of the bundled components: docker/heavy-solvers/LICENSES.md.
 
 ARG UBUNTU=ubuntu:24.04
+# The slim solver image (#422) reads these; declared here because a global ARG must
+# precede the first FROM. HEAVY_IMAGE is only pulled with SOLVER_SRC=published.
+ARG SOLVER_SRC=stages
+ARG HEAVY_IMAGE=ghcr.io/gchen19/ankusdrive-heavy:latest
 
 # ---------------------------------------------------------------------------------
 FROM ${UBUNTU} AS system
@@ -184,6 +188,21 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then mkdir -p /opt/elmer; \
       && rm -rf /src/elmerfem; fi
 
 # ---------------------------------------------------------------------------------
+# Bempp's dedicated venv (meshio>=5 clashes with solidspy's meshio==3, so it is never
+# the driver venv). Its own stage since #422: the slim solver image copies this prefix
+# too, and a stage is the only thing a COPY --from can name.
+FROM system AS bempp
+ARG TARGETARCH
+COPY scripts/install-solvers.sh /src/ankusdrive/scripts/install-solvers.sh
+# bempp's shape generators shell out to a gmsh CLI, which the pip wheel supplies —
+# except on Linux aarch64, where PyPI has no gmsh wheel, so arm64 takes it from apt (#363).
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends gmsh && gmsh --version \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+RUN BEMPP_VENV=/opt/venv-bempp bash /src/ankusdrive/scripts/install-solvers.sh acoustics_bem
+
+# ---------------------------------------------------------------------------------
 FROM system AS final
 COPY --from=yade    /opt/yade          /opt/yade
 COPY --from=openems /opt/openEMS       /opt/openEMS
@@ -210,15 +229,15 @@ RUN python3 -m venv /opt/venv \
  && pip install -q --upgrade pip \
  && pip install -q "/src/ankusdrive[mbd,topology,optics,fluids,optics_gpl]" "ruff==0.15.15" build
 
-# Bempp (dedicated venv — meshio>=5 clashes with solidspy's meshio==3). Its shape
-# generators shell out to a gmsh CLI, which the pip wheel supplies — except on Linux
-# aarch64, where PyPI has no gmsh wheel, so arm64 takes the CLI from apt (#363).
-# (Here in `final`, not `system`, so adding it did not invalidate every stage's cache.)
+# Bempp comes from its own stage (#422). The gmsh CLI its shape generators shell out
+# to is a pip wheel everywhere except Linux aarch64, where arm64 takes it from apt —
+# that install lives in the bempp stage, so it must be repeated here for the arm64
+# RUNTIME (a venv copy carries no apt package).
 ARG TARGETARCH
+COPY --from=bempp /opt/venv-bempp /opt/venv-bempp
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       apt-get update && apt-get install -y --no-install-recommends gmsh && gmsh --version; \
     fi
-RUN BEMPP_VENV=/opt/venv-bempp bash /src/ankusdrive/scripts/install-solvers.sh acoustics_bem
 
 # FreeCAD from the pinned AppImage, live-verified (worker ping + a CalculiX solve)
 RUN cd /src/ankusdrive && PY=/opt/venv/bin/python3 PREFIX=/opt/freecad BINDIR=/usr/local/bin \
@@ -300,3 +319,213 @@ LABEL org.opencontainers.image.title="ankusdrive-heavy" \
       org.opencontainers.image.source="https://github.com/gchen19/AnkusDrive" \
       org.opencontainers.image.licenses="See /licenses/README.md (bundles GPL-3.0, LGPL-3.0 and other components)"
 WORKDIR /
+
+# =================================================================================
+# The SLIM solver image, `ankusdrive-solvers` (#422) — what a user actually runs under
+# ANKUSDRIVE_SUBSTRATE=container. Everything above builds the CI image, which carries
+# FreeCAD, the driver venv and every -dev package because the whole suite runs INSIDE
+# it. Under the container substrate none of that is used: AnkusDrive and FreeCAD stay
+# on the host and only solvers cross `<engine> exec`. Measured on the arm64 image,
+# those host-side pieces are ~2.5 GB of a ~4.5 GB download.
+#
+# So this half installs the RUNTIME packages only (openfoam2512, not -dev; no
+# toolchain) and copies the already-built solver prefixes onto it.
+#
+# WHERE THE PREFIXES COME FROM — `SOLVER_SRC`:
+#   stages     (default) the yade/openems/fsi/oims/elmer/bempp stages above, so CI
+#              builds it from the same recipe and reuses their layer caches.
+#   published  the published heavy image (`HEAVY_IMAGE`), for a local build in
+#              minutes instead of the hours those source stages take.
+# BuildKit only builds the stages a target needs, so `stages` never pulls the
+# published image and `published` never compiles anything.
+#
+#   docker build -f docker/heavy-solvers/Dockerfile --target slim -t ankusdrive-solvers .
+#   docker build -f docker/heavy-solvers/Dockerfile --target slim \
+#     --build-arg SOLVER_SRC=published --build-arg HEAVY_IMAGE=ghcr.io/…@sha256:… .
+#
+# NOT here, by design: FreeCAD, the driver venv, CalculiX (`ccx`), PrusaSlicer,
+# Blender, SU2 — every one of those resolves on the HOST under this substrate.
+
+FROM ${HEAVY_IMAGE} AS payloads-published
+FROM yade    AS src-yade-stages
+FROM openems AS src-openems-stages
+FROM fsi     AS src-fsi-stages
+FROM oims    AS src-oims-stages
+FROM elmer   AS src-elmer-stages
+FROM bempp   AS src-bempp-stages
+FROM payloads-published AS src-yade-published
+FROM payloads-published AS src-openems-published
+FROM payloads-published AS src-fsi-published
+FROM payloads-published AS src-oims-published
+FROM payloads-published AS src-elmer-published
+FROM payloads-published AS src-bempp-published
+FROM src-yade-${SOLVER_SRC}    AS src-yade
+FROM src-openems-${SOLVER_SRC} AS src-openems
+FROM src-fsi-${SOLVER_SRC}     AS src-fsi
+FROM src-oims-${SOLVER_SRC}    AS src-oims
+FROM src-elmer-${SOLVER_SRC}   AS src-elmer
+FROM src-bempp-${SOLVER_SRC}   AS src-bempp
+
+# ---------------------------------------------------------------------------------
+# Runtime base: the libraries the solvers LINK, with no toolchain and no headers.
+#
+# The library list is DERIVED, not hand-written: tools/container_runtime_deps.sh ldd's
+# every ELF in the solver prefixes and maps each dependency to its apt package. It is
+# derived on ONE architecture, so a package the other one names differently — or does
+# not have at all, like x86's libquadmath0 — is marked per-arch below. The --check in
+# the `slim` stage is what catches the other direction (a library arm64 needs and
+# amd64 did not), by failing that architecture's build and naming it. To regenerate
+# after a solver pin moves:
+#   docker run --rm -v "$PWD/tools:/t:ro" \
+#     -e EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+#     <heavy image> bash /t/container_runtime_deps.sh /opt/yade /opt/fsi /opt/of7 \
+#       /opt/openEMS /opt/venv-openems /opt/venv-bempp
+# The `slim` stage then re-runs that tool with --check, so a list that has fallen
+# short fails THIS build, on THIS architecture, instead of a user's solve.
+FROM ${UBUNTU} AS runtime
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
+# OpenFOAM's etc/bashrc derives the user dir from $USER, which docker leaves unset.
+ENV USER=root LANG=C.UTF-8
+# BuildKit always sets TARGETARCH; a builder that does not would silently skip the
+# per-arch packages below (amd64's Elmer, arm64's BLAS/gmsh) and publish an image
+# missing a solver. Fail here instead.
+RUN case "$TARGETARCH" in amd64|arm64) ;; \
+    *) echo "TARGETARCH=${TARGETARCH:-<unset>} — build with BuildKit, or pass --build-arg TARGETARCH=amd64|arm64" >&2; exit 1 ;; esac
+# `curl | bash` for the ESI repo is what scripts/install-solvers.sh documents and what
+# the system stage above does; pinning that keyring is tracked in #423.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+      software-properties-common \
+ && curl -fsSL https://dl.openfoam.com/add-debian-repo.sh | bash \
+ && if [ "$TARGETARCH" = "amd64" ]; then add-apt-repository -y ppa:elmer-csc-ubuntu/elmer-csc-ppa; fi \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      openfoam2512 \
+      # YADE embeds the SYSTEM python, so part of what it needs are IMPORTS, which ldd
+      # cannot see and the derived list below therefore misses: numpy and mpmath at
+      # start-up, IPython as soon as `yade` runs a script (yade.runtime imports it).
+      # The check in the slim stage RUNS a script for exactly this reason.
+      python3 python3-numpy python3-mpmath ipython3 \
+      $([ "$TARGETARCH" = "amd64" ] && echo elmerfem-csc) \
+      $([ "$TARGETARCH" = "arm64" ] && echo gmsh) \
+      libaec0 libamd3 libarpack2t64 libboost-atomic1.83.0 libboost-chrono1.83.0t64 \
+      libboost-date-time1.83.0 libboost-filesystem1.83.0 libboost-iostreams1.83.0 \
+      libboost-log1.83.0 libboost-program-options1.83.0 libboost-python1.83.0 \
+      libboost-regex1.83.0 libboost-serialization1.83.0 libboost-system1.83.0 \
+      libboost-thread1.83.0 libbrotli1 libbsd0 libbz2-1.0 libcamd3 libcap2 libccolamd3 \
+      libcholmod5 libcolamd3 libcurl4t64 libdeflate0 libdouble-conversion3 \
+      libevent-core-2.1-7t64 libevent-pthreads-2.1-7t64 libexpat1 libffi8 \
+      libfontconfig1 libfreetype6 libgfortran5 libgl1 libgl2ps1.4 libglib2.0-0t64 \
+      libglu1-mesa libglvnd0 libglx0 libgmp10 libgmpxx4ldbl libgomp1 libgts-0.7-5t64 \
+      libhdf5-103-1t64 libhdf5-hl-100t64 libhwloc15 libicu74 libjbig0 libjpeg-turbo8 \
+      libjsoncpp25 liblerc4 liblz4-1 liblzma5 libmd0 libopenblas0-pthread libopengl0 \
+      libopenmpi3t64 libpcre2-8-0 libpng16-16t64 libpython3.12t64 \
+      libreadline8t64 libsharpyuv0 libspooles2.2t64 libssl3t64 libsuitesparseconfig7 \
+      libsz2 libtbb12 libtiff6 libtinfo6 libtinyxml2.6.2v5 libudev1 libvtk9.1t64 \
+      libwebp7 libx11-6 libxau6 libxcb1 libxcursor1 libxdmcp6 libxext6 libxfixes3 \
+      libxft2 libxinerama1 libxml2 libxrender1 libzstd1 zlib1g \
+      # libquadmath is GCC's x86 __float128 runtime — no such package on arm64.
+      # arm64 instead needs BLAS/LAPACK: its Elmer is the source build (WITH_MPI=OFF,
+      # libblas/liblapack), where amd64 takes the PPA package and its dependencies.
+      $([ "$TARGETARCH" = "amd64" ] && echo libquadmath0) \
+      $([ "$TARGETARCH" = "arm64" ] && echo libblas3 liblapack3) \
+ && apt-get purge -y --auto-remove software-properties-common gnupg \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /
+
+# ---------------------------------------------------------------------------------
+# Assemble the solver tree, then TRIM it — in this throwaway stage, because deleting
+# a file in a later layer does not reclaim its bytes: the data still ships in the
+# layer that added it. `slim` below copies the finished /opt in ONE layer, so what is
+# removed here is genuinely absent from the published image.
+FROM runtime AS assemble
+ARG TARGETARCH
+COPY --from=src-yade    /opt/yade         /opt/yade
+COPY --from=src-openems /opt/openEMS      /opt/openEMS
+COPY --from=src-openems /opt/venv-openems /opt/venv-openems
+COPY --from=src-fsi     /opt/fsi          /opt/fsi
+COPY --from=src-oims    /opt/of7          /opt/of7
+COPY --from=src-elmer   /opt/elmer        /opt/elmer
+COPY --from=src-bempp   /opt/venv-bempp   /opt/venv-bempp
+
+# One Elmer path on both architectures: amd64 takes the PPA binaries in /usr/bin,
+# arm64 the source build already under /opt/elmer/bin. Discovery probes either, but a
+# single published ANKUSDRIVE_ELMER_PATH is what a user copies out of the image — and
+# sibling_bin resolves ElmerGrid/ViewFactors NEXT TO it, so all three are linked.
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      mkdir -p /opt/elmer/bin \
+      && for b in ElmerSolver ElmerGrid ViewFactors; do ln -sfn "/usr/bin/$b" "/opt/elmer/bin/$b"; done; \
+    fi \
+ && for b in ElmerSolver ElmerGrid ViewFactors; do test -x "/opt/elmer/bin/$b" || { echo "missing /opt/elmer/bin/$b" >&2; exit 1; }; done
+
+# OpenFOAM-7 ships its build tree: 688 .o/.dep intermediates under platforms/*/
+# applications (363 MB), plus the source, tutorials and docs a runtime image never
+# reads — openInjMoldSim needs only bin/, lib/, etc/ (the bashrc sources config.sh)
+# and bin/foamEtcFile. ~560 MB.
+RUN rm -rf /opt/of7/OpenFOAM/OpenFOAM-7/platforms/*/applications \
+           /opt/of7/OpenFOAM/OpenFOAM-7/tutorials \
+           /opt/of7/OpenFOAM/OpenFOAM-7/src \
+           /opt/of7/OpenFOAM/OpenFOAM-7/applications \
+           /opt/of7/OpenFOAM/OpenFOAM-7/doc \
+           /opt/of7/OpenFOAM/OpenFOAM-7/test
+
+# ---------------------------------------------------------------------------------
+# The published image: the runtime base plus the assembled solver tree, one layer.
+FROM runtime AS slim
+COPY --from=assemble /opt /opt
+
+# Arch-neutral path to the ESI build, so the published ANKUSDRIVE_* values are the
+# same on every platform (the heavy image does this too).
+RUN set -e; plat=$(ls -d /usr/lib/openfoam/openfoam2512/platforms/*Opt | head -1) \
+ ; test -x "$plat/bin/simpleFoam" \
+ ; ln -sfn "$(basename "$plat")" /usr/lib/openfoam/openfoam2512/platforms/current \
+ ; test -x /opt/of7/OpenFOAM/site/7/platforms/current/bin/openInjMoldSim
+
+ENV ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc \
+    ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/current/bin/simpleFoam \
+    ANKUSDRIVE_FSI_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc \
+    ANKUSDRIVE_CCX_PRECICE=/opt/fsi/calculix-adapter/bin/ccx_preCICE \
+    ANKUSDRIVE_PRECICE_LIB=/opt/fsi/precice/lib \
+    ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=/opt/fsi/openfoam-adapter/lib \
+    ANKUSDRIVE_YADE=/opt/yade/bin/yade \
+    ANKUSDRIVE_ELMER_PATH=/opt/elmer/bin/ElmerSolver \
+    ANKUSDRIVE_OPENEMS_PYTHON=/opt/venv-openems/bin/python \
+    ANKUSDRIVE_BEMPP_PYTHON=/opt/venv-bempp/bin/python \
+    ANKUSDRIVE_OPENINJMOLDSIM=/opt/of7/OpenFOAM/site/7/platforms/current/bin/openInjMoldSim \
+    ANKUSDRIVE_OPENINJMOLDSIM_BASHRC=/opt/of7/OpenFOAM/OpenFOAM-7/etc/bashrc \
+    LD_LIBRARY_PATH=/opt/openEMS/lib
+
+COPY docker/heavy-solvers/LICENSES.md /licenses/README.md
+
+# The image is not done until (a) every solver's DT_NEEDED resolves — the trimmed
+# package list is complete on THIS architecture — and (b) each solver actually runs.
+# A missing runtime library otherwise surfaces as a failed solve on a user's Mac.
+COPY tools/container_runtime_deps.sh /usr/local/bin/ankusdrive-runtime-deps
+RUN EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+      bash /usr/local/bin/ankusdrive-runtime-deps --check \
+        /opt/yade /opt/fsi /opt/of7 /opt/openEMS /opt/venv-openems /opt/venv-bempp
+# Each solver must RUN, not merely exist. Checked with the command's own exit status
+# and a banner match on stdout — `… 2>&1 | grep -qi yade` would pass on a traceback
+# that merely names the path, which is how a missing python3-mpmath first slipped by.
+RUN set -e \
+ ; /opt/yade/bin/yade --version > /tmp/yade.txt 2>&1 \
+ ; grep -qi "yade version" /tmp/yade.txt \
+   # …and RUN a script the way the worker does: `--version` never imports
+   # yade.runtime, so it passes on an image where every real DEM solve dies on a
+   # missing IPython. `pack`/`utils` are what dem_gpl_runner.py imports.
+ ; printf 'from yade import pack, utils\nprint("yade-script-ok")\n' > /tmp/yade_probe.py \
+ ; /opt/yade/bin/yade -x -n /tmp/yade_probe.py 2>&1 | grep -q yade-script-ok \
+ ; /opt/elmer/bin/ElmerSolver -v > /tmp/elmer.txt 2>&1 \
+ ; grep -q "ELMER SOLVER" /tmp/elmer.txt \
+ ; /opt/venv-openems/bin/python -c "import openEMS, CSXCAD" \
+ ; /opt/venv-bempp/bin/python -c "import bempp_cl" \
+ ; test -x "$ANKUSDRIVE_CCX_PRECICE" && test -d "$ANKUSDRIVE_PRECICE_LIB" \
+ ; test -f "$ANKUSDRIVE_OPENFOAM_ADAPTER_LIB/libpreciceAdapterFunctionObject.so" \
+ ; bash -c 'source "$ANKUSDRIVE_OPENFOAM_BASHRC" >/dev/null 2>&1; simpleFoam -help >/dev/null' \
+ ; bash -c 'unset FOAM_SIGFPE; source "$ANKUSDRIVE_OPENINJMOLDSIM_BASHRC" >/dev/null 2>&1; openInjMoldSim -help >/dev/null 2>&1 || true'
+
+LABEL org.opencontainers.image.title="ankusdrive-solvers" \
+      org.opencontainers.image.description="AnkusDrive slim solver image for ANKUSDRIVE_SUBSTRATE=container, amd64 + arm64 (OpenFOAM, Elmer, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp) — runtime only: no FreeCAD, no toolchain" \
+      org.opencontainers.image.source="https://github.com/gchen19/AnkusDrive" \
+      org.opencontainers.image.licenses="See /licenses/README.md (bundles GPL-3.0, LGPL-3.0 and other components)"
