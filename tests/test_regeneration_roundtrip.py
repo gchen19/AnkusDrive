@@ -137,7 +137,7 @@ def _record_cad_fem(rec_dir):
             facts["fem_results"] = run("fem_results", job_id=job["job_id"])
             facts["fem"] = True
         run("save_document", path=str(out / "bracket.FCStd"))
-        # object= explicitly: with none, export_shape picks the first shaped object (#414)
+        # object= explicitly: name the part the fingerprint checks rather than rely on the default
         cut_name = next(o["name"] for o in run("list_objects") if o["type"] == "Part::Cut")
         run("export_shape", path=str(out / "bracket.step"), object=cut_name)
         transcript = run("session_transcript", prune_aborted=True)

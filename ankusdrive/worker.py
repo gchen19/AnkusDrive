@@ -3342,11 +3342,8 @@ def _export_doc_shape(doc, path, ext):
     top-level shaped object (skipping consumed inputs) so a multi-feature doc
     exports as one shape."""
     import Part
-    shaped = [o for o in doc.Objects
-              if hasattr(o, "Shape") and not o.Shape.isNull() and not o.InList]
-    if not shaped:
-        shaped = [o for o in doc.Objects
-                  if hasattr(o, "Shape") and not o.Shape.isNull()]
+    shaped = [o for o in doc.Objects if _has_part_shape(o)]
+    shaped = _top_level_shaped(shaped) or shaped
     if not shaped:
         raise RuntimeError("no shaped object to export")
     shape = shaped[0].Shape if len(shaped) == 1 \
@@ -3413,6 +3410,42 @@ def _h_open_document(p):
     }
 
 
+def _has_part_shape(obj):
+    # isinstance, not hasattr: an FEM mesh's `Shape` is a link to the meshed
+    # Part.Feature, not a TopoShape, so `.isNull()` on it raises (#414).
+    shape = getattr(obj, "Shape", None)
+    return isinstance(shape, Part.Shape) and not shape.isNull()
+
+
+def _top_level_shaped(objs):
+    """The objects no other shaped object references. A Cut, Body, Link or
+    Mirror consumes what it references; an FEM mesh, material or drawing view
+    only points at it, so it must not demote the part (#414)."""
+    return [o for o in objs if not any(_has_part_shape(u) for u in o.InList)]
+
+
+def _default_export_object(doc):
+    """The one final shape to export when the caller names no object (#414).
+
+    Consumed producer-inputs (a Cut's Base/Tool, Body features) and anything
+    another shaped object references (a Link's target, an App::Part's children)
+    are never candidates, and solids win over sketches/datums. If that still leaves more
+    than one, refuse and list them rather than guess."""
+    consumed = _collect_consumed(doc)
+    finals = _top_level_shaped([o for o in doc.Objects
+                                if o.Name not in consumed and _has_part_shape(o)])
+    candidates = [o for o in finals if o.Shape.Solids] or finals
+    if not candidates:
+        raise RuntimeError("no shaped objects in document")
+    if len(candidates) > 1:
+        names = ", ".join(f"{o.Name} ({o.TypeId})" for o in candidates)
+        raise ValueError(
+            f"export_shape: {len(candidates)} final shapes in the document ({names}); "
+            "pass object= to choose one"
+        )
+    return candidates[0]
+
+
 @handler("export_shape")
 def _h_export_shape(p):
     """Export a Part-based object to STEP/IGES/BREP/STL. Format detected from path extension."""
@@ -3425,18 +3458,18 @@ def _h_export_shape(p):
         obj = doc.getObject(obj_name)
         if obj is None:
             raise KeyError(f"no object named {obj_name!r}")
+        if not _has_part_shape(obj):
+            raise ValueError(
+                f"object {obj_name!r} ({obj.TypeId}) has no exportable Part shape"
+            )
     else:
-        part_objs = [o for o in doc.Objects if hasattr(o, "Shape") and not o.Shape.isNull()]
-        if not part_objs:
-            raise RuntimeError("no shaped objects in document")
-        obj = part_objs[0]
+        obj = _default_export_object(doc)
 
     path = p["path"]
     ext = os.path.splitext(path)[1].lower()
 
     if ext in (".step", ".stp", ".iges", ".igs"):
-        import Part as _Part
-        _Part.export([obj], path)
+        Part.export([obj], path)
     elif ext == ".brep":
         obj.Shape.exportBrep(path)
     elif ext == ".stl":
@@ -4709,7 +4742,7 @@ def _h_get_object(p):
         except Exception:
             continue
         out["properties"][prop] = _coerce_property(v)
-    if hasattr(obj, "Shape") and not obj.Shape.isNull():
+    if _has_part_shape(obj):
         out["volume"] = obj.Shape.Volume
         out["area"] = obj.Shape.Area
     return out
@@ -4782,12 +4815,12 @@ def _previous_volume_of(obj):
         base = obj.BaseFeature
         if base is None:
             return 0.0
-        if hasattr(base, "Shape") and not base.Shape.isNull():
+        if _has_part_shape(base):
             return base.Shape.Volume
         return 0.0
     if obj.isDerivedFrom("Part::Cut"):
         base = getattr(obj, "Base", None)
-        if base is not None and hasattr(base, "Shape") and not base.Shape.isNull():
+        if base is not None and _has_part_shape(base):
             return base.Shape.Volume
         return 0.0
     return _VERIFY_UNSUPPORTED
@@ -4824,7 +4857,7 @@ def _h_verify_feature(p):
             f"(via Base). For other types, diff against an explicit baseline."
         )
 
-    if not hasattr(obj, "Shape") or obj.Shape.isNull():
+    if not _has_part_shape(obj):
         raise RuntimeError(
             f"feature {obj.Name!r} has null Shape — likely a recompute failure"
         )
@@ -4995,12 +5028,7 @@ def _h_run_script(p):
         for obj in App.ActiveDocument.Objects:
             if obj.Name in pre_names:
                 continue
-            if not hasattr(obj, "Shape"):
-                continue
-            try:
-                if obj.Shape.isNull():
-                    continue
-            except Exception:
+            if not _has_part_shape(obj):
                 continue
             h = _register("script", obj)
             registered.append(
@@ -7083,7 +7111,7 @@ def _h_add_part(p):
                     or o.isDerivedFrom("Part::Feature")
                     or o.isDerivedFrom("App::Part"))  # subassembly container
                 and not o.isDerivedFrom("Part::Datum")  # skip datum planes/LCS
-                and hasattr(o, "Shape") and not o.Shape.isNull()
+                and _has_part_shape(o)
             ]
             if not candidates:
                 raise RuntimeError(f"no shaped object in {source['path']}")
@@ -7091,8 +7119,7 @@ def _h_add_part(p):
             # consumed input: link the Cut, not the Box it was cut from; link the
             # subassembly App::Part, not the parts inside it. A boolean's inputs (and
             # a Part's members) carry the parent in their InList; the top's is empty.
-            toplevel = [o for o in candidates if not o.InList]
-            target = (toplevel or candidates)[-1]
+            target = (_top_level_shaped(candidates) or candidates)[-1]
         App.setActiveDocument(doc.Name)
     else:
         raise ValueError(f"source must have 'handle' or 'path': {source!r}")
@@ -7145,7 +7172,7 @@ def _h_list_assembly_parts(p):
         info = {"name": o.Name, "type": o.TypeId, "label": o.Label}
         if o.isDerivedFrom("App::Link") and o.LinkedObject is not None:
             info["linked"] = o.LinkedObject.Name
-        if hasattr(o, "Shape") and not o.Shape.isNull():
+        if _has_part_shape(o):
             info["volume"] = o.Shape.Volume
         if hasattr(o, "Placement"):
             pos = o.Placement.Base
@@ -7159,9 +7186,9 @@ def _world_shape(obj):
     chain. App::Link wraps a base shape and applies its own Placement."""
     if obj.isDerivedFrom("App::Link") and obj.LinkedObject is not None:
         base = obj.LinkedObject
-        if hasattr(base, "Shape") and not base.Shape.isNull():
+        if _has_part_shape(base):
             return base.Shape.transformed(obj.Placement.Matrix)
-    if hasattr(obj, "Shape") and not obj.Shape.isNull():
+    if _has_part_shape(obj):
         return obj.Shape.transformed(obj.Placement.Matrix)
     return None
 
@@ -7179,7 +7206,7 @@ def _leaf_world_shapes(group, parent_matrix, acc, prefix=""):
         if base.isDerivedFrom("App::Part"):
             _leaf_world_shapes(base.Group, m.multiply(base.Placement.Matrix),
                                acc, prefix=label + "/")
-        elif hasattr(base, "Shape") and not base.Shape.isNull():
+        elif _has_part_shape(base):
             acc.append((label, base.Shape.transformed(m)))
 
 
@@ -7321,7 +7348,7 @@ def _h_bom_extract(p):
             key = (None, base.Name)
             part = base.Label or base.Name
         # volume is invariant under the placement chain, so the local shape is fine
-        s = base.Shape if (hasattr(base, "Shape") and not base.Shape.isNull()) else None
+        s = base.Shape if (_has_part_shape(base)) else None
         v = s.Volume if s is not None else 0.0
         row = counts.get(key)
         if row is None:
@@ -7604,7 +7631,7 @@ def _link_world_shape(link):
     transformed by the link's placement). None if the link carries no shape."""
     base = (link.LinkedObject if (link.isDerivedFrom("App::Link")
                                   and link.LinkedObject is not None) else link)
-    if not (hasattr(base, "Shape") and not base.Shape.isNull()):
+    if not (_has_part_shape(base)):
         return None
     return base.Shape.transformed(link.Placement.Matrix)
 
@@ -7614,7 +7641,7 @@ def _link_local_shape(link):
     (a gear's pitch radius) that are taken about the part's own axis."""
     base = (link.LinkedObject if (link.isDerivedFrom("App::Link")
                                   and link.LinkedObject is not None) else link)
-    if not (hasattr(base, "Shape") and not base.Shape.isNull()):
+    if not (_has_part_shape(base)):
         return None
     return base.Shape
 
@@ -12160,7 +12187,7 @@ def _parse_render_request(p):
     import types
     compound = _flatten_for_addon(p)
     src = types.SimpleNamespace(Shape=compound) if compound is not None else _resolve(p["handle"])
-    if not hasattr(src, "Shape"):
+    if not _has_part_shape(src):
         raise TypeError(f"handle {p['handle']!r} has no Shape to render")
     width = int(p.get("width", 800))
     height = int(p.get("height", 600))
@@ -12274,7 +12301,7 @@ def _render_leaves(obj):
         return acc
     if obj.isDerivedFrom("App::Link") and obj.LinkedObject is not None:
         return [(obj.Name, _world_shape(obj))]
-    if not hasattr(obj, "Shape") or obj.Shape.isNull():
+    if not _has_part_shape(obj):
         raise TypeError(f"{obj.Name!r} has no Shape to render")
     return [(obj.Label or obj.Name, obj.Shape)]
 
@@ -20536,7 +20563,8 @@ def _release_geometry(doc, p, pages):
 
     Preference order: an explicit handle/object/assembly; else the source of the
     first page's main view (the strongest binding there is — it is literally the
-    solid the drawing dimensions); else the first shaped object in the document."""
+    solid the drawing dimensions); else the document's single final shape, the
+    same rule as export_shape (#414)."""
     ref = p.get("handle") or p.get("object") or p.get("assembly")
     if ref:
         obj = _handles.get(ref) or doc.getObject(str(ref))
@@ -20548,12 +20576,7 @@ def _release_geometry(doc, p, pages):
         src = getattr(main, "Source", None) if main is not None else None
         if src:
             return src[0]
-    for o in doc.Objects:
-        if hasattr(o, "Shape") and not o.Shape.isNull():
-            return o
-    raise RuntimeError(
-        "no geometry to release; pass handle=/object= or open a document with a "
-        "shaped object in it")
+    return _default_export_object(doc)
 
 
 def _release_bom_rows(obj, p):
@@ -20569,7 +20592,7 @@ def _release_bom_rows(obj, p):
         if p.get("density") is not None:
             params["density"] = float(p["density"])
         return HANDLERS["bom_extract"](params)
-    shape = obj.Shape if (hasattr(obj, "Shape") and not obj.Shape.isNull()) else None
+    shape = obj.Shape if (_has_part_shape(obj)) else None
     row = {"part": getattr(obj, "Label", None) or obj.Name, "count": 1,
            "total_volume_mm3": shape.Volume if shape is not None else 0.0}
     if p.get("density") is not None:
@@ -20766,7 +20789,7 @@ def _h_release_package(p):
     rfq_block = None
     if p.get("rfq"):
         geom = _release_geometry(doc, p, pages)
-        shape = (geom.Shape if (hasattr(geom, "Shape") and not geom.Shape.isNull())
+        shape = (geom.Shape if (_has_part_shape(geom))
                  else None)
         volume = (shape.Volume if shape is not None else
                   sum(float(r.get("total_volume_mm3") or 0.0)
