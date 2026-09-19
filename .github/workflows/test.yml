@@ -78,3 +78,27 @@ jobs:
 
       - name: Run test suite
         run: bash tests/run_all.sh
+
+  macos-dev-env:
+    name: Discovery on a docs/MACOS.md dev Mac (hosted, no FreeCAD)
+    # #314. The Linux lanes fake a Mac-with-Multipass by monkeypatching; three leaks in
+    # a row (#313, #349, #314) got past that and only showed on a real developer Mac.
+    # This builds that Mac on a hosted runner with nothing patched: tests/ci/multipass
+    # on PATH answering `info` with a running VM, and the OpenFOAM override declared in
+    # both the env and a config.toml, exactly as docs/MACOS.md sets them. The script
+    # checks that premise first so the lane cannot go vacuously green. No VM (hosted
+    # runners have no nested virtualization) and no FreeCAD, so it is minutes.
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install AnkusDrive
+        run: python -m pip install -e .
+
+      - name: Discovery suites against the documented Multipass setup
+        run: bash tests/run_macos_devenv.sh
