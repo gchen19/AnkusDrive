@@ -83,6 +83,9 @@ _SOLVERS: dict = {
         "family": "thermal_transient",
         "extra": None,                       # system package, not a pip extra
         "binaries": ("ElmerSolver", "ElmerSolver_mpi"),
+        # routed through `<engine> exec` under ANKUSDRIVE_SUBSTRATE=container (#419);
+        # its ElmerGrid / ViewFactors siblings cross with it (sibling_bin)
+        "container": True,
         "dirs": {
             "Linux":   ("/usr/bin", "/usr/local/bin", "/opt/elmer/bin"),
             "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin",
@@ -285,7 +288,13 @@ _SOLVERS: dict = {
                         "(scripts/install-solvers.sh acoustics_bem); then point "
                         "ANKUSDRIVE_BEMPP_PYTHON at that venv's python.",
         "interpreter": {"env": "ANKUSDRIVE_BEMPP_PYTHON", "venv": ".venv-bempp",
-                        "requires": ("bempp_cl",)},
+                        "requires": ("bempp_cl",),
+                        # the heavy image's venv, probed when the env is unset (#419)
+                        "container_python": "/opt/venv-bempp/bin/python"},
+        "container": True,
+        # bempp_cl's @njit(cache=True) writes beside its own sources by default, and the
+        # image's venv is not writable for the host uid the container runs as (#419)
+        "container_env": {"NUMBA_CACHE_DIR": "/tmp/ankusdrive-numba-cache"},
         # installed-but-unwired probe (issue #177): bempp lives in the dedicated
         # .venv-bempp (meshio>=5), not this interpreter; the venv beside the repo is
         # the evidence it is installed but ANKUSDRIVE_BEMPP_PYTHON is not set here.
@@ -313,6 +322,10 @@ _SOLVERS: dict = {
         "license": "GPL-3.0",
         "isolation": "subprocess",
         "binaries": ("yade", "yade-batch"),
+        "container": True,                   # #419
+        # the bare variable the worker (and the heavy image) sets; honoring it here
+        # keeps discovery — and so `ankusdrive doctor` — in step with the solve
+        "env_aliases": ("ANKUSDRIVE_YADE",),
         "dirs": {
             "Linux":   (os.path.expanduser("~/opt/yade/bin"),
                         "/usr/bin", "/usr/local/bin", "/opt/yade/bin"),
@@ -348,7 +361,9 @@ _SOLVERS: dict = {
                         "out-of-process only via ankusdrive/em_fullwave_gpl_runner.py.",
         # the runner needs BOTH bindings, so the interpreter must carry both
         "interpreter": {"env": "ANKUSDRIVE_OPENEMS_PYTHON", "venv": ".venv-openems",
-                        "requires": ("openEMS", "CSXCAD")},
+                        "requires": ("openEMS", "CSXCAD"),
+                        "container_python": "/opt/venv-openems/bin/python"},
+        "container": True,
         # installed-but-unwired probe (issue #177): openEMS lives in a dedicated
         # .venv-openems, NOT this interpreter, so the find_spec probe above reports it
         # absent in a bare shell. The venv sitting beside the repo is the evidence
@@ -689,6 +704,12 @@ def _posix_glob(patterns) -> list:
 # same seams: an exec relay, a filesystem the host cannot see (overrides name paths
 # INSIDE it and are trusted, not stat'd), and the host scratch mounted at the SAME
 # absolute path so a case dir means the same thing on both sides.
+#
+# Beyond the OpenFOAM set, `container` also carries the solvers the registry marks
+# ``"container": True`` — YADE, Elmer, openEMS and Bempp (#419) — so a host with no
+# Linux solver stack (macOS) gets every family the image holds. Those are launched
+# directly (solver_argv), not through bash, and are PROBED inside the running
+# container rather than trusted: nothing on the host proves the image carries them.
 
 _SUBSTRATES = ("native", "wsl", "multipass", "container")
 _CONTAINER_ENGINES = ("docker", "podman", "nerdctl")
@@ -930,6 +951,181 @@ def container_run_command() -> str:
             f'-v "$TMPDIR:$TMPDIR" {_HEAVY_IMAGE} sleep infinity')
 
 
+# --- container-routed solvers beyond OpenFOAM (issue #419) ------------------------
+
+def _container_routed(spec: dict) -> bool:
+    """True when ``spec``'s solver runs inside the container: the ``container``
+    substrate is selected and the solver is one it carries — the OpenFOAM-backed set
+    (``substrate_bins``) or a ``"container": True`` entry. Host installs of a routed
+    solver are ignored: they are not what ``<engine> exec`` runs."""
+    return (bool(spec.get("substrate_bins") or spec.get("container"))
+            and substrate() == "container")
+
+
+def routes_through_container(name: str) -> bool:
+    """Public :func:`_container_routed` by solver name — what the worker asks before
+    wrapping a launch in :func:`solver_argv` / staging a runner. Raises ValueError
+    for an unknown solver."""
+    return _container_routed(_spec(name))
+
+
+_ctr_probe_cache: dict = {}        # (engine, name, argv) -> (monotonic_deadline, (rc, out)|None)
+
+
+def _container_probe_exec(engine: str, name: str, argv: tuple, timeout_s: float):
+    """``<engine> exec <name> <argv>`` -> ``(returncode, stdout)``, or None when the
+    engine is missing or the exec hangs. Never ``-i``, and stdin is /dev/null: a probe
+    has nothing to send."""
+    import subprocess
+    try:
+        proc = subprocess.run([engine, "exec", name, *argv], capture_output=True,
+                              text=True, timeout=timeout_s, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.returncode, proc.stdout
+
+
+def _container_probe(engine: str, name: str, argv: tuple):
+    """Cached :func:`_container_probe_exec`. THE INJECTABLE SEAM: tests fake what the
+    container holds by replacing this function, which also bypasses the cache. Every
+    probe is READ-ONLY (``command -v``, ``test -x``, a find_spec), so discovery stays
+    side-effect-free in the sense capabilities() promises."""
+    import time as _time
+    ttl = float(_config.get("ANKUSDRIVE_MULTIPASS_CACHE_S") or _VM_INFO_TTL_S)
+    key = (engine, name, tuple(argv))
+    now = _time.monotonic()
+    hit = _ctr_probe_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    timeout_s = float(_config.get("ANKUSDRIVE_CONTAINER_PROBE_TIMEOUT_S") or 30.0)
+    result = _container_probe_exec(engine, name, tuple(argv), timeout_s)
+    _ctr_probe_cache[key] = (now + ttl, result)
+    return result
+
+
+def _container_binary(spec: dict):
+    """The in-container path of a ``"container": True`` binary solver, found by
+    probing the running container: each registry binary on its PATH, then in the
+    spec's Linux install dirs. None when the container is not running or holds none —
+    so an image that lacks the solver reports it missing instead of ready."""
+    if container_state() != "running":
+        return None
+    names = " ".join(spec["binaries"])
+    dirs = " ".join(spec["dirs"].get("Linux", ()))
+    script = (f'for b in {names}; do p=$(command -v "$b") && {{ echo "$p"; exit 0; }}; '
+              f'done; for d in {dirs}; do for b in {names}; do '
+              f'[ -x "$d/$b" ] && {{ echo "$d/$b"; exit 0; }}; done; done; exit 1')
+    r = _container_probe(container_engine(), container_name(), ("sh", "-c", script))
+    if not r or r[0] != 0:
+        return None
+    lines = (r[1] or "").strip().splitlines()
+    return lines[0] if lines and lines[0].startswith("/") else None
+
+
+def container_file_exists(path: str) -> bool:
+    """Whether ``path`` is an executable file INSIDE the running container — the
+    routed twin of ``os.path.isfile`` for a companion binary the host cannot stat
+    (ElmerGrid / ViewFactors next to an in-container ElmerSolver)."""
+    if not path.startswith("/") or container_state() != "running":
+        return False
+    r = _container_probe(container_engine(), container_name(), ("test", "-x", path))
+    return bool(r) and r[0] == 0
+
+
+def solver_file_exists(solver: str, path: str) -> bool:
+    """Whether ``path`` is an executable file where solver ``solver`` runs: inside the
+    container when it is routed there (#419), else on the host. A plain
+    ``os.path.isfile`` would answer False for every in-container binary, which is how
+    a gate meant to skip an absent solver silently skips a present one."""
+    if routes_through_container(solver):
+        return container_file_exists(path)
+    return os.path.isfile(path)
+
+
+def solver_argv(name: str, argv, cwd: str | None = None, *, stdin: bool = False) -> list:
+    """The argv that launches solver ``name``'s process: ``argv`` unchanged unless the
+    solver is container-routed (:func:`routes_through_container`), then
+    ``[<engine>, "exec", ["-i"], ["-w", <cwd>], <container>, *argv]`` — the direct-
+    launch twin of :func:`bash_argv` (#419).
+
+    ``cwd`` is the case dir, meaningful inside the container because the host scratch
+    is mounted at the same path. ``stdin=True`` adds ``-i`` and is ONLY for a launch
+    whose stdin is a pipe the caller owns (``subprocess.run(input=...)`` — the
+    sentinel-JSON runners), which would otherwise read EOF. Never for an inherited
+    stdin: that is #223's stdin-theft class. A registry ``container_env`` crosses as
+    ``-e`` (an ``env=`` on the host Popen would stop at the exec client)."""
+    argv = [str(a) for a in argv]
+    spec = _spec(name)
+    if not _container_routed(spec):
+        return argv
+    env = [f for k, v in spec.get("container_env", {}).items() for f in ("-e", f"{k}={v}")]
+    return [container_engine(), "exec", *(["-i"] if stdin else []), *env,
+            *(["-w", cwd] if cwd else []), container_name(), *argv]
+
+
+def stage_runner(name: str, runner: str) -> str:
+    """The path solver ``name`` should run ``runner`` (a standalone ``*_runner.py``)
+    from. Unrouted: ``runner`` itself. Container-routed: a copy under the host scratch
+    (``tempfile.gettempdir()``, the directory mounted at the same path), keyed by
+    content hash so concurrent solves share one file and an upgrade never runs a stale
+    runner — the installed package directory is not visible inside the container.
+
+    The scratch can be a shared ``/tmp``, where another local user could plant a file
+    at that predictable path to have it executed. So a staged copy is reused only when
+    this user owns it and its bytes are exactly the runner's; anything else is ignored
+    and the runner is written into a fresh private (0700) directory instead."""
+    if not routes_through_container(name):
+        return runner
+    import hashlib
+    import tempfile
+    with open(runner, "rb") as f:
+        data = f.read()
+    base = os.path.join(tempfile.gettempdir(), "ankusdrive-runners")
+    dest = os.path.join(base, hashlib.sha256(data).hexdigest()[:16], os.path.basename(runner))
+    if _owned_with_bytes(dest, data):
+        return dest
+    try:
+        os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+        if _owned_by_me(base) and _owned_by_me(os.path.dirname(dest)):
+            tmp = f"{dest}.{os.getpid()}.tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, dest)            # atomic: a racing solve never reads half a file
+            if _owned_with_bytes(dest, data):
+                return dest
+    except OSError:
+        pass
+    private = tempfile.mkdtemp(prefix="ankusdrive-runner-")   # 0700, unpredictable name
+    dest = os.path.join(private, os.path.basename(runner))
+    with open(dest, "wb") as f:
+        f.write(data)
+    return dest
+
+
+def _owned_by_me(path: str) -> bool:
+    """``path`` exists, is not a symlink, and belongs to this user (POSIX; always True
+    where there are no uids)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    import stat as _stat
+    if _stat.S_ISLNK(st.st_mode):
+        return False
+    return not hasattr(os, "getuid") or st.st_uid == os.getuid()
+
+
+def _owned_with_bytes(path: str, data: bytes) -> bool:
+    """``path`` is a regular file this user owns whose content is exactly ``data``."""
+    if not _owned_by_me(path):
+        return False
+    try:
+        with open(path, "rb") as f:
+            return f.read() == data
+    except OSError:
+        return False
+
+
 def bash_argv(script: str, case_dir: str | None = None) -> list:
     """The argv that runs ``script`` under bash in the caller's ``cwd`` (the case
     dir). One launcher per substrate (:func:`substrate`), the same bash script inside
@@ -1147,6 +1343,15 @@ def _vm_binary_path(name: str, spec: dict):
     exactly the path ``bash_argv`` will hand to ``multipass exec``. The ``container``
     substrate resolves the same way (#361). Returns the path or None; None whenever
     no opaque substrate is reachable, where :func:`_binary_path` governs."""
+    if spec.get("container") and _container_routed(spec):
+        # #419 (YADE, Elmer): an absolute override is trusted like OpenFOAM's; without
+        # one the running container is probed, never assumed to hold the solver
+        if not container_available():
+            return None
+        for c in _override_candidates(name, spec):
+            if c.startswith("/"):
+                return c
+        return _container_binary(spec)
     if not (spec.get("substrate_bins") and _opaque_substrate_available()):
         return None
     for c in _override_candidates(name, spec):
@@ -1198,6 +1403,30 @@ def _unwired_found(name: str, spec: dict):
     evidence it is *installed but not wired into this shell*. READ-ONLY — never sources
     a bashrc, never sets an env var (discovery stays side-effect-free). Returns
     ``(found_at, wire_hint)`` when such evidence exists, else None."""
+    if spec.get("container") and _container_routed(spec):
+        # #419: under `container` a host venv or binary is irrelevant; what is missing
+        # is the container, its running state, or the solver inside that image
+        eng, cname = container_engine(), container_name()
+        state = container_state(cname)
+        if state == "absent":
+            found_at = ("container substrate" if container_available()
+                        else f"container substrate (no `{eng}` on PATH)")
+            hint = (f"no solver container {cname!r} — create it from the prebuilt solver "
+                    f"image, with the host scratch mounted at the same path: "
+                    f"{container_run_command()}. See docs/CONTAINER_SUBSTRATE.md")
+        elif state == "stopped":
+            found_at = f"container {cname!r} (stopped)"
+            hint = (f"the solver container {cname!r} exists but is not running — "
+                    f"`{eng} start {cname}`. See docs/CONTAINER_SUBSTRATE.md")
+        else:
+            found_at = f"container {cname!r} (running)"
+            env = (spec.get("interpreter", {}).get("env")
+                   or f"ANKUSDRIVE_{name.upper()}_PATH")
+            hint = (f"the solver container {cname!r} is running but {name} did not "
+                    f"resolve inside it — the image may not include it (the full "
+                    f"{_HEAVY_IMAGE} does), or it lives elsewhere: set {env} to its "
+                    f"IN-CONTAINER path. See docs/CONTAINER_SUBSTRATE.md")
+        return found_at, hint
     cfg = spec.get("unwired")
     if not cfg:
         return None
@@ -1340,6 +1569,23 @@ def _interpreter_python(name: str, spec: dict):
     never answered in-process: under the worker it is ``freecadcmd``, which a module
     importable in-process does not make a Python the runner can be launched with."""
     requires = spec["interpreter"]["requires"]
+    if spec.get("container") and _container_routed(spec):
+        # #419: only an in-container interpreter counts, and it is asked IN the
+        # container — the override first, then the heavy image's dedicated venv
+        if container_state() != "running":
+            return None
+        cfg = spec["interpreter"]
+        probe = ("import importlib.util,sys;"
+                 f"sys.exit(0 if all(importlib.util.find_spec(m) for m in {tuple(requires)!r}) "
+                 "else 1)")
+        for c in dict.fromkeys(filter(None, (_config.get(cfg["env"]),
+                                             cfg.get("container_python")))):
+            if not c.startswith("/"):
+                continue
+            r = _container_probe(container_engine(), container_name(), (c, "-c", probe))
+            if r and r[0] == 0:
+                return c
+        return None
     seen = set()
     for c in [*_interpreter_candidates(spec), sys.executable]:
         if not c or c in seen or not os.path.isfile(c):
@@ -1415,6 +1661,8 @@ def find_solver(name: str) -> dict:
             info["available"] = True
             info["module"] = spec["interpreter"]["requires"][0]
             info["path"] = exe
+            if spec.get("container") and _container_routed(spec):
+                info["via"] = "container"          # launched by solver_argv (#419)
     elif spec["kind"] == "wheel":
         resolved = next((m for m in spec["modules"] if _module_available(m)), None)
         if resolved is not None:
@@ -1423,7 +1671,7 @@ def find_solver(name: str) -> dict:
     else:                                            # binary
         # a substrate solver under `container` resolves ONLY from the in-container
         # override: a host install is not what `<engine> exec` runs (#361)
-        host_ok = not spec.get("substrate_bins") or _host_discovery_applies()
+        host_ok = not _container_routed(spec)
         path = _binary_path(name, spec) if host_ok else None
         if path is not None:
             info["available"] = True
@@ -1774,13 +2022,19 @@ def run_argvs(case_dir: str, argv_list) -> tuple:
     return rc, out[-2000:]
 
 
-def sibling_bin(main_bin: str, name: str) -> str:
+def sibling_bin(main_bin: str, name: str, solver: str | None = None) -> str:
     """Resolve a companion executable that ships next to ``main_bin`` (ElmerGrid /
     ViewFactors next to ElmerSolver): PATH first, then the sibling path — with the
     ``.exe`` suffix Windows needs (a bare ``os.path.join(dir, name)`` never passes
     ``isfile`` there, which silently skipped the ViewFactors/ElmerGrid legs on an
     otherwise-complete native Windows Elmer install; issue #205). Existence is the
-    caller's check — the returned path may not exist."""
+    caller's check — the returned path may not exist.
+
+    With ``solver`` container-routed (#419) the sibling is the in-container path next
+    to ``main_bin`` — a host PATH hit is not what `<engine> exec` would run. Check it
+    with :func:`container_file_exists`, not ``os.path.isfile``."""
+    if solver and routes_through_container(solver):
+        return main_bin.rsplit("/", 1)[0] + "/" + name
     found = shutil.which(name)
     if found:
         return found

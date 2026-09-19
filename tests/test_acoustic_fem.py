@@ -24,7 +24,7 @@ from tests.heavy_solve import skip_heavy  # noqa: E402
 
 def _run_elmer(case_dir, sif):
     binary = solvers.find_solver("elmer")["path"]
-    return subprocess.run([binary, sif], cwd=case_dir,
+    return subprocess.run(solvers.solver_argv("elmer", [binary, sif], case_dir), cwd=case_dir,
                           capture_output=True, text=True)
 
 

@@ -50,6 +50,8 @@ def _yade_exec():
     """Resolve the `yade` executable the same way the worker does: ANKUSDRIVE_YADE /
     ANKUSDRIVE_YADE_PATH → ~/opt/yade/bin/yade → the solver registry (PATH/dirs).
     Returns the path or None."""
+    if solvers.routes_through_container("yade"):   # #419: in-container discovery only
+        return solvers.find_solver("yade").get("path")
     for env in ("ANKUSDRIVE_YADE", "ANKUSDRIVE_YADE_PATH"):
         if (v := os.environ.get(env)) and Path(v).is_file():
             return v
@@ -64,7 +66,8 @@ def _run_yade(problem, timeout=600):
     the test twin of ankusdrive.worker._run_dem_gpl."""
     exe = _yade_exec()
     assert exe, "yade executable not resolvable"
-    proc = subprocess.run([exe, "-x", "-n", str(RUNNER)],
+    runner = solvers.stage_runner("yade", str(RUNNER))
+    proc = subprocess.run(solvers.solver_argv("yade", [exe, "-x", "-n", runner], stdin=True),
                           input=json.dumps(problem), capture_output=True,
                           text=True, timeout=timeout)
     _, _, rest = proc.stdout.partition("@@JSON@@")

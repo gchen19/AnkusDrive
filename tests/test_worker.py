@@ -4201,8 +4201,9 @@ def test_geometry_bridge_validation_errors_are_clean():
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from ankusdrive import solvers
-    if not solvers.is_available("elmer") or not os.path.isfile(
-            solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ElmerGrid")):
+    if not solvers.is_available("elmer") or not solvers.solver_file_exists(
+            "elmer", solvers.sibling_bin(
+                solvers.find_solver("elmer")["path"], "ElmerGrid", "elmer")):
         print("    SKIP — ElmerSolver/ElmerGrid not installed")
         return
     with Worker() as w:
@@ -4278,8 +4279,9 @@ def test_geometry_bridge_box_end_to_end_matches_heisler():
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from ankusdrive import solvers
     from ankusdrive.analysis import thermal as _thermal
-    if not solvers.is_available("elmer") or not os.path.isfile(
-            solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ElmerGrid")):
+    if not solvers.is_available("elmer") or not solvers.solver_file_exists(
+            "elmer", solvers.sibling_bin(
+                solvers.find_solver("elmer")["path"], "ElmerGrid", "elmer")):
         print("    SKIP — ElmerSolver/ElmerGrid not installed")
         return
     with Worker() as w:

@@ -82,7 +82,7 @@ def test_frf_sweep_matches_sdof_oracle():
     d = tempfile.mkdtemp(prefix="frf_live_")
     built = vib.write_harmonic_beam_case(d)
     binary = solvers.find_solver("elmer")["path"]
-    proc = subprocess.run([binary, built["sif"]], cwd=d,
+    proc = subprocess.run(solvers.solver_argv("elmer", [binary, built["sif"]], d), cwd=d,
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout[-500:]
     tips = vib.parse_harmonic_beam(d, n_steps=built["n_steps"],

@@ -165,7 +165,7 @@ def test_conjugate_channel_matches_energy_balance_and_solid_drop():
         return
     with tempfile.TemporaryDirectory() as d:
         built = cht.write_cht_channel_case(d)
-        proc = subprocess.run([solvers.find_solver("elmer")["path"], built["sif"]],
+        proc = subprocess.run(solvers.solver_argv("elmer", [solvers.find_solver("elmer")["path"], built["sif"]], d),
                               cwd=d, capture_output=True, text=True)
         assert proc.returncode == 0, proc.stdout[-800:]
         parsed = cht.parse_cht_scalars(d, built["scalars"])
@@ -189,7 +189,7 @@ def test_conjugate_channel_zero_flux_negative():
         return
     with tempfile.TemporaryDirectory() as d:
         built = cht.write_cht_channel_case(d, flux_w_m2=0.0)
-        proc = subprocess.run([solvers.find_solver("elmer")["path"], built["sif"]],
+        proc = subprocess.run(solvers.solver_argv("elmer", [solvers.find_solver("elmer")["path"], built["sif"]], d),
                               cwd=d, capture_output=True, text=True)
         assert proc.returncode == 0, proc.stdout[-800:]
         parsed = cht.parse_cht_scalars(d, built["scalars"])
@@ -252,7 +252,7 @@ def test_graetz_solve_matches_eigenvalue():
     d = tempfile.mkdtemp(prefix="graetz_live_")
     built = cht.write_graetz_channel_case(d)
     binary = solvers.find_solver("elmer")["path"]
-    proc = subprocess.run([binary, built["sif"]], cwd=d,
+    proc = subprocess.run(solvers.solver_argv("elmer", [binary, built["sif"]], d), cwd=d,
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout[-500:]
     r = cht.parse_graetz_channel(

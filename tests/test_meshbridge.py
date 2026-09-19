@@ -524,8 +524,9 @@ def test_bridged_box_matches_heisler_oracle():
     0.2–0.9 % live; gate 3 %)."""
     if skip_heavy("Elmer/OpenFOAM mesh bridge"):
         return
-    if not solvers.is_available("elmer") or not os.path.isfile(
-            solvers.sibling_bin(solvers.find_solver("elmer")["path"], "ElmerGrid")):
+    if not solvers.is_available("elmer") or not solvers.solver_file_exists(
+            "elmer", solvers.sibling_bin(
+                solvers.find_solver("elmer")["path"], "ElmerGrid", "elmer")):
         print("    SKIP — ElmerSolver/ElmerGrid not installed")
         return
     assert _FIXTURE_UNV.is_file(), f"missing fixture {_FIXTURE_UNV}"
@@ -535,10 +536,12 @@ def test_bridged_box_matches_heisler_oracle():
             d, k=200.0, rho=2700.0, cp=900.0, h_conv=10000.0, duration_s=0.6,
             convection_tags=[1, 2], t_initial_c=100.0, t_ambient_c=25.0)
         grid_argv = [solvers.sibling_bin(          # bare "ElmerGrid" isn't on PATH
-            solvers.find_solver("elmer")["path"], "ElmerGrid")] + built["elmergrid_argv"][1:]
-        grid = _run(grid_argv, d)
+            solvers.find_solver("elmer")["path"], "ElmerGrid", "elmer")] \
+            + built["elmergrid_argv"][1:]
+        grid = _run(solvers.solver_argv("elmer", grid_argv, d), d)
         assert grid.returncode == 0, grid.stdout[-800:] + grid.stderr[-800:]
-        solve = _run([solvers.find_solver("elmer")["path"], built["sif"]], d)
+        solve = _run(solvers.solver_argv(
+            "elmer", [solvers.find_solver("elmer")["path"], built["sif"]], d), d)
         assert solve.returncode == 0, solve.stdout[-800:] + solve.stderr[-800:]
         parsed = mb.parse_minmax_scalars(d, built["scalars"])
         assert parsed, "no scalars written"
