@@ -370,8 +370,12 @@ FROM src-bempp-${SOLVER_SRC}   AS src-bempp
 # Runtime base: the libraries the solvers LINK, with no toolchain and no headers.
 #
 # The library list is DERIVED, not hand-written: tools/container_runtime_deps.sh ldd's
-# every ELF in the solver prefixes and maps each dependency to its apt package. To
-# regenerate after a solver pin moves:
+# every ELF in the solver prefixes and maps each dependency to its apt package. It is
+# derived on ONE architecture, so a package the other one names differently — or does
+# not have at all, like x86's libquadmath0 — is marked per-arch below. The --check in
+# the `slim` stage is what catches the other direction (a library arm64 needs and
+# amd64 did not), by failing that architecture's build and naming it. To regenerate
+# after a solver pin moves:
 #   docker run --rm -v "$PWD/tools:/t:ro" \
 #     -e EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
 #     <heavy image> bash /t/container_runtime_deps.sh /opt/yade /opt/fsi /opt/of7 \
@@ -416,11 +420,15 @@ RUN apt-get update \
       libglu1-mesa libglvnd0 libglx0 libgmp10 libgmpxx4ldbl libgomp1 libgts-0.7-5t64 \
       libhdf5-103-1t64 libhdf5-hl-100t64 libhwloc15 libicu74 libjbig0 libjpeg-turbo8 \
       libjsoncpp25 liblerc4 liblz4-1 liblzma5 libmd0 libopenblas0-pthread libopengl0 \
-      libopenmpi3t64 libpcre2-8-0 libpng16-16t64 libpython3.12t64 libquadmath0 \
+      libopenmpi3t64 libpcre2-8-0 libpng16-16t64 libpython3.12t64 \
       libreadline8t64 libsharpyuv0 libspooles2.2t64 libssl3t64 libsuitesparseconfig7 \
       libsz2 libtbb12 libtiff6 libtinfo6 libtinyxml2.6.2v5 libudev1 libvtk9.1t64 \
       libwebp7 libx11-6 libxau6 libxcb1 libxcursor1 libxdmcp6 libxext6 libxfixes3 \
       libxft2 libxinerama1 libxml2 libxrender1 libzstd1 zlib1g \
+      # libquadmath is GCC's x86 __float128 runtime — no such package on arm64.
+      # arm64 instead needs BLAS/LAPACK: its Elmer is the source build (WITH_MPI=OFF,
+      # libblas/liblapack), where amd64 takes the PPA package and its dependencies.
+      $([ "$TARGETARCH" = "amd64" ] && echo libquadmath0) \
       $([ "$TARGETARCH" = "arm64" ] && echo libblas3 liblapack3) \
  && apt-get purge -y --auto-remove software-properties-common gnupg \
  && rm -rf /var/lib/apt/lists/*
