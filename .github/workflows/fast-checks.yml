@@ -92,6 +92,11 @@ jobs:
         # Static half: COPYs cover pyproject's readme/license-files, .dockerignore
         # admits them, base digest-pinned. The introspection-image job builds it.
         run: python tests/test_dockerfile.py
+      - name: Slim solver image contract (#422)
+        # The CI `slim` job builds and gates the real image; this catches the static
+        # drift (host-side payloads creeping back in, a trim that reclaims nothing)
+        # in seconds, on every PR, without a Docker build.
+        run: python tests/test_slim_image.py
 
       - name: Tool annotations — every tool classified, read-only means read-only (#368)
         # Clients auto-approve tools marked read-only. Sweeps every @mcp.tool() into

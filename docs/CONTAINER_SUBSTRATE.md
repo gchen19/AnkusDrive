@@ -6,9 +6,17 @@ the snappyHexMesh meshbridge (issue #361) — and YADE (DEM), Elmer (transient/r
 thermal, CHT, low-frequency EM, acoustic and harmonic FEM), openEMS (full-wave EM) and
 Bempp (acoustic BEM) (issue #419).
 
-The prebuilt solver image, `ghcr.io/gchen19/ankusdrive-heavy`, carries ESI OpenFOAM,
-the serial preCICE stack with both adapters, OpenFOAM-7 + openInjMoldSim, YADE, Elmer,
-openEMS and Bempp. That
+The prebuilt solver image, **`ghcr.io/gchen19/ankusdrive-solvers`**, carries ESI
+OpenFOAM, the serial preCICE stack with both adapters, OpenFOAM-7 + openInjMoldSim,
+YADE, Elmer, openEMS and Bempp.
+
+It is the **slim** image (#422): solvers and the libraries they link, and nothing
+else. AnkusDrive, FreeCAD, CalculiX, PrusaSlicer, Blender and SU2 all run on the host
+under this substrate, so none of them is in it, and neither is a compiler — every
+solver is prebuilt. `ghcr.io/gchen19/ankusdrive-heavy` still exists and still works
+here, but it is the **CI** image: it runs the whole test suite inside itself, so it
+also carries FreeCAD, the driver venv and every `-dev` package — roughly four times
+the download for no extra solver. That
 replaces multi-hour source builds with one `pull`. Its component licences are listed
 in [`docker/heavy-solvers/LICENSES.md`](../docker/heavy-solvers/LICENSES.md).
 
@@ -19,8 +27,8 @@ the default branch; every build is also tagged `sha-<commit>`. **Pin a digest or
 [`heavy-solves.yml`](../.github/workflows/heavy-solves.yml).
 
 ```bash
-docker pull ghcr.io/gchen19/ankusdrive-heavy:latest          # or :sha-<commit>
-docker image inspect --format '{{.Architecture}}' ghcr.io/gchen19/ankusdrive-heavy
+docker pull ghcr.io/gchen19/ankusdrive-solvers:latest        # or :sha-<commit>
+docker image inspect --format '{{.Architecture}}' ghcr.io/gchen19/ankusdrive-solvers
 ```
 
 ## How it works
@@ -68,12 +76,18 @@ use:
    ```bash
    docker run -d --name ankusdrive-solvers \
      --user "$(id -u):$(id -g)" -e HOME=/tmp \
+     --tmpfs /tmp:rw,exec,size=2g \
      -v "$TMPDIR:$TMPDIR" \
-     ghcr.io/gchen19/ankusdrive-heavy sleep infinity
+     ghcr.io/gchen19/ankusdrive-solvers sleep infinity
    ```
 
    `--user` makes the solvers run as you. Without it, a native Linux engine writes
    every case file as root, and AnkusDrive can't clean up its own scratch.
+
+   `--tmpfs /tmp` gives the container its own writable scratch in memory. Solvers use
+   it heavily — OpenMPI's session files (Elmer), openEMS's simulation dirs, numba's
+   cache — and on a host whose Docker disk is full, every one of those fails in a way
+   that looks like a solver bug rather than a full disk.
 
    On macOS, Docker Desktop shares `/private` and `/var/folders` (where `$TMPDIR`
    lives) by default. With another engine (OrbStack, colima, podman), make sure that
@@ -127,6 +141,14 @@ Blender at all. See [`SOLVERS_MACOS.md`](SOLVERS_MACOS.md).
 - **Only the solvers listed above** use the container. SU2, CalculiX (`ccx` for
   warpage and core FEM), PrusaSlicer, Blender, KrakenOS and the pip-wheel solvers
   resolve on the host as usual.
+- **A host install's paths in your config win, and then fail inside the container.**
+  `ANKUSDRIVE_*` overrides — in the environment or in `config.toml` — are taken as
+  IN-CONTAINER paths and trusted, because the host cannot see inside. So a
+  `config.toml` written for a native install (say `openfoam_bashrc =
+  "/usr/lib/openfoam/openfoam2606/etc/bashrc"`) is sourced in a container that has
+  openfoam2512, and the solve fails with `blockMesh: command not found` rather than
+  anything about paths. Under this substrate, either clear those entries or set them
+  to what the image publishes (`docker exec <container> env | grep ANKUSDRIVE_`).
 - **Prepared `case_dir`s must live under the mounted scratch.** A case directory you
   pass in yourself is used at its host path, so it only exists inside the container
   if it is under `$TMPDIR`.
