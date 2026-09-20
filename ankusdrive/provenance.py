@@ -184,7 +184,7 @@ def identify(name: str, resolved: dict | None = None) -> dict:
 
 
 def tilde(path: str | None) -> str | None:
-    """``/home/alice/opt/yade/bin/yade`` -> ``~/opt/yade/bin/yade``.
+    """``/home/user/opt/yade/bin/yade`` -> ``~/opt/yade/bin/yade``.
 
     A transcript is meant to be shareable, and a solver under ``$HOME`` carries the
     user's name in its path. Which install it was survives; who they are does not.
