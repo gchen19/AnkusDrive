@@ -4,7 +4,15 @@ Verified end-to-end on macOS 26.5 / arm64, FreeCAD 1.1.1, 2026-08-30. Every comm
 below was actually run on that machine; the per-family results are what
 `solve_capabilities` reported afterwards, not what the packages claim.
 
-> **Read this first — the one mistake that costs an afternoon.**
+> **Read this first — the shortcut that replaces most of this page.**
+> Since #419 (2026-09-19) the **container substrate** runs every Linux-only family on
+> macOS out of one prebuilt multi-arch image: OpenFOAM CFD, preCICE FSI, molding fill,
+> **Elmer, YADE, openEMS and Bempp**. That is one `docker pull` instead of the Multipass
+> VM in section 3 and the source builds in section 5 and the appendix. See
+> [`CONTAINER_SUBSTRATE.md`](CONTAINER_SUBSTRATE.md) — start there, and treat the
+> native/VM recipes below as the fallback for when you want a solver on the host.
+
+> **Read this second — the one mistake that costs an afternoon.**
 > Wheel-backed solvers must be installed into **FreeCAD's bundled Python**, not into
 > the repo `.venv`. See [Which interpreter](#which-interpreter) below.
 
@@ -39,24 +47,47 @@ use `python -m pip`.
 
 ## Result on the reference machine
 
-8 of 12 families working — 7 reported by `solve_capabilities`, plus `acoustics_bem`,
-which functions but reports `unwired` (see the [reporting gap](#the-unwired-reporting-gap)).
-Before this pass only 3 were.
+**2026-08-30 (Multipass + native):** 8 of 12 families working — 7 reported by
+`solve_capabilities`, plus `acoustics_bem`, which functions but reports `unwired` (see
+the [reporting gap](#the-unwired-reporting-gap)). Before that pass only 3 were.
+
+**2026-09-20 (container substrate):** `ankusdrive doctor` reports **13 families ready,
+0 unwired, 0 absent** on macOS 26.5 / arm64 — the eight above plus `thermal_transient`,
+`dem`, `em_fullwave` and `fsi` in the container, and `studio_render` on a native
+Homebrew Blender.
+
+Discovery is the weaker claim; these are **live solves** under `RUN_HEAVY_SOLVES=1`,
+against `ghcr.io/gchen19/ankusdrive-heavy` (native arm64, 12.9 GB) on OrbStack:
+
+| Suite | Result | Live evidence |
+|---|---|---|
+| `test_elmer` | 13/13 (3.0s) | Heisler oracle + small-Biot lumped agreement |
+| `test_granular` | 6/6 (11.8s) | YADE settled 656 spheres → φ=0.588, coordination 5.71 |
+| `test_em_fullwave` | 9/9 (97.8s) | openEMS FDTD waveguide solves |
+| `test_acoustics_bem` | 5/5 (34.8s) | Bempp vs Mie: ratio 0.9856 @ ka=2, 1.0063 @ ka=4 |
+| `test_fsi` | 4/4 (7.5s) | **coupled preCICE OpenFOAM↔CalculiX**: 4 windows converged, tip 0 → 3.4696 mm |
+
+The FSI row is the one worth noting — a real coupled solve on macOS, which
+[section 5](#5-solvers-with-no-native-macos-build) previously called unreachable.
 
 | Family | Status | Backend |
 |---|---|---|
 | `warpage` | ✅ | CalculiX — bundled with FreeCAD, zero setup |
 | `slicing` | ✅ | PrusaSlicer.app |
-| `cfd` | ✅ | OpenFOAM v2512 (Multipass VM) + SU2 8.5.0 |
+| `cfd` | ✅ | OpenFOAM v2512 (Multipass VM, or the container) + SU2 8.5.0 native |
 | `mbd` | ✅ | mujoco 3.12.0 |
 | `topology` | ✅ | solidspy |
 | `optics` | ✅ | optiland 0.6.2 |
 | `optics_nonseq` | ✅ | KrakenOS 1.0.0.24 |
-| `acoustics_bem` | ⚠️ works, reports "unwired" | bempp-cl 0.4.2 — see [caveat](#the-unwired-reporting-gap) |
-| `thermal_transient` | ❌ | Elmer — no prebuilt binaries; buildable from source, see [appendix](#appendix-building-elmer-on-apple-silicon) |
-| `dem` | ❌ | YADE — Linux-only build recipe |
-| `em_fullwave` | ❌ | openEMS — Linux-only build recipe |
-| `fsi` | ❌ | preCICE — Linux-only build recipe |
+| `acoustics_bem` | ✅ (⚠️ reports "unwired" on a *host* venv) | bempp-cl — clean in the container; see [caveat](#the-unwired-reporting-gap) |
+| `thermal_transient` | ✅ since #384 / #419 | Elmer — source build (see [appendix](#appendix-building-elmer-on-apple-silicon)) **or** the container |
+| `dem` | ✅ since #419 | YADE — container only; no macOS build recipe exists |
+| `em_fullwave` | ✅ since #419 | openEMS — container only; no macOS build recipe exists |
+| `fsi` | ✅ since #419 | preCICE + both adapters — container only |
+
+The last four rows read ❌ when this page was written on 2026-08-30. #384 (Elmer source
+build) and #419 (the container substrate) closed all four; the table now records what is
+reachable today, not what the reference machine happened to have installed that day.
 
 ## 1. Wheel solvers — into FreeCAD's Python
 
@@ -115,13 +146,24 @@ CalculiX needs nothing: FreeCAD ships `ccx` (and `gmsh`) in
 
 ## 3. OpenFOAM via Multipass
 
+> **Prefer the container.** Everything in this section is the older of two substrates.
+> The container ([`CONTAINER_SUBSTRATE.md`](CONTAINER_SUBSTRATE.md)) crosses the same
+> seam, needs no VM provisioning, and carries Elmer/YADE/openEMS/Bempp as well. Use
+> Multipass only if you already run it or you want a VM you control.
+
 There is no native macOS OpenFOAM. AnkusDrive drives a Linux VM instead: `bash_argv`
 (`ankusdrive/solvers.py:707`) swaps `["bash","-c",script]` for
 `["multipass","exec",<vm>,"--","bash","-c","cd <case> && …"]`.
 
-The mechanism is opt-in per solver via a `substrate_bins` key — **only `openfoam` and
-`precice` declare one**. Elmer, YADE and openEMS have no substrate path, so putting them
-in the VM would not help; they must run natively, and no macOS recipe exists.
+Under **Multipass** the mechanism is opt-in per solver via a `substrate_bins` key, and
+only `openfoam` and `precice` declare one — so putting Elmer, YADE or openEMS in the VM
+would not help.
+
+**This is no longer true of the container substrate.** Since #419 those solvers carry a
+registry `"container": True` flag instead, and are resolved by *probing* the running
+container rather than by a `substrate_bins` host glob — so all four cross into it. The
+claim that they "must run natively, and no macOS recipe exists" applied to the VM, and
+only until 2026-09-19.
 
 ```bash
 bash scripts/install-solvers.sh multipass          # provision the VM
@@ -199,6 +241,11 @@ Then set `bempp_python` in config.toml (above).
 
 ### The "unwired" reporting gap
 
+> **Does not apply under the container substrate.** There bempp is resolved by probing
+> `/opt/venv-bempp` inside the container, so `acoustics_bem` reports a plain
+> `ready via bempp_cl (in container)`. Verified on macOS arm64, 2026-09-20. The gap
+> below is specific to a host venv wired through `ANKUSDRIVE_BEMPP_PYTHON`.
+
 bempp will report **`unwired`** even when correctly installed and wired. This is a
 reporting bug, not a broken install:
 
@@ -222,18 +269,29 @@ print(subprocess.run([exe,'-c','import bempp_cl;print(\"child import OK\")'],
 The same gap applies to `openems` (`ANKUSDRIVE_OPENEMS_PYTHON`) and `kraken`
 (`ANKUSDRIVE_OPTICS_GPL_PYTHON`) wherever those live in a separate venv.
 
-## 5. What is genuinely unavailable on macOS
+## 5. Solvers with no native macOS build
 
-| Family | Solver | Why |
-|---|---|---|
-| `thermal_transient` | Elmer | No prebuilt binaries anywhere — but it **does** build on Apple Silicon. See [Building Elmer](#appendix-building-elmer-on-apple-silicon). |
-| `dem` | YADE | `build_dem_gpl` is hard-gated to Linux (apt toolchain: boost, CGAL, VTK, metis). |
-| `em_fullwave` | openEMS | `build_openems` is hard-gated to Linux (apt + `update_openEMS.sh`). |
-| `fsi` | preCICE | `build_fsi` is hard-gated to Linux. *In principle* reachable via Multipass — preCICE is one of the two solvers declaring `substrate_bins` — but the recipe (libprecice + CalculiX adapter + OpenFOAM adapter, 4 env vars) has not been run in the VM. |
+None of these has a practical native macOS build, and for three of the four no macOS
+build recipe exists at all. **All four now run on macOS through the container** (#419) —
+the `build_*` gates below are about building on the *host*, which the container makes
+unnecessary.
+
+| Family | Solver | Native host build | Container |
+|---|---|---|---|
+| `thermal_transient` | Elmer | source build, ~1 h — [appendix](#appendix-building-elmer-on-apple-silicon); automated by `install-solvers.sh elmer` (#384) | ✅ `/opt/elmer/bin` |
+| `dem` | YADE | none — `build_dem_gpl` is hard-gated to Linux (apt: boost, CGAL, VTK, metis) | ✅ `/opt/yade/bin/yade` |
+| `em_fullwave` | openEMS | none — `build_openems` is hard-gated to Linux (apt + `update_openEMS.sh`) | ✅ `/opt/venv-openems` |
+| `fsi` | preCICE | none — `build_fsi` is hard-gated to Linux | ✅ `/opt/fsi` (libprecice + both adapters, prebuilt) |
+
+`build_fsi` being Linux-gated no longer costs you the family: the container ships the
+whole stack prebuilt, so you export the four paths instead of building them. preCICE is
+the one container family that is **not** auto-probed — see
+[`CONTAINER_SUBSTRATE.md`](CONTAINER_SUBSTRATE.md) step 3.
 
 Note `scripts/install-solvers.sh` still prints "macOS: Docker only — the runner glue is
-Linux-only (issue #193)" for OpenFOAM. That guidance is **stale**: the Multipass path in
-`solvers.py` works, as section 3 demonstrates.
+Linux-only (issue #193)" for OpenFOAM. That line is stale in its reasoning but has
+accidentally become right about the destination: Docker *is* now the recommended macOS
+path, though via the container substrate, not by hand.
 
 ## Restart after wiring
 
@@ -249,6 +307,13 @@ or update wipes it. Re-run section 1 afterwards.
 ---
 
 # Appendix: building Elmer on Apple Silicon
+
+> **You probably do not need this any more.** The container carries Elmer prebuilt at
+> `/opt/elmer/bin` (all three of `ElmerSolver`, `ElmerGrid`, `ViewFactors`), built from
+> source for arm64 in the image itself — so `thermal_transient`, CHT, low-frequency EM
+> and acoustic/harmonic FEM work on macOS with one `docker pull` and no compiler. Build
+> natively only if you want Elmer on the host (no container, or you are driving it
+> outside AnkusDrive). Everything below stays valid for that case.
 
 The `thermal_transient` family (plus CHT, low-frequency EM, and acoustic/harmonic FEM)
 runs on Elmer. macOS is the only platform where AnkusDrive cannot hand you a binary — but
