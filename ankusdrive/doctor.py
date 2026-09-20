@@ -472,7 +472,7 @@ def _fmt_container_image(img: dict) -> list[str]:
     if not v:
         if digest:
             lines.append(f"        verify: bash scripts/verify-container-image.sh "
-                         f"{(ref or '').split(':')[0]}@{digest}")
+                         f"{solvers.image_base(ref or '')}@{digest}")
         return lines
     status = v.get("status")
     built = v.get("self_declared") or {}
