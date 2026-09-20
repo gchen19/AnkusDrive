@@ -234,7 +234,10 @@ def test_container_run_command_mounts_the_scratch_at_the_same_path():
         p.env(ANKUSDRIVE_CONTAINER_ENGINE="podman", ANKUSDRIVE_CONTAINER="foam")
         cmd = solvers.container_run_command()
         assert cmd.startswith("podman run -d --name foam "), cmd
-        assert '-v "$TMPDIR:$TMPDIR"' in cmd and "ghcr.io/gchen19/ankusdrive-heavy" in cmd
+        assert '-v "$TMPDIR:$TMPDIR"' in cmd and "ghcr.io/gchen19/ankusdrive-solvers" in cmd
+        # solvers write heavily to /tmp (OpenMPI, openEMS, numba); a full Docker disk
+        # otherwise fails a solve in a way that looks like a solver bug (#422)
+        assert "--tmpfs /tmp" in cmd, cmd
         # as the host user, or case files come out root-owned on a native Linux engine
         assert '--user "$(id -u):$(id -g)"' in cmd and "-e HOME=/tmp" in cmd, cmd
 
