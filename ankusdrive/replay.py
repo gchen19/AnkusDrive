@@ -42,7 +42,11 @@ that script. It is pure Python (no FreeCAD, no ``mcp``):
   different solver, or a failing gate stops there.
 * **Paths are redacted.** Absolute paths become ``WORKDIR / "<relative>"``, so a shared
   script carries no ``/Users/<name>/…``. Paths the session read but did not write are
-  listed as prerequisites.
+  listed as prerequisites — including a prepared solver deck (``case_dir`` / ``sif`` /
+  ``stl_path``), which the replay needs before it starts (#437). A path an earlier step
+  *produced* and nothing in the script writes — a case dir handed from one solve to the
+  next — is a hand-off the script cannot make, and is stated as a warning instead of
+  listed as a file nobody can supply.
 * **The environment is carried with it.** With a ``provenance`` record the script
   opens with a ``PROVENANCE`` literal — AnkusDrive / Python / FreeCAD / platform /
   substrate, and every solver the session reached, with the path it resolved to, the
@@ -248,8 +252,15 @@ _NOT_A_CHECK = {"elapsed_s", "elapsed", "wall_time_s", "cpu_time_s", "runtime_s"
 # Verdict fields — what the analysis was, not what it measured. Compared exactly.
 _EXPECT_KEY = ("ok", "pass", "fidelity", "basis", "correlation", "solver", "status",
                "converged", "mode")
+# Parameters naming a path the call READS. The exporter's default is the opposite —
+# a path argument is somewhere the call writes — which is right for `path` / `out_dir`
+# and wrong for every prepared input: a file the replay needs before it starts, and
+# which therefore belongs under Prerequisites. `case_dir` / `sif` / `stl_path` are the
+# solver half (a prepared .sif + mesh, an OpenFOAM case tree, an STL to trace or
+# slice); the solver also WRITES its output into a case dir, but what matters for a
+# replay is that the deck has to be there first (#437).
 _INPUT_PARAMS = {"registry", "manifest", "manifest_path", "input", "source", "src", "file",
-                 "lockfile"}
+                 "lockfile", "case_dir", "cooling_case_dir", "sif", "stl_path"}
 _RESERVED = {"s", "sys", "Path", "Session", "WORKDIR"}
 
 
@@ -403,6 +414,20 @@ def _is_path(value: str) -> bool:
 
 def _collect_paths(entries) -> list:
     return [v for e in entries for _, _, v in _walk_strings(e.get("args") or {}) if _is_path(v)]
+
+
+def _produced_paths(entries) -> dict:
+    """``{path: seq}`` for every path a call RETURNED, at the first step that returned
+    it. A tool that hands back where it worked — a solver's ``case_dir``, an export's
+    resolved path — names a path the session made, not one the user supplied."""
+    out: dict = {}
+    for e in sorted(entries, key=lambda e: e["seq"]):
+        if not e.get("ok"):
+            continue
+        for _path, _k, v in _walk_strings(e.get("result") or {}):
+            if _is_path(v) and v not in out:
+                out[v] = e["seq"]
+    return out
 
 
 def _scopes(result) -> list:
@@ -593,6 +618,7 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
     # 4. paths -------------------------------------------------------------------------
     emitted = [e for e in entries if kind[e["seq"]] in live | {"fail"}]
     paths = _Paths(_collect_paths(emitted), workdir)
+    produced = _produced_paths(entries)
     prerequisites, written = [], set()
     for e in emitted:
         if kind[e["seq"]] == "fail":
@@ -602,10 +628,21 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
                 continue
             reads = e["tool"] == "open_document" or e["tool"] in read_only or k in _INPUT_PARAMS
             rel = "/".join(paths.rel(v))
-            if reads and v not in written and rel not in prerequisites:
-                prerequisites.append(rel)
             if not reads:
                 written.add(v)
+            elif v in written:
+                pass                       # an earlier step in the script writes it
+            elif produced.get(v, e["seq"]) < e["seq"]:
+                # an earlier step's own output, handed on by path and written by nothing
+                # the script does — a solver case dir from a previous solve, say. A
+                # replay regenerates that somewhere else, so it is not a file to copy
+                # in; it is a hand-off the script cannot make.
+                warnings.append(
+                    f"step {e['seq']}: {k} is a path step {produced[v]} produced, not an "
+                    "input you supply; a replay regenerates it elsewhere (often a fresh "
+                    "temp dir), so re-point this argument by hand before running")
+            elif rel not in prerequisites:
+                prerequisites.append(rel)
 
     # 5. emit --------------------------------------------------------------------------
     names: dict[str, str] = {}                  # linked value -> variable
