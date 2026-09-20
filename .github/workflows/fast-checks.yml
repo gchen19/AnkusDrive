@@ -132,6 +132,13 @@ jobs:
         # worker tiers SKIP without mcp / FreeCAD and run in run_all.
         run: python tests/test_session_transcript.py
 
+      - name: Analysis provenance — the transcript audits simulations and solvers (#433)
+        # Static tier here (the environment record, $HOME collapsed out of solver paths,
+        # drift, and the exporter keeping and checking analysis + solve results). The
+        # server tier SKIPs without mcp and the solver tier without FreeCAD + Elmer;
+        # both run in run_all.
+        run: python tests/test_audit_provenance.py
+
       - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
         # Each shim keeps a <=0.4.x install working and each fails silently if it
         # regresses. Delete this step with the shims in 0.6.
