@@ -59,8 +59,13 @@ done
 echo "solvers: $selected"
 [ "$selected" != "$solvers" ] && echo "  (expanded from '$solvers' — fsi links libOpenFOAM)"
 
+# Stamp the checkout this was built from, so `ankusdrive doctor` reports "the image
+# you built here (commit …), unsigned" instead of warning about an unknown image.
+commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 args=(--target slim -t "$tag" -f docker/heavy-solvers/Dockerfile
-      --build-arg "SOLVER_SRC=$solver_src")
+      --build-arg "SOLVER_SRC=$solver_src"
+      --build-arg "BUILT_SOURCE=local"
+      --build-arg "BUILT_COMMIT=$commit")
 for s in $ALL; do
   on=off
   case " $selected " in *" $s "*) on=on ;; esac

@@ -502,6 +502,12 @@ RUN rm -rf /opt/of7/OpenFOAM/OpenFOAM-7/platforms/*/applications \
 # The published image: the runtime base plus the assembled solver tree, one layer.
 FROM runtime AS slim
 ARG TARGETARCH
+# How this image was built, recorded in its manifest so `doctor` can tell a local
+# build from an anonymous image (#423). Self-asserted: it phrases a message, it is
+# never evidence — the signature over the published digest is.
+ARG BUILT_SOURCE=local
+ARG BUILT_COMMIT=
+ARG BUILT_WORKFLOW=
 ARG WITH_OPENFOAM
 ARG WITH_ELMER
 ARG WITH_YADE
@@ -555,7 +561,8 @@ RUN set -eu \
  ; [ "$WITH_FSI"      = on ] && sel="$sel fsi"      || true \
  ; [ "$WITH_OIMS"     = on ] && sel="$sel oims"     || true \
  ; [ "$WITH_BEMPP"    = on ] && sel="$sel bempp"    || true \
- ; bash /usr/local/bin/ankusdrive-write-manifest "$TARGETARCH" $sel \
+ ; BUILT_SOURCE="$BUILT_SOURCE" BUILT_COMMIT="$BUILT_COMMIT" BUILT_WORKFLOW="$BUILT_WORKFLOW" \
+     bash /usr/local/bin/ankusdrive-write-manifest "$TARGETARCH" $sel \
  ; cat /etc/ankusdrive/solvers.json
 
 COPY tools/container_runtime_deps.sh /usr/local/bin/ankusdrive-runtime-deps

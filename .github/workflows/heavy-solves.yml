@@ -127,6 +127,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The pin says WHICH bytes; this says WHO built them (#423). A digest a lane
+      # trusts for hours of live solves should be one this repository's image workflow
+      # signed, not merely one that was in the registry. It runs before the pull, so a
+      # digest that cannot be attributed never reaches a solve.
+      #
+      # REQUIRE_ATTESTATION is 0 until the pins move to an image published AFTER
+      # signing landed: today's pinned digest predates it and has nothing to verify,
+      # and a gate that fails on that would only teach everyone to ignore it. The
+      # pin-bump PR flips this to 1 — and that is the commit where this gate is
+      # actually proven, because the new digest is signed.
+      - name: Verify the pinned image's provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUIRE_ATTESTATION: "0"
+        run: |
+          if gh attestation verify "oci://$HEAVY_IMAGE" --repo "$GITHUB_REPOSITORY" \
+               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/heavy-image.yml"; then
+            echo "provenance verified for $HEAVY_IMAGE"
+          elif [ "$REQUIRE_ATTESTATION" = "1" ]; then
+            echo "::error::$HEAVY_IMAGE has no verifiable provenance from this repo"
+            exit 1
+          else
+            echo "::warning::$HEAVY_IMAGE has no verifiable provenance (pinned before #423; bump the pin to a signed image and set REQUIRE_ATTESTATION=1)"
+          fi
+
       - name: Pull solver image
         run: |
           docker pull "$HEAVY_IMAGE"
@@ -203,6 +228,31 @@ jobs:
       # probing the container, the zero-config path a macOS user gets (#419). The
       # image's other ANKUSDRIVE_* values (FreeCAD, CalculiX, ...) name container paths
       # the host must never try to run.
+      # The pin says WHICH bytes; this says WHO built them (#423). A digest a lane
+      # trusts for hours of live solves should be one this repository's image workflow
+      # signed, not merely one that was in the registry. It runs before the pull, so a
+      # digest that cannot be attributed never reaches a solve.
+      #
+      # REQUIRE_ATTESTATION is 0 until the pins move to an image published AFTER
+      # signing landed: today's pinned digest predates it and has nothing to verify,
+      # and a gate that fails on that would only teach everyone to ignore it. The
+      # pin-bump PR flips this to 1 — and that is the commit where this gate is
+      # actually proven, because the new digest is signed.
+      - name: Verify the pinned image's provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUIRE_ATTESTATION: "0"
+        run: |
+          if gh attestation verify "oci://$HEAVY_IMAGE" --repo "$GITHUB_REPOSITORY" \
+               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/heavy-image.yml"; then
+            echo "provenance verified for $HEAVY_IMAGE"
+          elif [ "$REQUIRE_ATTESTATION" = "1" ]; then
+            echo "::error::$HEAVY_IMAGE has no verifiable provenance from this repo"
+            exit 1
+          else
+            echo "::warning::$HEAVY_IMAGE has no verifiable provenance (pinned before #423; bump the pin to a signed image and set REQUIRE_ATTESTATION=1)"
+          fi
+
       - name: Start the solver container
         run: |
           scratch="$RUNNER_TEMP/scratch"

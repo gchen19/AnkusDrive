@@ -223,6 +223,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Sigstore signs with a short-lived OIDC identity; the attestation is then
+      # written to this repo and pushed beside the image (#423).
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -252,15 +256,50 @@ jobs:
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "$IMAGE@sha256:%s " *)
       - name: Record the digest to pin
+        id: pin
         run: |
           ref="$IMAGE:${{ steps.meta.outputs.version }}"
           docker buildx imagetools inspect "$ref"
           digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
             echo "### ankusdrive-heavy (linux/amd64 + linux/arm64)"
             echo "Pin in heavy-solves.yml: \`$IMAGE@$digest\`"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "PIN $IMAGE@$digest"
+      # WHAT SIGNS THIS IMAGE (#423). `docker pull` trusts whatever the registry
+      # serves; a digest pin proves only that two people got the same bytes, not who
+      # built them. These attestations tie THIS digest to this repository, this
+      # workflow file and this commit, signed through Sigstore with a short-lived
+      # OIDC identity — no key to store or leak. Users verify with
+      # `scripts/verify-container-image.sh` (a `gh attestation verify` wrapper).
+      #
+      # The subject is the multi-arch MANIFEST digest, which is what a tag resolves
+      # to and therefore what anyone actually pulls.
+      - name: Attest build provenance (heavy)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.pin.outputs.digest }}
+          push-to-registry: true
+      # An SBOM turns "is it authentic?" into "what is in it?" — the question that
+      # matters when a CVE lands in one of the bundled solvers' dependencies.
+      - name: Generate SBOM (heavy)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.pin.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Attest SBOM (heavy)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.pin.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+
 
   slim:
     name: Slim solver image (${{ matrix.platform.arch }})
@@ -298,6 +337,10 @@ jobs:
           file: docker/heavy-solvers/Dockerfile
           target: slim
           platforms: linux/${{ matrix.platform.arch }}
+          build-args: |
+            BUILT_SOURCE=published
+            BUILT_COMMIT=${{ github.sha }}
+            BUILT_WORKFLOW=.github/workflows/heavy-image.yml
           # The slim stage's own RUN steps are the gate: every solver's DT_NEEDED must
           # resolve (tools/container_runtime_deps.sh --check, so the trimmed package
           # list is complete on THIS arch) and every solver must actually run. A PR
@@ -408,6 +451,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Sigstore signs with a short-lived OIDC identity; the attestation is then
+      # written to this repo and pushed beside the image (#423).
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -437,12 +484,47 @@ jobs:
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "$SLIM_IMAGE@sha256:%s " *)
       - name: Record the digest to pin
+        id: pin
         run: |
           ref="$SLIM_IMAGE:${{ steps.meta.outputs.version }}"
           docker buildx imagetools inspect "$ref"
           digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
             echo "### ankusdrive-solvers — slim, for ANKUSDRIVE_SUBSTRATE=container (linux/amd64 + linux/arm64)"
             echo "Pin in docs/CONTAINER_SUBSTRATE.md: \`$SLIM_IMAGE@$digest\`"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "PIN $SLIM_IMAGE@$digest"
+      # WHAT SIGNS THIS IMAGE (#423). `docker pull` trusts whatever the registry
+      # serves; a digest pin proves only that two people got the same bytes, not who
+      # built them. These attestations tie THIS digest to this repository, this
+      # workflow file and this commit, signed through Sigstore with a short-lived
+      # OIDC identity — no key to store or leak. Users verify with
+      # `scripts/verify-container-image.sh` (a `gh attestation verify` wrapper).
+      #
+      # The subject is the multi-arch MANIFEST digest, which is what a tag resolves
+      # to and therefore what anyone actually pulls.
+      - name: Attest build provenance (slim)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.SLIM_IMAGE }}
+          subject-digest: ${{ steps.pin.outputs.digest }}
+          push-to-registry: true
+      # An SBOM turns "is it authentic?" into "what is in it?" — the question that
+      # matters when a CVE lands in one of the bundled solvers' dependencies.
+      - name: Generate SBOM (slim)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.SLIM_IMAGE }}@${{ steps.pin.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Attest SBOM (slim)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.SLIM_IMAGE }}
+          subject-digest: ${{ steps.pin.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+
