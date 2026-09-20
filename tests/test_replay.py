@@ -207,6 +207,61 @@ def test_paths_redacted():
     assert "(WORKDIR / 'out').mkdir(" in out["script"]
 
 
+def test_a_prepared_solver_case_is_a_prerequisite():
+    """A `case_dir` / `sif` / `stl_path` is a deck the replay needs BEFORE it runs, not
+    somewhere the call writes. Treating it as an output pointed the script at a
+    directory that does not exist and said nothing about it (#437)."""
+    out = R.export([
+        E(1, "thermal_transient_submit", {"case_dir": "/Users/you/decks/slab",
+                                          "sif": "/Users/you/decks/slab/case.sif"},
+          {"job_id": "job_1", "status": "running"}),
+        E(2, "slice_gcode_submit", {"stl_path": "/Users/you/decks/part.stl"},
+          {"job_id": "job_2", "status": "running"}),
+    ])
+    assert sorted(out["prerequisites"]) == ["part.stl", "slab", "slab/case.sif"], \
+        out["prerequisites"]
+    assert "/Users" not in out["script"], out["script"]
+    assert not any("re-point" in w for w in out["warnings"]), out["warnings"]
+    # an output directory is still an output
+    out = R.export([E(1, "release_package", {"item": "P-1", "out_dir": "/Users/you/p/out"})])
+    assert out["prerequisites"] == [], out["prerequisites"]
+
+
+def test_a_case_dir_the_session_produced_is_a_warning_not_a_prerequisite():
+    """The coupled hand-off (#116): a fill solve reports where it worked and a warpage
+    solve is pointed at it. Nothing supplies that directory — a replay regenerates the
+    case in a fresh temp dir — so it is not a file to copy in, and the script says so
+    instead of listing a prerequisite nobody can satisfy."""
+    out = R.export([
+        E(1, "molding_fill_submit", {"body": "pad_1", "stages": "fill_pack"},
+          {"job_id": "job_1", "status": "running"}),
+        E(2, "job_result", {"job_id": "job_1"},
+          {"job_id": "job_1", "status": "done",
+           "result": {"ok": True, "solver": "openfoam", "case_dir": "/tmp/foam_mold_abc"}}),
+        E(3, "molding_warpage_submit", {"body": "pad_1", "cooling_case_dir": "/tmp/foam_mold_abc"},
+          {"job_id": "job_2", "status": "running"}),
+    ])
+    assert out["prerequisites"] == [], out["prerequisites"]
+    warned = [w for w in out["warnings"] if "re-point" in w]
+    assert len(warned) == 1 and "step 3" in warned[0] and "step 2 produced" in warned[0], \
+        out["warnings"]
+    assert warned[0] in out["script"], "the warning belongs in the script's header too"
+
+
+def test_a_path_the_script_itself_writes_is_neither():
+    """Save to a path, reopen it: the script writes it before it reads it, so it is not
+    a prerequisite — and not the #437 hand-off warning either, even though an earlier
+    result echoed the path back."""
+    out = R.export([
+        E(1, "add_primitive", {"kind": "box"}, {"handle": "box_1"}),
+        E(2, "save_document", {"path": "/Users/you/p/out/a.FCStd"},
+          {"saved": "/Users/you/p/out/a.FCStd"}),
+        E(3, "open_document", {"path": "/Users/you/p/out/a.FCStd"}, {"doc": "a"}),
+    ])
+    assert out["prerequisites"] == [], out["prerequisites"]
+    assert not any("re-point" in w for w in out["warnings"]), out["warnings"]
+
+
 def test_paths_without_common_root_keep_distinct_dirs():
     out = R.export([
         E(1, "export_shape", {"path": "/tmp/a/part.step"}),
