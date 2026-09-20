@@ -63,7 +63,8 @@ _ISOLATE = ("ANKUSDRIVE_SUBSTRATE", "ANKUSDRIVE_CONTAINER", "ANKUSDRIVE_CONTAINE
             "ANKUSDRIVE_OPENINJMOLDSIM_PATH", "ANKUSDRIVE_OPENINJMOLDSIM_BASHRC",
             "ANKUSDRIVE_WSL_DISTRO", "WM_PROJECT_DIR", "ANKUSDRIVE_CONFIG",
             "ANKUSDRIVE_ELMER_PATH", "ANKUSDRIVE_YADE", "ANKUSDRIVE_YADE_PATH",
-            "ANKUSDRIVE_OPENEMS_PYTHON", "ANKUSDRIVE_BEMPP_PYTHON")
+            "ANKUSDRIVE_OPENEMS_PYTHON", "ANKUSDRIVE_BEMPP_PYTHON",
+            "ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE")
 
 
 class _patch:
@@ -779,6 +780,120 @@ def test_an_unreachable_container_still_trusts_an_override():
         p.set(solvers, "_container_inspect", lambda eng, name: None)   # absent
         p.env(ANKUSDRIVE_OPENFOAM_BASHRC=_C_BASHRC)
         assert solvers.openfoam_bashrc() == _C_BASHRC
+
+# --- is this image ours? (#423) ---------------------------------------------------
+
+def _image(p, *, ref="ghcr.io/gchen19/ankusdrive-solvers:latest",
+           digest="sha256:" + "a" * 64, verify=None, manifest=None):
+    """A running container created from ``ref``@``digest``, with ``verify`` standing in
+    for what `gh attestation verify` returns: (returncode, output)."""
+    _container_host(p)
+    _fake_container(p, manifest=manifest)
+    p.set(solvers, "_container_inspect_config",
+          lambda eng, name: json.dumps({"Image": ref,
+                                        "RepoDigests": [f"{ref.split(':')[0]}@{digest}"]
+                                        if digest else []}))
+    p.set(solvers, "_gh_verify_exec", lambda r, t: verify)
+
+
+def test_a_signed_image_verifies():
+    with _patch() as p:
+        _image(p, verify=(0, "Verification succeeded!"))
+        v = solvers.verify_container_image()
+        assert v["status"] == "verified", v
+        assert v["repo"] == "gchen19/AnkusDrive"
+        assert v["workflow"].endswith("heavy-image.yml")
+
+
+def test_a_custom_image_is_unsigned_not_failed_and_can_be_allowed():
+    """A user building their own image is the normal case, not an attack. It warns
+    once, says why, and ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE=1 accepts it for good."""
+    built = _manifest(solvers=("openfoam",))
+    built = json.dumps({**json.loads(built),
+                        "built": {"source": "local", "commit": "abc1234"}})
+    with _patch() as p:
+        _image(p, verify=(1, "no attestations found for subject"), manifest=built)
+        v = solvers.verify_container_image()
+        assert v["status"] == "unsigned", v
+        assert v["allowed_by_config"] is False
+        assert v["self_declared"] == {"source": "local", "commit": "abc1234"}, v
+        p.env(ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE="1")
+        assert solvers.verify_container_image()["allowed_by_config"] is True
+    # an image built with no registry digest at all cannot be verified either
+    with _patch() as p:
+        _image(p, digest=None, verify=(0, "should not be consulted"))
+        v = solvers.verify_container_image()
+        assert v["status"] == "unsigned" and "built locally" in v["reason"], v
+
+
+def test_an_attestation_from_another_repo_is_a_mismatch_and_is_never_silenced():
+    """The case signing exists to catch: an image that carries provenance, just not
+    ours. The override is for YOUR images, not for one impersonating this repo."""
+    from ankusdrive import doctor
+    with _patch() as p:
+        _image(p, verify=(1, "verification failed: certificate identity does not match"))
+        p.env(ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE="1")
+        v = solvers.verify_container_image()
+        assert v["status"] == "mismatch", v
+        out = "\n".join(doctor._fmt_container_image(
+            {"ref": "x:latest", "digest": "sha256:" + "a" * 64, "verification": v}))
+        assert "NOT signed" in out and "[warn]" in out, out
+        assert "allowed by" not in out, ("an override silenced a mismatch", out)
+
+
+def test_an_unrunnable_check_is_never_reported_as_authentic():
+    """No gh, no auth, no network: the honest answer is "not checked", never a pass."""
+    with _patch() as p:
+        _image(p, verify=None)                       # gh missing
+        v = solvers.verify_container_image()
+        assert v["status"] == "unavailable" and "gh" in v["reason"], v
+    with _patch() as p:
+        _image(p, verify=(1, "error: gh auth login required (HTTP 401)"))
+        v = solvers.verify_container_image()
+        assert v["status"] == "unavailable" and "authenticated" in v["reason"], v
+    with _patch() as p:                              # an unfamiliar failure
+        _image(p, verify=(1, "some future gh message"))
+        assert solvers.verify_container_image()["status"] == "unavailable"
+    with _patch() as p:                              # gh too old: it prints its usage
+        _image(p, verify=(1, 'unknown command "attestation" for "gh"\n\nUsage: gh '
+                             "<command>\n\nAvailable commands:\n  alias\n  api\n"))
+        v = solvers.verify_container_image()
+        assert v["status"] == "unavailable", v
+        assert "2.49" in v["reason"] and "Available commands" not in v["reason"], \
+            ("gh's whole usage text was quoted back at the reader", v["reason"])
+        assert len(v["reason"]) < 200, v["reason"]
+
+
+def test_verification_never_runs_unless_asked():
+    """It is the one solver call that reaches the network, so no default path — and
+    no MCP status call — may trigger it."""
+    from ankusdrive import doctor
+    with _patch() as p:
+        _image(p, verify=(0, "ok"))
+        p.set(solvers, "_gh_verify_exec",
+              lambda *a: (_ for _ in ()).throw(AssertionError("verified without asking")))
+        assert "verification" not in (doctor.build_report(
+            probe_version=False, mcp_serve=False)["container_image"] or {})
+
+
+def test_doctor_phrases_each_state_for_the_person_reading_it():
+    from ankusdrive import doctor
+    base = {"ref": "ghcr.io/gchen19/ankusdrive-solvers:latest", "digest": "sha256:" + "b" * 64}
+    def render(v):
+        return "\n".join(doctor._fmt_container_image({**base, "verification": v}))
+    verified = render({"status": "verified", "repo": "gchen19/AnkusDrive",
+                       "workflow": ".github/workflows/heavy-image.yml", "reason": "",
+                       "allowed_by_config": False, "self_declared": None})
+    assert "[ok]" in verified and "signed by gchen19/AnkusDrive" in verified
+    unsigned = render({"status": "unsigned", "reason": "no attestation was published",
+                       "repo": "gchen19/AnkusDrive", "workflow": "w",
+                       "allowed_by_config": False,
+                       "self_declared": {"source": "local", "commit": "abc1234"}})
+    assert "built here" in unsigned and "abc1234" in unsigned, unsigned
+    assert "ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE=1" in unsigned
+    allowed = render({"status": "unsigned", "reason": "x", "repo": "r", "workflow": "w",
+                      "allowed_by_config": True, "self_declared": None})
+    assert "[ok]" in allowed and "allowed by" in allowed, allowed
 
 # --- runner ---------------------------------------------------------------------
 

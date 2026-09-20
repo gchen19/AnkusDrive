@@ -145,6 +145,37 @@ running container was created from, and the exact command to check it.
 Images published before this landed have no attestation; the script says so rather
 than failing, since "nothing to check" and "check failed" are different answers.
 
+### Your own image is not a failure
+
+There are three outcomes, and only one is alarming:
+
+| | meaning | what to do |
+|---|---|---|
+| **verified** | provenance names this repository's image workflow | nothing |
+| **unsigned** | no attestation at all: an image you built, one published before signing, or no network/`gh` | expected for a custom image — silence it below |
+| **mismatch** | an attestation exists but names a **different** repository | do not run it; this is an image claiming to be ours |
+
+An image built by `tools/build_solver_image.sh` records the checkout it came from, so
+it is reported as *"unsigned — built here, commit abc1234"* rather than as an unknown
+image. (That record is the image describing itself; it is used to phrase the message
+and is never evidence. Only the signature is.)
+
+To accept an unsigned image for good — the normal case when you build your own:
+
+```bash
+export ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE=1     # or allow_unverified_image = true in config.toml
+```
+
+That silences **unsigned** only. A **mismatch** still warns, because the override is
+for images you built, not for one impersonating this repository. Nothing here blocks a
+solve either way: a check that stranded you offline, or on your own image, would cost
+more than it protects.
+
+`ankusdrive doctor --verify-image` runs the check, and the MCP tool
+`setup_status(verify_image=True)` returns the same verdict for an agent that is asked
+whether the solvers are authentic. Both are opt-in: it is the one call here that
+reaches the network.
+
 ## Building an image with only the solvers you want
 
 The published image carries every solver. If you only need some of them, build your

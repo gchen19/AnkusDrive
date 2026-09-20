@@ -3282,7 +3282,7 @@ def solve_capabilities() -> dict:
 
 
 @mcp.tool()
-def setup_status(verify_freecad_boot: bool = False) -> dict:
+def setup_status(verify_freecad_boot: bool = False, verify_image: bool = False) -> dict:
     """The machine-readable form of `ankusdrive doctor` — resolve FreeCAD and every
     solver family and report, per item, found/missing with the exact fix. Call this
     when the user asks to set up, diagnose, or finish installing AnkusDrive, then walk
@@ -3292,6 +3292,23 @@ def setup_status(verify_freecad_boot: bool = False) -> dict:
     environment is mutated (`verify_freecad_boot=True` additionally boots FreeCAD
     once, time-boxed, purely to read back its version — leave it False unless the
     user doubts the install actually runs).
+
+    `verify_image=True` additionally checks, OVER THE NETWORK, that the solver
+    container's image was signed by this repository — use it when the user asks
+    whether the solvers they are running are authentic. It adds
+    `container_image.verification` = {status, reason, repo, workflow,
+    allowed_by_config, self_declared}, where status is:
+      • `verified`   — provenance names this repository's image workflow;
+      • `unsigned`   — no attestation: an image the user built themselves (common and
+        legitimate), one published before signing existed, or no network/`gh`. Relay
+        it as expected-for-a-custom-image, and mention
+        ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE=1 silences it;
+      • `mismatch`   — an attestation exists but names a DIFFERENT repository. Say so
+        plainly: that is an image claiming to be ours. No setting silences it;
+      • `unavailable` — the check could not run (`reason` says why). Never report
+        this as authentic.
+    `self_declared` is what the image says about itself and is never evidence —
+    only the signature is.
 
     Returns {platform: {system, machine}, freecad: {available, path, source,
     version?, fix?}, install: {kind, source} (venv | pipx | uv_tool | uvx | mcpb —
@@ -3306,7 +3323,8 @@ def setup_status(verify_freecad_boot: bool = False) -> dict:
     `prepared_case_only` resolves but no AnkusDrive tool can build it a case, so it
     does not make its family available (SU2/cfd — issue #237)."""
     from ankusdrive import doctor
-    return doctor.build_report(probe_version=verify_freecad_boot)
+    return doctor.build_report(probe_version=verify_freecad_boot,
+                               verify_image=verify_image)
 
 
 @mcp.prompt()

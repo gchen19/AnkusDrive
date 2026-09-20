@@ -115,6 +115,8 @@ def cmd_doctor(args):
         # The deep MCP probe spawns a server process; --no-boot means "resolve only,
         # start nothing", so it silences this too (issue #278).
         mcp_serve=not (args.no_boot or args.no_mcp_serve),
+        # Opt-in: the only doctor step that reaches the network (#423).
+        verify_image=args.verify_image and not args.no_boot,
     )
     if args.json:
         print(json.dumps(report, indent=2))
@@ -210,6 +212,12 @@ def build_parser():
         help="start nothing: skip booting FreeCAD to read its version and skip the "
              "MCP serve round-trip (resolve/import only; the solver half never "
              "needs a boot)",
+    )
+    pd.add_argument(
+        "--verify-image", action="store_true",
+        help="check that the solver container's image was signed by this repository "
+             "(needs network and `gh`; an image you built yourself is reported as "
+             "unsigned, which ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE=1 silences)",
     )
     pd.add_argument(
         "--no-mcp-serve", action="store_true",

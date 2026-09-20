@@ -337,6 +337,10 @@ jobs:
           file: docker/heavy-solvers/Dockerfile
           target: slim
           platforms: linux/${{ matrix.platform.arch }}
+          build-args: |
+            BUILT_SOURCE=published
+            BUILT_COMMIT=${{ github.sha }}
+            BUILT_WORKFLOW=.github/workflows/heavy-image.yml
           # The slim stage's own RUN steps are the gate: every solver's DT_NEEDED must
           # resolve (tools/container_runtime_deps.sh --check, so the trimmed package
           # list is complete on THIS arch) and every solver must actually run. A PR

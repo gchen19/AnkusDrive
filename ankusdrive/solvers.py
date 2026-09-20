@@ -1162,6 +1162,126 @@ def _container_inspect_config(engine: str, name: str):
     return payload
 
 
+# --- is this image ours? (#423) -----------------------------------------------------
+# Signing the published images is only half the answer; the other half is a user
+# asking "what am I running my geometry through?" and getting a checkable reply.
+#
+# There are THREE outcomes, and conflating them is how a security signal becomes
+# noise people learn to ignore:
+#
+#   verified   provenance names THIS repo and the workflow that builds images.
+#   unsigned   no attestation at all — an image built with
+#              tools/build_solver_image.sh, one published before signing existed, or
+#              simply no network / no `gh`. Legitimate and common; it warns once and
+#              can be silenced with ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE=1.
+#   mismatch   an attestation EXISTS but does not name this repo/workflow. That is an
+#              image claiming to be ours, which no setting silences.
+#
+# Nothing here blocks a solve. A check that stranded someone offline, or someone
+# running the image they built themselves, would be worse than the risk it covers.
+
+_IMAGE_REPO = "gchen19/AnkusDrive"
+_IMAGE_WORKFLOW = ".github/workflows/heavy-image.yml"
+
+
+def _classify_verify_output(rc: int, text: str) -> tuple:
+    """``(status, reason)`` from the verifier's exit code and output.
+
+    gh has no machine-readable "why it failed", so this reads its message — and when
+    the message is one it does not recognise, it says ``unavailable`` rather than
+    guessing. Calling an unrecognised failure ``mismatch`` would cry wolf; calling it
+    ``unsigned`` would wave through the one case worth alarm."""
+    if rc == 0:
+        return "verified", ""
+    low = (text or "").lower()
+    for needle in ("no attestation", "no matching attestation", "not found",
+                   "could not find", "failed to fetch attestation"):
+        if needle in low:
+            return "unsigned", "no attestation was published for this digest"
+    for needle in ("verification failed", "does not match", "no trusted",
+                   "signature", "certificate identity", "predicate"):
+        if needle in low:
+            return "mismatch", "an attestation exists but does not name this repository"
+    if "authentication" in low or "gh auth login" in low or "http 401" in low:
+        return "unavailable", "gh is not authenticated (`gh auth login`)"
+    # An old gh answers "unknown command" and prints its entire usage; quoting that
+    # back at the reader tells them nothing about their image.
+    if "unknown command" in low or "available commands:" in low:
+        return "unavailable", ("this gh has no `attestation` command — it needs "
+                               ">= 2.49 (https://cli.github.com)")
+    tail = " ".join((text or "").split())[-200:]
+    return "unavailable", tail or f"verifier exited {rc}"
+
+
+def _gh_verify_exec(ref: str, timeout_s: float):
+    """Run ``gh attestation verify`` for ``ref``, returning ``(rc, combined output)``
+    or None when gh is missing. THE INJECTABLE SEAM: tests replace this."""
+    import subprocess
+    if not shutil.which("gh"):
+        return None
+    try:
+        proc = subprocess.run(
+            ["gh", "attestation", "verify", f"oci://{ref}", "--repo", _IMAGE_REPO,
+             "--signer-workflow", f"{_IMAGE_REPO}/{_IMAGE_WORKFLOW}"],
+            capture_output=True, text=True, timeout=timeout_s,
+            stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+def allow_unverified_image() -> bool:
+    """Whether the user has accepted running an UNSIGNED image —
+    ``ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE`` (env -> config.toml). It silences the
+    ``unsigned`` warning only; a ``mismatch`` is never silenced by it."""
+    raw = str(_config.get("ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def verify_container_image(ref: str | None = None, *, timeout_s: float = 60.0) -> dict:
+    """Check that the solver container's image was built by this repository (#423).
+
+    NETWORK: this is the one solver call that reaches the internet, so it is never on
+    a default path — ``doctor --verify-image`` / ``setup_status(verify_image=True)``
+    ask for it explicitly. Returns
+    ``{status, digest, ref, repo, workflow, reason, allowed_by_config, self_declared}``
+    with ``status`` one of ``verified`` / ``unsigned`` / ``mismatch`` /
+    ``unavailable``.
+
+    The caller chooses WHAT to verify; it can never choose WHO must have signed it —
+    the repo and workflow are constants above, or the answer would mean nothing.
+
+    ``self_declared`` is what the image says about itself (the #422 manifest: a local
+    build stamps its commit). It is used to PHRASE the result — "the image you built
+    here" reads differently from an anonymous one — and never as evidence: anything
+    can write that file. Only the signature is evidence."""
+    img = container_image() if ref is None else {"ref": ref, "digest": None}
+    out = {"status": "unavailable", "ref": None, "digest": None,
+           "repo": _IMAGE_REPO, "workflow": _IMAGE_WORKFLOW, "reason": "",
+           "allowed_by_config": allow_unverified_image(), "self_declared": None}
+    if not img:
+        out["reason"] = "no solver container is running"
+        return out
+    out["ref"], out["digest"] = img.get("ref"), img.get("digest")
+    manifest = container_manifest()
+    if isinstance(manifest, dict) and isinstance(manifest.get("built"), dict):
+        out["self_declared"] = manifest["built"]
+    if ref is None and not out["digest"]:
+        # A locally built image has no registry digest, so there is nothing published
+        # to verify it against — that is a fact about the image, not a failure.
+        out["status"] = "unsigned"
+        out["reason"] = "built locally, so no published digest exists to verify"
+        return out
+    target = ref or f"{str(out['ref']).split(':')[0]}@{out['digest']}"
+    result = _gh_verify_exec(target, timeout_s)
+    if result is None:
+        out["reason"] = ("the GitHub CLI (gh >= 2.49) is needed to check the "
+                         "signature: https://cli.github.com")
+        return out
+    out["status"], out["reason"] = _classify_verify_output(*result)
+    return out
+
+
 def container_path_exists(path: str, *, is_dir: bool = False) -> bool:
     """Whether ``path`` exists INSIDE the running container — a directory with
     ``is_dir``, else an executable file. False when the container is not running, so

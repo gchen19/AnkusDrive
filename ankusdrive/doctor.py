@@ -39,6 +39,16 @@ from .client import (
 _REPO_URL = "https://github.com/gchen19/AnkusDrive"
 
 
+def _container_image_report(verify: bool):
+    """The solver container's image, and — only when asked — whether this repository
+    signed it (#423). The check reaches the network, so it never rides along on a
+    default status call: `doctor --verify-image` / `setup_status(verify_image=True)`."""
+    img = solvers.container_image()
+    if img and verify:
+        img = {**img, "verification": solvers.verify_container_image()}
+    return img
+
+
 def _installer_scripts_location() -> str:
     """Where the ``scripts/install-solvers.*`` named by the fix hints actually lives.
 
@@ -159,7 +169,8 @@ def _toolsets_report() -> dict:
         return {"error": str(e)}
 
 
-def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
+def build_report(probe_version: bool = True, mcp_serve: bool = False,
+                 verify_image: bool = False) -> dict:
     """Full doctor payload: platform, FreeCAD, config, MCP, and solver capabilities.
 
     ``mcp_serve`` opts into the deeper MCP probe (spawn the server over stdio). It
@@ -183,7 +194,7 @@ def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
         # Which image the solvers actually run from, when they run in a container
         # (#423). Reported so "what am I running your geometry through?" has an
         # answer a user can verify, instead of whatever the registry served that day.
-        "container_image": solvers.container_image(),
+        "container_image": _container_image_report(verify_image),
     }
 
 
@@ -454,11 +465,40 @@ def _fmt_container_image(img: dict) -> list[str]:
     lines = [f"        image:  {ref or '(unknown)'}"]
     if digest:
         lines.append(f"        digest: {digest}")
-        lines.append(f"        verify: bash scripts/verify-container-image.sh "
-                     f"{(ref or '').split(':')[0]}@{digest}")
     else:
         lines.append("        digest: none — built locally, so there is nothing "
                      "published to verify it against")
+    v = img.get("verification")
+    if not v:
+        if digest:
+            lines.append(f"        verify: bash scripts/verify-container-image.sh "
+                         f"{(ref or '').split(':')[0]}@{digest}")
+        return lines
+    status = v.get("status")
+    built = v.get("self_declared") or {}
+    origin = ""
+    if built.get("source") == "local":
+        origin = f" — built here{', commit ' + built['commit'] if built.get('commit') else ''}"
+    elif built.get("source") == "published":
+        origin = f" — published build{', commit ' + built['commit'] if built.get('commit') else ''}"
+    if status == "verified":
+        lines.append(f"{_MARK['ok']}     signed by {v['repo']} ({v['workflow']})")
+    elif status == "mismatch":
+        # No setting silences this one: an attestation that names someone else is an
+        # image claiming to be ours, which is the case the signature exists to catch.
+        lines.append(f"{_MARK['unwired']}     NOT signed by {v['repo']}: {v['reason']}")
+        lines.append("        This image carries provenance from somewhere else. Do "
+                     "not run it unless you know why.")
+    elif status == "unsigned" and v.get("allowed_by_config"):
+        lines.append(f"{_MARK['ok']}     unsigned{origin} (allowed by "
+                     "ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE)")
+    elif status == "unsigned":
+        lines.append(f"{_MARK['unwired']}     unsigned{origin}: {v['reason']}")
+        lines.append("        Expected for an image you built yourself. Silence it "
+                     "with ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE=1, or pull the published "
+                     "image to get a signed one.")
+    else:
+        lines.append(f"        signature: not checked — {v['reason']}")
     return lines
 
 

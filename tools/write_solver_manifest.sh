@@ -17,6 +17,12 @@
 # The file is data, not instructions: AnkusDrive reads paths and reasons from it and
 # never executes anything it names.
 #
+# The file also records HOW the image was built (BUILT_SOURCE / BUILT_COMMIT): a local
+# build stamps the checkout it came from, so `ankusdrive doctor` can say "the image you
+# built here, unsigned" rather than warning about an anonymous one (#423). This is the
+# image describing ITSELF — anything can write it, so it is only ever used to phrase a
+# message. Authenticity comes from the signature over the published digest, never here.
+#
 # USAGE
 #   write_solver_manifest.sh <arch> <selected solver>...
 #   SELECTED="openfoam fsi" write_solver_manifest.sh amd64 $SELECTED
@@ -72,7 +78,11 @@ EOF
 $(rows)
 EOF
   echo
-  echo '  }'
+  echo '  },'
+  printf '  "built": {"source": "%s"' "${BUILT_SOURCE:-local}"
+  [ -n "${BUILT_COMMIT:-}" ] && printf ', "commit": "%s"' "$BUILT_COMMIT"
+  [ -n "${BUILT_WORKFLOW:-}" ] && printf ', "workflow": "%s"' "$BUILT_WORKFLOW"
+  printf '}\n'
   echo '}'
 } > "$out"
 
