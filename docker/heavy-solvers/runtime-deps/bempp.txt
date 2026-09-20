@@ -1,0 +1,44 @@
+# Runtime apt packages for `bempp` in the slim solver image (#422).
+#
+# DERIVED, not hand-written: tools/container_runtime_deps.sh ldd's every ELF in the
+# solver's prefix and maps each dependency to its apt package. Regenerate with
+#   docker run --rm -v "$PWD/tools:/t:ro" \
+#     -e EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+#     ghcr.io/gchen19/ankusdrive-solvers bash /t/container_runtime_deps.sh /opt/venv-bempp
+#
+# One package per line. A second field restricts it to an architecture. Lines added
+# by hand are marked: they are IMPORTS or CLI tools, which ldd cannot see.
+# hand-added: the venv's interpreter is /usr/bin/python3, and bempp's shape
+# generators shell out to a gmsh CLI — a pip wheel everywhere except Linux
+# aarch64, which has none, so arm64 takes it from apt (#363).
+gmsh arm64
+libbrotli1
+libbsd0
+libbz2-1.0
+libc6
+libexpat1
+libfontconfig1
+libfreetype6
+libgcc-s1
+libgl1
+libglu1-mesa
+libglvnd0
+libglx0
+libgomp1
+libmd0
+libopengl0
+libpng16-16t64
+libstdc++6
+libtbb12
+libx11-6
+libxau6
+libxcb1
+libxcursor1
+libxdmcp6
+libxext6
+libxfixes3
+libxft2
+libxinerama1
+libxrender1
+python3
+zlib1g

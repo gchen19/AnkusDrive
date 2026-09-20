@@ -334,6 +334,71 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  slim-subset:
+    name: Slim subset build — openfoam only (amd64)
+    # Proves the SELECTION works (#422 part B), which the full build cannot: with one
+    # solver chosen, the other six must be absent from the image AND recorded as
+    # excluded in its manifest, so the host reports them honestly instead of "ready".
+    # amd64 only: the mechanism is arch-independent and this is a fast guard, not a
+    # second product.
+    needs: stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/heavy-solvers/Dockerfile
+          target: slim
+          platforms: linux/amd64
+          build-args: |
+            WITH_OPENFOAM=on
+            WITH_ELMER=off
+            WITH_YADE=off
+            WITH_OPENEMS=off
+            WITH_FSI=off
+            WITH_OIMS=off
+            WITH_BEMPP=off
+          load: true
+          tags: ankusdrive-solvers:subset
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cache-system-amd64
+            type=registry,ref=${{ env.SLIM_IMAGE }}:cache-slim-amd64
+      - name: The image carries only what was selected, and says so
+        run: |
+          set -euo pipefail
+          docker run --rm ankusdrive-solvers:subset cat /etc/ankusdrive/solvers.json | tee manifest.json
+          python3 - <<'PY'
+          import json
+          m = json.load(open("manifest.json"))
+          assert sorted(m["solvers"]) == ["openfoam"], m["solvers"]
+          assert sorted(m["excluded"]) == ["bempp", "elmer", "fsi", "oims", "openems", "yade"], m["excluded"]
+          PY
+          # the unselected solvers' files must genuinely be absent, not merely unlisted
+          for p in /opt/yade/bin/yade /opt/venv-bempp/bin/python /opt/venv-openems/bin/python; do
+            if docker run --rm ankusdrive-solvers:subset test -e "$p"; then
+              echo "::error::$p is in an image that excluded it"; exit 1
+            fi
+          done
+          docker run --rm ankusdrive-solvers:subset bash -c \
+            'source "$ANKUSDRIVE_OPENFOAM_BASHRC" >/dev/null 2>&1; simpleFoam -help >/dev/null'
+          full=$(docker run --rm ankusdrive-solvers:subset du -sx --exclude=/proc --exclude=/sys / | cut -f1)
+          echo "subset filesystem: $((full / 1024)) MB" >> "$GITHUB_STEP_SUMMARY"
+
   slim-manifest:
     name: Publish slim multi-arch manifest
     needs: slim

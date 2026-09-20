@@ -1,0 +1,73 @@
+# Runtime apt packages for `yade` in the slim solver image (#422).
+#
+# DERIVED, not hand-written: tools/container_runtime_deps.sh ldd's every ELF in the
+# solver's prefix and maps each dependency to its apt package. Regenerate with
+#   docker run --rm -v "$PWD/tools:/t:ro" \
+#     -e EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+#     ghcr.io/gchen19/ankusdrive-solvers bash /t/container_runtime_deps.sh /opt/yade
+#
+# One package per line. A second field restricts it to an architecture. Lines added
+# by hand are marked: they are IMPORTS or CLI tools, which ldd cannot see.
+# hand-added: YADE embeds the system python; numpy and mpmath load at
+# start-up and IPython as soon as it runs a script (yade.runtime).
+ipython3
+libamd3
+libboost-atomic1.83.0
+libboost-chrono1.83.0t64
+libboost-date-time1.83.0
+libboost-filesystem1.83.0
+libboost-iostreams1.83.0
+libboost-log1.83.0
+libboost-python1.83.0
+libboost-regex1.83.0
+libboost-serialization1.83.0
+libboost-system1.83.0
+libboost-thread1.83.0
+libbsd0
+libbz2-1.0
+libc6
+libcamd3
+libccolamd3
+libcholmod5
+libcolamd3
+libdeflate0
+libdouble-conversion3
+libexpat1
+libgcc-s1
+libgfortran5
+libgl1
+libgl2ps1.4
+libglib2.0-0t64
+libglvnd0
+libglx0
+libgmp10
+libgmpxx4ldbl
+libgomp1
+libgts-0.7-5t64
+libjbig0
+libjpeg-turbo8
+liblerc4
+liblz4-1
+liblzma5
+libmd0
+libopenblas0-pthread
+libpcre2-8-0
+libpng16-16t64
+libpython3.12t64
+libquadmath0 amd64
+libsharpyuv0
+libstdc++6
+libsuitesparseconfig7
+libtbb12
+libtiff6
+libvtk9.1t64
+libwebp7
+libx11-6
+libxau6
+libxcb1
+libxdmcp6
+libzstd1
+python3
+python3-mpmath
+python3-numpy
+zlib1g

@@ -466,13 +466,26 @@ _C_OPENEMS_PY = "/opt/venv-openems/bin/python"
 _C_BEMPP_PY = "/opt/venv-bempp/bin/python"
 
 
-def _fake_container(p, *, holds=(), pythons=(), state=_RUNNING):
-    """A container whose filesystem holds the executables ``holds`` and whose
-    interpreters ``pythons`` import their solver's modules. Records every probe."""
+def _manifest(solvers=(), excluded=()):
+    """The JSON an image writes at /etc/ankusdrive/solvers.json (#422 part C)."""
+    return json.dumps({
+        "schema": 1, "architecture": "amd64",
+        "solvers": {s: {"path": f"/opt/{s}", "description": s} for s in solvers},
+        "excluded": {s: {"reason": "not selected when this image was built"}
+                     for s in excluded},
+    })
+
+
+def _fake_container(p, *, holds=(), pythons=(), state=_RUNNING, manifest=None):
+    """A container whose filesystem holds the executables ``holds``, whose interpreters
+    ``pythons`` import their solver's modules, and which publishes ``manifest`` (None =
+    an older image with no manifest). Records every probe."""
     probes = []
 
     def probe(engine, name, argv):
         probes.append(argv)
+        if argv[0] == "cat":                         # the image's own manifest
+            return (0, manifest) if manifest else (1, "")
         if argv[0] == "sh":                          # _container_binary's command -v scan
             script = argv[2]
             for path in holds:
@@ -498,17 +511,21 @@ def test_yade_and_elmer_resolve_by_probing_the_container():
             assert info["available"] and info["path"] == path, info
             assert info["via"] == "container", info
             assert solvers.routes_through_container(name) is True
-        assert all(a[:2] == ("sh", "-c") for a in probes), probes
+        assert all(a[:2] == ("sh", "-c") or a[0] == "cat" for a in probes), probes
 
 
-def test_a_trusted_override_skips_the_probe():
+def test_an_override_is_honoured_when_the_container_really_has_it():
+    """An override wins over the PATH scan — it is how a user points at a solver the
+    image put somewhere else. Since #422 it is checked inside the container first, so
+    only a path that exists there wins; the scan is skipped either way."""
     with _patch() as p:
         _container_host(p)
-        probes = _fake_container(p)
+        probes = _fake_container(p, holds=("/usr/bin/ElmerSolver", _C_YADE))
         p.env(ANKUSDRIVE_ELMER_PATH="/usr/bin/ElmerSolver", ANKUSDRIVE_YADE=_C_YADE)
         assert solvers.find_solver("elmer")["path"] == "/usr/bin/ElmerSolver"
         assert solvers.find_solver("yade")["path"] == _C_YADE     # the image's own env name
-        assert probes == [], probes
+        assert not [a for a in probes if a[0] == "sh"], \
+            ("an honoured override must not fall through to the PATH scan", probes)
 
 
 def test_host_elmer_and_yade_are_ignored_under_container_but_not_natively():
@@ -556,13 +573,14 @@ def test_openems_and_bempp_are_asked_inside_the_container():
             info = solvers.find_solver(name)
             assert info["available"] and info["path"] == py, info
             assert info["via"] == "container", info
-        assert {a[0] for a in probes} == {_C_OPENEMS_PY, _C_BEMPP_PY}, probes
-        assert all("find_spec" in a[2] for a in probes), probes
+        interp = [a for a in probes if a[0] not in ("cat", "sh", "test")]
+        assert {a[0] for a in interp} == {_C_OPENEMS_PY, _C_BEMPP_PY}, probes
+        assert all("find_spec" in a[2] for a in interp), probes
         # the override is tried first, and a relative one is never trusted
         probes.clear()
         p.env(ANKUSDRIVE_OPENEMS_PYTHON="venv/bin/python")
         assert solvers.solver_python("openems") == _C_OPENEMS_PY
-        assert [a[0] for a in probes] == [_C_OPENEMS_PY], probes
+        assert [a[0] for a in probes if a[0] not in ("cat",)] == [_C_OPENEMS_PY], probes
         # kraken is not container-routed: the host decides, the container is never asked
         probes.clear()
         solvers.find_solver("kraken")
@@ -679,6 +697,88 @@ def test_worker_launches_routed_solvers_only_through_solver_argv():
                 f"{f.name}:{i + 1} stats a sibling on the host — use "
                 "solvers.solver_file_exists(<solver>, …)")
 
+
+# --- the image states what it contains (#422 part C) ------------------------------
+
+def test_a_solver_the_image_excludes_is_never_reported_ready():
+    """With a partial image, trusting an in-container path means `doctor` says "ready
+    via yade (in container)" and the solve dies minutes later. The manifest is read
+    FIRST, so an omitted solver is a named miss — even when an override names it and
+    even when a probe would have found something."""
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, holds=(_C_ELMER, _C_YADE),
+                        pythons=(_C_OPENEMS_PY,),
+                        manifest=_manifest(solvers=("openfoam", "elmer"),
+                                           excluded=("yade", "openems", "bempp")))
+        p.env(ANKUSDRIVE_YADE=_C_YADE)              # an override cannot override absence
+        for name in ("yade", "openems"):
+            info = solvers.find_solver(name)
+            assert info["available"] is False, (name, info)
+            assert info["status"] == "unwired", info
+            assert "does not include" in info["wire_hint"], info["wire_hint"]
+            assert "build_solver_image.sh" in info["wire_hint"], info["wire_hint"]
+        # what the image DOES carry still resolves
+        assert solvers.find_solver("elmer")["available"] is True
+
+
+def test_an_image_without_a_manifest_still_probes():
+    """Every image built before #422 has no manifest. Discovery must fall back to
+    probing rather than treating a missing file as "carries nothing"."""
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, holds=(_C_ELMER, _C_YADE), manifest=None)
+        assert solvers.container_manifest() is None
+        assert solvers.container_excludes("yade") is None
+        assert solvers.find_solver("yade")["available"] is True
+    with _patch() as p:                              # garbage parses to "no manifest"
+        _container_host(p)
+        _fake_container(p, holds=(_C_YADE,), manifest="{not json")
+        assert solvers.container_manifest() is None
+        assert solvers.find_solver("yade")["available"] is True
+
+
+def test_the_fsi_stack_maps_onto_its_manifest_name():
+    """The registry calls the stack `precice` (its linchpin binary); the image records
+    it as `fsi`. A mismatch here would report the stack excluded on every image."""
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, manifest=_manifest(solvers=("openfoam", "fsi")))
+        assert solvers.container_excludes("precice") is None
+        _fake_container(p, manifest=_manifest(solvers=("openfoam",), excluded=("fsi",)))
+        assert solvers.container_excludes("precice")
+
+
+def test_a_host_path_override_is_caught_instead_of_trusted():
+    """The config.toml trap: a native install's `openfoam_bashrc` is an absolute path,
+    so it is trusted as an in-container path and sourced in a container that has no
+    such file — the solve then dies with `blockMesh: command not found`, naming
+    nothing useful. A RUNNING container is asked instead."""
+    host_bashrc = "/usr/lib/openfoam/openfoam2606/etc/bashrc"   # a HOST install's path
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, holds=(_C_BASHRC, _C_BIN))
+        p.env(ANKUSDRIVE_OPENFOAM_BASHRC=host_bashrc, ANKUSDRIVE_OPENFOAM_PATH=_C_BIN)
+        assert solvers.openfoam_bashrc() is None, "a host path was trusted as in-container"
+        p.env(ANKUSDRIVE_OPENFOAM_BASHRC=_C_BASHRC)              # what the image publishes
+        assert solvers.openfoam_bashrc() == _C_BASHRC
+        # and the hint names the trap rather than sending the reader hunting
+        p.env(ANKUSDRIVE_YADE="/usr/local/bin/yade")             # host path, not in image
+        _fake_container(p, holds=())
+        info = solvers.find_solver("yade")
+        assert info["status"] == "unwired", info
+        assert "does not exist inside container" in info["wire_hint"], info["wire_hint"]
+
+
+def test_an_unreachable_container_still_trusts_an_override():
+    """Only a RUNNING container can be asked. Stopped or absent, the override is
+    trusted exactly as before — otherwise every path would go unresolvable the moment
+    the container stops, which is not what the user needs to be told."""
+    with _patch() as p:
+        _container_host(p)
+        p.set(solvers, "_container_inspect", lambda eng, name: None)   # absent
+        p.env(ANKUSDRIVE_OPENFOAM_BASHRC=_C_BASHRC)
+        assert solvers.openfoam_bashrc() == _C_BASHRC
 
 # --- runner ---------------------------------------------------------------------
 
