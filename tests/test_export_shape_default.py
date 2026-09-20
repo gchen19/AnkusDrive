@@ -231,7 +231,7 @@ def test_assembly_doc_exports_the_container():
             w.call("add_part", assembly=asm["handle"], source={"handle": cut["handle"]},
                    placement=[x, 0, 0])
         # .brep, not .step: selection is what's under test, and Part.export of an
-        # App::Part of links currently writes a STEP with no geometry (separate bug).
+        # App::Part of links currently writes a STEP with no geometry (#434).
         r = w.call("export_shape", path=os.path.join(d, "asm.brep"))
         assert r["object"] == asm["name"], r
 
