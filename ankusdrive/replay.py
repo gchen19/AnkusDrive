@@ -42,6 +42,11 @@ that script. It is pure Python (no FreeCAD, no ``mcp``):
   different solver, or a failing gate stops there.
 * **Paths are redacted.** Absolute paths become ``WORKDIR / "<relative>"``, so a shared
   script carries no ``/Users/<name>/…``. Paths the session read but did not write are
+  listed as prerequisites — including a prepared solver deck (``case_dir`` / ``sif`` /
+  ``stl_path``), which the replay needs before it starts (#437). A path an earlier step
+  *produced* and nothing in the script writes — a case dir handed from one solve to the
+  next — is a hand-off the script cannot make, and is stated as a warning instead of
+  listed as a file nobody can supply.
 * **The environment is carried with it.** With a ``provenance`` record the script
   opens with a ``PROVENANCE`` literal — AnkusDrive / Python / FreeCAD / platform /
   substrate, and every solver the session reached, with the path it resolved to, the
