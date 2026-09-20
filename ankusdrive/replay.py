@@ -24,15 +24,32 @@ that script. It is pure Python (no FreeCAD, no ``mcp``):
   fetched is still waited for, so the replay's solve runs to completion.
 * **Read-only calls are pruned** (the ``READ_ONLY`` class in ``tool_annotations``)
   unless a kept call uses a value they returned, or (with ``checkpoints``) they returned
-  a number worth checking. ``include_read_only=True`` keeps them all.
+  a number worth checking. ``include_read_only=True`` keeps them all. **Analysis calls
+  are never pruned** (:func:`analysis_tools` — the ``hand_calcs``, ``simulation`` and
+  ``fem`` families): a closed-form estimate is read-only in the MCP sense, but it is
+  not an inspection — it is the derivation, and a transcript that drops it is not an
+  audit record of anything (#433).
 * **Arguments equal to the tool's default are omitted** (defaults read from
   ``mcp_server.py`` by ``ast``, so the exporter never imports the server).
 * **Checkpoints:** numeric volume / area / mass / ``max_*`` / ``min_*`` / frequency
   results become ``s.check(...)``. Relative tolerance is 1e-6 for geometry and 1e-3
   for solver output (job results, and ``*_results`` / ``*_result_probe`` reads).
+  An **analysis or solve** result is checked *whole* instead: every finite scalar it
+  reports (its own keys, a job's ``result``, and the house ``gate`` verdict) becomes a
+  checkpoint, minus wall-clock bookkeeping. Its verdict fields — ``ok``, ``pass``,
+  ``fidelity``, ``basis``, ``correlation``, ``solver``, ``status`` — become
+  ``s.expect(...)``, so a replay that silently drops to a different correlation, a
+  different solver, or a failing gate stops there.
 * **Paths are redacted.** Absolute paths become ``WORKDIR / "<relative>"``, so a shared
   script carries no ``/Users/<name>/…``. Paths the session read but did not write are
   listed as prerequisites.
+* **The environment is carried with it.** With a ``provenance`` record the script
+  opens with a ``PROVENANCE`` literal — AnkusDrive / Python / FreeCAD / platform /
+  substrate, and every solver the session reached, with the path it resolved to, the
+  substrate it was reached through, and its probed version — and calls
+  ``s.provenance(PROVENANCE)``, which re-resolves all of it and prints each
+  difference. A replay on a different Elmer is not a failure; it is the finding.
+* **``run_script`` carries its content hash**, so a report can cite the code by digest.
 * **What the script can't reproduce is stated**, as comments in the script and in
   ``warnings``: ``run_script`` code, failed calls (kept as comments), a worker
   replaced without a ``restart_worker`` call, a truncated journal, and prerequisites.
@@ -48,6 +65,7 @@ import difflib
 import functools
 import keyword
 import math
+import pprint
 import re
 import time
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -165,6 +183,45 @@ class Session:
                               f"recorded {expected!r} (rel {rel})")
         return got
 
+    def expect(self, result: Any, path, recorded) -> Any:
+        """Assert ``result[path]`` still equals ``recorded`` exactly; return it.
+
+        The non-numeric twin of :meth:`check`, for the verdict fields an analysis
+        carries — ``ok``, ``pass``, ``fidelity``, ``basis``, ``correlation``,
+        ``solver``, ``status``. A replay that reaches a different solver, falls back
+        to a different correlation, or fails a gate that passed is a different
+        analysis, and stops here rather than producing a number that looks fine."""
+        keys = (path,) if isinstance(path, (str, int)) else tuple(path)
+        got = result
+        try:
+            for k in keys:
+                got = got[k]
+        except (KeyError, IndexError, TypeError):
+            raise ReplayError(f"{self._where()}result has no {list(keys)}") from None
+        if got != recorded:
+            raise ReplayError(f"{self._where()}{'.'.join(map(str, keys))} = {got!r}, "
+                              f"recorded {recorded!r}")
+        return got
+
+    def provenance(self, recorded: dict, strict: bool | None = None) -> list:
+        """Compare the recorded environment with this machine's and report every
+        difference. Returns the difference lines (empty when they agree).
+
+        Prints rather than raises by default: replaying on a newer Elmer is not an
+        error, it is the thing an audit wants stated. ``strict=True`` raises instead
+        — for a re-verification that is only meaningful on the same environment."""
+        from ankusdrive import provenance as prov
+        lines = prov.drift(recorded)
+        if not lines:
+            print("provenance: environment matches the recording")
+            return lines
+        print("provenance: the environment DIFFERS from the recording —")
+        for line in lines:
+            print(f"  ! {line}")
+        if strict:
+            raise ReplayError("environment differs from the recording: " + "; ".join(lines))
+        return lines
+
 
 # --- exporter ------------------------------------------------------------------------
 
@@ -184,6 +241,13 @@ _CHECK_KEY = re.compile(r"^((volume|area|surface_area|mass)(_[a-z0-9]+)?|max_[a-
                         r"min_[a-z0-9_]+|frequenc[a-z0-9_]*)$")
 _ABS_PATH = re.compile(r"^(/|~[/\\]|[A-Za-z]:[\\/])")
 _SOLVER_READ = re.compile(r"(_results|_result_probe)$")
+# Wall-clock and bookkeeping keys: real numbers, but they measure the machine, not the
+# part. Checking them would fail every replay for the wrong reason.
+_NOT_A_CHECK = {"elapsed_s", "elapsed", "wall_time_s", "cpu_time_s", "runtime_s",
+                "solve_time_s", "seq", "pid", "timestamp", "ts", "t_submit", "t_finish"}
+# Verdict fields — what the analysis was, not what it measured. Compared exactly.
+_EXPECT_KEY = ("ok", "pass", "fidelity", "basis", "correlation", "solver", "status",
+               "converged", "mode")
 _INPUT_PARAMS = {"registry", "manifest", "manifest_path", "input", "source", "src", "file",
                  "lockfile"}
 _RESERVED = {"s", "sys", "Path", "Session", "WORKDIR"}
@@ -216,12 +280,33 @@ def tool_defaults() -> dict:
     return out
 
 
-def _read_only() -> frozenset:
+def _load_sibling(stem: str):
+    """Load a sibling module by path — the exporter reads the registries without
+    importing the package (and so without pulling in the server)."""
     import importlib.util
-    spec = importlib.util.spec_from_file_location("_ta_for_replay", _PKG / "tool_annotations.py")
+    spec = importlib.util.spec_from_file_location(f"_{stem}_for_replay", _PKG / f"{stem}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return frozenset(mod.READ_ONLY)
+    return mod
+
+
+def _read_only() -> frozenset:
+    return frozenset(_load_sibling("tool_annotations").READ_ONLY)
+
+
+@functools.lru_cache(maxsize=1)
+def analysis_tools() -> frozenset:
+    """The tools whose call *is* the derivation: the ``hand_calcs`` (closed-form
+    estimates and gates), ``simulation`` (external-solver submits) and ``fem``
+    families, from the toolset registry.
+
+    Most are ``READ_ONLY`` — they compute a number and touch nothing — so the
+    read-only prune would drop them, and a thermal transcript would consist of the
+    CAD around the thermal work with the thermal work removed (#433). An inspection
+    can be re-read at any time; an analysis is the record of a decision."""
+    fam = _load_sibling("toolsets").FAMILIES
+    return frozenset().union(*(fam[f] for f in ("hand_calcs", "simulation", "fem")
+                               if f in fam))
 
 
 def _walk_strings(value, path=()):
@@ -320,19 +405,56 @@ def _collect_paths(entries) -> list:
     return [v for e in entries for _, _, v in _walk_strings(e.get("args") or {}) if _is_path(v)]
 
 
-def _checks(result) -> list:
-    """[(path, number)] a result offers as checkpoints: top-level numeric volume / area /
-    mass / max_* / min_* / frequency keys, and the same inside a job's ``result``."""
+def _scopes(result) -> list:
+    """The places a result keeps its numbers: itself, a job's ``result``, and the
+    house ``gate`` verdict on either."""
     if not isinstance(result, dict):
         return []
-    scopes = [((), result)]
-    if isinstance(result.get("result"), dict):
-        scopes.append((("result",), result["result"]))
+    out = [((), result)]
+    for prefix, scope in list(out):
+        for key in ("result", "gate"):
+            inner = scope.get(key)
+            if isinstance(inner, dict):
+                out.append((prefix + (key,), inner))
+                nested = inner.get("gate")
+                if key == "result" and isinstance(nested, dict):
+                    out.append((prefix + (key, "gate"), nested))
+    return out
+
+
+def _checks(result, wide: bool = False) -> list:
+    """[(path, number)] a result offers as checkpoints.
+
+    Narrow (the default, for geometry and everything else): top-level numeric volume /
+    area / mass / max_* / min_* / frequency keys. **Wide** (an analysis or a solve):
+    every finite scalar the result reports, minus wall-clock bookkeeping — for an
+    audit the whole reported result is the claim, not the two keys that happen to
+    match a name pattern."""
     out = []
-    for prefix, scope in scopes:
+    for prefix, scope in _scopes(result):
         for k, v in scope.items():
-            if _CHECK_KEY.match(str(k)) and isinstance(v, (int, float)) and not isinstance(v, bool) \
-                    and math.isfinite(v):
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
+                continue
+            if str(k) in _NOT_A_CHECK:
+                continue
+            if wide or _CHECK_KEY.match(str(k)):
+                out.append((prefix + (k,), v))
+    return out
+
+
+def _expects(result) -> list:
+    """[(path, value)] an analysis result offers as exact checks: its verdict fields
+    (bool or short string). What the analysis *was* — which solver, which correlation,
+    whether the gate passed — as distinct from what it measured."""
+    out = []
+    for prefix, scope in _scopes(result):
+        for k in _EXPECT_KEY:
+            if k not in scope:
+                continue
+            v = scope[k]
+            if k == "status" and v in ("running", "queued"):
+                continue            # in flight when it was recorded, not a verdict
+            if isinstance(v, bool) or (isinstance(v, str) and 0 < len(v) <= 64):
                 out.append((prefix + (k,), v))
     return out
 
@@ -349,16 +471,49 @@ def _call_text(tool, args, expr) -> str:
     return f"s.{tool}({', '.join(parts)})"
 
 
+def _provenance_lines(rec: dict) -> list:
+    """The environment record as docstring lines — what an auditor reads first."""
+    env = rec.get("env") or {}
+    plat = env.get("platform") or {}
+    fc = (env.get("freecad") or {}).get("version")
+    bits = [f"ankusdrive {env.get('ankusdrive', '?')}", f"Python {env.get('python', '?')}"]
+    if fc:
+        bits.append(f"FreeCAD {fc}")
+    bits.append(" ".join(x for x in (plat.get("system"), plat.get("machine")) if x) or "?")
+    if env.get("substrate"):
+        bits.append(f"solvers via {env['substrate']}")
+    lines = ["", "Recorded on:", "  " + ", ".join(bits)]
+    solvers = rec.get("solvers") or {}
+    if solvers:
+        lines.append("Solvers this session reached:")
+        for name, info in sorted(solvers.items()):
+            where = info.get("path") or info.get("module") or "not resolved"
+            ver = info.get("version") or f"version unknown ({info.get('version_source', '?')})"
+            via = info.get("via") or "host"
+            lines.append(f"  - {name} {ver} — {where} (via {via})")
+            for old_where in info.get("moved") or []:
+                lines.append(f"      earlier in the session: "
+                             f"{old_where.get('path') or old_where.get('module')} "
+                             f"(via {old_where.get('via', 'host')})")
+    lines.append("s.provenance(PROVENANCE) re-resolves all of it here and prints what differs.")
+    return lines
+
+
 def export(entries: list, *, workspace: str = "default", include_read_only: bool = False,
            checkpoints: bool = True, prune_aborted: bool = False, workdir: str | None = None,
-           truncated: bool = False, generator: str | None = None) -> dict:
+           truncated: bool = False, generator: str | None = None,
+           provenance: dict | None = None) -> dict:
     """Turn journal entries for one workspace into a replay script.
+
+    ``provenance`` is the environment record (:func:`ankusdrive.provenance.from_entries`)
+    to carry with the script; omit it for a script with no environment header.
 
     Returns ``{script, calls, exported, skipped, warnings, prerequisites}``: ``calls``
     is how many entries came in, ``exported`` how many became live calls, ``skipped``
     ``[{seq, tool, reason}]``."""
     entries = sorted(entries, key=lambda e: e["seq"])
     read_only = _read_only()
+    analysis = analysis_tools()
     warnings: list[str] = []
     skipped: list[dict] = []
     if truncated:
@@ -384,6 +539,8 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
             else:
                 kind[seq] = "skip"
                 skipped.append({"seq": seq, "tool": tool, "reason": "job polling (replaced by s.wait)"})
+        elif tool in analysis:
+            kind[seq] = "call"          # the derivation itself, read-only or not (#433)
         elif tool in read_only and not include_read_only and not (checkpoints and _checks(e.get("result"))):
             kind[seq] = "prune"
         else:
@@ -515,6 +672,8 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
             warnings.append(f"step {seq}: run_script replays agent-written code, and needs "
                             "ANKUSDRIVE_ALLOW_RUN_SCRIPT on")
             body.append("# run_script: agent-written code. Read it before running this script.")
+            if e.get("code_sha256"):
+                body.append(f"# code {e['code_sha256']}")
 
         if kind[seq] == "fetch":
             jid = args.get("job_id")
@@ -524,16 +683,18 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
             tol = job_tol
         else:
             call = _call_text(tool, args, expr)
-            tol = job_tol if _SOLVER_READ.search(tool) else geometry_tol
+            tol = job_tol if (_SOLVER_READ.search(tool) or tool in analysis) else geometry_tol
 
         result = e.get("result")
         binds = [(v, p) for v, p in _bindings(e) if (seq, v) not in var_of_binder]
         used_binds = [(v, p) for v, p in binds if seq in need_result and any(
             refs[x].get(v) == seq for x in refs)]
-        checks = _checks(result) if checkpoints else []
+        wide = kind[seq] == "fetch" or tool in analysis
+        checks = _checks(result, wide=wide) if checkpoints else []
+        expects = _expects(result) if (checkpoints and wide) else []
         job_binds = [v for v, p in binds if p and p[-1] == "job_id"]
 
-        if used_binds or checks or job_binds:
+        if used_binds or checks or expects or job_binds:
             rv = f"r{seq}"
             body.append(f"{rv} = {call}")
             for v, p in binds:
@@ -548,6 +709,9 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
             for path, v in checks:
                 keyexpr = repr(path[0]) if len(path) == 1 else repr(path)
                 body.append(f"s.check({rv}, {keyexpr}, {v!r}" + (f", rel={tol})" if tol != geometry_tol else ")"))
+            for path, v in expects:
+                keyexpr = repr(path[0]) if len(path) == 1 else repr(path)
+                body.append(f"s.expect({rv}, {keyexpr}, {v!r})")
         else:
             body.append(call)
         n_exported += 1
@@ -574,6 +738,8 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
         "Needs AnkusDrive and FreeCAD, plus any solver the recorded simulations used.",
         "Each s.check() fails the run at the first result that drifted from the recording.",
     ]
+    if provenance:
+        head += _provenance_lines(provenance)
     if prerequisites:
         head += ["", "Prerequisites (copy into WORKDIR at these relative paths):"]
         head += [f"  - {p}" for p in prerequisites]
@@ -586,9 +752,16 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
              "WORKDIR.mkdir(parents=True, exist_ok=True)"]
     for d in sorted(dirs_needed):
         head.append("(WORKDIR" + "".join(f" / {p!r}" for p in d) + ").mkdir(parents=True, exist_ok=True)")
+    if provenance:
+        head += ["",
+                 "# The environment this session was recorded in. Machine-readable twin of",
+                 "# the header above; s.provenance() compares it with this machine's.",
+                 "PROVENANCE = " + pprint.pformat(provenance, width=94, sort_dicts=True)]
     head += ["", "with Session() as s:"]
     if not any(line.strip() for line in body):
         body = ["pass  # the journal has no calls to replay in this workspace"]
+    if provenance:
+        body.insert(0, "s.provenance(PROVENANCE)")
     script = "\n".join(head + [("    " + line) if line else "" for line in body]) + "\n"
     return {"script": script, "calls": len(entries), "exported": n_exported,
             "skipped": skipped, "warnings": warnings, "prerequisites": prerequisites}

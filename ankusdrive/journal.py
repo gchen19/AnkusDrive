@@ -31,6 +31,14 @@ Each entry:
 * ``txn_depth`` — open ``transaction_open`` brackets in this workspace when the call
   started, so the exporter can tell which calls an abort undid. Resets with the worker.
 * ``elapsed_s``.
+* ``solvers`` — for a call whose result names an external solver, where that solver
+  resolved **at the moment it ran**: ``[{name, path|module, via, available}]``
+  (:func:`provenance.resolve`, pure path arithmetic, no subprocess). A solve is not
+  evidence until you can say which binary produced it, and the answer moves during a
+  session: a substrate change relocates every solver under it (#433). The version is
+  not probed here — that costs a subprocess, and the exporter fills it in later.
+* ``code_sha256`` — for ``run_script``, the content hash of the submitted code. The
+  code itself is in ``args`` verbatim; the digest is what a report cites (#433).
 
 Memory only. The journal lives in the server process and ends with it: nothing is
 written to disk (PRIVACY.md). It is capped at :data:`MAX_ENTRIES`; past the cap new
@@ -116,6 +124,43 @@ def _after_locked(entry: dict) -> None:
         rec[1] = max(0, rec[1] - 1)
 
 
+def _solver_names(value: Any, _depth: int = 0) -> list:
+    """Solver names a result mentions: the value of any ``solver`` key, within four
+    levels. Every family reports the solver it reached under that key — in the tool's
+    own result, in a degradation dict, or inside a job's ``result``."""
+    out = []
+    if _depth > 4:
+        return out
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == "solver" and isinstance(v, str) and v:
+                out.append(v)
+            else:
+                out.extend(_solver_names(v, _depth + 1))
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            out.extend(_solver_names(v, _depth + 1))
+    return out
+
+
+def _solvers_named(result: Any) -> list:
+    """Where each solver a result names resolves right now. Unknown names (a solver
+    the registry does not carry — ``elmergrid``, a bare app name) are kept with just
+    their name, so the record still says what ran. Best-effort: never raises."""
+    names, seen, out = _solver_names(result), set(), []
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            from ankusdrive import provenance
+            info = provenance.resolve(name)
+        except Exception:
+            info = {"name": name}
+        out.append({"name": name} if info.get("error") else info)
+    return out
+
+
 def record(tool: str, args: dict, started: float, *, ok: bool, result: Any = None,
            error: BaseException | None = None, workspace: str, worker_pid,
            seq: int, txn_depth: int) -> None:
@@ -127,6 +172,12 @@ def record(tool: str, args: dict, started: float, *, ok: bool, result: Any = Non
         entry["result"] = compact(result)
     else:
         entry["error"] = f"{type(error).__name__}: {error}"
+    if tool == "run_script" and isinstance(args.get("code"), str):
+        entry["code_sha256"] = "sha256:" + hashlib.sha256(
+            args["code"].encode("utf-8", "replace")).hexdigest()
+    used = _solvers_named(entry.get("result"))
+    if used:
+        entry["solvers"] = used
     with _lock:
         _after_locked(entry)
         if len(_entries) >= MAX_ENTRIES:
