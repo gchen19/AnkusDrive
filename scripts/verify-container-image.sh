@@ -94,11 +94,15 @@ if [ "$sbom_only" = 0 ]; then
 fi
 
 echo "== SBOM =="
-if gh attestation verify "oci://$ref" --repo "$REPO" --predicate-type https://spdx.dev/Document 2>&1; then
+# CycloneDX: an SPDX SBOM of these images runs past GitHub's 16 MiB predicate cap,
+# mostly on per-file entries nobody reads (see heavy-image.yml).
+if gh attestation verify "oci://$ref" --repo "$REPO" \
+     --predicate-type https://cyclonedx.org/bom 2>&1; then
   echo "  ok: an SBOM attestation is present and signed"
 else
-  # An image published before SBOM attestation landed has provenance but no SBOM.
-  echo "  note: no verifiable SBOM for this digest (images published before #423 have none)"
+  # Absent for an image published before SBOM attestation landed, and for one whose
+  # SBOM exceeded the cap (the workflow keeps that as a build artifact instead).
+  echo "  note: no SBOM attestation for this digest — provenance above is unaffected"
 fi
 
 echo

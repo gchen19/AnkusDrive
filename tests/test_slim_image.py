@@ -303,6 +303,23 @@ def test_both_images_are_signed_with_provenance_and_an_sbom():
     assert wf.count("subject-digest: ${{ steps.pin.outputs.digest }}") == 4, wf.count(
         "subject-digest: ${{ steps.pin.outputs.digest }}")
     assert wf.count("push-to-registry: true") == 4
+    # CycloneDX, because an SPDX SBOM of these images runs past the 16 MiB predicate
+    # cap on per-file entries — the first signing run failed on exactly that
+    assert wf.count("format: cyclonedx-json") == 2, "SBOMs must be CycloneDX"
+    assert "spdx-json" not in wf
+
+
+def test_an_oversized_sbom_cannot_sink_a_publish():
+    """Size follows the image's contents, so it can cross the cap again as solvers are
+    added. The signed image is what users need and it is pushed before this point;
+    failing the job there would unpublish it over a file nobody had yet read."""
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    assert wf.count("id: sbomfit") == 2
+    assert wf.count("if: steps.sbomfit.outputs.fits == 'true'") == 2, \
+        "the attestation must be conditional on the SBOM fitting"
+    assert wf.count("16 * 1024 * 1024") == 2, "the cap must be checked, not assumed"
+    assert wf.count("name: sbom-") == 2, \
+        "an SBOM that does not fit must still be kept as an artifact"
 
 
 def test_the_signing_jobs_can_mint_an_identity():

@@ -790,10 +790,40 @@ def _image(p, *, ref="ghcr.io/gchen19/ankusdrive-solvers:latest",
     _container_host(p)
     _fake_container(p, manifest=manifest)
     p.set(solvers, "_container_inspect_config",
-          lambda eng, name: json.dumps({"Image": ref,
-                                        "RepoDigests": [f"{ref.split(':')[0]}@{digest}"]
-                                        if digest else []}))
+          lambda eng, name: json.dumps(
+              {"Image": ref,
+               # docker records "<repo>@<digest>" — build it the way docker does, or
+               # the fake teaches the test a shape the real thing never produces
+               "RepoDigests": [f"{solvers.image_base(ref)}@{digest}"] if digest else []}))
     p.set(solvers, "_gh_verify_exec", lambda r, t: verify)
+
+
+def test_an_image_ref_reduces_to_its_repository():
+    """Both shapes that matter break naive ':' splitting: a digest-pinned ref (what
+    users are told to pin) and a registry with a port. Getting this wrong asked the
+    verifier about `repo@sha256@sha256:…`, which it rejects as malformed — found by
+    running the check against a real digest-pinned container."""
+    cases = {
+        "ghcr.io/o/i:latest": "ghcr.io/o/i",
+        "ghcr.io/o/i@sha256:" + "a" * 64: "ghcr.io/o/i",
+        "ghcr.io/o/i": "ghcr.io/o/i",
+        "localhost:5000/o/i:tag": "localhost:5000/o/i",
+        "localhost:5000/o/i@sha256:" + "b" * 64: "localhost:5000/o/i",
+    }
+    for ref, want in cases.items():
+        assert solvers.image_base(ref) == want, (ref, solvers.image_base(ref))
+
+
+def test_a_digest_pinned_container_is_verified_by_its_repository():
+    """The container a careful user runs names a digest, not a tag."""
+    asked = {}
+    with _patch() as p:
+        _image(p, ref="ghcr.io/gchen19/ankusdrive-solvers@sha256:" + "c" * 64,
+               digest="sha256:" + "c" * 64)
+        p.set(solvers, "_gh_verify_exec",
+              lambda r, t: (asked.setdefault("ref", r), (0, "ok"))[1])
+        assert solvers.verify_container_image()["status"] == "verified"
+    assert asked["ref"] == "ghcr.io/gchen19/ankusdrive-solvers@sha256:" + "c" * 64, asked
 
 
 def test_a_signed_image_verifies():

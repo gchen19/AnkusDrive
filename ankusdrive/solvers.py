@@ -1184,6 +1184,19 @@ _IMAGE_REPO = "gchen19/AnkusDrive"
 _IMAGE_WORKFLOW = ".github/workflows/heavy-image.yml"
 
 
+def image_base(ref: str) -> str:
+    """``ghcr.io/o/i:tag`` or ``ghcr.io/o/i@sha256:…`` -> ``ghcr.io/o/i``.
+
+    Naive splitting on ':' breaks on both of the shapes that matter: a digest-pinned
+    ref (which is what users are told to pin) and a registry with a port. Only a colon
+    in the LAST path segment is a tag."""
+    base = (ref or "").split("@", 1)[0]
+    head, sep, tail = base.rpartition("/")
+    if ":" in tail:
+        tail = tail.rsplit(":", 1)[0]
+    return f"{head}{sep}{tail}"
+
+
 def _classify_verify_output(rc: int, text: str) -> tuple:
     """``(status, reason)`` from the verifier's exit code and output.
 
@@ -1272,7 +1285,7 @@ def verify_container_image(ref: str | None = None, *, timeout_s: float = 60.0) -
         out["status"] = "unsigned"
         out["reason"] = "built locally, so no published digest exists to verify"
         return out
-    target = ref or f"{str(out['ref']).split(':')[0]}@{out['digest']}"
+    target = ref or f"{image_base(str(out['ref']))}@{out['digest']}"
     result = _gh_verify_exec(target, timeout_s)
     if result is None:
         out["reason"] = ("the GitHub CLI (gh >= 2.49) is needed to check the "
