@@ -16,6 +16,7 @@ Stdlib only; reads files; no Docker.
 
 Run:  python3 tests/test_slim_image.py
 """
+import os
 import re
 import sys
 import time
@@ -25,7 +26,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO / "docker" / "heavy-solvers" / "Dockerfile"
 WORKFLOW = REPO / ".github" / "workflows" / "heavy-image.yml"
+DEPS_DIR = REPO / "docker" / "heavy-solvers" / "runtime-deps"
 PREFIXES = ("yade", "openems", "fsi", "oims", "elmer", "bempp")
+SOLVERS = ("openfoam", *PREFIXES)
 
 
 def _text() -> str:
@@ -66,14 +69,19 @@ def test_host_side_payloads_never_enter_the_slim_image():
 
 def test_the_runtime_base_carries_no_build_toolchain():
     """Runtime packages only: no compiler, no headers. A -dev package here means the
-    image is paying for a build it never does."""
-    body = _stage("runtime")
-    installs = " ".join(re.findall(r"apt-get install[^&]*", body))
+    image is paying for a build it never does. The packages now live in the
+    runtime-deps data files, so check those as well as the stage."""
+    # comments explain WHY a -dev package is absent, so scan the package lines only
+    lines = [ln for ln in _stage("runtime").splitlines() if not ln.lstrip().startswith("#")]
+    for f in DEPS_DIR.glob("*.txt"):
+        lines += [ln for ln in f.read_text(encoding="utf-8").splitlines()
+                  if ln.strip() and not ln.lstrip().startswith("#")]
+    body = "\n".join(lines)
     for pkg in ("build-essential", "cmake", "gfortran ", "g++", "python3-dev",
                 "openfoam2512-dev", "flex", "bison", "ccache"):
-        assert pkg not in installs, f"{pkg!r} is a BUILD dependency; the slim image runs prebuilt solvers"
-    dev_pkgs = re.findall(r"\blib\S+-dev\b", installs)
-    assert not dev_pkgs, f"a -dev package is installed in the runtime base: {dev_pkgs}"
+        assert pkg not in body, f"{pkg!r} is a BUILD dependency; the slim image runs prebuilt solvers"
+    dev_pkgs = [p for p in re.findall(r"^lib\S+-dev\b", body, re.M)]
+    assert not dev_pkgs, f"a -dev package is in the runtime set: {dev_pkgs}"
 
 
 def test_the_trim_happens_where_it_reclaims_bytes():
@@ -99,8 +107,9 @@ def test_both_source_modes_are_wired_for_every_prefix():
         for mode in ("stages", "published"):
             assert re.search(rf"^FROM\s+\S+\s+AS\s+src-{p}-{mode}\s*$", text, re.M), \
                 f"no src-{p}-{mode} alias stage"
-        assert re.search(rf"^FROM\s+src-{p}-\$\{{SOLVER_SRC\}}\s+AS\s+src-{p}\s*$", text, re.M), \
-            f"src-{p} does not select on SOLVER_SRC"
+        assert re.search(rf"^FROM\s+src-{p}-\$\{{SOLVER_SRC\}}\s+AS\s+src-{p}-on\s*$",
+                         text, re.M), \
+            f"src-{p}-on does not select on SOLVER_SRC"
 
 
 def test_bempp_is_its_own_stage_so_both_images_can_copy_it():
@@ -123,9 +132,11 @@ def test_the_image_proves_each_solver_RUNS_not_merely_exists():
         "a `yade --version` check passes on an image where running a script fails — run one"
     for probe in ('import openEMS, CSXCAD', 'import bempp_cl', 'ELMER SOLVER', 'simpleFoam -help'):
         assert probe in body, f"the slim stage does not prove {probe!r} works"
-    # the imports ldd cannot see
+    # the imports ldd cannot see — now recorded in yade's runtime-deps file
+    yade_deps = (DEPS_DIR / "yade.txt").read_text(encoding="utf-8")
     for pkg in ("python3-numpy", "python3-mpmath", "ipython3"):
-        assert pkg in _stage("runtime"), f"{pkg} is a YADE import, invisible to ldd"
+        assert re.search(rf"^{pkg}\b", yade_deps, re.M), \
+            f"{pkg} is a YADE import, invisible to ldd — it must be listed by hand"
 
 
 def test_an_unset_target_arch_fails_the_build():
@@ -156,6 +167,124 @@ def test_the_docs_send_users_to_the_slim_image():
         "the documented `docker run` must name the slim image"
     assert "--tmpfs /tmp" in run_cmd[:600], \
         "solvers write heavily to /tmp; a full Docker disk otherwise looks like a solver bug"
+
+
+# --- selectable solvers (#422 part B) ---------------------------------------------
+
+def _run(*argv, **kw):
+    import subprocess
+    return subprocess.run([str(a) for a in argv], capture_output=True, text=True,
+                          cwd=str(REPO), **kw)
+
+
+def test_every_solver_has_a_runtime_deps_file():
+    """A selection installs the union of the selected solvers' files. A solver with no
+    file would build an image that carries its binaries and none of its libraries."""
+    for s in SOLVERS:
+        f = DEPS_DIR / f"{s}.txt"
+        assert f.is_file(), f"no runtime-deps file for {s}"
+        pkgs = [ln.split()[0] for ln in f.read_text(encoding="utf-8").splitlines()
+                if ln.strip() and not ln.startswith("#")]
+        assert pkgs, f"{f.name} lists no packages"
+        for ln in f.read_text(encoding="utf-8").splitlines():
+            if not ln.strip() or ln.startswith("#"):
+                continue
+            parts = ln.split()
+            assert len(parts) <= 2, f"{f.name}: '{ln}' — expected '<package> [arch]'"
+            if len(parts) == 2:
+                assert parts[1] in ("amd64", "arm64"), f"{f.name}: unknown arch {parts[1]!r}"
+
+
+def test_the_selector_applies_closure_and_arch():
+    sel = REPO / "tools" / "select_runtime_deps.sh"
+    # fsi links libOpenFOAM: selecting it without openfoam would build an image whose
+    # adapter cannot load, so the closure is applied for you
+    assert "openfoam" in _run("bash", sel, "--closure", "fsi").stdout.split()
+    assert set(_run("bash", sel, "--closure", "all").stdout.split()) == set(SOLVERS)
+    amd = set(_run("bash", sel, "amd64", "all").stdout.split())
+    arm = set(_run("bash", sel, "arm64", "all").stdout.split())
+    # x86's __float128 runtime has no arm64 package; arm64's Elmer is a source build
+    assert "libquadmath0" in amd and "libquadmath0" not in arm
+    assert "elmerfem-csc" in amd and "elmerfem-csc" not in arm
+    assert "libblas3" in arm and "libblas3" not in amd
+    # a subset installs strictly less
+    few = set(_run("bash", sel, "amd64", "openfoam").stdout.split())
+    assert few < amd, "selecting one solver must not install everything"
+    assert _run("bash", sel, "amd64", "nosuch").returncode != 0, "unknown solver accepted"
+    assert _run("bash", sel, "sparc", "all").returncode != 0, "unknown arch accepted"
+
+
+def test_the_build_wrapper_maps_a_selection_onto_the_build_args():
+    out = _run("bash", REPO / "tools" / "build_solver_image.sh",
+               "--solvers", "openfoam fsi", "--dry-run")
+    assert out.returncode == 0, out.stderr
+    assert "--build-arg WITH_OPENFOAM=on" in out.stdout
+    assert "--build-arg WITH_FSI=on" in out.stdout
+    for off in ("YADE", "OPENEMS", "OIMS", "BEMPP", "ELMER"):
+        assert f"--build-arg WITH_{off}=off" in out.stdout, off
+    assert "--target slim" in out.stdout
+    bad = _run("bash", REPO / "tools" / "build_solver_image.sh", "--solvers", "nosuch",
+               "--dry-run")
+    assert bad.returncode != 0, "the wrapper accepted an unknown solver"
+
+
+def test_selection_reaches_every_step_that_must_respect_it():
+    """An ARG that half the stage ignores is worse than no selection: the image would
+    install a solver's packages and not its files, or check a solver it does not have."""
+    text = _text()
+    for s in PREFIXES:
+        assert re.search(rf"^FROM\s+src-{s}-\$\{{WITH_{s.upper()}\}}\s+AS\s+src-{s}\s*$",
+                         text, re.M), f"src-{s} does not select on WITH_{s.upper()}"
+        assert re.search(rf"^FROM\s+empty-prefixes\s+AS\s+src-{s}-off\s*$", text, re.M), \
+            f"no empty stage for an unselected {s}"
+    runtime, slim = _stage("runtime"), _stage("slim")
+    for s in SOLVERS:
+        arg = f"WITH_{s.upper()}"
+        assert arg in runtime, f"{arg} does not reach the apt selection"
+    for guard in ("WITH_YADE", "WITH_ELMER", "WITH_OPENEMS", "WITH_BEMPP",
+                  "WITH_FSI", "WITH_OPENFOAM", "WITH_OIMS"):
+        assert guard in slim, f"{guard} does not guard its check in the slim stage"
+    assert 'echo "no solver selected' in runtime, \
+        "an empty selection must fail the build, not produce a solverless image"
+
+
+# --- the image states its contents (#422 part C) ----------------------------------
+
+def test_the_image_writes_a_manifest_of_what_it_contains():
+    assert "ankusdrive-write-manifest" in _stage("slim"), \
+        "the slim image must record its contents for the host to read"
+    gen = (REPO / "tools" / "write_solver_manifest.sh").read_text(encoding="utf-8")
+    for s in SOLVERS:
+        assert re.search(rf"^{s}\|/", gen, re.M), f"the manifest generator omits {s}"
+
+
+def test_the_manifest_paths_match_what_the_image_publishes():
+    """A manifest path that disagrees with the ENV is a lie the host would act on."""
+    gen = (REPO / "tools" / "write_solver_manifest.sh").read_text(encoding="utf-8")
+    env = _stage("slim")
+    for line in gen.splitlines():
+        m = re.match(r"^(\w+)\|(/\S+)\|", line)
+        if not m:
+            continue
+        name, path = m.groups()
+        if name in ("openfoam", "elmer", "yade", "openems", "bempp", "oims"):
+            assert path in env, f"the manifest's {name} path {path} is not what slim publishes"
+
+
+def test_the_manifest_generator_round_trips():
+    import json
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "solvers.json"
+        r = _run("bash", REPO / "tools" / "write_solver_manifest.sh", "amd64",
+                 "openfoam", "yade", env={**os.environ, "MANIFEST_PATH": str(out)})
+        assert r.returncode == 0, r.stderr
+        data = json.loads(out.read_text(encoding="utf-8"))
+        assert sorted(data["solvers"]) == ["openfoam", "yade"], data["solvers"]
+        assert set(data["excluded"]) == set(SOLVERS) - {"openfoam", "yade"}
+        assert data["architecture"] == "amd64"
+        for name, row in data["solvers"].items():
+            assert row["path"].startswith("/"), (name, row)
 
 
 def _discover():

@@ -32,6 +32,17 @@ ARG UBUNTU=ubuntu:24.04
 # precede the first FROM. HEAVY_IMAGE is only pulled with SOLVER_SRC=published.
 ARG SOLVER_SRC=stages
 ARG HEAVY_IMAGE=ghcr.io/gchen19/ankusdrive-heavy:latest
+# Which solvers the slim image carries (#422 part B). `on`/`off` per solver, because a
+# COPY --from can only select a STAGE, not parse a list. Build a subset with
+# tools/build_solver_image.sh --solvers "openfoam fsi yade", which sets these and
+# keeps the apt list and the manifest in step with them.
+ARG WITH_OPENFOAM=on
+ARG WITH_ELMER=on
+ARG WITH_YADE=on
+ARG WITH_OPENEMS=on
+ARG WITH_FSI=on
+ARG WITH_OIMS=on
+ARG WITH_BEMPP=on
 
 # ---------------------------------------------------------------------------------
 FROM ${UBUNTU} AS system
@@ -359,12 +370,31 @@ FROM payloads-published AS src-fsi-published
 FROM payloads-published AS src-oims-published
 FROM payloads-published AS src-elmer-published
 FROM payloads-published AS src-bempp-published
-FROM src-yade-${SOLVER_SRC}    AS src-yade
-FROM src-openems-${SOLVER_SRC} AS src-openems
-FROM src-fsi-${SOLVER_SRC}     AS src-fsi
-FROM src-oims-${SOLVER_SRC}    AS src-oims
-FROM src-elmer-${SOLVER_SRC}   AS src-elmer
-FROM src-bempp-${SOLVER_SRC}   AS src-bempp
+FROM src-yade-${SOLVER_SRC}    AS src-yade-on
+FROM src-openems-${SOLVER_SRC} AS src-openems-on
+FROM src-fsi-${SOLVER_SRC}     AS src-fsi-on
+FROM src-oims-${SOLVER_SRC}    AS src-oims-on
+FROM src-elmer-${SOLVER_SRC}   AS src-elmer-on
+FROM src-bempp-${SOLVER_SRC}   AS src-bempp-on
+
+# An unselected solver copies from a stage holding EMPTY prefixes: `COPY --from=scratch`
+# cannot copy a path that does not exist, and a conditional COPY does not exist. The
+# empty dirs cost nothing and keep every COPY below unconditional.
+FROM ${UBUNTU} AS empty-prefixes
+RUN mkdir -p /opt/yade /opt/openEMS /opt/venv-openems /opt/fsi /opt/of7 /opt/elmer /opt/venv-bempp
+FROM empty-prefixes AS src-yade-off
+FROM empty-prefixes AS src-openems-off
+FROM empty-prefixes AS src-fsi-off
+FROM empty-prefixes AS src-oims-off
+FROM empty-prefixes AS src-elmer-off
+FROM empty-prefixes AS src-bempp-off
+
+FROM src-yade-${WITH_YADE}       AS src-yade
+FROM src-openems-${WITH_OPENEMS} AS src-openems
+FROM src-fsi-${WITH_FSI}         AS src-fsi
+FROM src-oims-${WITH_OIMS}       AS src-oims
+FROM src-elmer-${WITH_ELMER}     AS src-elmer
+FROM src-bempp-${WITH_BEMPP}     AS src-bempp
 
 # ---------------------------------------------------------------------------------
 # Runtime base: the libraries the solvers LINK, with no toolchain and no headers.
@@ -385,60 +415,55 @@ FROM src-bempp-${SOLVER_SRC}   AS src-bempp
 FROM ${UBUNTU} AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
+ARG WITH_OPENFOAM
+ARG WITH_ELMER
+ARG WITH_YADE
+ARG WITH_OPENEMS
+ARG WITH_FSI
+ARG WITH_OIMS
+ARG WITH_BEMPP
 # OpenFOAM's etc/bashrc derives the user dir from $USER, which docker leaves unset.
 ENV USER=root LANG=C.UTF-8
 # BuildKit always sets TARGETARCH; a builder that does not would silently skip the
-# per-arch packages below (amd64's Elmer, arm64's BLAS/gmsh) and publish an image
-# missing a solver. Fail here instead.
+# per-arch packages (amd64's Elmer, arm64's BLAS) and publish an image missing a
+# solver. Fail here instead.
 RUN case "$TARGETARCH" in amd64|arm64) ;; \
     *) echo "TARGETARCH=${TARGETARCH:-<unset>} — build with BuildKit, or pass --build-arg TARGETARCH=amd64|arm64" >&2; exit 1 ;; esac
+
+# The package list is DERIVED and SELECTED, never hand-written here: each solver's
+# runtime packages live in docker/heavy-solvers/runtime-deps/<solver>.txt (produced by
+# tools/container_runtime_deps.sh, which ldd's every ELF in that solver's prefix), and
+# select_runtime_deps.sh resolves the chosen set for this architecture — applying the
+# closure rules (fsi links libOpenFOAM, so it implies openfoam). Selecting fewer
+# solvers therefore installs fewer packages, which is most of what a subset saves.
+COPY docker/heavy-solvers/runtime-deps /usr/local/share/ankusdrive/runtime-deps
+COPY tools/select_runtime_deps.sh /usr/local/bin/ankusdrive-select-deps
 # `curl | bash` for the ESI repo is what scripts/install-solvers.sh documents and what
 # the system stage above does; pinning that keyring is tracked in #423.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
-      software-properties-common \
- && curl -fsSL https://dl.openfoam.com/add-debian-repo.sh | bash \
- && if [ "$TARGETARCH" = "amd64" ]; then add-apt-repository -y ppa:elmer-csc-ubuntu/elmer-csc-ppa; fi \
- && apt-get update \
- && apt-get install -y --no-install-recommends \
-      openfoam2512 \
-      # YADE embeds the SYSTEM python, so part of what it needs are IMPORTS, which ldd
-      # cannot see and the derived list below therefore misses: numpy and mpmath at
-      # start-up, IPython as soon as `yade` runs a script (yade.runtime imports it).
-      # The check in the slim stage RUNS a script for exactly this reason.
-      python3 python3-numpy python3-mpmath ipython3 \
-      $([ "$TARGETARCH" = "amd64" ] && echo elmerfem-csc) \
-      $([ "$TARGETARCH" = "arm64" ] && echo gmsh) \
-      libaec0 libamd3 libarpack2t64 libboost-atomic1.83.0 libboost-chrono1.83.0t64 \
-      libboost-date-time1.83.0 libboost-filesystem1.83.0 libboost-iostreams1.83.0 \
-      libboost-log1.83.0 libboost-program-options1.83.0 libboost-python1.83.0 \
-      libboost-regex1.83.0 libboost-serialization1.83.0 libboost-system1.83.0 \
-      libboost-thread1.83.0 libbrotli1 libbsd0 libbz2-1.0 libcamd3 libcap2 libccolamd3 \
-      libcholmod5 libcolamd3 libcurl4t64 libdeflate0 libdouble-conversion3 \
-      libevent-core-2.1-7t64 libevent-pthreads-2.1-7t64 libexpat1 libffi8 \
-      libfontconfig1 libfreetype6 libgfortran5 libgl1 libgl2ps1.4 libglib2.0-0t64 \
-      libglu1-mesa libglvnd0 libglx0 libgmp10 libgmpxx4ldbl libgomp1 libgts-0.7-5t64 \
-      libhdf5-103-1t64 libhdf5-hl-100t64 libhwloc15 libicu74 libjbig0 libjpeg-turbo8 \
-      libjsoncpp25 liblerc4 liblz4-1 liblzma5 libmd0 libopenblas0-pthread libopengl0 \
-      libopenmpi3t64 libpcre2-8-0 libpng16-16t64 libpython3.12t64 \
-      libreadline8t64 libsharpyuv0 libspooles2.2t64 libssl3t64 libsuitesparseconfig7 \
-      libsz2 libtbb12 libtiff6 libtinfo6 libtinyxml2.6.2v5 libudev1 libvtk9.1t64 \
-      libwebp7 libx11-6 libxau6 libxcb1 libxcursor1 libxdmcp6 libxext6 libxfixes3 \
-      libxft2 libxinerama1 libxml2 libxrender1 libzstd1 zlib1g \
-      # libquadmath is GCC's x86 __float128 runtime — no such package on arm64.
-      # arm64 instead needs BLAS/LAPACK: its Elmer is the source build (WITH_MPI=OFF,
-      # libblas/liblapack), where amd64 takes the PPA package and its dependencies.
-      $([ "$TARGETARCH" = "amd64" ] && echo libquadmath0) \
-      $([ "$TARGETARCH" = "arm64" ] && echo libblas3 liblapack3) \
- && apt-get purge -y --auto-remove software-properties-common gnupg \
- && rm -rf /var/lib/apt/lists/*
+RUN set -eu \
+ ; sel="" \
+ ; [ "$WITH_OPENFOAM" = on ] && sel="$sel openfoam" || true \
+ ; [ "$WITH_ELMER"    = on ] && sel="$sel elmer"    || true \
+ ; [ "$WITH_YADE"     = on ] && sel="$sel yade"     || true \
+ ; [ "$WITH_OPENEMS"  = on ] && sel="$sel openems"  || true \
+ ; [ "$WITH_FSI"      = on ] && sel="$sel fsi"      || true \
+ ; [ "$WITH_OIMS"     = on ] && sel="$sel oims"     || true \
+ ; [ "$WITH_BEMPP"    = on ] && sel="$sel bempp"    || true \
+ ; [ -n "$sel" ] || { echo "no solver selected — at least one WITH_* must be on" >&2; exit 1; } \
+ ; echo "selected:$sel" \
+ ; apt-get update \
+ ; apt-get install -y --no-install-recommends ca-certificates curl gnupg software-properties-common \
+ ; case "$sel" in *openfoam*|*fsi*) curl -fsSL https://dl.openfoam.com/add-debian-repo.sh | bash ;; esac \
+ ; case "$sel:$TARGETARCH" in *elmer*:amd64) add-apt-repository -y ppa:elmer-csc-ubuntu/elmer-csc-ppa ;; esac \
+ ; apt-get update \
+ ; export RUNTIME_DEPS_DIR=/usr/local/share/ankusdrive/runtime-deps \
+ ; pkgs=$(bash /usr/local/bin/ankusdrive-select-deps "$TARGETARCH" $sel) \
+ ; echo "$pkgs" | tr '\n' ' ' \
+ ; apt-get install -y --no-install-recommends $pkgs \
+ ; apt-get purge -y --auto-remove software-properties-common gnupg \
+ ; rm -rf /var/lib/apt/lists/*
 WORKDIR /
 
-# ---------------------------------------------------------------------------------
-# Assemble the solver tree, then TRIM it — in this throwaway stage, because deleting
-# a file in a later layer does not reclaim its bytes: the data still ships in the
-# layer that added it. `slim` below copies the finished /opt in ONE layer, so what is
-# removed here is genuinely absent from the published image.
 FROM runtime AS assemble
 ARG TARGETARCH
 COPY --from=src-yade    /opt/yade         /opt/yade
@@ -453,11 +478,14 @@ COPY --from=src-bempp   /opt/venv-bempp   /opt/venv-bempp
 # arm64 the source build already under /opt/elmer/bin. Discovery probes either, but a
 # single published ANKUSDRIVE_ELMER_PATH is what a user copies out of the image — and
 # sibling_bin resolves ElmerGrid/ViewFactors NEXT TO it, so all three are linked.
-RUN if [ "$TARGETARCH" = "amd64" ]; then \
-      mkdir -p /opt/elmer/bin \
-      && for b in ElmerSolver ElmerGrid ViewFactors; do ln -sfn "/usr/bin/$b" "/opt/elmer/bin/$b"; done; \
-    fi \
- && for b in ElmerSolver ElmerGrid ViewFactors; do test -x "/opt/elmer/bin/$b" || { echo "missing /opt/elmer/bin/$b" >&2; exit 1; }; done
+ARG WITH_ELMER
+RUN if [ "$WITH_ELMER" = on ]; then \
+      if [ "$TARGETARCH" = "amd64" ]; then \
+        mkdir -p /opt/elmer/bin \
+        && for b in ElmerSolver ElmerGrid ViewFactors; do ln -sfn "/usr/bin/$b" "/opt/elmer/bin/$b"; done; \
+      fi \
+      && for b in ElmerSolver ElmerGrid ViewFactors; do test -x "/opt/elmer/bin/$b" || { echo "missing /opt/elmer/bin/$b" >&2; exit 1; }; done; \
+    fi
 
 # OpenFOAM-7 ships its build tree: 688 .o/.dep intermediates under platforms/*/
 # applications (363 MB), plus the source, tutorials and docs a runtime image never
@@ -473,14 +501,27 @@ RUN rm -rf /opt/of7/OpenFOAM/OpenFOAM-7/platforms/*/applications \
 # ---------------------------------------------------------------------------------
 # The published image: the runtime base plus the assembled solver tree, one layer.
 FROM runtime AS slim
+ARG TARGETARCH
+ARG WITH_OPENFOAM
+ARG WITH_ELMER
+ARG WITH_YADE
+ARG WITH_OPENEMS
+ARG WITH_FSI
+ARG WITH_OIMS
+ARG WITH_BEMPP
 COPY --from=assemble /opt /opt
 
 # Arch-neutral path to the ESI build, so the published ANKUSDRIVE_* values are the
 # same on every platform (the heavy image does this too).
-RUN set -e; plat=$(ls -d /usr/lib/openfoam/openfoam2512/platforms/*Opt | head -1) \
- ; test -x "$plat/bin/simpleFoam" \
- ; ln -sfn "$(basename "$plat")" /usr/lib/openfoam/openfoam2512/platforms/current \
- ; test -x /opt/of7/OpenFOAM/site/7/platforms/current/bin/openInjMoldSim
+RUN set -eu \
+ ; if [ "$WITH_OPENFOAM" = on ]; then \
+     plat=$(ls -d /usr/lib/openfoam/openfoam2512/platforms/*Opt | head -1) \
+     ; test -x "$plat/bin/simpleFoam" \
+     ; ln -sfn "$(basename "$plat")" /usr/lib/openfoam/openfoam2512/platforms/current \
+   ; fi \
+ ; if [ "$WITH_OIMS" = on ]; then \
+     test -x /opt/of7/OpenFOAM/site/7/platforms/current/bin/openInjMoldSim \
+   ; fi
 
 ENV ANKUSDRIVE_OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2512/etc/bashrc \
     ANKUSDRIVE_OPENFOAM_PATH=/usr/lib/openfoam/openfoam2512/platforms/current/bin/simpleFoam \
@@ -501,29 +542,63 @@ COPY docker/heavy-solvers/LICENSES.md /licenses/README.md
 # The image is not done until (a) every solver's DT_NEEDED resolves — the trimmed
 # package list is complete on THIS architecture — and (b) each solver actually runs.
 # A missing runtime library otherwise surfaces as a failed solve on a user's Mac.
+# What this image contains, stated by the image itself (#422 part C). AnkusDrive reads
+# it before trusting any in-container path, so a solver this build left out is reported
+# as excluded-by-design instead of "ready" followed by a failed solve.
+COPY tools/write_solver_manifest.sh /usr/local/bin/ankusdrive-write-manifest
+RUN set -eu \
+ ; sel="" \
+ ; [ "$WITH_OPENFOAM" = on ] && sel="$sel openfoam" || true \
+ ; [ "$WITH_ELMER"    = on ] && sel="$sel elmer"    || true \
+ ; [ "$WITH_YADE"     = on ] && sel="$sel yade"     || true \
+ ; [ "$WITH_OPENEMS"  = on ] && sel="$sel openems"  || true \
+ ; [ "$WITH_FSI"      = on ] && sel="$sel fsi"      || true \
+ ; [ "$WITH_OIMS"     = on ] && sel="$sel oims"     || true \
+ ; [ "$WITH_BEMPP"    = on ] && sel="$sel bempp"    || true \
+ ; bash /usr/local/bin/ankusdrive-write-manifest "$TARGETARCH" $sel \
+ ; cat /etc/ankusdrive/solvers.json
+
 COPY tools/container_runtime_deps.sh /usr/local/bin/ankusdrive-runtime-deps
-RUN EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
-      bash /usr/local/bin/ankusdrive-runtime-deps --check \
-        /opt/yade /opt/fsi /opt/of7 /opt/openEMS /opt/venv-openems /opt/venv-bempp
+RUN set -eu \
+ ; prefixes="" \
+ ; [ "$WITH_YADE"    = on ] && prefixes="$prefixes /opt/yade" || true \
+ ; [ "$WITH_FSI"     = on ] && prefixes="$prefixes /opt/fsi" || true \
+ ; [ "$WITH_OIMS"    = on ] && prefixes="$prefixes /opt/of7" || true \
+ ; [ "$WITH_OPENEMS" = on ] && prefixes="$prefixes /opt/openEMS /opt/venv-openems" || true \
+ ; [ "$WITH_BEMPP"   = on ] && prefixes="$prefixes /opt/venv-bempp" || true \
+ ; if [ -n "$prefixes" ]; then \
+     EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+       bash /usr/local/bin/ankusdrive-runtime-deps --check $prefixes \
+   ; else \
+     echo "no copied prefixes in this selection — apt resolves what it installed" \
+   ; fi
 # Each solver must RUN, not merely exist. Checked with the command's own exit status
 # and a banner match on stdout — `… 2>&1 | grep -qi yade` would pass on a traceback
 # that merely names the path, which is how a missing python3-mpmath first slipped by.
-RUN set -e \
- ; /opt/yade/bin/yade --version > /tmp/yade.txt 2>&1 \
- ; grep -qi "yade version" /tmp/yade.txt \
-   # …and RUN a script the way the worker does: `--version` never imports
-   # yade.runtime, so it passes on an image where every real DEM solve dies on a
-   # missing IPython. `pack`/`utils` are what dem_gpl_runner.py imports.
- ; printf 'from yade import pack, utils\nprint("yade-script-ok")\n' > /tmp/yade_probe.py \
- ; /opt/yade/bin/yade -x -n /tmp/yade_probe.py 2>&1 | grep -q yade-script-ok \
- ; /opt/elmer/bin/ElmerSolver -v > /tmp/elmer.txt 2>&1 \
- ; grep -q "ELMER SOLVER" /tmp/elmer.txt \
- ; /opt/venv-openems/bin/python -c "import openEMS, CSXCAD" \
- ; /opt/venv-bempp/bin/python -c "import bempp_cl" \
- ; test -x "$ANKUSDRIVE_CCX_PRECICE" && test -d "$ANKUSDRIVE_PRECICE_LIB" \
- ; test -f "$ANKUSDRIVE_OPENFOAM_ADAPTER_LIB/libpreciceAdapterFunctionObject.so" \
- ; bash -c 'source "$ANKUSDRIVE_OPENFOAM_BASHRC" >/dev/null 2>&1; simpleFoam -help >/dev/null' \
- ; bash -c 'unset FOAM_SIGFPE; source "$ANKUSDRIVE_OPENINJMOLDSIM_BASHRC" >/dev/null 2>&1; openInjMoldSim -help >/dev/null 2>&1 || true'
+RUN set -eu \
+ ; if [ "$WITH_YADE" = on ]; then \
+     /opt/yade/bin/yade --version > /tmp/yade.txt 2>&1 \
+     ; grep -qi "yade version" /tmp/yade.txt \
+     ; printf 'from yade import pack, utils\nprint("yade-script-ok")\n' > /tmp/yade_probe.py \
+     ; /opt/yade/bin/yade -x -n /tmp/yade_probe.py 2>&1 | grep -q yade-script-ok \
+   ; fi \
+ ; if [ "$WITH_ELMER" = on ]; then \
+     /opt/elmer/bin/ElmerSolver -v > /tmp/elmer.txt 2>&1 \
+     ; grep -q "ELMER SOLVER" /tmp/elmer.txt \
+   ; fi \
+ ; if [ "$WITH_OPENEMS" = on ]; then /opt/venv-openems/bin/python -c "import openEMS, CSXCAD"; fi \
+ ; if [ "$WITH_BEMPP" = on ]; then /opt/venv-bempp/bin/python -c "import bempp_cl"; fi \
+ ; if [ "$WITH_FSI" = on ]; then \
+     test -x "$ANKUSDRIVE_CCX_PRECICE" \
+     ; test -d "$ANKUSDRIVE_PRECICE_LIB" \
+     ; test -f "$ANKUSDRIVE_OPENFOAM_ADAPTER_LIB/libpreciceAdapterFunctionObject.so" \
+   ; fi \
+ ; if [ "$WITH_OPENFOAM" = on ]; then \
+     bash -c 'source "$ANKUSDRIVE_OPENFOAM_BASHRC" >/dev/null 2>&1; simpleFoam -help >/dev/null' \
+   ; fi \
+ ; if [ "$WITH_OIMS" = on ]; then \
+     bash -c 'unset FOAM_SIGFPE; source "$ANKUSDRIVE_OPENINJMOLDSIM_BASHRC" >/dev/null 2>&1; openInjMoldSim -help >/dev/null 2>&1 || true' \
+   ; fi
 
 LABEL org.opencontainers.image.title="ankusdrive-solvers" \
       org.opencontainers.image.description="AnkusDrive slim solver image for ANKUSDRIVE_SUBSTRATE=container, amd64 + arm64 (OpenFOAM, Elmer, YADE, openEMS, preCICE FSI, openInjMoldSim, Bempp) — runtime only: no FreeCAD, no toolchain" \

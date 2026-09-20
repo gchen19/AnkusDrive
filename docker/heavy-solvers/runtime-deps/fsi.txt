@@ -1,0 +1,35 @@
+# Runtime apt packages for `fsi` in the slim solver image (#422).
+#
+# DERIVED, not hand-written: tools/container_runtime_deps.sh ldd's every ELF in the
+# solver's prefix and maps each dependency to its apt package. Regenerate with
+#   docker run --rm -v "$PWD/tools:/t:ro" \
+#     -e EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+#     ghcr.io/gchen19/ankusdrive-solvers bash /t/container_runtime_deps.sh /opt/fsi
+#
+# One package per line. A second field restricts it to an architecture. Lines added
+# by hand are marked: they are IMPORTS or CLI tools, which ldd cannot see.
+# NB: also needs `openfoam` — the adapter links libOpenFOAM. The selector
+# pulls that in for you (see tools/select_runtime_deps.sh).
+libarpack2t64
+libboost-filesystem1.83.0
+libboost-log1.83.0
+libboost-program-options1.83.0
+libboost-thread1.83.0
+libc6
+libcap2
+libevent-core-2.1-7t64
+libevent-pthreads-2.1-7t64
+libgcc-s1
+libgfortran5
+libgomp1
+libhwloc15
+libicu74
+liblzma5
+libopenblas0-pthread
+libopenmpi3t64
+libspooles2.2t64
+libstdc++6
+libudev1
+libxml2
+openfoam2512
+zlib1g

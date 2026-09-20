@@ -1029,6 +1029,76 @@ def _container_binary(spec: dict):
     return lines[0] if lines and lines[0].startswith("/") else None
 
 
+# --- what the image says it contains (#422 part C) ----------------------------------
+# The host cannot see inside the container, so an in-container path is trusted rather
+# than stat'd (#361). That is safe while every image carries every solver; once an
+# image can legitimately omit one, the same trust becomes "ready via yade (in
+# container)" followed by a failed solve. So the image states its contents at
+# /etc/ankusdrive/solvers.json and that answer wins. An image without one — anything
+# built before #422 — falls back to probing, unchanged.
+
+_MANIFEST_PATH = "/etc/ankusdrive/solvers.json"
+
+
+def container_manifest():
+    """The running container's solver manifest as a dict, or None when it has none
+    (an older image), is not running, or the file does not parse. Cached with the
+    other container reads. The manifest is DATA: paths and reasons are reported to the
+    user, never executed."""
+    if container_state() != "running":
+        return None
+    r = _container_probe(container_engine(), container_name(), ("cat", _MANIFEST_PATH))
+    if not r or r[0] != 0:
+        return None
+    import json as _json
+    try:
+        data = _json.loads(r[1])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("solvers"), dict):
+        return None
+    return data
+
+
+def manifest_key(name: str) -> str:
+    """The name the IMAGE uses for registry solver ``name``. They agree except for the
+    FSI stack, which the registry keys on its linchpin binary (``precice``) while the
+    image — and tools/build_solver_image.sh — calls the whole stack ``fsi``. A hint
+    that told the reader to rebuild with `precice` would name a solver the build
+    script rejects."""
+    return {"precice": "fsi", "openinjmoldsim": "oims"}.get(name, name)
+
+
+def container_excludes(name: str):
+    """The reason the running container's image deliberately lacks solver ``name``, or
+    None when it carries it, has no manifest, or does not mention it. Registry names
+    map to manifest keys one-to-one except the FSI stack, which the image records
+    under ``fsi`` (the registry calls its linchpin binary ``precice``)."""
+    manifest = container_manifest()
+    if manifest is None:
+        return None
+    key = manifest_key(name)
+    if key in manifest["solvers"]:
+        return None
+    excluded = manifest.get("excluded")
+    if isinstance(excluded, dict) and key in excluded:
+        reason = excluded[key]
+        return (reason.get("reason") if isinstance(reason, dict) else str(reason)) \
+            or "not in this image"
+    return None
+
+
+def container_path_exists(path: str, *, is_dir: bool = False) -> bool:
+    """Whether ``path`` exists INSIDE the running container — a directory with
+    ``is_dir``, else an executable file. False when the container is not running, so
+    callers fall back to whatever they do for an unreachable substrate."""
+    if not path.startswith("/") or container_state() != "running":
+        return False
+    r = _container_probe(container_engine(), container_name(),
+                         ("test", "-d" if is_dir else "-e", path))
+    return bool(r) and r[0] == 0
+
+
 def container_file_exists(path: str) -> bool:
     """Whether ``path`` is an executable file INSIDE the running container — the
     routed twin of ``os.path.isfile`` for a companion binary the host cannot stat
@@ -1202,9 +1272,17 @@ def _substrate_override(value: str, *, is_dir: bool) -> str | None:
     p = wsl_posix(value)                     # \\wsl$ overrides normalize to POSIX
     if _posix_isdir(p) if is_dir else _posix_isfile(p):
         return p
-    if _opaque_substrate_available() and p.startswith("/"):
-        return p                             # in-VM/container path; host can't confirm
-    return None
+    if not (_opaque_substrate_available() and p.startswith("/")):
+        return None
+    # A Multipass VM can only be trusted — there is nothing to ask. A RUNNING container
+    # can be asked, and should be (#422): a config.toml or ANKUSDRIVE_* written for a
+    # HOST install is an absolute path too, so it is trusted here and then sourced
+    # inside a container that has no such file. The solve dies with `blockMesh: command
+    # not found`, naming nothing that points at the real cause. Asking turns that into
+    # a named miss at discovery time. An unreachable/older container still trusts.
+    if substrate() == "container" and container_state() == "running":
+        return p if container_path_exists(p, is_dir=is_dir) else None
+    return p                                 # in-VM path; host can't confirm
 
 
 def _override_candidates(name: str, spec: dict) -> list:
@@ -1351,13 +1429,19 @@ def _vm_binary_path(name: str, spec: dict):
     substrate resolves the same way (#361). Returns the path or None; None whenever
     no opaque substrate is reachable, where :func:`_binary_path` governs."""
     if spec.get("container") and _container_routed(spec):
-        # #419 (YADE, Elmer): an absolute override is trusted like OpenFOAM's; without
-        # one the running container is probed, never assumed to hold the solver
+        # #419 (YADE, Elmer): without an override the running container is probed,
+        # never assumed to hold the solver. An override is honoured, but checked
+        # inside the container (#422) — a host path in a config.toml is absolute too.
         if not container_available():
             return None
+        if container_excludes(name):         # the image says it left this one out
+            return None
         for c in _override_candidates(name, spec):
-            if c.startswith("/"):
-                return c
+            if not c.startswith("/"):
+                continue
+            if container_state() == "running" and not container_file_exists(c):
+                continue                     # names nothing in this image
+            return c
         return _container_binary(spec)
     if not (spec.get("substrate_bins") and _opaque_substrate_available()):
         return None
@@ -1410,6 +1494,15 @@ def _unwired_found(name: str, spec: dict):
     evidence it is *installed but not wired into this shell*. READ-ONLY — never sources
     a bashrc, never sets an env var (discovery stays side-effect-free). Returns
     ``(found_at, wire_hint)`` when such evidence exists, else None."""
+    # The image says it left this one out (#422) — true for every container-routed
+    # solver, including the OpenFOAM-backed set, whose own unwired probes would
+    # otherwise answer with a host bashrc or a host FSI build instead.
+    if _container_routed(spec) and (reason := container_excludes(name)):
+        cname, key = container_name(), manifest_key(name)
+        return (f"container {cname!r} (running)",
+                f"this image does not include {key} ({reason}). Rebuild with it: "
+                f"`bash tools/build_solver_image.sh --solvers \"<yours> {key}\"`, "
+                f"or use the full {_SOLVER_IMAGE}. See docs/CONTAINER_SUBSTRATE.md")
     if spec.get("container") and _container_routed(spec):
         # #419: under `container` a host venv or binary is irrelevant; what is missing
         # is the container, its running state, or the solver inside that image
@@ -1429,10 +1522,28 @@ def _unwired_found(name: str, spec: dict):
             found_at = f"container {cname!r} (running)"
             env = (spec.get("interpreter", {}).get("env")
                    or f"ANKUSDRIVE_{name.upper()}_PATH")
-            hint = (f"the solver container {cname!r} is running but {name} did not "
-                    f"resolve inside it — the image may not include it (the full "
-                    f"{_SOLVER_IMAGE} does), or it lives elsewhere: set {env} to its "
-                    f"IN-CONTAINER path. See docs/CONTAINER_SUBSTRATE.md")
+            reason = container_excludes(name)
+            override = next((c for c in _override_candidates(name, spec)
+                             if c.startswith("/")), None)
+            if reason:
+                # the image SAYS it left this one out (#422) — no point hunting paths
+                key = manifest_key(name)
+                hint = (f"this image does not include {key} ({reason}). Rebuild with it: "
+                        f"`bash tools/build_solver_image.sh --solvers \"<yours> {key}\"`, "
+                        f"or use the full {_SOLVER_IMAGE}. "
+                        f"See docs/CONTAINER_SUBSTRATE.md")
+            elif override and not container_file_exists(override):
+                # an override naming a HOST path is the config.toml trap (#422): it is
+                # absolute, so it looks like an in-container path and is trusted
+                hint = (f"{env}={override} does not exist inside container {cname!r} — "
+                        f"that looks like a path from a HOST install. Clear it, or set it "
+                        f"to what the image publishes: `{eng} exec {cname} env | grep "
+                        f"ANKUSDRIVE_`. See docs/CONTAINER_SUBSTRATE.md")
+            else:
+                hint = (f"the solver container {cname!r} is running but {name} did not "
+                        f"resolve inside it — the image may not include it (the full "
+                        f"{_SOLVER_IMAGE} does), or it lives elsewhere: set {env} to its "
+                        f"IN-CONTAINER path. See docs/CONTAINER_SUBSTRATE.md")
         return found_at, hint
     cfg = spec.get("unwired")
     if not cfg:
@@ -1578,8 +1689,10 @@ def _interpreter_python(name: str, spec: dict):
     requires = spec["interpreter"]["requires"]
     if spec.get("container") and _container_routed(spec):
         # #419: only an in-container interpreter counts, and it is asked IN the
-        # container — the override first, then the heavy image's dedicated venv
+        # container — the override first, then the image's dedicated venv
         if container_state() != "running":
+            return None
+        if container_excludes(name):         # the image says it left this one out
             return None
         cfg = spec["interpreter"]
         probe = ("import importlib.util,sys;"

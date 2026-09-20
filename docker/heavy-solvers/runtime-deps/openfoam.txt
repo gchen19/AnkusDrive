@@ -1,0 +1,14 @@
+# Runtime apt packages for `openfoam` in the slim solver image (#422).
+#
+# DERIVED, not hand-written: tools/container_runtime_deps.sh ldd's every ELF in the
+# solver's prefix and maps each dependency to its apt package. Regenerate with
+#   docker run --rm -v "$PWD/tools:/t:ro" \
+#     -e EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+#     ghcr.io/gchen19/ankusdrive-solvers bash /t/container_runtime_deps.sh (apt package, nothing to ldd)
+#
+# One package per line. A second field restricts it to an architecture. Lines added
+# by hand are marked: they are IMPORTS or CLI tools, which ldd cannot see.
+# The ESI apt package, whose own dependencies apt resolves. The RUNTIME one:
+# openfoam2512-dev adds headers and the wmake toolchain, which the slim image
+# never uses (no AnkusDrive case compiles a coded BC — see molding_fill.py).
+openfoam2512

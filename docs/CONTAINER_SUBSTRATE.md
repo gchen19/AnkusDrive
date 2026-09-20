@@ -117,6 +117,51 @@ use:
    something is missing, the hint names the container's state (no container, stopped,
    or running with this shell unwired) and the exact fix.
 
+## Building an image with only the solvers you want
+
+The published image carries every solver. If you only need some of them, build your
+own — nothing is compiled, the prebuilt solver trees are copied, so it takes minutes:
+
+```bash
+tools/build_solver_image.sh --solvers "openfoam fsi" -t my-solvers:dev
+tools/build_solver_image.sh --solvers all --from-published   # no local stage builds
+```
+
+Known solvers: `openfoam elmer yade openems fsi oims bempp` (`oims` is
+openInjMoldSim, the molding solver on OpenFOAM-7). `fsi` implies `openfoam` — its
+adapter links libOpenFOAM — and the script expands that for you.
+
+A subset is smaller in two ways: it copies fewer solver trees, and it installs fewer
+apt packages, since each solver's runtime packages are listed separately in
+[`docker/heavy-solvers/runtime-deps/`](../docker/heavy-solvers/runtime-deps/) (derived
+by `tools/container_runtime_deps.sh`, which ldd's every binary rather than trusting a
+hand-written list). Measured on amd64: **0.69 GB** for OpenFOAM alone and **1.6 GB**
+for YADE + Elmer, against 3.3 GB for the full set.
+
+Then point the substrate at it:
+
+```bash
+docker run -d --name ankusdrive-solvers --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  --tmpfs /tmp:rw,exec,size=2g -v "$TMPDIR:$TMPDIR" my-solvers:dev sleep infinity
+```
+
+### The image says what it contains
+
+Every image records its own contents at `/etc/ankusdrive/solvers.json`, and AnkusDrive
+reads that before trusting any in-container path. So a solver your image left out is
+reported as excluded **by design**, with the command to rebuild:
+
+```
+[warn] fsi              unwired (precice)
+        fix:   this image does not include fsi (not selected when this image was built).
+               Rebuild with it: `bash tools/build_solver_image.sh --solvers "<yours> fsi"`…
+```
+
+That matters because the host cannot see inside the container: without the manifest,
+a partial image would report a missing solver as `ready via … (in container)` and the
+solve would fail minutes later. An image built before this existed has no manifest,
+and AnkusDrive falls back to probing it, exactly as before.
+
 ## macOS: what this gives you, and what it doesn't
 
 On macOS the alternative substrate is a Multipass VM ([`MACOS.md`](MACOS.md)), which
@@ -141,14 +186,16 @@ Blender at all. See [`SOLVERS_MACOS.md`](SOLVERS_MACOS.md).
 - **Only the solvers listed above** use the container. SU2, CalculiX (`ccx` for
   warpage and core FEM), PrusaSlicer, Blender, KrakenOS and the pip-wheel solvers
   resolve on the host as usual.
-- **A host install's paths in your config win, and then fail inside the container.**
-  `ANKUSDRIVE_*` overrides — in the environment or in `config.toml` — are taken as
-  IN-CONTAINER paths and trusted, because the host cannot see inside. So a
-  `config.toml` written for a native install (say `openfoam_bashrc =
-  "/usr/lib/openfoam/openfoam2606/etc/bashrc"`) is sourced in a container that has
-  openfoam2512, and the solve fails with `blockMesh: command not found` rather than
-  anything about paths. Under this substrate, either clear those entries or set them
-  to what the image publishes (`docker exec <container> env | grep ANKUSDRIVE_`).
+- **A host install's paths in your config are caught, not trusted — while the
+  container runs.** `ANKUSDRIVE_*` overrides, in the environment or in `config.toml`,
+  name IN-CONTAINER paths. A `config.toml` written for a native install (say
+  `openfoam_bashrc = "/usr/lib/openfoam/openfoam2606/etc/bashrc"`) is absolute too, so
+  it used to be trusted and then sourced in a container that has openfoam2512 — the
+  solve failing with `blockMesh: command not found`, naming nothing useful. AnkusDrive
+  now checks such a path inside the running container and, when it is not there, says
+  so instead. While the container is stopped there is nothing to ask, so the override
+  is still trusted; either clear those entries or set them to what the image publishes
+  (`docker exec <container> env | grep ANKUSDRIVE_`).
 - **Prepared `case_dir`s must live under the mounted scratch.** A case directory you
   pass in yourself is used at its host path, so it only exists inside the container
   if it is under `$TMPDIR`.

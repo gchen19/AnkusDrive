@@ -1,0 +1,18 @@
+# Runtime apt packages for `elmer` in the slim solver image (#422).
+#
+# DERIVED, not hand-written: tools/container_runtime_deps.sh ldd's every ELF in the
+# solver's prefix and maps each dependency to its apt package. Regenerate with
+#   docker run --rm -v "$PWD/tools:/t:ro" \
+#     -e EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+#     ghcr.io/gchen19/ankusdrive-solvers bash /t/container_runtime_deps.sh (per-arch: a package on amd64, a source build on arm64)
+#
+# One package per line. A second field restricts it to an architecture. Lines added
+# by hand are marked: they are IMPORTS or CLI tools, which ldd cannot see.
+# amd64 installs the CSC PPA package. arm64 has none (the PPA publishes amd64
+# only, noble ships no elmer), so the image carries a source build under
+# /opt/elmer and needs its BLAS/LAPACK and Fortran runtime here.
+elmerfem-csc amd64
+libblas3 arm64
+libgfortran5
+libgomp1
+liblapack3 arm64

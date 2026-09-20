@@ -1,0 +1,63 @@
+# Runtime apt packages for `openems` in the slim solver image (#422).
+#
+# DERIVED, not hand-written: tools/container_runtime_deps.sh ldd's every ELF in the
+# solver's prefix and maps each dependency to its apt package. Regenerate with
+#   docker run --rm -v "$PWD/tools:/t:ro" \
+#     -e EXTRA_LIB_DIRS=/usr/lib/openfoam/openfoam2512/platforms/current/lib \
+#     ghcr.io/gchen19/ankusdrive-solvers bash /t/container_runtime_deps.sh /opt/openEMS /opt/venv-openems
+#
+# One package per line. A second field restricts it to an architecture. Lines added
+# by hand are marked: they are IMPORTS or CLI tools, which ldd cannot see.
+# hand-added: the venv's interpreter is /usr/bin/python3 (pyvenv.cfg home).
+libaec0
+libboost-program-options1.83.0
+libboost-thread1.83.0
+libbrotli1
+libc6
+libcom-err2
+libcurl4t64
+libdeflate0
+libdouble-conversion3
+libexpat1
+libffi8
+libgcc-s1
+libgmp10
+libgnutls30t64
+libgssapi-krb5-2
+libhdf5-103-1t64
+libhdf5-hl-100t64
+libhogweed6t64
+libidn2-0
+libjbig0
+libjpeg-turbo8
+libjsoncpp25
+libk5crypto3
+libkeyutils1
+libkrb5-3
+libkrb5support0
+libldap2
+liblerc4
+liblz4-1
+liblzma5
+libnettle8t64
+libnghttp2-14
+libp11-kit0
+libpng16-16t64
+libpsl5t64
+librtmp1
+libsasl2-2
+libsharpyuv0
+libssh-4
+libssl3t64
+libstdc++6
+libsz2
+libtasn1-6
+libtbb12
+libtiff6
+libtinyxml2.6.2v5
+libunistring5
+libvtk9.1t64
+libwebp7
+libzstd1
+python3
+zlib1g
