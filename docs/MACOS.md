@@ -121,7 +121,7 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ ank
 | Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD (`pocl` on Apple Silicon); dedicated venv (`ANKUSDRIVE_BEMPP_PYTHON`) — or ✅ the **container substrate** (#419) |
 | Full-wave EM | openEMS | ⚠️ source build with brew deps; the `em_gpl` recipe is Linux-only today — ✅ use the **container substrate** (#419) |
 | DEM (granular) | YADE (GPL) | ⚠️ no macOS build path in this repo — ✅ use the **container substrate** (#419) |
-| FSI (preCICE) | OpenFOAM + CalculiX | ✅ **Multipass** (arm64-native Ubuntu VM) — AnkusDrive runs the apps via `multipass exec`; live coupled solve verified ([#193](https://github.com/gchen19/AnkusDrive/issues/193), see below). Needs the in-VM `ANKUSDRIVE_*` exports |
+| FSI (preCICE) | OpenFOAM + CalculiX | ✅ **Multipass** (arm64-native Ubuntu VM) — AnkusDrive runs the apps via `multipass exec`; live coupled solve verified ([#193](https://github.com/gchen19/AnkusDrive/issues/193), see below). Needs the in-VM `ANKUSDRIVE_*` exports — or ✅ the **container substrate**, which ships the whole stack prebuilt at `/opt/fsi` ([`CONTAINER_SUBSTRATE.md`](CONTAINER_SUBSTRATE.md), #419); the same four exports, pointed inside the container |
 | Injection-molding fill | openInjMoldSim / interFoam | ✅ **Multipass**, same routing — needs the in-VM exports below. Both paths **live-verified on Apple Silicon**: the `interFoam` cavity-fill gates (2026-08-05) and `openInjMoldSim` fill/pack/cool itself (2026-08-15, [#276](https://github.com/gchen19/AnkusDrive/issues/276) — arm64 OF7-org source build via `tools/build_openinjmoldsim.sh`, gcc-11 pin) |
 
 Every absent solver **degrades cleanly** — the family returns `{ok: false, reason, install}`
