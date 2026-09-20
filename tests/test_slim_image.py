@@ -287,6 +287,81 @@ def test_the_manifest_generator_round_trips():
             assert row["path"].startswith("/"), (name, row)
 
 
+# --- supply chain: who built this image (#423) ------------------------------------
+
+def test_both_images_are_signed_with_provenance_and_an_sbom():
+    """A published image nobody can attribute is one users have to take on faith.
+    Both manifests get Sigstore provenance AND an SBOM, pushed to the registry so a
+    digest carries its own evidence."""
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    for action in ("actions/attest-build-provenance", "actions/attest-sbom",
+                   "anchore/sbom-action"):
+        assert wf.count(action) == 2, \
+            f"{action} must run for BOTH images (found {wf.count(action)})"
+    # the subject is the multi-arch manifest digest — what a tag resolves to, and so
+    # what anyone actually pulls
+    assert wf.count("subject-digest: ${{ steps.pin.outputs.digest }}") == 4, wf.count(
+        "subject-digest: ${{ steps.pin.outputs.digest }}")
+    assert wf.count("push-to-registry: true") == 4
+
+
+def test_the_signing_jobs_can_mint_an_identity():
+    """Sigstore signs with a short-lived OIDC token; without id-token the attestation
+    steps fail at the end of a two-hour build."""
+    import re as _re
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    for job in ("manifest", "slim-manifest"):
+        start = wf.index(f"\n  {job}:")
+        nxt = _re.search(r"\n  [a-z-]+:\n", wf[start + 3:])
+        body = wf[start:start + 3 + (nxt.start() if nxt else len(wf))]
+        for perm in ("id-token: write", "attestations: write"):
+            assert perm in body, f"{job} lacks {perm}"
+
+
+def test_every_pinned_action_is_a_commit_sha():
+    """A tag is mutable: `@v4` today is whatever that repo tags tomorrow, and these
+    jobs hold an OIDC token. The repo pins by SHA everywhere; keep it that way."""
+    import re as _re
+    for wf in (WORKFLOW, REPO / ".github" / "workflows" / "heavy-solves.yml"):
+        for m in _re.finditer(r"uses:\s+([\w.-]+/[\w.-]+(?:/[\w.-]+)*)@(\S+)", wf.read_text(encoding="utf-8")):
+            action, ref = m.groups()
+            assert _re.fullmatch(r"[0-9a-f]{40}", ref), \
+                f"{wf.name}: {action} is pinned to {ref!r}, not a commit SHA"
+
+
+def test_the_verify_script_pins_the_signer_workflow():
+    """Verifying only that SOMETHING signed it is close to verifying nothing: any
+    workflow in any repo can produce an attestation. The identity must name this
+    repository AND the workflow file that builds images."""
+    sh = (REPO / "scripts" / "verify-container-image.sh").read_text(encoding="utf-8")
+    assert "--signer-workflow" in sh, "the verify script must pin the signing workflow"
+    assert "heavy-image.yml" in sh
+    assert "--repo" in sh
+    # exit codes are the contract for anyone scripting it
+    assert "exit 1" in sh and "exit 2" in sh
+
+
+def test_the_lanes_check_provenance_before_they_trust_a_pin():
+    wf = (REPO / ".github" / "workflows" / "heavy-solves.yml").read_text(encoding="utf-8")
+    assert wf.count("gh attestation verify") == 2, \
+        "both lanes that pull the pinned image must check who built it"
+    assert "REQUIRE_ATTESTATION" in wf
+    # the gate must precede the pull it guards, in both lanes
+    for pull in ("- name: Pull solver image", "- name: Start the solver container"):
+        assert wf.index("Verify the pinned image's provenance") < wf.index(pull) or \
+            wf.rindex("Verify the pinned image's provenance") < wf.index(pull), \
+            f"the provenance check must run before {pull!r}"
+
+
+def test_doctor_reports_the_image_the_solvers_run_from():
+    """"What am I running your geometry through?" should have an answer a user can
+    check, not whatever the registry served that day."""
+    doc = (REPO / "ankusdrive" / "doctor.py").read_text(encoding="utf-8")
+    assert "container_image" in doc and "_fmt_container_image" in doc
+    assert "verify-container-image.sh" in doc, \
+        "doctor must print the command that checks the digest it just printed"
+
+
 def _discover():
     g = globals()
     return [(n, g[n]) for n in sorted(g) if n.startswith("test_") and callable(g[n])]

@@ -117,6 +117,34 @@ use:
    something is missing, the hint names the container's state (no container, stopped,
    or running with this shell unwired) and the exact fix.
 
+## Checking the image is ours
+
+`docker pull` trusts whatever the registry serves, and a digest pin only proves that
+two people got the same bytes — not who built them. Every published manifest is signed
+through Sigstore with a short-lived GitHub OIDC identity (no key to store or leak) and
+carries provenance naming the repository, workflow and commit that produced it, plus
+an SBOM of what is inside:
+
+```bash
+scripts/verify-container-image.sh                          # the slim image, :latest
+scripts/verify-container-image.sh ghcr.io/gchen19/ankusdrive-solvers@sha256:<digest>
+```
+
+It needs the GitHub CLI (`gh` ≥ 2.49, authenticated). Under the hood it is:
+
+```bash
+gh attestation verify oci://ghcr.io/gchen19/ankusdrive-solvers@sha256:<digest> \
+  --repo gchen19/AnkusDrive \
+  --signer-workflow gchen19/AnkusDrive/.github/workflows/heavy-image.yml
+```
+
+Verify a **digest**, then run that digest — verifying `:latest` and then pulling
+`:latest` later is two different images. `ankusdrive doctor` prints the digest the
+running container was created from, and the exact command to check it.
+
+Images published before this landed have no attestation; the script says so rather
+than failing, since "nothing to check" and "check failed" are different answers.
+
 ## Building an image with only the solvers you want
 
 The published image carries every solver. If you only need some of them, build your

@@ -180,6 +180,10 @@ def build_report(probe_version: bool = True, mcp_serve: bool = False) -> dict:
         # Whether the run_script tool may execute agent-written code (#378).
         "run_script": script_policy.report(),
         "solvers": solvers.capabilities(),
+        # Which image the solvers actually run from, when they run in a container
+        # (#423). Reported so "what am I running your geometry through?" has an
+        # answer a user can verify, instead of whatever the registry served that day.
+        "container_image": solvers.container_image(),
     }
 
 
@@ -439,6 +443,25 @@ def _resolved_label(state: dict) -> str:
     return name
 
 
+def _fmt_container_image(img: dict) -> list[str]:
+    """The image the solver container runs, and how to check it is ours (#423).
+
+    A digest is what a signature is over, so it is what gets printed and what the
+    verify script takes. An image built locally has no registry digest — said plainly,
+    because "cannot verify" and "failed verification" are different answers and only
+    one of them is a problem."""
+    ref, digest = img.get("ref"), img.get("digest")
+    lines = [f"        image:  {ref or '(unknown)'}"]
+    if digest:
+        lines.append(f"        digest: {digest}")
+        lines.append(f"        verify: bash scripts/verify-container-image.sh "
+                     f"{(ref or '').split(':')[0]}@{digest}")
+    else:
+        lines.append("        digest: none — built locally, so there is nothing "
+                     "published to verify it against")
+    return lines
+
+
 def _fmt_solvers(caps: dict) -> list[str]:
     lines = []
     families = caps["families"]
@@ -588,6 +611,11 @@ def render(report: dict) -> str:
     if mcp:
         out.append("MCP server:")
         out += _fmt_mcp(mcp)
+        out.append("")
+    img = report.get("container_image")
+    if img:
+        out.append("Solver container image:")
+        out += _fmt_container_image(img)
         out.append("")
     out.append("Solver families:")
     out += _fmt_solvers(caps)

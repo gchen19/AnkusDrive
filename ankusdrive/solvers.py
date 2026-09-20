@@ -1088,6 +1088,80 @@ def container_excludes(name: str):
     return None
 
 
+def container_image() -> dict | None:
+    """What image the running solver container was created from:
+    ``{"ref": <repo:tag or repo@digest as given>, "digest": "sha256:…"|None}``, or
+    None when nothing is running (#423).
+
+    The digest is what a signature is over, so it is what `doctor` prints and what
+    scripts/verify-container-image.sh takes. A locally built image has no registry
+    digest; that is reported as None rather than guessed at."""
+    if not container_available():
+        return None
+    payload = _container_inspect_config(container_engine(), container_name())
+    if not payload:
+        return None
+    import json as _json
+    try:
+        data = _json.loads(payload)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    ref = data.get("Image") or None
+    digests = data.get("RepoDigests") or []
+    digest = None
+    for rd in digests if isinstance(digests, list) else []:
+        if "@" in str(rd):
+            digest = str(rd).split("@", 1)[1]
+            if ref and str(rd).startswith(str(ref).split(":")[0]):
+                break
+    return {"ref": ref, "digest": digest}
+
+
+def _container_inspect_config_exec(engine: str, name: str, timeout_s: float):
+    """``<engine> inspect`` of the container's image reference + repo digests, as JSON
+    text, or None. Two reads in one: the container names its image, the image carries
+    the digest the registry served it under."""
+    import subprocess
+    try:
+        # container -> image ref, then image -> repo digests (the container object
+        # does not carry them)
+        proc = subprocess.run([engine, "container", "inspect", "--format",
+                               "{{.Config.Image}}", name],
+                              capture_output=True, text=True, timeout=timeout_s,
+                              stdin=subprocess.DEVNULL)
+        if proc.returncode != 0:
+            return None
+        ref = (proc.stdout or "").strip()
+        if not ref:
+            return None
+        proc = subprocess.run([engine, "image", "inspect", "--format",
+                               "{{json .RepoDigests}}", ref],
+                              capture_output=True, text=True, timeout=timeout_s,
+                              stdin=subprocess.DEVNULL)
+        rds = (proc.stdout or "").strip() if proc.returncode == 0 else "[]"
+    except (OSError, subprocess.SubprocessError):
+        return None
+    import json as _json
+    return _json.dumps({"Image": ref, "RepoDigests": _json.loads(rds or "[]")})
+
+
+def _container_inspect_config(engine: str, name: str):
+    """Cached :func:`_container_inspect_config_exec`. THE INJECTABLE SEAM for tests."""
+    import time as _time
+    ttl = float(_config.get("ANKUSDRIVE_MULTIPASS_CACHE_S") or _VM_INFO_TTL_S)
+    key = (engine, name, "image")
+    now = _time.monotonic()
+    hit = _ctr_probe_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    timeout_s = float(_config.get("ANKUSDRIVE_MULTIPASS_TIMEOUT_S") or 5.0)
+    payload = _container_inspect_config_exec(engine, name, timeout_s)
+    _ctr_probe_cache[key] = (now + ttl, payload)
+    return payload
+
+
 def container_path_exists(path: str, *, is_dir: bool = False) -> bool:
     """Whether ``path`` exists INSIDE the running container — a directory with
     ``is_dir``, else an executable file. False when the container is not running, so
