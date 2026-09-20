@@ -41,6 +41,15 @@ Everything below stays on your machine:
 | Solver working directories and renders | your system temp directory, or a `workdir` / `case_dir` you pass | temp files are cleaned up by the tools or your OS; a directory you supply keeps its files |
 | Background job results and open documents | the running server's memory | until the job is discarded or the server exits |
 | A journal of this session's tool calls (tool names, arguments, trimmed results), kept so the session can be exported as a script | the running server's memory; never written to disk | until the server exits |
+| Alongside a call that reached an external solver, where that solver resolved: its path or module and the substrate it ran through | the same in-memory journal; never written to disk | until the server exits |
+
+A transcript you export with `session_transcript` carries that environment with it —
+AnkusDrive / FreeCAD / Python versions, your OS and machine architecture, and each
+solver's path and version — so that the analysis in it can be audited. Absolute paths
+are rewritten relative to `WORKDIR` and a solver path under your home directory is
+collapsed to `~/…`, so the script says which install ran without naming you. It is
+still a description of your machine: read it before sharing, or export with
+`provenance=False`. AnkusDrive never sends it anywhere; where it goes is your choice.
 
 ## Sharing and retention
 

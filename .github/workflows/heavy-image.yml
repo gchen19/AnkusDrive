@@ -284,21 +284,50 @@ jobs:
           push-to-registry: true
       # An SBOM turns "is it authentic?" into "what is in it?" — the question that
       # matters when a CVE lands in one of the bundled solvers' dependencies.
+      #
+      # CycloneDX, not SPDX: GitHub caps an attestation predicate at 16 MiB, and SPDX
+      # carries an entry per packaged FILE — measured on the slim image, 18.7 MiB of
+      # which 22,721 entries were files and only 610 were packages. CycloneDX records
+      # those same 610 packages in 7.8 MiB. The first signing run failed exactly here,
+      # on BOTH images.
       - name: Generate SBOM (heavy)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: ${{ env.IMAGE }}@${{ steps.pin.outputs.digest }}
-          format: spdx-json
-          output-file: sbom.spdx.json
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
           upload-artifact: false
           upload-release-assets: false
+      # Size follows the image's contents, so it can cross the cap again as solvers are
+      # added. An SBOM that does not fit must not sink the publish: the signed image is
+      # what users need, and it is already pushed by here. Too big means keep it as an
+      # artifact and say so — never fail.
+      - name: Can this SBOM be attested? (heavy)
+        id: sbomfit
+        run: |
+          bytes=$(stat -c %s sbom.cdx.json)
+          limit=$((16 * 1024 * 1024))
+          echo "SBOM (heavy): $((bytes / 1048576)) MiB (cap $((limit / 1048576)) MiB)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -lt "$limit" ]; then
+            echo "fits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fits=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SBOM is $((bytes / 1048576)) MiB, over GitHub's 16 MiB attestation cap — kept as an artifact instead"
+          fi
       - name: Attest SBOM (heavy)
+        if: steps.sbomfit.outputs.fits == 'true'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.pin.outputs.digest }}
-          sbom-path: sbom.spdx.json
+          sbom-path: sbom.cdx.json
           push-to-registry: true
+      # Kept either way: when it did not fit, this is the only copy.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-heavy
+          path: sbom.cdx.json
+          retention-days: 90
 
 
   slim:
@@ -512,19 +541,48 @@ jobs:
           push-to-registry: true
       # An SBOM turns "is it authentic?" into "what is in it?" — the question that
       # matters when a CVE lands in one of the bundled solvers' dependencies.
+      #
+      # CycloneDX, not SPDX: GitHub caps an attestation predicate at 16 MiB, and SPDX
+      # carries an entry per packaged FILE — measured on the slim image, 18.7 MiB of
+      # which 22,721 entries were files and only 610 were packages. CycloneDX records
+      # those same 610 packages in 7.8 MiB. The first signing run failed exactly here,
+      # on BOTH images.
       - name: Generate SBOM (slim)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: ${{ env.SLIM_IMAGE }}@${{ steps.pin.outputs.digest }}
-          format: spdx-json
-          output-file: sbom.spdx.json
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
           upload-artifact: false
           upload-release-assets: false
+      # Size follows the image's contents, so it can cross the cap again as solvers are
+      # added. An SBOM that does not fit must not sink the publish: the signed image is
+      # what users need, and it is already pushed by here. Too big means keep it as an
+      # artifact and say so — never fail.
+      - name: Can this SBOM be attested? (slim)
+        id: sbomfit
+        run: |
+          bytes=$(stat -c %s sbom.cdx.json)
+          limit=$((16 * 1024 * 1024))
+          echo "SBOM (slim): $((bytes / 1048576)) MiB (cap $((limit / 1048576)) MiB)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -lt "$limit" ]; then
+            echo "fits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fits=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SBOM is $((bytes / 1048576)) MiB, over GitHub's 16 MiB attestation cap — kept as an artifact instead"
+          fi
       - name: Attest SBOM (slim)
+        if: steps.sbomfit.outputs.fits == 'true'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.SLIM_IMAGE }}
           subject-digest: ${{ steps.pin.outputs.digest }}
-          sbom-path: sbom.spdx.json
+          sbom-path: sbom.cdx.json
           push-to-registry: true
+      # Kept either way: when it did not fit, this is the only copy.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-slim
+          path: sbom.cdx.json
+          retention-days: 90
 

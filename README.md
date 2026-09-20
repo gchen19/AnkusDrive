@@ -430,7 +430,7 @@ every day.
 | Tolerance ↔ cost | `tolerance_cost_check` (per-dimension IT grade, the cheapest process that holds it naturally, a relative cost index, and a flag when a dimension is tighter than the declared process can hold without a secondary operation), `suggest_loosening` (*the loosest tolerance that works* — greedy loosening, every step re-verified against `tolerance_stackup`'s cpk); `cost_estimate(tolerance_class=…)` puts the same curve in the rollup |
 | Design control / PLM | items & part numbers (`items_new`, `items_validate`, `items_resolve`, `items_check_manifest`), recipes (`recipe`, `recipe_list`, `recipe_schema`, `recipe_validate`), feature templates (`feature_instantiate`, `feature_list`, `feature_schema`, `feature_validate`), variant families (`family_materialize`, `family_validate`), lifecycle/revision (`lifecycle_transition`, `lifecycle_editable`, `lifecycle_classify_change`, `lifecycle_apply_change`), change control (`eco_create`, `eco_validate`, `change_impact`, `where_used`, `baseline_create`, `baseline_verify`), interface registry + substitutability (`get_interface`, `substitutability_check`), projects (`scaffold_project`, `project_validate`, `project_check_references`, `project_resolve_manifest`) |
 | Operations | `transaction_open`, `transaction_commit`, `transaction_abort` |
-| Session transcripts | `session_transcript`: the session so far as a Python script that regenerates it (model, drawings, simulations) through these same tools. Handles are variables, job polls are one `s.wait(job)`, measured results are `s.check()` lines that stop a drifted replay, and paths are relative to `WORKDIR`. Read-only: it returns the script as text. Tool calls are kept in server memory only ([PRIVACY.md](PRIVACY.md)) |
+| Session transcripts | `session_transcript`: the session so far as a Python script that regenerates it (model, drawings, simulations) through these same tools. Handles are variables, job polls are one `s.wait(job)`, measured results are `s.check()` lines that stop a drifted replay, and paths are relative to `WORKDIR`. It is also the **analysis provenance** record: every hand-calc and solve is kept and checked whole, `run_script` carries its SHA-256, and a `PROVENANCE` block names AnkusDrive / FreeCAD / platform / substrate plus every solver the session reached — path, substrate and probed version. Read-only: it returns the script as text. Tool calls are kept in server memory only ([PRIVACY.md](PRIVACY.md)) |
 
 All tools return JSON; geometry-creating tools return a `handle` (e.g.
 `pad_1`) that subsequent calls reference. The heavy simulation families return
@@ -499,6 +499,42 @@ its switch, and a missing solver stops the run at that step. Each `s.check()` st
 the run at the first result that differs from the recording. The script's header
 lists what it can't reproduce: failed calls, `run_script` code, and files the session
 read, which you copy into `WORKDIR` first.
+
+### Auditing an analysis
+
+The same tool answers the other question a transcript is for: *what exactly produced
+this number?* A simulation session exports with its derivation intact — the closed-form
+estimates are not dropped as "inspection", every number an analysis or a solve reported
+becomes an `s.check()`, and the verdict fields become `s.expect()`, so a replay that
+reaches a different solver or falls back to a different correlation stops there rather
+than returning a plausible figure:
+
+```python
+PROVENANCE = {'env': {'ankusdrive': '0.5.5', 'freecad': {'version': '1.1.0'},
+                      'substrate': 'container', ...},
+              'solvers': {'elmer': {'version': '26.2', 'via': 'container',
+                                    'path': '/usr/bin/ElmerSolver', ...}}}
+
+with Session() as s:
+    s.provenance(PROVENANCE)                     # prints every difference from the recording
+
+    r1 = s.h_estimate(geometry='vertical_plate', characteristic_mm=100.0, t_surface_c=200.0)
+    s.check(r1, 'h_total_w_m2k', 8.4111, rel=0.001)
+    s.expect(r1, 'correlation', 'churchill_chu_vertical_plate')
+
+    r2 = s.thermal_transient_submit(half_thickness_mm=1.5, h_conv=8.0, duration_s=600.0, ...)
+    r5 = s.wait(r2['job_id'])
+    s.check(r5, ('result', 't_center_c'), 45.49120518934, rel=0.001)
+    s.expect(r5, ('result', 'solver'), 'elmer')
+```
+
+`s.provenance()` re-resolves the whole environment on the replaying machine and prints
+what moved: a different Elmer version, a solver that relocated when the substrate
+changed, a FreeCAD that is not the one that built the model. A replay on a different
+solver is not a failure — it is the finding. Solver paths under `$HOME` are collapsed
+to `~/…`, so the record says which install without saying who. `session_transcript`
+also returns the record as `provenance` for attaching to a report; pass
+`provenance=False` to skip it and the version probes it runs.
 
 ### What the CLI is (and isn't)
 

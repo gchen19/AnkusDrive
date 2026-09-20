@@ -115,6 +115,8 @@ Test-Module 'Session journal (#407)' 'test_session_journal.py'
 Test-Module 'Replay (#408)' 'test_replay.py'
 # session_transcript within the directory policy: read-only, writes nothing, no replay-as-tool (#409).
 Test-Module 'session_transcript tool (#409)' 'test_session_transcript.py'
+# The transcript as an audit record: environment, solver identity, analysis + solve checks (#433).
+Test-Module 'Analysis provenance (#433)' 'test_audit_provenance.py'
 # Record a CAD+FEM session, export, replay in a fresh interpreter, compare geometry + FEM (#410).
 Test-Module 'Regeneration round trip (#410)' 'test_regeneration_roundtrip.py'
 # The other half: the tools actually work over MCP, driving the real worker. Needs

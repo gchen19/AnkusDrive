@@ -137,6 +137,13 @@ echo "== session_transcript tool: read-only, writes nothing, no replay-as-tool (
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_session_transcript.py; else python3 tests/test_session_transcript.py; fi
 
 echo
+echo "== Analysis provenance: a transcript that audits simulations and solvers (#433) =="
+# Static tier (the environment record, home-collapsed solver paths, drift, and the
+# exporter keeping/checking analysis and solve results); the server tier needs mcp and
+# the solver tier a real Elmer, both SKIP with a reason when absent.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_audit_provenance.py; else python3 tests/test_audit_provenance.py; fi
+
+echo
 echo "== Regeneration round trip: record CAD+FEM, export, replay fresh, compare (#410) =="
 # Needs mcp + FreeCAD (SKIPs without); the FEM half needs CalculiX and says so if absent.
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_regeneration_roundtrip.py; else python3 tests/test_regeneration_roundtrip.py; fi
