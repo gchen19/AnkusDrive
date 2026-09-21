@@ -518,7 +518,8 @@ process. Several reuse existing AnkusDrive tools directly.
   (`analysis/impact_case.py`) — the meshed part flown into a fixed rigid floor through
   CalculiX `*DYNAMIC` penalty contact. `direction` is the way the part travels; any
   3-vector works, so an edge or corner drop turns the floor instead of re-meshing.
-  Implicit HHT-α at a fixed step by default (ms-scale drops), explicit central
+  Implicit HHT-α with ccx-adaptive stepping by default (ms-scale drops; `time_step_s`
+  opts in to a faster fixed step where contact comes on smoothly), explicit central
   difference at the computed stable step for stress-wave events; optional bilinear
   plasticity. Peak G, impulse, contact duration and restitution are reduced from the
   floor-reaction history alone (v = v₀ − ∫F dt / m, exact for any mesh); peak von
