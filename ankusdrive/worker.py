@@ -17526,8 +17526,7 @@ def _impact_dynamics_submit(p, info):
         direction=direction, duration_s=p.get("duration_s"), gap_mm=p.get("gap_mm"),
         method=method, contact_stiffness_mpa_mm=p.get("contact_stiffness_mpa_mm"),
         yield_mpa=sy if plastic else None, tangent_mpa=p.get("tangent_mpa"),
-        time_step_s=p.get("time_step_s"), adaptive=bool(p.get("adaptive", False)),
-        max_time_step_s=p.get("max_time_step_s"),
+        time_step_s=p.get("time_step_s"), max_time_step_s=p.get("max_time_step_s"),
         gravity=bool(p.get("gravity", True)), samples=p.get("samples"))
     g_limit = p.get("deceleration_limit_g")
     twin = _screen.bar_impact(v, built["extent_mm"], youngs_gpa=E / 1e3,
@@ -17568,8 +17567,8 @@ def _impact_dynamics_submit(p, info):
             "strike_node": built["lowest_node"],
             "contact_faces": built["n_slave_faces"],
             "plastic": plastic,
-            # the 1-D ceiling for THIS material and speed: a real part's face stress
-            # sits at or below ρ·c₀·v unless geometry concentrates it
+            # the 1-D reference for THIS material and speed (ρ·c₀·v). A squat body
+            # landing flat runs above it — dilatational speed — and a corner far above
             "bar_stress_mpa": twin["elastic_stress_mpa"],
             "stdout_tail": (proc.stdout or "")[-2000:],
         }
@@ -17579,7 +17578,7 @@ def _impact_dynamics_submit(p, info):
             return out
         red = _imp.reduce_impact(hist, mass_t=built["mass_t"],
                                  velocity_mm_s=built["velocity_mm_s"],
-                                 gravity=built["gravity"])
+                                 gravity=built["gravity"], gap_mm=built["gap_mm"])
         stress = _imp.parse_peak_stress_frd(
             os.path.join(case_dir, built["job_name"] + ".frd"),
             exclude_nodes=built["floor_nodes"])
@@ -17593,7 +17592,8 @@ def _impact_dynamics_submit(p, info):
         out["force_history"] = [[t, round(f, 4)] for t, f in
                                 zip(hist["t"][::step], hist["force_n"][::step])]
         out["gate"] = _imp.impact_gate(
-            red, stress, yield_mpa=sy, deceleration_limit_g=g_limit, plastic=plastic)
+            red, stress, yield_mpa=sy, deceleration_limit_g=g_limit, plastic=plastic,
+            extent_mm=built["extent_mm"])
         return out
 
     return jobs.submit("impact_dynamics", _work, key=key,
@@ -17614,12 +17614,13 @@ def _h_impact_dynamics_submit(p):
     Material from `material` or explicit `youngs_mpa`/`poisson`/`density_kg_m3`
     (required — no defaults), `yield_mpa` for the stress criterion;
     `plastic=True` (+ `tangent_mpa`) switches on bilinear plasticity.
-    `method='implicit'` (default, HHT-α at a fixed step = duration/1000, ms-scale
-    drops, 2nd-order tets) or 'explicit' (central difference at the stable step,
-    stress-wave events, 1st-order tets). Optional: `duration_s` (default free flight +
-    20 bar-speed transits), `gap_mm`, `char_length_mm`, `contact_stiffness_mpa_mm`,
-    `time_step_s`, `adaptive` (+ `max_time_step_s`; ccx automatic incrementation, for
-    a run the fixed step cannot converge), `samples`, `gravity`,
+    `method='implicit'` (default, HHT-α, ccx-adaptive stepping, ms-scale drops,
+    2nd-order tets) or 'explicit' (central difference at the stable step, stress-wave
+    events, 1st-order tets). Optional: `duration_s` (default free flight + 10 wave
+    round trips along the drop), `gap_mm`, `char_length_mm`,
+    `contact_stiffness_mpa_mm`, `time_step_s` (implicit: run a FIXED step instead —
+    several times faster where contact comes on smoothly, but ccx stops if an
+    increment diverges), `max_time_step_s`, `samples`, `gravity`,
     `deceleration_limit_g`.
 
     Poll job_result for `{ok, returncode, solver, case_dir, nodes, tets, method,

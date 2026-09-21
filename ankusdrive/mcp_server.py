@@ -5141,7 +5141,6 @@ def impact_dynamics_submit(
     char_length_mm: float | None = None,
     contact_stiffness_mpa_mm: float | None = None,
     time_step_s: float | None = None,
-    adaptive: bool = False,
     max_time_step_s: float | None = None,
     samples: int | None = None,
     gravity: bool = True,
@@ -5159,14 +5158,16 @@ def impact_dynamics_submit(
     (required, no defaults — the answer scales with √(E·ρ)). `yield_mpa` arms the
     stress criterion; `plastic=True` (+ `tangent_mpa`, bilinear) lets it yield
     instead. `deceleration_limit_g` arms the fragility criterion.
-    `method`: 'implicit' (default; HHT-α at a fixed `time_step_s` = duration/1000 —
-    right for ms-scale drops) | 'explicit' (central difference at the stable step —
-    for stress-wave events ≲ 100 µs; first-order tets). `adaptive=True`
-    (+ `max_time_step_s`) hands stepping to ccx — several times slower in contact,
-    kept for a run the fixed step cannot converge. `duration_s` defaults to free flight + 20
-    bar-speed transits of the longest dimension — long enough for a stiff body; a
-    compliant one needs more, and the gate says so. `samples` is the single output
-    cadence ccx allows (force history AND stress frames; default sized to the mesh).
+    `method`: 'implicit' (default; HHT-α, ccx steps adaptively — right for ms-scale
+    drops) | 'explicit' (central difference at the stable step — for stress-wave
+    events ≲ 100 µs; first-order tets). `time_step_s` on an implicit run switches to a
+    FIXED step: several times faster where contact comes on smoothly, but ccx stops
+    if an increment diverges (a flat face landing all at once does). `duration_s`
+    defaults to free flight + 10 wave round trips along the drop — enough for a stiff
+    body; a compliant one needs more, and the gate says so. `samples` is the single
+    output cadence ccx allows (force history AND stress frames; default sized to the
+    mesh). A sharp corner sinks a fraction of an element before face-to-face contact
+    pushes back (`engagement_lag_mm`) — refine `char_length_mm` for corner drops.
 
     Validated against the exact St-Venant bar (`bar_impact`): face force ρ·c₀·v₀·A,
     contact duration 2L/c₀, restitution 1 and the plastic-wave cap all within ~1–3 %.
@@ -5180,12 +5181,12 @@ def impact_dynamics_submit(
     plastic, bar_stress_mpa, peak_force_n, peak_force_time_s, peak_g, impulse_n_s,
     contact_start_s, contact_duration_s, separated, arrested, rebound_velocity_m_s,
     restitution, energy_end_ratio, energy_min_ratio, mass_check, samples,
-    contact_samples, peak_von_mises_mpa, peak_stress_node, peak_stress_time_s,
+    contact_samples, engagement_lag_mm, peak_von_mises_mpa, peak_stress_node, peak_stress_time_s,
     peak_stress_location_mm, force_history, gate} where gate is {pass, score,
     fidelity:"solve", band_pct, checks, utilisation, warnings} — a run that ends
     before the fall is arrested, or whose energy grows, FAILS."""
     params: dict = {"body": body, "direction": direction, "method": method,
-                    "plastic": plastic, "gravity": gravity, "adaptive": adaptive}
+                    "plastic": plastic, "gravity": gravity}
     for k, v in (("drop_height_mm", drop_height_mm), ("velocity_m_s", velocity_m_s),
                  ("material", material), ("youngs_mpa", youngs_mpa),
                  ("poisson", poisson), ("density_kg_m3", density_kg_m3),

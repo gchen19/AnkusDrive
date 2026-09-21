@@ -193,20 +193,21 @@ def test_deck_cards_implicit_and_explicit():
         assert "\n1, S6\n" in t and b["n_slave_faces"] == 1      # only the struck end
         assert "Nall, 1, -1000" in t and "Nall, 2," not in t     # velocity along -x only
         assert "Nfloor, 1, 3, 0." in t and "*PLASTIC" not in t and "GRAV" not in t
-        # ONE output cadence — ccx lets the last card win for .dat and .frd alike
-        assert t.count("FREQUENCY=2") == 3 and "TIME POINTS" not in t
-        # implicit runs at a FIXED step: ccx's adaptive "impact rules" cost 4-8x
-        assert f"*DYNAMIC, DIRECT\n{b['duration_s'] / 1000:.9e}," in t
+        # ONE output cadence — ccx lets the last card win for .dat and .frd alike.
+        # Implicit is ADAPTIVE by default: a flat face landing at once needs cutbacks.
+        assert b["adaptive"] and t.count("TIME POINTS=Tout") == 3
+        assert "\n*DYNAMIC\n" in t and "FREQUENCY" not in t
         assert b["samples"] == 400 and C.default_samples(20000) == 100
-        ad = _bar_case(d, adaptive=True)
-        ta = Path(d, "case.inp").read_text(encoding="utf-8")
-        assert ad["adaptive"] and ta.count("TIME POINTS=Tout") == 3
-        assert "\n*DYNAMIC\n" in ta and "FREQUENCY" not in ta
+        # ... and a time_step_s opts in to the fixed step, which refuses time points
+        fx = _bar_case(d, time_step_s=b["duration_s"] / 1000)
+        tf = Path(d, "case.inp").read_text(encoding="utf-8")
+        assert not fx["adaptive"] and tf.count("FREQUENCY=2") == 3
+        assert "*DYNAMIC, DIRECT\n" in tf and "TIME POINTS" not in tf
         assert C.default_samples(10 ** 6) == 40
         assert math.isclose(b["mass_t"], 7.85e-9 * 100.0, rel_tol=1e-9)
         assert math.isclose(b["contact_stiffness_mpa_mm"], 25 * 210000.0)
         c0 = math.sqrt(210000.0 / 7.85e-9)
-        assert math.isclose(b["duration_s"], 0.005 / 1000 + 20 * 100 / c0)
+        assert math.isclose(b["duration_s"], 0.005 / 1000 + 20 * 100 / c0)  # 10 round trips
         assert math.isclose(_bar_case(d, gap_mm=None)["gap_mm"], 0.1)  # 0.1 % of 100 mm
 
         e = _bar_case(d, method="explicit", etype="C3D8R",
@@ -234,8 +235,6 @@ def test_deck_rejects_what_cannot_run():
         # incompatible-mode / second-order meshes cannot go explicit (lumped mass)
         assert _raises(lambda: _bar_case(d, method="explicit", etype="C3D8I"))
         assert _raises(lambda: _bar_case(d, method="rk4"))
-        assert _raises(lambda: _bar_case(d, method="explicit", etype="C3D8R",
-                                         adaptive=True))
         assert _raises(lambda: _bar_case(d, velocity_m_s=0))
         assert _raises(lambda: _bar_case(d, yield_mpa=250, tangent_mpa=3e5))
     finally:
@@ -257,6 +256,7 @@ def _half_sine_history(*, m=1e-3, v0=1000.0, T=1e-3, n=400, e=1.0, t_end=2e-3):
 def test_reduce_recovers_newtons_law_on_a_half_sine():
     hist, fp = _half_sine_history(e=0.8)
     r = C.reduce_impact(hist, mass_t=1e-3, velocity_mm_s=1000.0, gravity=False)
+    assert r["engagement_lag_mm"] is None                   # no gap given, no claim
     assert math.isclose(r["peak_force_n"], fp, rel_tol=1e-4)
     assert math.isclose(r["peak_g"], fp / (1e-3 * C.G0_MM_S2), rel_tol=1e-3)
     assert math.isclose(r["restitution"], 0.8, abs_tol=2e-3)
@@ -276,6 +276,8 @@ def test_gate_fails_truncated_and_unstable_runs_and_applies_criteria():
     assert trunc["arrested"] is False and g["pass"] is False and g["score"] == 0.0
     assert any("duration_s" in w for w in g["warnings"])
 
+    late = C.impact_gate(dict(full, engagement_lag_mm=0.8), extent_mm=10.0)
+    assert late["pass"] and any("char_length_mm" in w for w in late["warnings"])
     grown = dict(full, energy_end_ratio=1.4)
     assert C.impact_gate(grown)["checks"]["energy_bounded"] is False
     assert C.impact_gate(dict(full, mass_check=1e3))["pass"] is False   # unit slip
@@ -449,7 +451,8 @@ def test_ccx_soft_landing_recovers_the_drop_screen():
             base, mesh=mesh, youngs_mpa=210000.0, poisson=0.3, density_kg_m3=7850.0,
             velocity_m_s=v, direction="-z", gravity=False, gap_mm=0.005,
             contact_stiffness_mpa_mm=k_n_mm / 100.0,        # 10×10 mm face
-            duration_s=5e-4, time_step_s=1e-6)
+            duration_s=5e-4, samples=200)                   # the DEFAULT, adaptive path
+        assert built["adaptive"]
         subprocess.run([solvers.ccx_bin()] + built["argv"][1:], cwd=base,
                        capture_output=True, text=True, timeout=900)
         hist = C.parse_impact_dat(os.path.join(base, "case.dat"),

@@ -23,17 +23,19 @@ Solver. **CalculiX** (``ccx``) ``*DYNAMIC`` — the deck is written here and ``c
 runs at the subprocess boundary like the warpage post-step, so there is no new
 solver and no new licence boundary. Two integrators:
 
-* ``method="implicit"`` (default) — HHT-α at a FIXED step (``duration/1000`` unless
-  told otherwise). The right tool for a drop: the event lasts milliseconds, the
-  stable explicit step is nanoseconds. Its numerical damping costs ~1 % of the
-  rebound speed. Fixed, because ccx's automatic incrementation applies "impact
-  rules" in implicit contact dynamics: every energy jump drops the increment to the
-  minimum and climbs back at 1.5× — measured 4–8× the increments and wall time of
-  the fixed step on the bar oracle, for the same answer. ``adaptive=True`` is kept
-  for the run a fixed step cannot converge (deep plasticity).
+* ``method="implicit"`` (default) — HHT-α. The right tool for a drop: the event lasts
+  milliseconds, the stable explicit step is nanoseconds. Its numerical damping costs
+  ~1 % of the rebound speed. By default ccx steps it adaptively, which is what a real
+  part needs — a flat face lands thousands of contact elements in one increment, and
+  a FIXED step has no cutback to absorb that (ccx stops: "solution seems to
+  diverge"). Adaptive is not free: in implicit contact dynamics ccx applies "impact
+  rules" — every energy jump drops the increment to the minimum and climbs back at
+  1.5× — several times the increments of a fixed step. So ``time_step_s`` opts in to
+  the fixed step where contact comes on smoothly (the bar oracle runs 4–8× faster).
 * ``method="explicit"`` — central difference, for stress-wave events (≲ 100 µs).
-  Needs first-order elements (C3D4 / C3D8R). Runs at :func:`stable_time_step`; ccx's
-  own automatic choice sits ~20× under it on the bar oracle.
+  Needs first-order elements (C3D4 / C3D8R). Always a fixed step, at
+  :func:`stable_time_step`; ccx's own automatic choice sits ~20× under it on the bar
+  oracle.
 
 The floor is one fully-fixed brick normal to ``direction``; the part's
 floor-facing boundary faces are the slave surface of a face-to-face penalty pair.
@@ -47,7 +49,11 @@ and restitution all follow from that one signal.
 
 Fidelity & honesty. ``fidelity="solve"``, banded: peak contact force depends on the
 penalty stiffness and the mesh, and a stress peak *at* a contact point is mesh-
-dependent (a corner drop is near-singular). Penalty-spring energy is not part of
+dependent (a corner drop is near-singular). Face-to-face contact acts at the slave
+faces' integration points, so a sharp corner sinks a fraction of an element before
+anything pushes back — reported as ``engagement_lag_mm``; refine the mesh to shrink
+it. A squat body landing flat is 3-D, not a bar: its face stress follows the
+dilatational speed (1.27·c₀ at ν = 0.35), above ``bar_impact``'s ρ·c₀·v₀. Penalty-spring energy is not part of
 ``ELSE``, so total energy dips mid-contact — the gate reads the **end-state**
 energy. Small-strain plasticity (``yield_mpa`` + ``tangent_mpa``) is bilinear and
 rate-independent; no failure/erosion, no friction.
@@ -310,8 +316,8 @@ def impact_inp_text(
     velocity_mm_s: float, duration_s: float, method: str = "implicit",
     contact_stiffness: float, yield_mpa: float | None = None,
     tangent_mpa: float | None = None, time_step_s: float | None = None,
-    adaptive: bool = False, max_time_step_s: float | None = None,
-    gravity: bool = True, samples: int = 200,
+    max_time_step_s: float | None = None, gravity: bool = True,
+    samples: int = 200,
 ) -> str:
     """The ``*DYNAMIC`` contact deck. Flat and fully resolved: mesh ``*INCLUDE``, the
     floor brick (all 24 dofs fixed), the face-to-face LINEAR penalty pair, the initial
@@ -358,10 +364,9 @@ def impact_inp_text(
     # `samples`. A fixed-step (DIRECT) run refuses *TIME POINTS, and there the
     # increment count is known, so FREQUENCY does the same job; an adaptive run lands
     # on the time points.
+    adaptive = not time_step_s
     if adaptive and method == "explicit":
-        raise ValueError("adaptive stepping is implicit-only")
-    if not adaptive and not time_step_s:
-        raise ValueError("a fixed-step run needs time_step_s")
+        raise ValueError("explicit dynamics needs time_step_s (see stable_time_step)")
     if adaptive:
         cadence = "TIME POINTS=Tout"
         L += ["*TIME POINTS, NAME=Tout, GENERATE",
@@ -374,9 +379,8 @@ def impact_inp_text(
         L += ["*DYNAMIC, EXPLICIT, DIRECT", f"{time_step_s:.9e}, {duration_s:.9e}"]
     elif adaptive:
         dt_max = max_time_step_s or 2.0 * duration_s / samples   # time points govern
-        dt = time_step_s or dt_max / 5.0
-        L += ["*DYNAMIC",
-              f"{dt:.9e}, {duration_s:.9e}, {dt * 1e-7:.9e}, {max(dt, dt_max):.9e}"]
+        dt = dt_max / 5.0
+        L += ["*DYNAMIC", f"{dt:.9e}, {duration_s:.9e}, {dt * 1e-7:.9e}, {dt_max:.9e}"]
     else:
         L += ["*DYNAMIC, DIRECT", f"{time_step_s:.9e}, {duration_s:.9e}"]
     if gravity:
@@ -394,8 +398,7 @@ def write_impact_case(
     duration_s: float | None = None, gap_mm: float | None = None,
     method: str = "implicit", contact_stiffness_mpa_mm: float | None = None,
     yield_mpa: float | None = None, tangent_mpa: float | None = None,
-    time_step_s: float | None = None, adaptive: bool = False,
-    max_time_step_s: float | None = None,
+    time_step_s: float | None = None, max_time_step_s: float | None = None,
     gravity: bool = True, mesh_filename: str = "mesh.inp", job_name: str = "case",
     samples: int | None = None,
 ) -> dict:
@@ -403,13 +406,14 @@ def write_impact_case(
     already there; ``mesh`` is its :func:`parse_mesh_inp`).
 
     Defaults that carry judgement: ``gap_mm`` = 0.1 % of the part's length along the
-    drop (it only costs free-flight time); ``duration_s`` = free flight + 20 transits
-    of the part's longest dimension at the bar speed ``c₀`` — long enough for a stiff
-    body to rebound, and the result says so (``arrested``) when it was not;
+    drop (it only costs free-flight time); ``duration_s`` = free flight + 10 wave
+    round trips of the part's length along the drop at the bar speed ``c₀`` (a stiff
+    body rebounds in one) — a compliant one needs more, and the result says so
+    (``arrested``) when it did;
     ``contact_stiffness_mpa_mm`` = 25·E implicit / 5·E explicit (ccx advises 5–50·E;
-    the explicit stable step scales with 1/√K); ``time_step_s`` = ``duration/1000``
-    implicit — 50 steps per bar-speed transit of the part at the default duration —
-    or :func:`stable_time_step` explicit; ``samples`` = :func:`default_samples`.
+    the explicit stable step scales with 1/√K); ``time_step_s`` = None implicit (ccx
+    steps adaptively; give one to run a fixed step instead) or
+    :func:`stable_time_step` explicit; ``samples`` = :func:`default_samples`.
 
     Returns ``{case_dir, inp, job_name, argv, direction, velocity_mm_s, duration_s,
     gap_mm, method, mass_t, volume_mm3, extent_mm, lowest_node, n_slave_faces,
@@ -432,10 +436,8 @@ def write_impact_case(
     if gap_mm is None:
         gap_mm = max(1e-3 * probe["extent_mm"], 1e-4)
     floor = floor_block(nodes, d, gap_mm=gap_mm)
-    bb = [max(p[k] for p in nodes.values()) - min(p[k] for p in nodes.values())
-          for k in range(3)]
     if duration_s is None:
-        duration_s = gap_mm / v + 20.0 * max(bb) / c0
+        duration_s = gap_mm / v + 20.0 * floor["extent_mm"] / c0
     k_pen = contact_stiffness_mpa_mm or (25.0 if method == "implicit" else 5.0) * youngs_mpa
     slave = [(eid, face) for eid, face, n in boundary_faces(nodes, elements, etype)
              if _dot(n, d) > 0.0]
@@ -448,8 +450,6 @@ def write_impact_case(
             h_min_mm=min_element_size(nodes, elements, etype), youngs_mpa=youngs_mpa,
             poisson=poisson, density_t_mm3=rho, contact_stiffness=k_pen)
         time_step_s = step["time_step_s"]
-    if method == "implicit" and not adaptive and not time_step_s:
-        time_step_s = duration_s / 1000.0
     samples = int(samples) if samples else default_samples(len(nodes))
     text = impact_inp_text(
         mesh_include=mesh_filename, elset=mesh["elset"], nset=mesh["nset"], floor=floor,
@@ -458,8 +458,8 @@ def write_impact_case(
         slave_faces=slave, d=d, youngs_mpa=youngs_mpa, poisson=poisson,
         density_t_mm3=rho, velocity_mm_s=v, duration_s=duration_s, method=method,
         contact_stiffness=k_pen, yield_mpa=yield_mpa, tangent_mpa=tangent_mpa,
-        time_step_s=time_step_s, adaptive=adaptive,
-        max_time_step_s=max_time_step_s, gravity=gravity, samples=samples)
+        time_step_s=time_step_s, max_time_step_s=max_time_step_s, gravity=gravity,
+        samples=samples)
     os.makedirs(case_dir, exist_ok=True)
     inp = f"{job_name}.inp"
     with open(os.path.join(case_dir, inp), "w", encoding="utf-8") as f:
@@ -476,7 +476,7 @@ def write_impact_case(
         "floor_nodes": [max(nodes) + 1 + i for i in range(8)],
         "plastic": yield_mpa is not None,
         "samples": samples, "time_step_s": time_step_s, "time_step": step,
-        "adaptive": bool(adaptive),
+        "adaptive": not time_step_s,
     }
 
 
@@ -582,7 +582,8 @@ def parse_peak_stress_frd(frd_path: str, *, exclude_nodes=()) -> dict | None:
 # --- reduction + gate -----------------------------------------------------------
 
 def reduce_impact(history: dict, *, mass_t: float, velocity_mm_s: float,
-                  gravity: bool = True, contact_frac: float = 0.02) -> dict:
+                  gravity: bool = True, contact_frac: float = 0.02,
+                  gap_mm: float | None = None) -> dict:
     """Reduce the floor-reaction history to the drop's headline numbers.
 
     Everything follows from one signal by Newton's second law: impulse
@@ -590,11 +591,14 @@ def reduce_impact(history: dict, *, mass_t: float, velocity_mm_s: float,
     ``v = v₀ − J/m (+ g·t)``, peak COM deceleration ``F_peak/(m·g)``. Contact is
     ``F > contact_frac·F_peak``; ``separated`` means it ended before the window did,
     ``arrested`` that the fall was at least stopped. ``mass_check`` is ccx's own
-    initial kinetic energy over ``½·m·v₀²`` — a units / density tripwire.
+    initial kinetic energy over ``½·m·v₀²`` — a units / density tripwire. With
+    ``gap_mm``, ``engagement_lag_mm`` is how far past first touch the part travelled
+    before the contact pushed back (face-to-face contact on a sharp strike point).
 
     Returns ``{peak_force_n, peak_force_time_s, peak_g, impulse_n_s, contact_start_s,
     contact_duration_s, separated, arrested, rebound_velocity_m_s, restitution,
-    energy_end_ratio, energy_min_ratio, mass_check, samples, contact_samples}``."""
+    energy_end_ratio, energy_min_ratio, mass_check, samples, contact_samples,
+    engagement_lag_mm}``."""
     t, f = history["t"], history["force_n"]
     peak = max(f)
     i_peak = f.index(peak)
@@ -628,13 +632,15 @@ def reduce_impact(history: dict, *, mass_t: float, velocity_mm_s: float,
         "mass_check": round(k0 / ke0, 4) if k0 is not None else None,
         "samples": len(t),
         "contact_samples": len(on),
+        "engagement_lag_mm": (round(max(0.0, start * velocity_mm_s - gap_mm), 5)
+                              if start is not None and gap_mm is not None else None),
     }
 
 
 def impact_gate(
     metrics: dict, stress: dict | None = None, *, yield_mpa: float | None = None,
     deceleration_limit_g: float | None = None, plastic: bool = False,
-    energy_tol: float = 0.05, band_pct: float = 20.0,
+    energy_tol: float = 0.05, band_pct: float = 20.0, extent_mm: float | None = None,
 ) -> dict:
     """The house verdict for an impact solve.
 
@@ -665,6 +671,12 @@ def impact_gate(
         warnings.append(
             f"the contact pulse spans only {metrics.get('contact_samples')} output "
             "samples — the peak is under-resolved; shorten duration_s or raise samples")
+    lag = metrics.get("engagement_lag_mm")
+    if lag and extent_mm and lag > 0.02 * extent_mm:
+        warnings.append(
+            f"the strike point sank {lag:.2f} mm before the contact pushed back — "
+            "face-to-face contact resolves a sharp corner or edge only to a fraction of "
+            "an element; refine the mesh (char_length_mm) for a corner/edge drop")
     end = metrics.get("energy_end_ratio")
     checks["energy_bounded"] = end is None or end <= 1.0 + energy_tol
     if not checks["energy_bounded"]:
