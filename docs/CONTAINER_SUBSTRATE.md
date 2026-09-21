@@ -76,7 +76,8 @@ use:
    ```bash
    docker run -d --name ankusdrive-solvers \
      --user "$(id -u):$(id -g)" -e HOME=/tmp \
-     --tmpfs /tmp:rw,exec,size=2g \
+     --network none --cap-drop ALL --security-opt no-new-privileges \
+     --read-only --tmpfs /tmp:rw,exec,size=2g \
      -v "$TMPDIR:$TMPDIR" \
      ghcr.io/gchen19/ankusdrive-solvers sleep infinity
    ```
@@ -88,6 +89,14 @@ use:
    it heavily — OpenMPI's session files (Elmer), openEMS's simulation dirs, numba's
    cache — and on a host whose Docker disk is full, every one of those fails in a way
    that looks like a solver bug rather than a full disk.
+
+   The rest is least privilege, and each flag is there because the solvers genuinely
+   do not need what it removes — verified by running the live solver suites with all
+   of them on. `--network none` is the notable one: nothing in a mesh is a reason to
+   reach the internet. They are not a sandbox for hostile code (a bind-mounted scratch
+   is still a hole), but they are the difference between a solver bug being contained
+   and being a foothold. `ankusdrive doctor` says so when a container has more
+   privilege than the solvers need.
 
    On macOS, Docker Desktop shares `/private` and `/var/folders` (where `$TMPDIR`
    lives) by default. With another engine (OrbStack, colima, podman), make sure that
