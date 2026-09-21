@@ -18,10 +18,17 @@ CALL — so a green result here means "this interpreter can serve MCP", which is
 exactly what the Windows core-install lane needs to assert on a runner with no
 FreeCAD installed.
 
-SKIPs when the ``mcp`` package isn't importable in this interpreter (the Linux
-suite's system python3 has no venv deps).
+INTERPRETER RESOLUTION (#317). The interpreter that starts this file is not
+necessarily one that can import ``mcp``: on the self-hosted Linux runner
+``run_all.sh`` hands it ``.venv/bin/python3``, which ``tests/setup_local.sh`` makes a
+symlink to FreeCAD's bundled python — numpy and Pillow, never ``mcp`` — so this
+test used to SKIP there on every run while the lane reported green. It now uses
+``tests/_interpreters.py``, shared with test_mcp.py: this interpreter if it has
+``mcp``, else re-exec into the first probed candidate that does (repo venv, then
+``python3``/``python`` from PATH). It SKIPs, naming every interpreter it asked, only
+when ``mcp`` is importable in none of them.
 
-Run:  .venv/bin/python3 tests/test_mcp_boot.py
+Run:  python3 tests/test_mcp_boot.py     (any interpreter; it finds one with `mcp`)
 """
 import asyncio
 import os
@@ -32,11 +39,17 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "tests"))   # the shared _interpreters helper
 
-try:
+from _interpreters import ensure_mcp_interpreter  # noqa: E402
+
+# None = this interpreter has `mcp`; else the list asked (the re-exec, when one
+# qualifies, happens inside and never returns here).
+_TRIED = ensure_mcp_interpreter(__file__)
+if _TRIED is None:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
-except ImportError:                                     # noqa: BLE001 - reported below
+else:
     ClientSession = None
 
 # A path that cannot exist, so the server has to boot with FreeCAD unresolved. The
@@ -101,8 +114,9 @@ def _discover():
 
 def main():
     if ClientSession is None:
-        print("  SKIP test_mcp_boot — the `mcp` package is not installed in "
-              f"{sys.executable} (run from the venv: pip install -e .)")
+        print("  SKIP test_mcp_boot — the `mcp` package is not importable in any "
+              "interpreter here. Tried: " + ", ".join(str(c) for c in _TRIED) +
+              ". Install the host deps (pip install -e .) to run this test.")
         return
     failures = []
     t_suite = time.time()

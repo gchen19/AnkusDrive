@@ -104,8 +104,8 @@ python3 tests/test_windows_support.py
 
 echo
 echo "== MCP server boots over stdio with FreeCAD unresolved (#279) =="
-# Needs the venv (the `mcp` client SDK); the system python3 has no deps, and the test
-# SKIPs cleanly there rather than failing.
+# Needs the `mcp` SDK, not FreeCAD. $VENV_PY may be FreeCAD's bundled python (no mcp);
+# the test probes for an interpreter that has it (#317) and SKIPs only if none does.
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_mcp_boot.py; else python3 tests/test_mcp_boot.py; fi
 
 echo
