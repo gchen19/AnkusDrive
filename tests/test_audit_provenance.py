@@ -356,7 +356,10 @@ def _payload(result):
 def _freecad_available() -> bool:
     try:
         from ankusdrive import client
-        return bool(client._resolve_freecadcmd())
+        path = client._resolve_freecadcmd()
+        # resolution returns the path it WOULD use, present or not — the file has to
+        # exist or the worker tier runs and dies on a hosted runner with no FreeCAD
+        return bool(path and Path(path).exists())
     except Exception:
         return False
 
