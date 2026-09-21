@@ -153,7 +153,13 @@ jobs:
     name: Assemble + preflight (${{ matrix.platform.arch }})
     needs: stage
     runs-on: ${{ matrix.platform.runner }}
-    timeout-minutes: 120
+    # Usually minutes: the source stages are already built and this only assembles
+    # them, installs FreeCAD and runs the preflight. But a commit that invalidates the
+    # `system` layer invalidates EVERY stage, and this job then rebuilds what it
+    # cannot pull — amd64 hit the old 120-minute cap doing exactly that (#423), which
+    # skipped the publish for an image that was otherwise fine. The cap is a runaway
+    # guard, not a schedule; a hosted runner's own ceiling is 6 hours.
+    timeout-minutes: 240
     permissions:
       contents: read
       packages: write
