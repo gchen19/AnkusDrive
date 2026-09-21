@@ -29,6 +29,16 @@ FEM mesh or material defeats. Now only a *shaped* referrer demotes an object:
   test_save_step_body_is_the_body          : ...and origin planes stay out of it
   test_add_part_from_file_with_fem_mesh    : add_part links the Cut
   test_assembly_doc_exports_the_container  : linked children don't make it ambiguous
+
+Exporting that container to STEP then wrote a 1.6 kB file with no faces in it, for
+a container of links and of plain features alike, and reported success (#434). The
+resolved shape is exported now, and a STEP/IGES that carries no geometry raises:
+
+  test_assembly_step_carries_the_geometry  : both parts, volumes and placements
+  test_assembly_iges_carries_the_geometry  : the same for IGES
+  test_single_part_step_unchanged          : the ordinary path still exports
+  test_step_geometry_scanner               : the guard's scan, without FreeCAD
+  test_release_of_an_assembly_has_geometry : the vendor bundle carried the empty file
   test_release_step_without_page_is_cut    : release_package's no-page fallback had
                                              #414's silent default too (released Box)
 
@@ -91,6 +101,18 @@ def _pad_body(w, doc):
     ])
     w.call("pad", sketch=sk["handle"], length=5)
     return body
+
+
+def _step_stats(w, path):
+    """Solid count, volume and bounding-box X length of an exported file."""
+    code = (
+        "import Part\n"
+        f"s = Part.Shape(); s.read({str(path)!r})\n"
+        "bb = s.BoundBox\n"
+        "__result__ = {'solids': len(s.Solids), 'faces': len(s.Faces),\n"
+        "              'vol': s.Volume, 'xlen': bb.XLength}\n"
+    )
+    return w.call("run_script", code=code, auto_register=False)["result"]
 
 
 def _step_solids(w, path):
@@ -230,10 +252,97 @@ def test_assembly_doc_exports_the_container():
         for x in (0, 40):
             w.call("add_part", assembly=asm["handle"], source={"handle": cut["handle"]},
                    placement=[x, 0, 0])
-        # .brep, not .step: selection is what's under test, and Part.export of an
-        # App::Part of links currently writes a STEP with no geometry (#434).
-        r = w.call("export_shape", path=os.path.join(d, "asm.brep"))
+        step = os.path.join(d, "asm.step")
+        r = w.call("export_shape", path=step)
         assert r["object"] == asm["name"], r
+        got = _step_stats(w, step)
+        # both parts, their volumes, and 40 mm apart -- placements survive (#434)
+        assert got["solids"] == 2, got
+        assert abs(got["vol"] - 2 * cut["volume"]) < 1e-3, (got, cut["volume"])
+        assert abs(got["xlen"] - 60.0) < 1e-6, got
+
+
+def test_assembly_step_carries_the_geometry():
+    """#434: Part.export of an App::Part dropped every face; the shape is exported now."""
+    with Worker() as w, tempfile.TemporaryDirectory() as d:
+        cut = _box_minus_cylinder(w, "es_asm_step")
+        asm = w.call("make_assembly")
+        for x in (0, 40):
+            w.call("add_part", assembly=asm["handle"], source={"handle": cut["handle"]},
+                   placement=[x, 0, 0])
+        step = os.path.join(d, "asm.step")
+        r = w.call("export_shape", path=step, object=asm["name"])
+        got = _step_stats(w, step)
+        assert got["solids"] == 2, got
+        assert abs(got["vol"] - 2 * cut["volume"]) < 1e-3, (got, cut["volume"])
+        assert r["size"] > 4096, r  # the broken file was 1640 bytes
+
+
+def test_assembly_iges_carries_the_geometry():
+    with Worker() as w, tempfile.TemporaryDirectory() as d:
+        cut = _box_minus_cylinder(w, "es_asm_iges")
+        asm = w.call("make_assembly")
+        for x in (0, 40):
+            w.call("add_part", assembly=asm["handle"], source={"handle": cut["handle"]},
+                   placement=[x, 0, 0])
+        iges = os.path.join(d, "asm.iges")
+        w.call("export_shape", path=iges, object=asm["name"])
+        got = _step_stats(w, iges)
+        # IGES is surface-based: faces and volume, not solids
+        assert got["faces"] == 14, got
+        assert abs(got["vol"] - 2 * cut["volume"]) < 1e-1, (got, cut["volume"])
+
+
+def test_single_part_step_unchanged():
+    """The ordinary path is untouched: same geometry as before the #434 fix."""
+    with Worker() as w, tempfile.TemporaryDirectory() as d:
+        cut = _box_minus_cylinder(w, "es_plain_step")
+        step = os.path.join(d, "part.step")
+        w.call("export_shape", path=step, object="Cut")
+        got = _step_stats(w, step)
+        assert got["solids"] == 1 and got["faces"] == 7, got
+        assert abs(got["vol"] - cut["volume"]) < 1e-3, (got, cut["volume"])
+
+
+def test_step_geometry_scanner():
+    """The guard's scan, on bytes, with no FreeCAD in the loop."""
+    from ankusdrive import export_check
+
+    with tempfile.TemporaryDirectory() as d:
+        empty = Path(d, "empty.step")
+        empty.write_bytes(b"ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n"
+                          b"#3 = SHAPE_DEFINITION_REPRESENTATION(#4,#10);\nENDSEC;\n")
+        assert export_check.step_has_geometry(empty) is False
+
+        real = Path(d, "real.step")
+        real.write_bytes(b"DATA;\n#12 = ADVANCED_FACE('',(#13),#40,.T.);\n")
+        assert export_check.step_has_geometry(real) is True
+
+        # a marker straddling the chunk boundary is still found
+        split = Path(d, "split.step")
+        split.write_bytes(b"x" * 1023 + b"MANIFOLD_SOLID_BREP('',#9)")
+        assert export_check.file_contains(
+            split, export_check.STEP_GEOMETRY_MARKERS, chunk_bytes=1024) is True
+
+
+def test_release_of_an_assembly_has_geometry():
+    """release_package exports its STEP through export_shape, so a released
+    assembly shipped the empty file to the vendor (#434)."""
+    with Worker() as w, tempfile.TemporaryDirectory() as d:
+        cut = _box_minus_cylinder(w, "es_rel_asm")
+        asm = w.call("make_assembly")
+        for x in (0, 40):
+            w.call("add_part", assembly=asm["handle"], source={"handle": cut["handle"]},
+                   placement=[x, 0, 0])
+        w.call("save_document", path=os.path.join(d, "asm.FCStd"))
+        registry = os.path.join(d, "items.json")
+        w.call("items_new", registry=registry, item="asm", files=["asm.FCStd"])
+        res = w.call("release_package", registry=registry, item="asm",
+                     out_dir=os.path.join(d, "pkg"), kinds=["step"], draft=True)
+        step = next(Path(d, "pkg", f["name"]) for f in res["files"] if f["kind"] == "step")
+        got = _step_stats(w, step)
+        assert got["solids"] == 2, got
+        assert abs(got["vol"] - 2 * cut["volume"]) < 1e-3, (got, cut["volume"])
 
 
 # --- runner -------------------------------------------------------------------
