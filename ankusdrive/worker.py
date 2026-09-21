@@ -17556,6 +17556,7 @@ def _impact_dynamics_submit(p, info):
     def _work():
         import subprocess
         argv = [ccx_bin] + built["argv"][1:]
+        _cases.snapshot(case_dir)              # the deck, before ccx writes into it
         proc = subprocess.run(argv, cwd=case_dir, capture_output=True, text=True)
         hist = _imp.parse_impact_dat(
             os.path.join(case_dir, built["job_name"] + ".dat"), tuple(built["direction"]))

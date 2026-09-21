@@ -340,10 +340,14 @@ jobs:
     name: Slim solver image (${{ matrix.platform.arch }})
     # The same source stages the heavy image assembles, minus FreeCAD, the driver venv
     # and every -dev package: what a user actually runs under the container substrate
-    # (#422). It builds from the stage caches, so it adds minutes, not another compile.
+    # (#422). It builds from the stage caches, so it USUALLY adds minutes, not another
+    # compile — but it has the assemble job's failure mode exactly: after a commit that
+    # invalidates the `system` layer it rebuilds what it cannot pull. Measured on the
+    # runs after #442: 56 min (arm64), 77 min (amd64), then cancelled AT the old
+    # 90-minute cap on amd64 (#447). Same guard, same reasoning, same number as assemble.
     needs: stage
     runs-on: ${{ matrix.platform.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 240
     permissions:
       contents: read
       packages: write
