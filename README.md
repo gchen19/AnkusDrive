@@ -710,7 +710,6 @@ at, with the script that regenerates each one — is indexed in
 
 - **Error model**: FreeCAD raises plain Python exceptions from C++; worker catches and serializes them, but stack context across the JSON boundary is still lossy.
 - **Async / concurrency**: multi-doc shipped (`list_documents` / `set_active_document` / `close_document`), and every long-running solve — CalculiX included, via `fem_run_submit` — can run off the channel through the `*_submit` + `job_*` pattern. The synchronous `fem_run` remains for small solves. One worker still means one main thread: a job's FreeCAD-side steps (writing the solver input, importing results) run on it, between requests.
-- **macOS Gatekeeper / sandboxing**: `freecadcmd` launched from a non-interactive context may hit quarantine issues. This has never been confirmed either way — tracked in [#310](https://github.com/gchen19/AnkusDrive/issues/310), which will either document the fix or delete this caveat.
 
 ## Privacy Policy
 

@@ -60,6 +60,40 @@ the bundle's own `Contents/Resources/bin/python` without a `sys.path` shim. That
 nothing in AnkusDrive (or its tests) imports FreeCAD in-process; everything goes through
 the `freecadcmd` worker subprocess.
 
+### Gatekeeper and quarantine: no action needed
+
+A browser-downloaded FreeCAD carries `com.apple.quarantine`. That does **not** block
+an MCP host from launching `freecadcmd`, even on the very first run, with nobody at a
+terminal to answer a prompt. Verified 2026-09-21 ([#310](https://github.com/gchen19/AnkusDrive/issues/310)):
+
+- FreeCAD 1.1.3 arm64 DMG, a build never run on that Mac. The bundle was copied out of a
+  quarantined DMG so every file carried the never-approved flag `0083`.
+- The MCP server was started by a `launchctl submit` job: no TTY, parent launchd, and not a
+  child of a terminal that could lend its Developer Tools exemption. That is the same
+  shape as a server Claude Desktop spawns.
+- `ping`, `setup_status(verify_freecad_boot=true)` (version 1.1.3), and a `run_script`
+  that built a box all succeeded. syspolicyd *did* assess the exec
+  (`GK evaluateScanResult`) and passed it on FreeCAD's notarized Developer ID
+  (`spctl` reports `source=Notarized Developer ID`). No dialog appeared, and the
+  quarantine flag stayed `0083`, so no user approval was needed or recorded.
+
+The pass depends on the bundle's notarized signature staying intact, and that part was
+verified too. A second quarantined copy had one file inside `FreeCAD.app` edited *before*
+its first launch (`spctl`: `a sealed resource is missing or invalid`). Launched the same
+way, syspolicyd logged `Prompt shown, waiting for response` and put the "cannot be
+verified" dialog on the desktop. The worker hung until
+`Terminating process due to Gatekeeper rejection`. The MCP host sees
+`ping: no response within 15.0s`, then `WorkerDied`, and
+`setup_status(verify_freecad_boot=true)` reports
+`resolved but did not boot: WorkerDied`, with nothing that points at Gatekeeper. Once
+FreeCAD has run, a later edit to the bundle no longer matters, which is why an installed
+bundle modified after first launch keeps working. If a first launch dies like this, clear
+the attribute:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/FreeCAD.app
+```
+
 ## `ankusdrive doctor`
 
 One cross-platform health report: resolves FreeCAD **and** every solver family and
