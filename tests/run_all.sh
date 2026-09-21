@@ -218,6 +218,9 @@ python3 tests/test_molding_fill.py
 # fill cannot fit under emulation (#386).
 python3 tests/test_molding_relay.py
 python3 tests/test_impact.py
+# Impact dynamics (#311): deck/parsers/gate always; the live St-Venant ccx gates
+# under RUN_HEAVY_SOLVES=1.
+python3 tests/test_impact_case.py
 
 echo
 echo "== Design-for-X toys (DfM/DfA/packaging; pure-Python; no FreeCAD) =="

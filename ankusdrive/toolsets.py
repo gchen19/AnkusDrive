@@ -87,7 +87,7 @@ FAMILIES: dict = {
         fluid_props bolted_joint_check bearing_life spring_check gear_rating belt_drive
         press_fit_stress seal_check chain_drive weld_group fatigue_check fracture_check
         wear_estimate creep_flag h_estimate plate_check beam_buckling plastic_collapse
-        elastica_deflection hertz_contact laminate_properties beam_modal drop_impact
+        elastica_deflection hertz_contact laminate_properties beam_modal drop_impact bar_impact
         random_vibration harmonic_response thermal_lumped thermal_transient_1d
         thermal_composite_wall em_skin_depth em_dc_resistance em_field waveguide_cutoff
         dipole_resonance monopole_sphere rigid_sphere_scattering acoustic_screen cfd_pipe_flow
@@ -101,7 +101,7 @@ FAMILIES: dict = {
         em_conduction_submit em_induction_submit em_induction_heating_submit
         em_fullwave_submit cfd_internal_flow_submit cfd_external_flow_submit
         cfd_mesh_independence_submit fsi_pressure_plate_submit molding_fill_submit
-        molding_warpage_submit dem_pack_submit dem_flow_submit mechanism_simulate_submit
+        molding_warpage_submit impact_dynamics_submit dem_pack_submit dem_flow_submit mechanism_simulate_submit
         topology_optimize_submit topology_to_solid optics_solid_trace study_submit
         optimize_submit slice_gcode_submit async_demo_submit
     """,

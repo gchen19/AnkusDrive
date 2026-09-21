@@ -56,7 +56,7 @@ EXACT_TOOLS = {
     # fluids
     "cfd_pipe_flow", "cfd_body_drag", "grid_convergence",
     # impact / acoustics / EM closed-form twins
-    "drop_impact", "acoustic_screen", "em_skin_depth", "em_dc_resistance",
+    "drop_impact", "bar_impact", "acoustic_screen", "em_skin_depth", "em_dc_resistance",
     "waveguide_cutoff", "dipole_resonance", "monopole_sphere", "rigid_sphere_scattering",
     # FSI closed-form twins
     "fsi_channel_pressure", "fsi_plate_deflection", "fsi_interface_balance",
@@ -83,7 +83,7 @@ BOUNDED_TOOLS = {
     "cfd_mesh_independence_submit", "cht_channel_submit",
     "cht_graetz_submit", "dem_flow_submit", "dem_pack_submit", "em_conduction_submit",
     "em_fullwave_submit", "em_induction_heating_submit", "em_induction_submit",
-    "fsi_pressure_plate_submit", "harmonic_response_submit", "mechanism_simulate_submit",
+    "fsi_pressure_plate_submit", "harmonic_response_submit", "impact_dynamics_submit", "mechanism_simulate_submit",
     "molding_fill_submit", "molding_warpage_submit", "render_photoreal_submit",
     "slice_gcode_submit", "thermal_radiation_submit", "thermal_transient_submit",
     "topology_optimize_submit",
@@ -300,6 +300,7 @@ ANALYSIS_SWEEP = [
                              cell_sizes=[1.0, 2.0, 4.0])),
     # --- impact / acoustics / EM twins ---
     ("drop_impact", dict(drop_height_mm=1000, crush_distance_mm=10)),
+    ("bar_impact", dict(velocity_m_s=4.43, length_mm=100, material="abs")),
     ("acoustic_screen", dict(kind="cavity_modes", lx_mm=4000, ly_mm=3000, lz_mm=2500)),
     ("em_skin_depth", dict(frequency_hz=50.0, conductor="copper")),
     ("em_dc_resistance", dict(length_mm=1000.0, area_mm2=1.0, conductor="copper",
