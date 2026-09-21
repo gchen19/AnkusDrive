@@ -5145,6 +5145,7 @@ def impact_dynamics_submit(
     samples: int | None = None,
     gravity: bool = True,
     deceleration_limit_g: float | None = None,
+    contact: str = "auto",
 ) -> dict:
     """Transient DROP / IMPACT dynamics — the solve `drop_impact` escalates to. Meshes
     `body`, flies it at `velocity_m_s` (or the free-fall speed of `drop_height_mm` —
@@ -5166,8 +5167,11 @@ def impact_dynamics_submit(
     defaults to free flight + 10 wave round trips along the drop — enough for a stiff
     body; a compliant one needs more, and the gate says so. `samples` is the single
     output cadence ccx allows (force history AND stress frames; default sized to the
-    mesh). A sharp corner sinks a fraction of an element before face-to-face contact
-    pushes back (`engagement_lag_mm`) — refine `char_length_mm` for corner drops.
+    mesh). `contact`: 'auto' (default) | 'face' | 'node' — measured: ccx's face-to-face
+    penalty never engages a corner strike (the part falls through) and its
+    node-to-face one locks up on a broad flat landing, so 'auto' uses face contact
+    down to a 45° edge and node contact for anything sharper. `engagement_lag_mm`
+    reports how far the strike point sank before the contact pushed back.
 
     Validated against the exact St-Venant bar (`bar_impact`): face force ρ·c₀·v₀·A,
     contact duration 2L/c₀, restitution 1 and the plastic-wave cap all within ~1–3 %.
@@ -5178,7 +5182,9 @@ def impact_dynamics_submit(
     Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
     {ok, returncode, solver, case_dir, nodes, tets, method, direction, velocity_m_s,
     drop_height_mm, duration_s, time_step_s, mass_g, strike_node, contact_faces,
-    plastic, bar_stress_mpa, peak_force_n, peak_force_time_s, peak_g, impulse_n_s,
+    contact, strike_alignment,
+    plastic, bar_stress_mpa, peak_force_n, peak_force_median3_n,
+    peak_force_time_s, peak_g, impulse_n_s,
     contact_start_s, contact_duration_s, separated, arrested, rebound_velocity_m_s,
     restitution, energy_end_ratio, energy_min_ratio, mass_check, samples,
     contact_samples, engagement_lag_mm, peak_von_mises_mpa, peak_stress_node, peak_stress_time_s,
@@ -5186,7 +5192,7 @@ def impact_dynamics_submit(
     fidelity:"solve", band_pct, checks, utilisation, warnings} — a run that ends
     before the fall is arrested, or whose energy grows, FAILS."""
     params: dict = {"body": body, "direction": direction, "method": method,
-                    "plastic": plastic, "gravity": gravity}
+                    "plastic": plastic, "gravity": gravity, "contact": contact}
     for k, v in (("drop_height_mm", drop_height_mm), ("velocity_m_s", velocity_m_s),
                  ("material", material), ("youngs_mpa", youngs_mpa),
                  ("poisson", poisson), ("density_kg_m3", density_kg_m3),

@@ -10,8 +10,9 @@ truncated or energy-growing run.
 The solver-backed half flies a ν = 0 steel bar into the floor through real penalty
 contact and holds ccx to the exact 1-D answers — face stress ρ·c₀·v₀, contact
 duration 2L/c₀, restitution 1 — then repeats it past yield against the bilinear
-plastic-wave cap, shows a run cut short is rejected, and lands a stiff block on a soft
-contact to recover the ``drop_impact`` screen's own G = 2h/d.
+plastic-wave cap, shows a run cut short is rejected, lands a stiff block on a soft
+contact to recover the ``drop_impact`` screen's own G = 2h/d, and drops a cube on its
+corner — the case face-to-face contact falls straight through.
 """
 import math
 import os
@@ -198,6 +199,10 @@ def test_deck_cards_implicit_and_explicit():
         assert b["adaptive"] and t.count("TIME POINTS=Tout") == 3
         assert "\n*DYNAMIC\n" in t and "FREQUENCY" not in t
         assert b["samples"] == 400 and C.default_samples(20000) == 100
+        # the minimum increment is 1/50 of the step: ccx pins the step there while a
+        # contact closes, and at 1e-7 a node-to-face strike never arrives
+        step = [float(v) for v in t.split("*DYNAMIC\n")[1].splitlines()[0].split(",")]
+        assert math.isclose(step[2], step[0] / 50, rel_tol=1e-6) and step[0] < step[3]
         # ... and a time_step_s opts in to the fixed step, which refuses time points
         fx = _bar_case(d, time_step_s=b["duration_s"] / 1000)
         tf = Path(d, "case.inp").read_text(encoding="utf-8")
@@ -225,6 +230,34 @@ def test_deck_cards_implicit_and_explicit():
         h = 210000.0 * 2100.0 / (210000.0 - 2100.0)
         assert f"{250 + h:.9g}, 1." in t
         assert e["plastic"] and math.isclose(e["contact_stiffness_mpa_mm"], 5 * 210000.0)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_contact_formulation_follows_the_strike():
+    """Neither ccx penalty formulation covers both ends (measured): face-to-face never
+    engages a cube corner, node-to-face locks up on a broad flat landing."""
+    assert C.pick_contact(1.0) == "face" and C.pick_contact(0.7072) == "face"   # <= 45°
+    assert C.pick_contact(0.5774) == "node"                                   # corner
+    d = tempfile.mkdtemp(prefix="impact_contact_")
+    try:
+        _write_cube_mesh(os.path.join(d, "mesh.inp"), n=2)
+        mesh = C.parse_mesh_inp(os.path.join(d, "mesh.inp"))
+        kw = dict(mesh=mesh, youngs_mpa=2300.0, poisson=0.35, density_kg_m3=1050.0,
+                  velocity_m_s=4.43)
+        flat = C.write_impact_case(d, direction="-z", **kw)
+        assert flat["contact"] == "face" and flat["strike_alignment"] == 1.0
+        assert "TYPE=SURFACE TO SURFACE" in Path(d, "case.inp").read_text(encoding="utf-8")
+        assert flat["adaptive"]                      # face contact <-> adaptive stepping
+        corner = C.write_impact_case(d, direction=(-1, -1, -1), **kw)
+        assert corner["contact"] == "node"
+        # node contact <-> a fixed step: ccx's adaptive impact rules stall on it
+        assert not corner["adaptive"]
+        assert math.isclose(corner["time_step_s"], corner["duration_s"] / 1000)
+        assert math.isclose(corner["strike_alignment"], 1 / math.sqrt(3), abs_tol=1e-4)
+        assert "TYPE=NODE TO SURFACE" in Path(d, "case.inp").read_text(encoding="utf-8")
+        assert C.write_impact_case(d, direction="-z", contact="node", **kw)["contact"] == "node"
+        assert _raises(lambda: C.write_impact_case(d, contact="glue", **kw))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -260,8 +293,18 @@ def test_reduce_recovers_newtons_law_on_a_half_sine():
     assert math.isclose(r["peak_force_n"], fp, rel_tol=1e-4)
     assert math.isclose(r["peak_g"], fp / (1e-3 * C.G0_MM_S2), rel_tol=1e-3)
     assert math.isclose(r["restitution"], 0.8, abs_tol=2e-3)
+    # a lone contact-onset spike moves the raw peak, not the G the verdict reads
+    spiked = dict(hist, force_n=list(hist["force_n"]))
+    spiked["force_n"][3] = 5 * fp
+    rs = C.reduce_impact(spiked, mass_t=1e-3, velocity_mm_s=1000.0, gravity=False)
+    assert math.isclose(rs["peak_force_n"], 5 * fp, rel_tol=1e-6)
+    assert math.isclose(rs["peak_g"], r["peak_g"], rel_tol=1e-3)
     assert math.isclose(r["contact_duration_s"], 1e-3, rel_tol=0.03)
     assert r["separated"] and r["arrested"] and r["mass_check"] == 1.0
+    # ... and ccx's ½mv² is not read off a sample already in contact
+    late = {k: v[5:] for k, v in hist.items()}
+    assert C.reduce_impact(late, mass_t=1e-3, velocity_mm_s=1000.0,
+                           gravity=False)["mass_check"] is None
     assert math.isclose(r["energy_end_ratio"], 0.64, abs_tol=1e-3)
 
 
@@ -466,6 +509,50 @@ def test_ccx_soft_landing_recovers_the_drop_screen():
         assert red["separated"] and 0.97 <= red["restitution"] <= 1.01, red
         assert C.impact_gate(red, deceleration_limit_g=1.2 * screen["g_peak"])["pass"]
         assert not C.impact_gate(red, deceleration_limit_g=0.8 * screen["g_peak"])["pass"]
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_ccx_corner_drop_engages_and_rebounds():
+    """The corner drop the issue asked for. No closed form — what is held is that the
+    contact ENGAGES at first touch (face-to-face contact never does: the part falls
+    through), the body leaves again without gaining energy, and the worst stress is
+    found at the corner that struck."""
+    if skip_heavy("CalculiX impact dynamics (corner drop)"):
+        return
+    if solvers.ccx_bin() is None:
+        print("    SKIP — CalculiX (ccx) not installed")
+        return
+    base = tempfile.mkdtemp(prefix="impact_ccx_corner_")
+    try:
+        _write_cube_mesh(os.path.join(base, "mesh.inp"), n=4)
+        mesh = C.parse_mesh_inp(os.path.join(base, "mesh.inp"))
+        built = C.write_impact_case(
+            base, mesh=mesh, youngs_mpa=2300.0, poisson=0.35, density_kg_m3=1050.0,
+            velocity_m_s=4.43, direction=(-1, -1, -1), gravity=False, gap_mm=0.05,
+            duration_s=1.5e-3, samples=200)
+        assert built["contact"] == "node" and built["lowest_node"] == 1
+        subprocess.run([solvers.ccx_bin()] + built["argv"][1:], cwd=base,
+                       capture_output=True, text=True, timeout=1500)
+        hist = C.parse_impact_dat(os.path.join(base, "case.dat"),
+                                  tuple(built["direction"]))
+        assert hist is not None, "ccx produced no floor-reaction history"
+        red = C.reduce_impact(hist, mass_t=built["mass_t"],
+                              velocity_mm_s=built["velocity_mm_s"], gravity=False,
+                              gap_mm=built["gap_mm"])
+        assert red["peak_force_n"] > 0 and red["engagement_lag_mm"] < 0.1, red
+        assert red["arrested"] and red["separated"], red
+        # a point penalty contact under HHT-α can hand back a few % too much; the gate's
+        # own tolerance (5 %) is the line, and it is held here too
+        assert 0.5 < red["restitution"] <= 1.05 and red["energy_end_ratio"] <= 1.05, red
+        assert C.impact_gate(red)["pass"], red
+        assert abs(red["mass_check"] - 1.0) < 1e-3, red
+        stress = C.parse_peak_stress_frd(os.path.join(base, "case.frd"),
+                                         exclude_nodes=built["floor_nodes"])
+        assert stress["node"] == 1 and stress["location_mm"] == [0.0, 0.0, 0.0], stress
+        # far above the 1-D ρ·c₀·v₀: a point strike concentrates what a flat one spreads
+        twin = I.bar_impact(4.43, 10.0, youngs_gpa=2.3, density_kg_m3=1050)
+        assert stress["peak_von_mises_mpa"] > 3 * twin["stress_mpa"], (stress, twin)
     finally:
         shutil.rmtree(base, ignore_errors=True)
 

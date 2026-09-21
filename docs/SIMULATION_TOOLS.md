@@ -527,6 +527,10 @@ process. Several reuse existing AnkusDrive tools directly.
   before the fall is arrested or whose energy grows. Closed-form twin: `bar_impact`
   (St-Venant: σ = ρ·c₀·v₀, T = 2L/c₀, restitution 1, plastic-wave cap) — the exact
   anchor the live gates in `tests/test_impact_case.py` hold ccx to within 1–3 %.
+  Contact is chosen from the strike geometry (`contact='auto'`): ccx's face-to-face
+  penalty never engages a corner strike and its node-to-face one gains energy on a
+  flat landing, so face contact + adaptive stepping serve flat/edge landings down to
+  45° and node contact + a fixed step anything sharper.
   Runs on the host's `ccx` on every OS (FreeCAD bundles it) — not container-routed.
 
 ### 10. Machine-element rating  *(highest leverage on existing tools)*

@@ -38,7 +38,9 @@ solver and no new licence boundary. Two integrators:
   oracle.
 
 The floor is one fully-fixed brick normal to ``direction``; the part's
-floor-facing boundary faces are the slave surface of a face-to-face penalty pair.
+floor-facing boundary faces are the slave surface of a LINEAR penalty pair —
+face-to-face for a flat or edge landing, node-to-face for a corner, because neither
+ccx formulation handles both (:func:`pick_contact`).
 Rotating the *floor and velocity* rather than the part is what makes an edge or
 corner drop one parameter (``direction=(-1, -1, -1)``) instead of a re-mesh.
 
@@ -50,7 +52,7 @@ and restitution all follow from that one signal.
 Fidelity & honesty. ``fidelity="solve"``, banded: peak contact force depends on the
 penalty stiffness and the mesh, and a stress peak *at* a contact point is mesh-
 dependent (a corner drop is near-singular). Face-to-face contact acts at the slave
-faces' integration points, so a sharp corner sinks a fraction of an element before
+faces' integration points, so a tilted edge sinks a fraction of an element before
 anything pushes back — reported as ``engagement_lag_mm``; refine the mesh to shrink
 it. A squat body landing flat is 3-D, not a bar: its face stress follows the
 dilatational speed (1.27·c₀ at ν = 0.35), above ``bar_impact``'s ρ·c₀·v₀. Penalty-spring energy is not part of
@@ -72,6 +74,7 @@ import re
 G0_MM_S2 = 9806.65
 
 _METHODS = ("implicit", "explicit")
+_CONTACTS = {"face": "SURFACE TO SURFACE", "node": "NODE TO SURFACE"}
 
 # Corner-node faces, 0-based, in CalculiX S1..Sn order, outward-oriented.
 _TET_FACES = ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0))
@@ -233,6 +236,24 @@ def drop_direction(spec) -> tuple:
     return _unit(v)
 
 
+def pick_contact(strike_alignment: float) -> str:
+    """Which ccx penalty formulation a strike needs, from ``strike_alignment`` — the
+    best ``n·d`` among the free faces meeting at the strike node (1 = landing flat).
+
+    Measured, not assumed — neither formulation covers both ends:
+
+    * ``"face"`` (SURFACE TO SURFACE) engages a flat landing and edges tilted up to
+      45° (n·d ≥ 0.707), but NEVER a cube corner (n·d = 0.577): ccx generates no
+      contact element at all and the part falls through the floor.
+    * ``"node"`` (NODE TO SURFACE) catches the corner node at first touch and matches
+      the bar oracle, but on a broad flat landing it GAINS energy (restitution 1.2–1.5)
+      and under adaptive stepping ccx's "impact rules" stall short of the floor.
+
+    So: face contact (adaptive stepping) down to 45°, node contact (fixed step, see
+    :func:`write_impact_case`) for anything sharper."""
+    return "face" if strike_alignment >= 0.70 else "node"
+
+
 def floor_block(nodes: dict, d: tuple, *, gap_mm: float, margin: float = 1.0) -> dict:
     """The rigid floor: one brick normal to ``d``, its near face ``gap_mm`` beyond the
     part's furthest point along ``d``, overhanging the part's footprint by ``margin``
@@ -317,7 +338,7 @@ def impact_inp_text(
     contact_stiffness: float, yield_mpa: float | None = None,
     tangent_mpa: float | None = None, time_step_s: float | None = None,
     max_time_step_s: float | None = None, gravity: bool = True,
-    samples: int = 200,
+    samples: int = 200, contact: str = "face",
 ) -> str:
     """The ``*DYNAMIC`` contact deck. Flat and fully resolved: mesh ``*INCLUDE``, the
     floor brick (all 24 dofs fixed), the face-to-face LINEAR penalty pair, the initial
@@ -325,6 +346,8 @@ def impact_inp_text(
     floor reaction + energies (``.dat``) and the stress field (``.frd``)."""
     if method not in _METHODS:
         raise ValueError(f"method must be one of {_METHODS}")
+    if contact not in _CONTACTS:
+        raise ValueError(f"contact must be one of {_CONTACTS}")
     if youngs_mpa <= 0 or density_t_mm3 <= 0 or not (0.0 <= poisson < 0.5):
         raise ValueError("youngs_mpa, density must be > 0 and 0 <= poisson < 0.5")
     if velocity_mm_s <= 0 or duration_s <= 0 or contact_stiffness <= 0:
@@ -353,7 +376,8 @@ def impact_inp_text(
           "*SURFACE, NAME=Sslave, TYPE=ELEMENT"]
     L += [f"{eid}, S{face}" for eid, face in slave_faces]
     L += ["*SURFACE, NAME=Smaster, TYPE=ELEMENT", f"{floor_elem}, {floor['face']}",
-          "*CONTACT PAIR, INTERACTION=floor, TYPE=SURFACE TO SURFACE", "Sslave, Smaster",
+          f"*CONTACT PAIR, INTERACTION=floor, TYPE={_CONTACTS[contact]}",
+          "Sslave, Smaster",
           "*SURFACE INTERACTION, NAME=floor",
           "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR", f"{contact_stiffness:.9g}",
           "*BOUNDARY", "Nfloor, 1, 3, 0.",
@@ -380,7 +404,13 @@ def impact_inp_text(
     elif adaptive:
         dt_max = max_time_step_s or 2.0 * duration_s / samples   # time points govern
         dt = dt_max / 5.0
-        L += ["*DYNAMIC", f"{dt:.9e}, {duration_s:.9e}, {dt * 1e-7:.9e}, {dt_max:.9e}"]
+        # The MINIMUM increment is a working parameter here, not a floor nobody reaches.
+        # ccx's "impact rules" pin the step AT the minimum while a contact is about to
+        # close, to resolve the instant of impact. At 1e-7 of the step a node-to-face
+        # strike never gets there — the part creeps 1e-9 mm per increment (measured:
+        # 17 000 increments, no progress). At 1/50 it crosses in a handful; the price is
+        # a cutback floor only 50x under the step, and ccx says so if it needs more.
+        L += ["*DYNAMIC", f"{dt:.9e}, {duration_s:.9e}, {dt / 50.0:.9e}, {dt_max:.9e}"]
     else:
         L += ["*DYNAMIC, DIRECT", f"{time_step_s:.9e}, {duration_s:.9e}"]
     if gravity:
@@ -400,7 +430,7 @@ def write_impact_case(
     yield_mpa: float | None = None, tangent_mpa: float | None = None,
     time_step_s: float | None = None, max_time_step_s: float | None = None,
     gravity: bool = True, mesh_filename: str = "mesh.inp", job_name: str = "case",
-    samples: int | None = None,
+    samples: int | None = None, contact: str = "auto",
 ) -> dict:
     """Write the impact deck ``<job_name>.inp`` into ``case_dir`` (the mesh file is
     already there; ``mesh`` is its :func:`parse_mesh_inp`).
@@ -411,13 +441,14 @@ def write_impact_case(
     body rebounds in one) — a compliant one needs more, and the result says so
     (``arrested``) when it did;
     ``contact_stiffness_mpa_mm`` = 25·E implicit / 5·E explicit (ccx advises 5–50·E;
-    the explicit stable step scales with 1/√K); ``time_step_s`` = None implicit (ccx
-    steps adaptively; give one to run a fixed step instead) or
-    :func:`stable_time_step` explicit; ``samples`` = :func:`default_samples`.
+    the explicit stable step scales with 1/√K); ``time_step_s`` = None for implicit
+    face contact (ccx steps adaptively; give one to run a fixed step instead),
+    ``duration/1000`` for implicit node contact, :func:`stable_time_step` explicit; ``samples`` = :func:`default_samples`.
 
     Returns ``{case_dir, inp, job_name, argv, direction, velocity_mm_s, duration_s,
     gap_mm, method, mass_t, volume_mm3, extent_mm, lowest_node, n_slave_faces,
-    contact_stiffness_mpa_mm, wave_speed_mm_s, floor_nodes, plastic, samples,
+    contact_stiffness_mpa_mm, contact, strike_alignment, wave_speed_mm_s,
+    floor_nodes, plastic, samples,
     time_step_s, time_step, adaptive}`` (``time_step`` is the explicit stability
     breakdown)."""
     if method not in _METHODS:
@@ -439,10 +470,16 @@ def write_impact_case(
     if duration_s is None:
         duration_s = gap_mm / v + 20.0 * floor["extent_mm"] / c0
     k_pen = contact_stiffness_mpa_mm or (25.0 if method == "implicit" else 5.0) * youngs_mpa
-    slave = [(eid, face) for eid, face, n in boundary_faces(nodes, elements, etype)
-             if _dot(n, d) > 0.0]
+    free = boundary_faces(nodes, elements, etype)
+    slave = [(eid, face) for eid, face, n in free if _dot(n, d) > 0.0]
     if not slave:
         raise ValueError("no boundary face of the mesh faces the floor")
+    table = _TET_FACES if _corners(etype) == 4 else _HEX_FACES
+    alignment = max((_dot(n, d) for eid, face, n in free
+                     if floor["lowest_node"] in (elements[eid][i] for i in table[face - 1])),
+                    default=1.0)
+    if contact == "auto":
+        contact = pick_contact(alignment)
     volume = mesh_volume(nodes, elements, etype)
     step = None
     if method == "explicit" and not time_step_s:
@@ -450,6 +487,12 @@ def write_impact_case(
             h_min_mm=min_element_size(nodes, elements, etype), youngs_mpa=youngs_mpa,
             poisson=poisson, density_t_mm3=rho, contact_stiffness=k_pen)
         time_step_s = step["time_step_s"]
+    if method == "implicit" and contact == "node" and not time_step_s:
+        # node-to-face contact runs at a FIXED step: a point strike comes on one node
+        # at a time, which DIRECT handles, while ccx's adaptive "impact rules" either
+        # pin the step at its minimum short of the floor or run out of cutbacks
+        # (measured both ways). Stable across 500–2000 steps and a 2x finer mesh.
+        time_step_s = duration_s / 1000.0
     samples = int(samples) if samples else default_samples(len(nodes))
     text = impact_inp_text(
         mesh_include=mesh_filename, elset=mesh["elset"], nset=mesh["nset"], floor=floor,
@@ -459,7 +502,7 @@ def write_impact_case(
         density_t_mm3=rho, velocity_mm_s=v, duration_s=duration_s, method=method,
         contact_stiffness=k_pen, yield_mpa=yield_mpa, tangent_mpa=tangent_mpa,
         time_step_s=time_step_s, max_time_step_s=max_time_step_s, gravity=gravity,
-        samples=samples)
+        samples=samples, contact=contact)
     os.makedirs(case_dir, exist_ok=True)
     inp = f"{job_name}.inp"
     with open(os.path.join(case_dir, inp), "w", encoding="utf-8") as f:
@@ -472,6 +515,7 @@ def write_impact_case(
         "mass_t": rho * volume, "volume_mm3": volume,
         "extent_mm": floor["extent_mm"], "lowest_node": floor["lowest_node"],
         "n_slave_faces": len(slave), "contact_stiffness_mpa_mm": k_pen,
+        "contact": contact, "strike_alignment": round(alignment, 4),
         "wave_speed_mm_s": c0, "gravity": bool(gravity),
         "floor_nodes": [max(nodes) + 1 + i for i in range(8)],
         "plastic": yield_mpa is not None,
@@ -588,20 +632,28 @@ def reduce_impact(history: dict, *, mass_t: float, velocity_mm_s: float,
 
     Everything follows from one signal by Newton's second law: impulse
     ``J = ∫F dt`` (trapezoid), centre-of-mass velocity along the drop
-    ``v = v₀ − J/m (+ g·t)``, peak COM deceleration ``F_peak/(m·g)``. Contact is
+    ``v = v₀ − J/m (+ g·t)``, peak COM deceleration ``F_peak/(m·g)`` — off the
+    3-point-median force, so a one-sample contact-onset spike does not set it (the raw
+    ``peak_force_n`` is still returned). Contact is
     ``F > contact_frac·F_peak``; ``separated`` means it ended before the window did,
     ``arrested`` that the fall was at least stopped. ``mass_check`` is ccx's own
     initial kinetic energy over ``½·m·v₀²`` — a units / density tripwire. With
     ``gap_mm``, ``engagement_lag_mm`` is how far past first touch the part travelled
     before the contact pushed back (face-to-face contact on a sharp strike point).
 
-    Returns ``{peak_force_n, peak_force_time_s, peak_g, impulse_n_s, contact_start_s,
+    Returns ``{peak_force_n, peak_force_median3_n, peak_force_time_s, peak_g, impulse_n_s, contact_start_s,
     contact_duration_s, separated, arrested, rebound_velocity_m_s, restitution,
     energy_end_ratio, energy_min_ratio, mass_check, samples, contact_samples,
     engagement_lag_mm}``."""
     t, f = history["t"], history["force_n"]
     peak = max(f)
     i_peak = f.index(peak)
+    # A penalty contact closing on a moving face rings for one sample (measured: a
+    # first-sample spike ~1.5x the plateau on a flat landing). A 3-point median drops
+    # a lone spike and leaves any pulse wider than two samples alone; G is read off it.
+    med = [sorted(f[max(0, i - 1):i + 2])[1] if 0 < i < len(f) - 1 else f[i]
+           for i in range(len(f))]
+    peak_med = max(med)
     ke0 = 0.5 * mass_t * velocity_mm_s ** 2
     imp = [0.0]
     for i in range(1, len(t)):
@@ -615,11 +667,13 @@ def reduce_impact(history: dict, *, mass_t: float, velocity_mm_s: float,
     separated = bool(on) and on[-1] < len(t) - 1
     etot = [a + b for a, b in zip(history["strain_mj"], history["kinetic_mj"])
             if a is not None and b is not None]
-    k0 = next((k for k in history["kinetic_mj"] if k is not None), None)
+    # ccx's own ½mv² — only meaningful from a sample taken BEFORE contact began
+    k0 = history["kinetic_mj"][0] if (not on or on[0] > 0) else None
     return {
         "peak_force_n": round(peak, 4),
         "peak_force_time_s": t[i_peak],
-        "peak_g": round(peak / (mass_t * G0_MM_S2), 3),
+        "peak_force_median3_n": round(peak_med, 4),
+        "peak_g": round(peak_med / (mass_t * G0_MM_S2), 3),
         "impulse_n_s": round(imp[-1], 9),
         "contact_start_s": start,
         "contact_duration_s": dur,
@@ -675,8 +729,8 @@ def impact_gate(
     if lag and extent_mm and lag > 0.02 * extent_mm:
         warnings.append(
             f"the strike point sank {lag:.2f} mm before the contact pushed back — "
-            "face-to-face contact resolves a sharp corner or edge only to a fraction of "
-            "an element; refine the mesh (char_length_mm) for a corner/edge drop")
+            "face-to-face contact resolves a tilted edge only to a fraction of an "
+            "element; refine the mesh (char_length_mm), or set contact='node'")
     end = metrics.get("energy_end_ratio")
     checks["energy_bounded"] = end is None or end <= 1.0 + energy_tol
     if not checks["energy_bounded"]:

@@ -17527,7 +17527,8 @@ def _impact_dynamics_submit(p, info):
         method=method, contact_stiffness_mpa_mm=p.get("contact_stiffness_mpa_mm"),
         yield_mpa=sy if plastic else None, tangent_mpa=p.get("tangent_mpa"),
         time_step_s=p.get("time_step_s"), max_time_step_s=p.get("max_time_step_s"),
-        gravity=bool(p.get("gravity", True)), samples=p.get("samples"))
+        gravity=bool(p.get("gravity", True)), samples=p.get("samples"),
+        contact=p.get("contact", "auto"))
     g_limit = p.get("deceleration_limit_g")
     twin = _screen.bar_impact(v, built["extent_mm"], youngs_gpa=E / 1e3,
                               density_kg_m3=rho)
@@ -17542,7 +17543,8 @@ def _impact_dynamics_submit(p, info):
         "method": method, "k": built["contact_stiffness_mpa_mm"],
         "dt": built["time_step_s"], "adaptive": built["adaptive"],
         "dtmax": p.get("max_time_step_s"),
-        "grav": built["gravity"], "samples": built["samples"], "glim": g_limit}})
+        "grav": built["gravity"], "samples": built["samples"], "glim": g_limit,
+        "contact": built["contact"]}})
 
     def _work():
         import subprocess
@@ -17566,6 +17568,8 @@ def _impact_dynamics_submit(p, info):
             "mass_g": round(built["mass_t"] * 1e6, 6),
             "strike_node": built["lowest_node"],
             "contact_faces": built["n_slave_faces"],
+            "contact": built["contact"],
+            "strike_alignment": built["strike_alignment"],
             "plastic": plastic,
             # the 1-D reference for THIS material and speed (ρ·c₀·v). A squat body
             # landing flat runs above it — dilatational speed — and a corner far above
@@ -17621,7 +17625,10 @@ def _h_impact_dynamics_submit(p):
     `contact_stiffness_mpa_mm`, `time_step_s` (implicit: run a FIXED step instead —
     several times faster where contact comes on smoothly, but ccx stops if an
     increment diverges), `max_time_step_s`, `samples`, `gravity`,
-    `deceleration_limit_g`.
+    `deceleration_limit_g`, `contact` ('auto' default | 'face' | 'node' — ccx's
+    face-to-face penalty never engages a corner strike and its node-to-face one locks
+    up on a broad flat landing, so 'auto' picks by how squarely the strike point faces
+    the floor).
 
     Poll job_result for `{ok, returncode, solver, case_dir, nodes, tets, method,
     direction, velocity_m_s, mass_g, peak_force_n, peak_g, impulse_n_s,
