@@ -130,11 +130,14 @@ ARG CCX_ADAPTER_SHA=ff3950b9a23925d223d4cb45606272cbf57d626f
 ARG OF_ADAPTER_SHA=f6d7928c52df4bf109a4d5abd245531d6eeb136c
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # 1) serial libprecice (MPI OFF — see the conda-forge MPI double-load gotcha in the script)
-RUN git init -q /src/precice && cd /src/precice \
- && git remote add origin https://github.com/precice/precice.git \
- && git fetch -q --depth 1 origin "$PRECICE_SHA" && git checkout -q FETCH_HEAD \
- && got="$(git rev-parse HEAD)" \
- && { [ "$got" = "$PRECICE_SHA" ] || { echo "preCICE checkout $got != pinned $PRECICE_SHA" >&2; exit 1; }; } \
+# Fetched BY TAG and then verified against the pinned commit — not fetched by bare
+# SHA. preCICE derives its version from git tags, and a detached commit with no tags
+# in the shallow clone builds a library the openfoam-adapter then fails to link
+# against ("undefined symbols"). Pinning is about what you ACCEPT, not how you fetch:
+# a moved tag fails the check below.
+RUN git clone -q --depth 1 --branch "$PRECICE_TAG" https://github.com/precice/precice.git /src/precice \
+ && got="$(git -C /src/precice rev-parse HEAD)" \
+ && { [ "$got" = "$PRECICE_SHA" ] || { echo "preCICE $PRECICE_TAG is $got, not the pinned $PRECICE_SHA — the tag moved" >&2; exit 1; }; } \
  && cmake -S /src/precice -B /src/precice/build -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/opt/fsi/precice -DPRECICE_FEATURE_MPI_COMMUNICATION=OFF \
       -DPRECICE_FEATURE_PETSC_MAPPING=OFF -DPRECICE_FEATURE_PYTHON_ACTIONS=OFF \

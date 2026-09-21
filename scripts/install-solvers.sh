@@ -309,12 +309,11 @@ build_fsi() {
   # run standalone next to OpenFOAM's OpenMPI (libmpi.so.40) they double-load MPI and
   # segfault in MPI_Comm_rank. Build preCICE serial (no MPI) and link BOTH adapters
   # against it — the validated, conflict-free path.
-  # By commit, not tag: a tag can be moved, and this library mediates every FSI solve
-  # (v3.4.0 == 95b2bbd1, #423)
-  git init ~/precice-src && ( cd ~/precice-src \\
-    && git remote add origin https://github.com/precice/precice.git \\
-    && git fetch --depth 1 origin 95b2bbd16bd1ec1f410d9f11ce4e8a06fcb4bed4 \\
-    && git checkout FETCH_HEAD )
+  # Clone the tag, then VERIFY the commit: preCICE derives its version from tags, so a
+  # bare-SHA checkout builds a library the adapter cannot link. A moved tag fails here (#423).
+  git clone --depth 1 --branch v3.4.0 https://github.com/precice/precice.git ~/precice-src
+  [ "$(git -C ~/precice-src rev-parse HEAD)" = 95b2bbd16bd1ec1f410d9f11ce4e8a06fcb4bed4 ] \\
+    || { echo "preCICE v3.4.0 moved off the pinned commit"; exit 1; }
   cmake -S ~/precice-src -B ~/precice-src/build -DCMAKE_BUILD_TYPE=Release \\
         -DCMAKE_INSTALL_PREFIX=$pserial -DPRECICE_FEATURE_MPI_COMMUNICATION=OFF \\
         -DPRECICE_FEATURE_PETSC_MAPPING=OFF -DPRECICE_FEATURE_PYTHON_ACTIONS=OFF \\

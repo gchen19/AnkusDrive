@@ -410,8 +410,11 @@ def test_precice_is_pinned_by_commit_not_tag():
     text = _text()
     m = _re.search(r"ARG PRECICE_SHA=([0-9a-f]{40})", text)
     assert m, "preCICE must be pinned to a full commit SHA"
-    assert 'git fetch -q --depth 1 origin "$PRECICE_SHA"' in text
-    assert '--branch "$PRECICE_TAG"' not in text, "still cloning preCICE by tag"
+    # Fetched by tag, then VERIFIED against the commit: preCICE derives its version
+    # from tags, and a bare-SHA checkout builds a library the openfoam-adapter cannot
+    # link. Pinning is about what you ACCEPT, not how you fetch.
+    assert '[ "$got" = "$PRECICE_SHA" ]' in text, \
+        "the cloned preCICE commit must be checked against the pin"
 
 
 def test_the_openfoam_repo_key_is_pinned_not_piped_to_bash():
