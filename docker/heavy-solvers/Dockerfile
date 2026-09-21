@@ -51,12 +51,16 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
 # OpenFOAM's etc/bashrc derives the user dir from $USER, which docker leaves unset.
 ENV USER=root LANG=C.UTF-8
+# The ESI repo is added with its key PINNED (#423) — `curl … | bash`, which ESI
+# documents, runs whatever that URL serves today as root and then trusts its key for
+# every openfoam package. Same script the install path uses, so they cannot drift.
+COPY scripts/add-openfoam-repo.sh /tmp/add-openfoam-repo.sh
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl wget gnupg software-properties-common git bzip2 unzip file \
       python3 python3-venv python3-dev python3-pip \
       build-essential cmake gfortran pkg-config ccache flex bison \
- && curl -fsSL https://dl.openfoam.com/add-debian-repo.sh | bash \
+ && bash /tmp/add-openfoam-repo.sh \
  && if [ "$TARGETARCH" = "amd64" ]; then add-apt-repository -y ppa:elmer-csc-ubuntu/elmer-csc-ppa; fi \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -118,19 +122,34 @@ RUN git clone -q https://github.com/thliebig/openEMS-Project.git /src/openEMS-Pr
 # that recipe with container paths. Keep the two in step.
 FROM system AS fsi
 ARG JOBS=4
+# By COMMIT: a tag can be moved, and this library mediates every FSI solve. The tag
+# it pointed at when pinned is kept for readability (#423).
 ARG PRECICE_TAG=v3.4.0
+ARG PRECICE_SHA=95b2bbd16bd1ec1f410d9f11ce4e8a06fcb4bed4
 ARG CCX_ADAPTER_SHA=ff3950b9a23925d223d4cb45606272cbf57d626f
 ARG OF_ADAPTER_SHA=f6d7928c52df4bf109a4d5abd245531d6eeb136c
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # 1) serial libprecice (MPI OFF — see the conda-forge MPI double-load gotcha in the script)
+# Fetched BY TAG and then verified against the pinned commit — not fetched by bare
+# SHA. preCICE derives its version from git tags, and a detached commit with no tags
+# in the shallow clone builds a library the openfoam-adapter then fails to link
+# against ("undefined symbols"). Pinning is about what you ACCEPT, not how you fetch:
+# a moved tag fails the check below.
 RUN git clone -q --depth 1 --branch "$PRECICE_TAG" https://github.com/precice/precice.git /src/precice \
+ && got="$(git -C /src/precice rev-parse HEAD)" \
+ && { [ "$got" = "$PRECICE_SHA" ] || { echo "preCICE $PRECICE_TAG is $got, not the pinned $PRECICE_SHA — the tag moved" >&2; exit 1; }; } \
  && cmake -S /src/precice -B /src/precice/build -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/opt/fsi/precice -DPRECICE_FEATURE_MPI_COMMUNICATION=OFF \
       -DPRECICE_FEATURE_PETSC_MAPPING=OFF -DPRECICE_FEATURE_PYTHON_ACTIONS=OFF \
       -DBUILD_TESTING=OFF \
  && cmake --build /src/precice/build -j"$JOBS" && cmake --install /src/precice/build
 # 2) CalculiX 2.20 source + calculix-adapter -> ccx_preCICE
-RUN wget -q http://www.dhondt.de/ccx_2.20.src.tar.bz2 -O /src/ccx.tbz2 \
+# HTTPS + a pinned checksum (#423): this tarball becomes ccx_preCICE, the solid
+# participant of every FSI solve. Over plain http with no checksum, anyone between
+# the builder and dhondt.de chose that solver's source.
+ARG CCX_SRC_SHA256=63bf6ea09e7edcae93e0145b1bb0579ea7ae82e046f6075a27c8145b72761bcf
+RUN wget -q https://www.dhondt.de/ccx_2.20.src.tar.bz2 -O /src/ccx.tbz2 \
+ && echo "$CCX_SRC_SHA256  /src/ccx.tbz2" | sha256sum -c - \
  && mkdir -p /src/CalculiX && tar xjf /src/ccx.tbz2 -C /src/CalculiX --strip-components=2 ./CalculiX/ccx_2.20 \
  && git init -q /opt/fsi/calculix-adapter && cd /opt/fsi/calculix-adapter \
  && git remote add origin https://github.com/precice/calculix-adapter.git \
@@ -438,8 +457,8 @@ RUN case "$TARGETARCH" in amd64|arm64) ;; \
 # solvers therefore installs fewer packages, which is most of what a subset saves.
 COPY docker/heavy-solvers/runtime-deps /usr/local/share/ankusdrive/runtime-deps
 COPY tools/select_runtime_deps.sh /usr/local/bin/ankusdrive-select-deps
-# `curl | bash` for the ESI repo is what scripts/install-solvers.sh documents and what
-# the system stage above does; pinning that keyring is tracked in #423.
+COPY scripts/add-openfoam-repo.sh /tmp/add-openfoam-repo.sh
+# The ESI repo goes in with its key pinned (#423) — see scripts/add-openfoam-repo.sh.
 RUN set -eu \
  ; sel="" \
  ; [ "$WITH_OPENFOAM" = on ] && sel="$sel openfoam" || true \
@@ -453,7 +472,7 @@ RUN set -eu \
  ; echo "selected:$sel" \
  ; apt-get update \
  ; apt-get install -y --no-install-recommends ca-certificates curl gnupg software-properties-common \
- ; case "$sel" in *openfoam*|*fsi*) curl -fsSL https://dl.openfoam.com/add-debian-repo.sh | bash ;; esac \
+ ; case "$sel" in *openfoam*|*fsi*) bash /tmp/add-openfoam-repo.sh ;; esac \
  ; case "$sel:$TARGETARCH" in *elmer*:amd64) add-apt-repository -y ppa:elmer-csc-ubuntu/elmer-csc-ppa ;; esac \
  ; apt-get update \
  ; export RUNTIME_DEPS_DIR=/usr/local/share/ankusdrive/runtime-deps \

@@ -70,6 +70,99 @@ tracked in [epic #303](https://github.com/gchen19/AnkusDrive/issues/303); the
 original phase plan is kept as a design record at
 [`docs/archive/PUBLISHING_PLAN.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/archive/PUBLISHING_PLAN.md).
 
+### macOS quickstart — solvers in a container
+
+FreeCAD, CalculiX, SU2, PrusaSlicer and every pip-wheel family run **natively** on a
+Mac; the block above is all you need for those. What has no practical macOS build is
+the Linux solver stack — OpenFOAM, Elmer, YADE, openEMS, Bempp, preCICE,
+openInjMoldSim. Those run in a container, and AnkusDrive stays on the host and reaches
+into it. The image is multi-arch, so on Apple Silicon it runs **native, not emulated**.
+
+```bash
+# 1. A container engine: Docker Desktop, OrbStack, colima or podman.
+
+# 2. Pull the solver image (0.88 GB on Apple Silicon, 1.15 GB on Intel).
+docker pull ghcr.io/gchen19/ankusdrive-solvers:latest
+
+# 3. Check it is ours before running your geometry through it (see below).
+bash scripts/verify-container-image.sh
+
+# 4. Point AnkusDrive at the container substrate.
+export ANKUSDRIVE_SUBSTRATE=container
+#    optional: ANKUSDRIVE_CONTAINER_ENGINE=podman|nerdctl   (default docker)
+#    optional: ANKUSDRIVE_CONTAINER=<name>                  (default ankusdrive-solvers)
+
+# 5. Create the container. $TMPDIR must be mounted at the SAME path inside, because a
+#    case directory has to mean the same thing on both sides. On macOS $TMPDIR is a
+#    per-user /var/folders/... path — mount THAT, not /tmp.
+docker run -d --name ankusdrive-solvers \
+  --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  --network none --cap-drop ALL --security-opt no-new-privileges \
+  --read-only --tmpfs /tmp:rw,exec,size=2g \
+  -v "$TMPDIR:$TMPDIR" \
+  ghcr.io/gchen19/ankusdrive-solvers sleep infinity
+
+# 6. Export the in-container paths for the OpenFOAM-backed families. The image
+#    publishes them; YADE, Elmer, openEMS and Bempp need no export — AnkusDrive finds
+#    them by asking the container.
+docker exec ankusdrive-solvers env | grep -E \
+  '^ANKUSDRIVE_(OPENFOAM_PATH|OPENFOAM_BASHRC|FSI_OPENFOAM_BASHRC|CCX_PRECICE|PRECICE_LIB|OPENFOAM_ADAPTER_LIB|OPENINJMOLDSIM|OPENINJMOLDSIM_BASHRC)='
+
+# 7. Confirm.
+ankusdrive doctor                  # each family: ready via <solver> (in container)
+ankusdrive doctor --verify-image   # …and that the image is signed by this repo
+```
+
+The `run` flags are least privilege, and each is there because the solvers genuinely
+do not need what it removes — verified by running the live solver suites with them on.
+`--network none` in particular: nothing in a mesh is a reason to reach the internet.
+
+**Don't copy the image's `ANKUSDRIVE_FREECADCMD` or `ANKUSDRIVE_CALCULIX_PATH`** — those
+name paths inside the container, while FreeCAD and `ccx` run on your Mac.
+
+A `config.toml` written for a native install is the one trap here: its absolute paths
+are read as in-container paths. `ankusdrive doctor` now catches that and says so.
+
+The alternative substrate on macOS is a Multipass VM, which you provision yourself —
+[`docs/MACOS.md`](docs/MACOS.md) has the full per-solver reality on a Mac, and
+[`docs/CONTAINER_SUBSTRATE.md`](docs/CONTAINER_SUBSTRATE.md) the container path in depth.
+
+### The solver images, and checking they are ours
+
+| image | what it is | size |
+|---|---|---|
+| `ghcr.io/gchen19/ankusdrive-solvers` | **what you want**: solvers and their runtime libraries, nothing else | 1.15 GB amd64 / 0.88 GB arm64 |
+| `ghcr.io/gchen19/ankusdrive-heavy` | the CI image — also carries FreeCAD, the driver venv and every build toolchain, because the whole test suite runs inside it | 5.3 GB / 4.5 GB |
+
+Both are public, multi-arch (`linux/amd64` + `linux/arm64`, each built natively) and
+tagged `latest` plus `sha-<commit>`.
+
+Every published manifest is **signed through Sigstore** with a short-lived GitHub OIDC
+identity — no key to store or leak — and carries provenance naming the repository,
+workflow and commit that built it, plus a CycloneDX SBOM of what is inside:
+
+```bash
+bash scripts/verify-container-image.sh                       # the slim image, :latest
+bash scripts/verify-container-image.sh ghcr.io/gchen19/ankusdrive-solvers@sha256:<digest>
+```
+
+Needs the GitHub CLI (`gh` ≥ 2.49, authenticated). Verify a **digest** and then run
+that digest: verifying `:latest` today and pulling `:latest` next week are two
+different images. `ankusdrive doctor` prints the digest the running container was made
+from, and `--verify-image` checks it.
+
+There are three answers, and only one is alarming: **verified**; **unsigned** (an image
+you built yourself, or one published before signing existed — silence it with
+`ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE=1`); and **mismatch**, an image carrying provenance
+from somewhere else, which no setting silences. Verification never blocks a solve.
+
+**Building your own** — a subset, or with your own changes — takes minutes, because
+nothing is compiled (the prebuilt solver trees are copied):
+
+```bash
+tools/build_solver_image.sh --solvers "openfoam fsi" -t my-solvers:dev   # 0.69 GB
+```
+
 ### Windows quickstart (PowerShell)
 
 Windows is a first-class target (core CAD + CalculiX FEM run natively against a stock
@@ -295,14 +388,25 @@ reports the root and the live numbers under `cases`. Tune with `ANKUSDRIVE_CASE_
 reaping off with `ANKUSDRIVE_KEEP_SCRATCH=1`. A `case_dir` **you** supply is never
 touched, wherever it lives.
 
+Every solve result also carries `deck` — a manifest of what the solver was handed,
+taken the moment its first step launched, before it wrote any output into the same
+directory: `{digest, count, bytes, files: {path: hash}}`. A `session_transcript`
+compares it with `s.deck(...)` ahead of that solve's checks, so a replayed number that
+drifted arrives already explained — `~ case.sif` printed right above the failing check
+means the problem changed; `deck matches the recording` means it did not, and the
+solver or the environment did. CalculiX FEM results carry their `.inp` the same way.
+
 **Platform note:** the solver *discovery* layer is fully cross-platform (per-OS install
 dirs, Windows `PATHEXT`/`.exe`, env overrides), so `ankusdrive doctor` gives an honest report
 on macOS/Linux/Windows. The **pip-wheel** families (MBD, topology, optics, fluids) install
 identically everywhere. The **native-binary** families differ by OS — CalculiX ships inside
 every FreeCAD install; SU2 and PrusaSlicer have good Windows/macOS binaries; Elmer has a
 portable Windows zip but no macOS binaries; the
-**OpenFOAM-backed** families (CFD, FSI, injection molding) still rely on a Linux shell +
-linker glue and are Linux/WSL/Docker for now. See
+**OpenFOAM-backed** families (CFD, FSI, injection molding) — plus YADE, openEMS and
+Bempp — rely on a Linux shell + linker glue. On macOS they run through the **signed
+solver container**, native on Apple Silicon and with no source builds: see
+[macOS quickstart](#macos-quickstart--solvers-in-a-container). On Windows they run
+through WSL. See
 [`docs/WINDOWS.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/WINDOWS.md) and [`docs/MACOS.md`](https://github.com/gchen19/AnkusDrive/blob/main/docs/MACOS.md) for the full
 per-solver reality and setup on each OS.
 

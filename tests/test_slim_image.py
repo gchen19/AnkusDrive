@@ -379,6 +379,99 @@ def test_doctor_reports_the_image_the_solvers_run_from():
         "doctor must print the command that checks the digest it just printed"
 
 
+# --- build inputs: what the image is made OF (#423) --------------------------------
+
+def test_no_build_input_is_fetched_over_plain_http():
+    """Plain http means anyone on the path chooses what gets compiled into a solver.
+    The CalculiX source became ccx_preCICE — the solid participant of every FSI solve."""
+    for f in (DOCKERFILE, REPO / "scripts" / "install-solvers.sh",
+              REPO / "scripts" / "add-openfoam-repo.sh",
+              REPO / "tools" / "build_openinjmoldsim.sh"):
+        if not f.is_file():
+            continue
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            assert "http://" not in line, f"{f.name}:{i} fetches over plain http: {line.strip()}"
+
+
+def test_the_calculix_source_is_checksummed():
+    text = _text()
+    assert "CCX_SRC_SHA256=" in text, "the CalculiX tarball must be pinned by checksum"
+    assert "sha256sum -c -" in text, "…and the checksum must actually be verified"
+    sh = (REPO / "scripts" / "install-solvers.sh").read_text(encoding="utf-8")
+    assert "sha256sum -c -" in sh, \
+        "the recipe users copy must verify it too, or only CI is protected"
+
+
+def test_precice_is_pinned_by_commit_not_tag():
+    """A tag can be moved; this library mediates every FSI solve."""
+    import re as _re
+    text = _text()
+    m = _re.search(r"ARG PRECICE_SHA=([0-9a-f]{40})", text)
+    assert m, "preCICE must be pinned to a full commit SHA"
+    # Fetched by tag, then VERIFIED against the commit: preCICE derives its version
+    # from tags, and a bare-SHA checkout builds a library the openfoam-adapter cannot
+    # link. Pinning is about what you ACCEPT, not how you fetch.
+    assert '[ "$got" = "$PRECICE_SHA" ]' in text, \
+        "the cloned preCICE commit must be checked against the pin"
+
+
+def test_the_openfoam_repo_key_is_pinned_not_piped_to_bash():
+    """`curl … | bash` runs whatever that URL serves today, as root, and apt then
+    trusts the key it installs — for every OpenFOAM package, on every image built
+    afterwards."""
+    script = REPO / "scripts" / "add-openfoam-repo.sh"
+    assert script.is_file(), "no pinned repo script"
+    body = script.read_text(encoding="utf-8")
+    assert "PUBKEY_SHA256=" in body and "PUBKEY_FPR=" in body, \
+        "pin both: a checksum catches a mangled download, a fingerprint a different key"
+    assert "signed-by=" in body, \
+        "scope the key to this repo — trusted.gpg.d lets it vouch for anything"
+    text = _text() + (REPO / "scripts" / "install-solvers.sh").read_text(encoding="utf-8")
+    assert "add-debian-repo.sh | bash" not in text
+    assert "add-debian-repo.sh | sudo bash" not in text
+
+
+# --- runtime privilege (#423) ------------------------------------------------------
+
+def test_the_documented_run_command_is_least_privilege():
+    import subprocess
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, %r)\n"
+         "import os; os.environ['ANKUSDRIVE_SUBSTRATE']='container'\n"
+         "from ankusdrive import solvers; print(solvers.container_run_command())"
+         % str(REPO)],
+        capture_output=True, text=True, cwd=str(REPO))
+    cmd = out.stdout
+    for flag in ("--network none", "--cap-drop ALL", "--security-opt no-new-privileges",
+                 "--read-only", "--tmpfs /tmp", '--user "$(id -u):$(id -g)"'):
+        assert flag in cmd, f"the documented run command lacks {flag}: {cmd}"
+
+
+def test_the_docs_show_the_same_flags_as_the_code():
+    """A hardened command in code and a permissive one in the docs teaches the docs."""
+    doc = (REPO / "docs" / "CONTAINER_SUBSTRATE.md").read_text(encoding="utf-8")
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    for where, body in (("CONTAINER_SUBSTRATE.md", doc), ("README.md", readme)):
+        run = body[body.index("docker run -d --name ankusdrive-solvers"):][:700]
+        for flag in ("--network none", "--cap-drop ALL", "--read-only", "--tmpfs /tmp"):
+            assert flag in run, f"{where}'s run command lacks {flag}"
+
+
+def test_the_image_is_scanned_for_secrets_and_cves():
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    assert "\n  scan:" in wf, "no scan job"
+    job = wf[wf.index("\n  scan:"):]
+    assert "--scanners secret --exit-code 1" in job, \
+        "a secret in a published image must fail the build — there is no acceptable number"
+    assert "--severity CRITICAL --ignore-unfixed" in job, \
+        "the CVE gate is fixable CRITICALs; failing on unfixable ones wedges the pipeline"
+    assert "upload-sarif" in job, "CVEs should land in code scanning, not just a log"
+    assert (REPO / ".trivyignore").is_file(), "waivers need a reviewed home"
+
+
 def _discover():
     g = globals()
     return [(n, g[n]) for n in sorted(g) if n.startswith("test_") and callable(g[n])]

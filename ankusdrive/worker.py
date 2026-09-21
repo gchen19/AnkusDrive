@@ -13357,6 +13357,9 @@ def _fem_ccx_exec(ccx, inp, omp_threads):
     cwd or environment change. Returns {returncode, stdout, stderr}."""
     import subprocess
     env = dict(os.environ, OMP_NUM_THREADS=str(omp_threads))
+    # ccx's whole input is the .inp; the workdir also holds the last run's .frd/.dat,
+    # which are not this run's deck (#437)
+    _cases.snapshot(os.path.dirname(inp), only=[os.path.basename(inp)])
     proc = subprocess.run(
         [ccx, "-i", os.path.splitext(os.path.basename(inp))[0]],
         cwd=os.path.dirname(inp), env=env, capture_output=True, text=True,
@@ -15497,11 +15500,13 @@ def _h_slice_gcode_submit(p):
 
     def _work():
         import subprocess
+        _cases.snapshot(work_dir)
         proc = subprocess.run(argv, capture_output=True, text=True)
         out = {
             "ok": proc.returncode == 0,
             "returncode": proc.returncode,
             "solver": "prusaslicer",
+            "case_dir": work_dir,
             "gcode_path": gcode_path,
             "stdout_tail": ((proc.stdout or "") + (proc.stderr or ""))[-2000:],
         }
@@ -17024,6 +17029,7 @@ def _run_solver(solver, argv, cwd=None, **kw):
     which the container sees at the same path."""
     import subprocess
     from ankusdrive import solvers
+    _cases.snapshot(cwd)                   # the deck, before the solver writes into it
     return subprocess.run(solvers.solver_argv(solver, argv, cwd), cwd=cwd, **kw)
 
 
@@ -17365,6 +17371,7 @@ def _molding_warpage_submit(p, info):
     def _work():
         import subprocess
         argv = [ccx_bin] + built["argv"][1:]
+        _cases.snapshot(case_dir)
         proc = subprocess.run(argv, cwd=case_dir, capture_output=True, text=True)
         parsed = _warp.parse_warp_frd(
             os.path.join(case_dir, built["job_name"] + ".frd"),
@@ -18555,6 +18562,7 @@ def _run_foam(case_dir, argv_list, env_bashrc, unset_sigfpe=False):
     asks for. ``set -o pipefail`` keeps the tee from masking a solver failure: without
     it the pipeline's status is tee's, so a crashed app would report success and the
     chain would keep going."""
+    _cases.snapshot(case_dir)              # the deck, before the first app writes into it
     import subprocess
 
     from ankusdrive import solvers
@@ -18700,6 +18708,7 @@ def _openfoam_submit(p, kind):
                 cfg = solvers.su2_case_config(case_dir)
                 if cfg:
                     argv.append(cfg)
+            _cases.snapshot(case_dir)
             rc, tail = solvers.run_argvs(case_dir, [argv])
         return {
             "ok": rc == 0,
@@ -19092,6 +19101,7 @@ def _cfd_channel_su2_submit(p):
         "n_cells")})
 
     def _work():
+        _cases.snapshot(case_dir)
         rc, tail = solvers.run_argvs(case_dir, [[info["path"], "flow.cfg"]])
         hist = _su2.read_history(case_dir)
         out = {
@@ -21750,7 +21760,11 @@ def _main():
                     "traceback": "",
                 }})
                 continue
-            _respond({"id": mid, "result": HANDLERS[method](params)})
+            # A request is the main thread's unit of work the way a job is a
+            # thread's: a synchronous solve's deck is recorded during it and attached
+            # to its result here, and nothing carries over to the next request (#437).
+            _cases.forget()
+            _respond({"id": mid, "result": _cases.attach(HANDLERS[method](params))})
         except Exception as e:
             _respond({"id": mid, "error": {
                 "type": type(e).__name__,

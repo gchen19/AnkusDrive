@@ -175,6 +175,8 @@ def run_coupled_fsi(case_dir: str, *, timeout_s: int = 600) -> dict:
     Returns ``{ok, returncode_fluid, returncode_solid, time_windows, tip_disp_m,
     tip_history, coupling_converged, log_tail (Solid), fluid_log_tail}``. ``ok`` is true when both
     participants exit 0 and preCICE reached the final time window."""
+    from .. import cases as _cases
+    _cases.snapshot(case_dir)              # the deck, before blockMesh writes into it
     fluid = os.path.join(case_dir, "fluid-openfoam")
     solid = os.path.join(case_dir, "solid-calculix")
     # The fluid must source the OpenFOAM version the preCICE adapter was built

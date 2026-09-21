@@ -268,7 +268,7 @@ def test_the_module_is_freecad_free_and_stdlib_only():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert "FreeCAD" not in imported and "Part" not in imported, imported
-    assert imported <= {"os", "re", "shutil", "tempfile", "threading", "time",
+    assert imported <= {"hashlib", "os", "re", "shutil", "tempfile", "threading", "time",
                         "__future__", "ankusdrive"}, imported
 
 

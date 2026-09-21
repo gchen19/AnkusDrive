@@ -111,7 +111,7 @@ jobs:
       # Digest-pinned multi-arch manifest: a rebuild of the image never changes what
       # these lanes test until this line changes. heavy-image.yml's `manifest` job
       # summary prints the digest to pin. Keep heavy-solves-container's pin in lockstep.
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:995d7cbe51bfccec0fe7d22d36da4de987434c26a7fc40f45f3545e53a9f4641  # sha-7c1ae82, linux/amd64 + linux/arm64
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:70fcf977584c7c4981f925ba3cb300ec4d2d1b72854e9ae7c5398a321ad11e68  # sha-d636ac2, linux/amd64 + linux/arm64 — SIGNED (#423)
     steps:
       # Not `container:` — that pulls the image before any step, leaving no chance to
       # free the runner's disk first, and this image plus the suite's case dirs need it.
@@ -133,15 +133,14 @@ jobs:
       # signed, not merely one that was in the registry. It runs before the pull, so a
       # digest that cannot be attributed never reaches a solve.
       #
-      # REQUIRE_ATTESTATION is 0 until the pins move to an image published AFTER
-      # signing landed: today's pinned digest predates it and has nothing to verify,
-      # and a gate that fails on that would only teach everyone to ignore it. The
-      # pin-bump PR flips this to 1 — and that is the commit where this gate is
-      # actually proven, because the new digest is signed.
+      # REQUIRE_ATTESTATION is 1 as of the pin above, which is the first signed image
+      # (#423): an unattributable digest now FAILS the lane rather than warning. It
+      # was 0 while the pin predated signing — a gate that fails on a digest with
+      # nothing to verify only teaches people to ignore it.
       - name: Verify the pinned image's provenance
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REQUIRE_ATTESTATION: "0"
+          REQUIRE_ATTESTATION: "1"
         run: |
           if gh attestation verify "oci://$HEAVY_IMAGE" --repo "$GITHUB_REPOSITORY" \
                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/heavy-image.yml"; then
@@ -187,7 +186,7 @@ jobs:
       RUN_HEAVY_SOLVES: "1"
       ANKUSDRIVE_SUBSTRATE: container
       # keep in lockstep with heavy-solves-hosted's pin
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:995d7cbe51bfccec0fe7d22d36da4de987434c26a7fc40f45f3545e53a9f4641  # sha-7c1ae82, linux/amd64 + linux/arm64
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:70fcf977584c7c4981f925ba3cb300ec4d2d1b72854e9ae7c5398a321ad11e68  # sha-d636ac2, linux/amd64 + linux/arm64 — SIGNED (#423)
     defaults:
       run:
         shell: bash -el {0}   # login shell so the conda env stays activated
@@ -234,15 +233,14 @@ jobs:
       # signed, not merely one that was in the registry. It runs before the pull, so a
       # digest that cannot be attributed never reaches a solve.
       #
-      # REQUIRE_ATTESTATION is 0 until the pins move to an image published AFTER
-      # signing landed: today's pinned digest predates it and has nothing to verify,
-      # and a gate that fails on that would only teach everyone to ignore it. The
-      # pin-bump PR flips this to 1 — and that is the commit where this gate is
-      # actually proven, because the new digest is signed.
+      # REQUIRE_ATTESTATION is 1 as of the pin above, which is the first signed image
+      # (#423): an unattributable digest now FAILS the lane rather than warning. It
+      # was 0 while the pin predated signing — a gate that fails on a digest with
+      # nothing to verify only teaches people to ignore it.
       - name: Verify the pinned image's provenance
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REQUIRE_ATTESTATION: "0"
+          REQUIRE_ATTESTATION: "1"
         run: |
           if gh attestation verify "oci://$HEAVY_IMAGE" --repo "$GITHUB_REPOSITORY" \
                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/heavy-image.yml"; then
@@ -390,7 +388,7 @@ jobs:
       packages: read
     env:
       # keep in lockstep with heavy-solves-hosted's pin
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:995d7cbe51bfccec0fe7d22d36da4de987434c26a7fc40f45f3545e53a9f4641  # sha-7c1ae82, linux/amd64 + linux/arm64
+      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:70fcf977584c7c4981f925ba3cb300ec4d2d1b72854e9ae7c5398a321ad11e68  # sha-d636ac2, linux/amd64 + linux/arm64 — SIGNED (#423)
     outputs:
       key: ${{ steps.key.outputs.key }}
     steps:

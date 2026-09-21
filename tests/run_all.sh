@@ -104,8 +104,8 @@ python3 tests/test_windows_support.py
 
 echo
 echo "== MCP server boots over stdio with FreeCAD unresolved (#279) =="
-# Needs the venv (the `mcp` client SDK); the system python3 has no deps, and the test
-# SKIPs cleanly there rather than failing.
+# Needs the `mcp` SDK, not FreeCAD. $VENV_PY may be FreeCAD's bundled python (no mcp);
+# the test probes for an interpreter that has it (#317) and SKIPs only if none does.
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_mcp_boot.py; else python3 tests/test_mcp_boot.py; fi
 
 echo
@@ -142,6 +142,14 @@ echo "== Solver case directories: one root, a stated retention (#437) =="
 # that no handler still strands a directory); the worker tier needs FreeCAD and runs a
 # real solve to check its case_dir lands under the root and survives the job.
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_case_cleanup.py; else python3 tests/test_case_cleanup.py; fi
+
+echo
+echo "== Solver decks: a drifted replay says which input file moved (#437) =="
+# Static tier (the manifest, once-per-job snapshots, the transcript comparison, and
+# an AST sweep that every solver launch records its deck); the worker tier runs a real
+# CalculiX FEM solve, and the solver tier Elmer plus a recorded transcript replayed
+# with one input changed.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_case_deck.py; else python3 tests/test_case_deck.py; fi
 
 echo
 echo "== Analysis provenance: a transcript that audits simulations and solvers (#433) =="

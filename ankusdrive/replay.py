@@ -54,6 +54,10 @@ that script. It is pure Python (no FreeCAD, no ``mcp``):
   ``s.provenance(PROVENANCE)``, which re-resolves all of it and prints each
   difference. A replay on a different Elmer is not a failure; it is the finding.
 * **``run_script`` carries its content hash**, so a report can cite the code by digest.
+* **Every solve's deck is compared.** A result's ``deck`` — the manifest of its case
+  directory at the moment its first solver step launched (#437) — becomes
+  ``s.deck(...)`` ahead of that result's checks, so a replay whose number drifts has
+  already printed whether the solver was handed the same files, and which one moved.
 * **What the script can't reproduce is stated**, as comments in the script and in
   ``warnings``: ``run_script`` code, failed calls (kept as comments), a worker
   replaced without a ``restart_worker`` call, a truncated journal, and prerequisites.
@@ -224,6 +228,38 @@ class Session:
             print(f"  ! {line}")
         if strict:
             raise ReplayError("environment differs from the recording: " + "; ".join(lines))
+        return lines
+
+    def deck(self, result: Any, path, recorded: dict, strict: bool = False) -> list:
+        """Compare the deck a solve was handed now with the one it was handed in the
+        recording, and print which files differ. Returns the difference lines.
+
+        A solve's result carries ``deck`` — a manifest of its case directory taken
+        the moment its first solver step launched (#437). When a replayed number then
+        drifts, this line, printed just above the ``s.check`` that fails, says whether
+        the deck moved and which file: a changed ``case.sif`` is a different problem,
+        an identical deck with a different number is the solver or the environment.
+        Prints rather than raises by default, like :meth:`provenance`; ``strict=True``
+        raises on any difference."""
+        from ankusdrive import cases
+        keys = (path,) if isinstance(path, (str, int)) else tuple(path)
+        current = result
+        try:
+            for k in keys:
+                current = current[k]
+        except (KeyError, IndexError, TypeError):
+            current = None
+        lines = cases.diff(recorded, current if isinstance(current, dict) else None)
+        if not lines:
+            print(f"{self._where()}deck matches the recording "
+                  f"({recorded.get('count')} files)")
+            return lines
+        print(f"{self._where()}deck DIFFERS from the recording —")
+        for line in lines:
+            print(f"  {line}")
+        if strict:
+            raise ReplayError(f"{self._where()}deck differs from the recording: "
+                              + "; ".join(lines))
         return lines
 
 
@@ -465,6 +501,42 @@ def _checks(result, wide: bool = False) -> list:
             if wide or _CHECK_KEY.match(str(k)):
                 out.append((prefix + (k,), v))
     return out
+
+
+def _decks(result, _path=(), _depth=0) -> list:
+    """[(path, manifest)] for every solver deck a result carries (#437): a ``deck``
+    dict beside a ``case_dir``, at the top level, inside a job's ``result``, or in a
+    list of cases (a mesh-independence ladder carries one per level)."""
+    out = []
+    if _depth > 4:
+        return out
+    if isinstance(result, dict):
+        d = result.get("deck")
+        if isinstance(d, dict) and "digest" in d:
+            out.append((_path + ("deck",), d))
+        for k, v in result.items():
+            if k != "deck" and isinstance(v, (dict, list)):
+                out.extend(_decks(v, _path + (k,), _depth + 1))
+    elif isinstance(result, list):
+        for i, v in enumerate(result):
+            if isinstance(v, (dict, list)):
+                out.extend(_decks(v, _path + (i,), _depth + 1))
+    return out
+
+
+def _deck_literal(m: dict) -> list:
+    """A deck manifest as source lines, one file per line — it is read by a person
+    diffing two transcripts as much as by :meth:`Session.deck`."""
+    lines = ["{"]
+    for k in ("digest", "count", "bytes", "truncated"):
+        if k in m:
+            lines.append(f"    {k!r}: {m[k]!r},")
+    if isinstance(m.get("files"), dict):
+        lines.append("    'files': {")
+        lines += [f"        {rel!r}: {h!r}," for rel, h in sorted(m["files"].items())]
+        lines.append("    },")
+    lines.append("}")
+    return lines
 
 
 def _expects(result) -> list:
@@ -729,9 +801,10 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
         wide = kind[seq] == "fetch" or tool in analysis
         checks = _checks(result, wide=wide) if checkpoints else []
         expects = _expects(result) if (checkpoints and wide) else []
+        decks = _decks(result) if checkpoints else []
         job_binds = [v for v, p in binds if p and p[-1] == "job_id"]
 
-        if used_binds or checks or expects or job_binds:
+        if used_binds or checks or expects or decks or job_binds:
             rv = f"r{seq}"
             body.append(f"{rv} = {call}")
             for v, p in binds:
@@ -743,6 +816,13 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
                 var_of_binder[(seq, v)] = var
                 if v in job_binds:
                     submitted[v] = (seq, var)
+            # the deck first: when a check below fails, what the solver was handed
+            # has already been compared and printed right above it
+            for path, m in decks:
+                lit = _deck_literal(m)
+                body.append(f"s.deck({rv}, {path!r}, {lit[0]}")
+                body += lit[1:-1]
+                body.append(lit[-1] + ")")
             for path, v in checks:
                 keyexpr = repr(path[0]) if len(path) == 1 else repr(path)
                 body.append(f"s.check({rv}, {keyexpr}, {v!r}" + (f", rel={tol})" if tol != geometry_tol else ")"))

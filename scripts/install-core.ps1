@@ -271,8 +271,13 @@ if (-not $SkipDoctor) {
         Write-Step 'MCP stdio boot check'
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
+        # Pin the check to THIS venv (#317): the test otherwise goes looking for any
+        # interpreter with `mcp`, which would pass for a venv that has none.
+        $env:ANKUSDRIVE_TEST_MCP_THIS_PYTHON = '1'
         & $venvPy $bootTest
-        if ($LASTEXITCODE -ne 0) {
+        $bootRc = $LASTEXITCODE
+        Remove-Item Env:ANKUSDRIVE_TEST_MCP_THIS_PYTHON -ErrorAction SilentlyContinue
+        if ($bootRc -ne 0) {
             $mcpBootFailed = $true
             Write-Warning 'the MCP server did not complete a stdio handshake - registering it with a host will fail.'
         }
