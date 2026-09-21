@@ -42,6 +42,12 @@ PY=/Applications/FreeCAD.app/Contents/Resources/bin/python \
 The same trap exists on Windows (FreeCAD bundles its own Python there too). On Linux it
 depends on how FreeCAD was installed — see [SOLVERS_LINUX.md](SOLVERS_LINUX.md).
 
+Installing into the bundle breaks its code signature seal. That is harmless as long as
+the bundle has run before or during the install, and this recipe guarantees it: the pip
+command itself is the bundle's first exec. Why the order matters, and what to do if
+Gatekeeper ever rejects the bundle, is in
+[MACOS.md, "Gatekeeper and quarantine"](MACOS.md#gatekeeper-and-quarantine).
+
 FreeCAD's `bin/pip` shim is broken (`ImportError: No module named _internal.cli.main`) —
 use `python -m pip`.
 

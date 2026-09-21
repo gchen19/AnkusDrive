@@ -60,39 +60,50 @@ the bundle's own `Contents/Resources/bin/python` without a `sys.path` shim. That
 nothing in AnkusDrive (or its tests) imports FreeCAD in-process; everything goes through
 the `freecadcmd` worker subprocess.
 
-### Gatekeeper and quarantine: no action needed
+### Gatekeeper and quarantine
 
-A browser-downloaded FreeCAD carries `com.apple.quarantine`. That does **not** block
-an MCP host from launching `freecadcmd`, even on the very first run, with nobody at a
-terminal to answer a prompt. Verified 2026-09-21 ([#310](https://github.com/gchen19/AnkusDrive/issues/310)):
+A browser-downloaded FreeCAD carries `com.apple.quarantine`. On its own, that does **not**
+stop an MCP host from launching `freecadcmd`, even on the very first run, with nobody at a
+terminal to answer a prompt. Verified 2026-09-21 on Apple Silicon
+([#310](https://github.com/gchen19/AnkusDrive/issues/310)). The FreeCAD 1.1.3 arm64 DMG had
+never run on that Mac, and each copy came out of a quarantined DMG, so every file carried the
+never-approved flag `0083`. The MCP server was started by a `launchctl submit` job: no TTY,
+parent launchd, and not the child of a terminal that could lend its Developer Tools
+exemption. That is the same shape as a server Claude Desktop spawns.
 
-- FreeCAD 1.1.3 arm64 DMG, a build never run on that Mac. The bundle was copied out of a
-  quarantined DMG so every file carried the never-approved flag `0083`.
-- The MCP server was started by a `launchctl submit` job: no TTY, parent launchd, and not a
-  child of a terminal that could lend its Developer Tools exemption. That is the same
-  shape as a server Claude Desktop spawns.
-- `ping`, `setup_status(verify_freecad_boot=true)` (version 1.1.3), and a `run_script`
-  that built a box all succeeded. syspolicyd *did* assess the exec
-  (`GK evaluateScanResult`) and passed it on FreeCAD's notarized Developer ID
-  (`spctl` reports `source=Notarized Developer ID`). No dialog appeared, and the
-  quarantine flag stayed `0083`, so no user approval was needed or recorded.
+| Bundle state when the MCP host launches it | Result |
+|---|---|
+| Untouched, never run | ✅ syspolicyd scans it, passes it on the notarized Developer ID, no dialog |
+| Solver wheels pip-installed into it from a terminal first (the [SOLVERS_MACOS.md](SOLVERS_MACOS.md) recipe) | ✅ the pip run is the bundle's first exec and passes the same way; the later MCP launch is not rescanned |
+| A file added inside it **before it had ever run** | ❌ "cannot be verified" dialog, then `Terminating process due to Gatekeeper rejection` |
 
-The pass depends on the bundle's notarized signature staying intact, and that part was
-verified too. A second quarantined copy had one file inside `FreeCAD.app` edited *before*
-its first launch (`spctl`: `a sealed resource is missing or invalid`). Launched the same
-way, syspolicyd logged `Prompt shown, waiting for response` and put the "cannot be
-verified" dialog on the desktop. The worker hung until
-`Terminating process due to Gatekeeper rejection`. The MCP host sees
+The failing row is what a broken code seal looks like to Gatekeeper
+(`spctl -a -vv`: `a sealed resource is missing or invalid`). The MCP host sees
 `ping: no response within 15.0s`, then `WorkerDied`, and
-`setup_status(verify_freecad_boot=true)` reports
-`resolved but did not boot: WorkerDied`, with nothing that points at Gatekeeper. Once
-FreeCAD has run, a later edit to the bundle no longer matters, which is why an installed
-bundle modified after first launch keeps working. If a first launch dies like this, clear
-the attribute:
+`setup_status(verify_freecad_boot=true)` reports `resolved but did not boot: WorkerDied`,
+with nothing that points at Gatekeeper.
+
+Installing solver wheels into the bundle, as the solver guide says to, **does** break the
+seal. It is harmless only because the bundle has already passed once by then; the pip
+command itself runs the bundle's `python`. Keep that order. Don't copy files into
+`FreeCAD.app` by any other route before FreeCAD has run. On the reference Mac, a bundle
+modified this way on 2026-08-30 still launched after a 2026-09-16 reboot.
+
+**If a launch is ever rejected, don't just clear the quarantine flag.** A broken seal
+means something changed the bundle after FreeCAD signed it, and Gatekeeper can't tell your
+own `pip install` from a tampered `freecadcmd`. Look at what changed first:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/FreeCAD.app
+codesign --verify --deep --strict -v /Applications/FreeCAD.app 2>&1 | grep -v __pycache__
 ```
+
+- If every line is `file added: …/site-packages/…` (or `…/bin/…` console scripts) from
+  packages you installed yourself, the change is yours. Clearing the flag is a deliberate
+  choice to trust it:
+  `xattr -dr com.apple.quarantine /Applications/FreeCAD.app`
+- If anything is `file modified` or outside what you installed, don't clear the flag.
+  Download FreeCAD again from the official release, check it against the published
+  `.dmg-SHA256.txt`, and reinstall the solver wheels.
 
 ## `ankusdrive doctor`
 
