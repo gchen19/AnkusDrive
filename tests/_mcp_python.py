@@ -1,6 +1,8 @@
 """Find an interpreter that can import `mcp`, for the tests that need one (#288, #317).
 
 Not a test file: the leading underscore keeps it out of every runner's discovery.
+Not named ``_interpreters``: that is a CPython 3.13+ stdlib module (PEP 734),
+built in on Windows, so it wins over anything on sys.path.
 A test script imports it as a sibling (``tests/`` is ``sys.path[0]`` when a script
 under it is run directly) BEFORE importing ``mcp`` itself.
 

@@ -23,7 +23,7 @@ necessarily one that can import ``mcp``: on the self-hosted Linux runner
 ``run_all.sh`` hands it ``.venv/bin/python3``, which ``tests/setup_local.sh`` makes a
 symlink to FreeCAD's bundled python — numpy and Pillow, never ``mcp`` — so this
 test used to SKIP there on every run while the lane reported green. It now uses
-``tests/_interpreters.py``, shared with test_mcp.py: this interpreter if it has
+``tests/_mcp_python.py``, shared with test_mcp.py: this interpreter if it has
 ``mcp``, else re-exec into the first probed candidate that does (repo venv, then
 ``python3``/``python`` from PATH). It SKIPs, naming every interpreter it asked, only
 when ``mcp`` is importable in none of them.
@@ -39,9 +39,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / "tests"))   # the shared _interpreters helper
+sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
 
-from _interpreters import ensure_mcp_interpreter  # noqa: E402
+from _mcp_python import ensure_mcp_interpreter  # noqa: E402
 
 # None = this interpreter has `mcp`; else the list asked (the re-exec, when one
 # qualifies, happens inside and never returns here).

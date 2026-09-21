@@ -14,7 +14,7 @@ was wrong three ways: POSIX-only, so Windows could not run the file at all even
 though the MCP surface is fully supported there; dependent on a ``.venv`` existing
 inside the repo, which is false for a pip/pipx install and for any git worktree;
 and free to disagree with the interpreter actually running the test. It now uses
-``tests/_interpreters.py`` (shared with test_mcp_boot.py since #317): this
+``tests/_mcp_python.py`` (shared with test_mcp_boot.py since #317): this
 interpreter if it has ``mcp``, else re-exec into the first probed candidate that
 does, else SKIP listing every interpreter it asked.
 
@@ -31,9 +31,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / "tests"))   # the shared _interpreters helper
+sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
 
-from _interpreters import ensure_mcp_interpreter  # noqa: E402
+from _mcp_python import ensure_mcp_interpreter  # noqa: E402
 
 _tried = ensure_mcp_interpreter(__file__)
 if _tried is not None:
