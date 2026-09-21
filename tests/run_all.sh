@@ -469,7 +469,7 @@ echo "== Degenerate subtractions (issue #282 — cut that ate the base / cut tha
 python3 tests/test_boolean_degenerate.py
 
 echo
-echo "== Default shape selection (issue #414 — export/save/release/add_part: consumed base picked, crash after FEM mesh) =="
+echo "== Default shape selection + interchange geometry (issues #414, #434 — consumed base picked, crash after FEM mesh, assembly STEP with no geometry) =="
 python3 tests/test_export_shape_default.py
 
 echo

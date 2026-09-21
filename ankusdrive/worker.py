@@ -104,6 +104,7 @@ def _set_visibility(obj, visible):
 
 # Stamped-property names (AD_*, with the pre-rename DP_* fallback) live in a
 # FreeCAD-free sibling so the fast lane can test them — see ankusdrive/props.py.
+from ankusdrive import export_check as _export_check  # noqa: E402
 from ankusdrive.props import (  # noqa: E402
     prop_name as _prop_name,
     prop_has as _prop_has,
@@ -3446,6 +3447,35 @@ def _default_export_object(doc):
     return candidates[0]
 
 
+# An IGES that lost its geometry is tiny; a real one is tens of kB. IGES has no
+# cheap textual marker to scan for, so only files small enough to be suspicious
+# are read back.
+_IGES_SUSPICIOUS_BYTES = 4096
+
+
+def _assert_export_wrote_geometry(path, ext, shape, name):
+    """A STEP/IGES with no geometry in it must never be reported as a success (#434)."""
+    if not shape.Faces:
+        return
+    if ext in (".step", ".stp"):
+        wrote_geometry = _export_check.step_has_geometry(path)
+    elif os.path.getsize(path) > _IGES_SUSPICIOUS_BYTES:
+        wrote_geometry = True
+    else:
+        try:
+            probe = Part.Shape()
+            probe.read(path)
+            wrote_geometry = bool(probe.Faces)
+        except Exception:
+            wrote_geometry = False
+    if not wrote_geometry:
+        raise RuntimeError(
+            f"{ext} export of {name!r} wrote no geometry to {path!r} "
+            f"({os.path.getsize(path)} bytes) although its shape has "
+            f"{len(shape.Faces)} faces"
+        )
+
+
 @handler("export_shape")
 def _h_export_shape(p):
     """Export a Part-based object to STEP/IGES/BREP/STL. Format detected from path extension."""
@@ -3469,7 +3499,17 @@ def _h_export_shape(p):
     ext = os.path.splitext(path)[1].lower()
 
     if ext in (".step", ".stp", ".iges", ".igs"):
-        Part.export([obj], path)
+        # The RESOLVED shape, not the document object: Part.export() of an
+        # App::Part writes the assembly structure and drops every face with it
+        # (#434) -- 1.6 kB and unreadable, for a container of links and a
+        # container of plain features alike. For a single part the two paths
+        # write the same file, so nothing is given up by always taking this one.
+        shape = obj.Shape
+        if ext in (".step", ".stp"):
+            shape.exportStep(path)
+        else:
+            shape.exportIges(path)
+        _assert_export_wrote_geometry(path, ext, shape, obj.Name)
     elif ext == ".brep":
         obj.Shape.exportBrep(path)
     elif ext == ".stl":
