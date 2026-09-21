@@ -44,6 +44,9 @@ def _container_image_report(verify: bool):
     signed it (#423). The check reaches the network, so it never rides along on a
     default status call: `doctor --verify-image` / `setup_status(verify_image=True)`."""
     img = solvers.container_image()
+    if img:
+        # Local read, no network: what the container is allowed to do (#423).
+        img = {**img, "privileges": solvers.container_privileges()}
     if img and verify:
         img = {**img, "verification": solvers.verify_container_image()}
     return img
@@ -468,6 +471,12 @@ def _fmt_container_image(img: dict) -> list[str]:
     else:
         lines.append("        digest: none — built locally, so there is nothing "
                      "published to verify it against")
+    priv = img.get("privileges")
+    if priv and priv.get("loose"):
+        lines.append(f"{_MARK['unwired']}     more privilege than the solvers need: "
+                     + "; ".join(priv["loose"]))
+        lines.append("        Recreate it with the documented flags "
+                     "(docs/CONTAINER_SUBSTRATE.md) — nothing here needs the network.")
     v = img.get("verification")
     if not v:
         if digest:

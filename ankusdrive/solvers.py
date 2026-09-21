@@ -951,10 +951,26 @@ def container_run_command() -> str:
     points somewhere writable, since that uid has no home inside the image, and
     ``--tmpfs /tmp`` gives the solvers their own scratch: OpenMPI session files,
     openEMS simulation dirs and numba's cache all land there, and on a host whose
-    Docker disk is full each one fails looking like a solver bug (#422)."""
+    Docker disk is full each one fails looking like a solver bug (#422).
+
+    The rest is least privilege (#423), and each flag is here because the solvers
+    genuinely do not need what it removes — verified by running the live suites with
+    them on:
+
+      ``--network none``            no solver fetches anything; a mesh is not a reason
+                                    to reach the internet
+      ``--cap-drop ALL``            none of them needs a Linux capability
+      ``--security-opt no-new-privileges``  nothing inside should gain privilege
+      ``--read-only``               the image is prebuilt; everything written goes to
+                                    the case dir (your scratch) or /tmp (the tmpfs)
+
+    They are not a sandbox for hostile code — a bind-mounted scratch is still a hole,
+    and an agent chooses the geometry the solver reads. They are the difference
+    between a solver bug being contained and being a foothold."""
     return (f'{container_engine()} run -d --name {container_name()} '
             f'--user "$(id -u):$(id -g)" -e HOME=/tmp '
-            f'--tmpfs /tmp:rw,exec,size=2g '
+            f'--network none --cap-drop ALL --security-opt no-new-privileges '
+            f'--read-only --tmpfs /tmp:rw,exec,size=2g '
             f'-v "$TMPDIR:$TMPDIR" {_SOLVER_IMAGE} sleep infinity')
 
 
@@ -1293,6 +1309,79 @@ def verify_container_image(ref: str | None = None, *, timeout_s: float = 60.0) -
         return out
     out["status"], out["reason"] = _classify_verify_output(*result)
     return out
+
+
+def container_privileges() -> dict | None:
+    """How much the running solver container is allowed to do, against what the
+    documented `docker run` grants (#423): ``{network, root, capabilities, writable,
+    loose: [what is looser than documented]}``, or None when nothing is running.
+
+    Reported, never enforced. A user may have good reasons — an engine that cannot do
+    `--network none`, a container someone else created — and a solver that refuses to
+    run because its container is too permissive helps nobody. But a solver container
+    with the network up and root inside is worth saying out loud once."""
+    if not container_available():
+        return None
+    payload = _container_inspect_privileges(container_engine(), container_name())
+    if not payload:
+        return None
+    # "<network>|<user>|<capdrop json>|<readonly>" — see the exec below for why this
+    # is four fields and not one JSON object
+    parts = payload.strip().split("|")
+    if len(parts) != 4:
+        return None
+    import json as _json
+    net, user, caps_raw, readonly_raw = parts
+    try:
+        caps = _json.loads(caps_raw or "[]") or []
+    except (ValueError, TypeError):
+        caps = []
+    caps = [str(c).upper() for c in caps] if isinstance(caps, list) else []
+    readonly = readonly_raw.strip().lower() == "true"
+    out = {"network": net, "root": user in ("", "0", "root"),
+           "capabilities": "dropped" if "ALL" in caps else "default",
+           "writable": not readonly, "loose": []}
+    if net not in ("none",):
+        out["loose"].append("network is reachable (--network none)")
+    if out["root"]:
+        out["loose"].append('runs as root (--user "$(id -u):$(id -g)")')
+    if out["capabilities"] != "dropped":
+        out["loose"].append("keeps Linux capabilities (--cap-drop ALL)")
+    if out["writable"]:
+        out["loose"].append("root filesystem is writable (--read-only)")
+    return out
+
+
+def _container_inspect_privileges_exec(engine: str, name: str, timeout_s: float):
+    """``<engine> container inspect`` of the bits that say what the container may do."""
+    import subprocess
+    # Four fields joined, not one JSON object: docker's template engine has no `dict`
+    # function (podman/nerdctl differ again), and a format that fails to parse returns
+    # nothing — which would silently read as "nothing to report".
+    fmt = ('{{.HostConfig.NetworkMode}}|{{.Config.User}}'
+           '|{{json .HostConfig.CapDrop}}|{{.HostConfig.ReadonlyRootfs}}')
+    try:
+        proc = subprocess.run([engine, "container", "inspect", "--format", fmt, name],
+                              capture_output=True, text=True, timeout=timeout_s,
+                              stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _container_inspect_privileges(engine: str, name: str):
+    """Cached :func:`_container_inspect_privileges_exec`. THE INJECTABLE SEAM."""
+    import time as _time
+    ttl = float(_config.get("ANKUSDRIVE_MULTIPASS_CACHE_S") or _VM_INFO_TTL_S)
+    key = (engine, name, "privileges")
+    now = _time.monotonic()
+    hit = _ctr_probe_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    timeout_s = float(_config.get("ANKUSDRIVE_MULTIPASS_TIMEOUT_S") or 5.0)
+    payload = _container_inspect_privileges_exec(engine, name, timeout_s)
+    _ctr_probe_cache[key] = (now + ttl, payload)
+    return payload
 
 
 def container_path_exists(path: str, *, is_dir: bool = False) -> bool:

@@ -1,0 +1,5 @@
+# Vulnerabilities accepted, each with a reason and a date. Reviewed when the scan
+# job flags something new; an entry with no reason is a bug, not a waiver (#423).
+#
+# Format: one CVE per line, optional trailing comment.
+# (empty — nothing waived yet)

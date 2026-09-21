@@ -141,9 +141,13 @@ system_guidance() {  # which: cfd|thermal|all
     cat <<'EOF'
 
 CFD (OpenFOAM / SU2) — system package, install manually then put on PATH:
-  Linux (OpenFOAM, openfoam.org):
-      sudo sh -c "wget -O - https://dl.openfoam.org/gpg.key | apt-key add -"
-      sudo add-apt-repository http://dl.openfoam.org/ubuntu
+  Linux (OpenFOAM, openfoam.org) — https + a scoped keyring, not apt-key (deprecated,
+  and a key in trusted.gpg.d can vouch for packages from ANY repo):
+      sudo install -d -m 0755 /etc/apt/keyrings
+      wget -qO- https://dl.openfoam.org/gpg.key \\
+        | sudo gpg --dearmor -o /etc/apt/keyrings/openfoam-org.gpg
+      echo "deb [signed-by=/etc/apt/keyrings/openfoam-org.gpg] https://dl.openfoam.org/ubuntu \\
+$(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/openfoam-org.list
       sudo apt-get update && sudo apt-get install -y openfoam11
       # then: source /opt/openfoam11/etc/bashrc   (puts foamRun/simpleFoam on PATH)
   conda (Linux):  conda install -c conda-forge openfoam
@@ -294,7 +298,10 @@ build_fsi() {
        bzip2   # bzip2 is NOT in the minimal Ubuntu cloud image (macOS Multipass); tar xjf the ccx src needs it
   # ESI OpenFOAM WITH dev headers + wmake (the apt 'openfoam' 1912 ships runtime
   # libs only — no headers/wmake, so the OF adapter cannot compile against it):
-  curl -s https://dl.openfoam.com/add-debian-repo.sh | sudo bash
+  # NOT \`curl … | sudo bash\` (what ESI documents): that runs whatever the URL serves
+  # today as root, and apt then trusts its key. This adds the same repo with the key
+  # checked against a pinned fingerprint + checksum (#423).
+  sudo bash scripts/add-openfoam-repo.sh
   sudo apt-get install -y openfoam${ofver}-dev      # gives \$FOAM_SRC + wmake
 
   # ---- 1) serial libprecice (MPI OFF) ---------------------------------------
@@ -302,7 +309,12 @@ build_fsi() {
   # run standalone next to OpenFOAM's OpenMPI (libmpi.so.40) they double-load MPI and
   # segfault in MPI_Comm_rank. Build preCICE serial (no MPI) and link BOTH adapters
   # against it — the validated, conflict-free path.
-  git clone --depth 1 --branch v3.4.0 https://github.com/precice/precice.git ~/precice-src
+  # By commit, not tag: a tag can be moved, and this library mediates every FSI solve
+  # (v3.4.0 == 95b2bbd1, #423)
+  git init ~/precice-src && ( cd ~/precice-src \\
+    && git remote add origin https://github.com/precice/precice.git \\
+    && git fetch --depth 1 origin 95b2bbd16bd1ec1f410d9f11ce4e8a06fcb4bed4 \\
+    && git checkout FETCH_HEAD )
   cmake -S ~/precice-src -B ~/precice-src/build -DCMAKE_BUILD_TYPE=Release \\
         -DCMAKE_INSTALL_PREFIX=$pserial -DPRECICE_FEATURE_MPI_COMMUNICATION=OFF \\
         -DPRECICE_FEATURE_PETSC_MAPPING=OFF -DPRECICE_FEATURE_PYTHON_ACTIONS=OFF \\
@@ -316,7 +328,11 @@ build_fsi() {
   # download to ~ (NOT /tmp — tmpfs since Ubuntu 24.10, gone when a WSL VM idles
   # out); the tarball's members carry a leading ./ so strip 2, not 1 (verified
   # live on the Windows runner's distro, issue #193)
-  wget http://www.dhondt.de/ccx_2.20.src.tar.bz2 -O ~/ccx.tbz2
+  # https + a pinned checksum: this source becomes ccx_preCICE, the solid participant
+  # of every FSI solve (#423)
+  wget https://www.dhondt.de/ccx_2.20.src.tar.bz2 -O ~/ccx.tbz2
+  echo "63bf6ea09e7edcae93e0145b1bb0579ea7ae82e046f6075a27c8145b72761bcf  \$HOME/ccx.tbz2" \\
+    | sha256sum -c -
   mkdir -p ~/CalculiX && tar xjf ~/ccx.tbz2 -C ~/CalculiX --strip-components=2 \\
        ./CalculiX/ccx_2.20    # -> ~/CalculiX/ccx_2.20/src
   git clone --depth 1 https://github.com/precice/calculix-adapter.git $ccxadapter
