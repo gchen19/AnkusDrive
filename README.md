@@ -295,6 +295,14 @@ reports the root and the live numbers under `cases`. Tune with `ANKUSDRIVE_CASE_
 reaping off with `ANKUSDRIVE_KEEP_SCRATCH=1`. A `case_dir` **you** supply is never
 touched, wherever it lives.
 
+Every solve result also carries `deck` — a manifest of what the solver was handed,
+taken the moment its first step launched, before it wrote any output into the same
+directory: `{digest, count, bytes, files: {path: hash}}`. A `session_transcript`
+compares it with `s.deck(...)` ahead of that solve's checks, so a replayed number that
+drifted arrives already explained — `~ case.sif` printed right above the failing check
+means the problem changed; `deck matches the recording` means it did not, and the
+solver or the environment did. CalculiX FEM results carry their `.inp` the same way.
+
 **Platform note:** the solver *discovery* layer is fully cross-platform (per-OS install
 dirs, Windows `PATHEXT`/`.exe`, env overrides), so `ankusdrive doctor` gives an honest report
 on macOS/Linux/Windows. The **pip-wheel** families (MBD, topology, optics, fluids) install

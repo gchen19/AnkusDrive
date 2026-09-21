@@ -90,6 +90,25 @@ def _evict_locked() -> None:
             _cache.pop(j["key"], None)
 
 
+def _attach_decks(result):
+    """Put the decks this job's solver launches recorded onto its result (#437).
+
+    The launch chokepoints record each case's manifest on the job's own thread
+    (``cases.snapshot``); this is the one place every job's result passes through on
+    that thread, so it is where they are attached. Best-effort: the attach must
+    never turn a finished solve into a failed job."""
+    try:
+        from ankusdrive import cases
+    except Exception:
+        return result
+    try:
+        return cases.attach(result)
+    except Exception:
+        return result
+    finally:
+        cases.forget()
+
+
 def _run(job_id: str, fn) -> None:
     """Background-thread target: run fn, store result/error. Writes the result
     BEFORE flipping status to done, so a reader that sees 'done' always sees the
@@ -97,6 +116,7 @@ def _run(job_id: str, fn) -> None:
     as a failed job rather than killing the thread silently."""
     try:
         r = fn()
+        r = _attach_decks(r)
         with _lock:
             job = _jobs.get(job_id)
             if job is None:

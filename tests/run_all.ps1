@@ -117,6 +117,8 @@ Test-Module 'Replay (#408)' 'test_replay.py'
 Test-Module 'session_transcript tool (#409)' 'test_session_transcript.py'
 # Solver case dirs: one managed root, reaped oldest-first past a stated bound (#437).
 Test-Module 'Solver case retention (#437)' 'test_case_cleanup.py'
+# Solver decks: each solve records what it was handed; a drifted replay names the file (#437).
+Test-Module 'Solver decks (#437)' 'test_case_deck.py'
 # The transcript as an audit record: environment, solver identity, analysis + solve checks (#433).
 Test-Module 'Analysis provenance (#433)' 'test_audit_provenance.py'
 # Record a CAD+FEM session, export, replay in a fresh interpreter, compare geometry + FEM (#410).
