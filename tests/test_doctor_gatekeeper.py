@@ -89,26 +89,28 @@ def _fake_bundle():
 
 
 BUNDLE_EXE = "/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd"
+# _app_bundle resolves the path, which on the Windows lane gains a drive letter.
+BUNDLE = str(Path("/Applications/FreeCAD.app").resolve())
 
 
 def test_quarantined_and_rejected_names_gatekeeper():
     with _probes(FLAG, 3, SEALED) as calls:
         gk = doctor.gatekeeper_report(BUNDLE_EXE, system="Darwin")
-    assert gk["bundle"] == "/Applications/FreeCAD.app", gk
+    assert gk["bundle"] == BUNDLE, gk
     assert gk["quarantined"] is True and gk["quarantine"] == FLAG, gk
     assert gk["assessment"] == "rejected", gk
     assert "Gatekeeper" in gk["fix"] and "code seal is broken" in gk["fix"], gk
     assert "codesign --verify --deep --strict -v" in gk["fix"], gk
     assert "SHA-256" in gk["fix"], gk
     # Both probes target the bundle, not the inner binary.
-    assert all(argv[-1] == "/Applications/FreeCAD.app" for argv in calls), calls
+    assert all(argv[-1] == BUNDLE for argv in calls), calls
 
 
 def test_probes_use_absolute_paths():
     # MCP hosts spawn the server with a minimal PATH (no /usr/sbin, where spctl
     # lives); a bare name there turned the live diagnosis into "unknown".
     with _fake_bundle() as (exe, _), _probes(FLAG, 3, SEALED, log=REJECTION) as calls:
-        doctor.gatekeeper_report(exe, system="Darwin", since=0.0)
+        doctor.gatekeeper_report(exe, system="Darwin", since=time.time())
     assert {a[0] for a in calls} == {"/usr/bin/xattr", "/usr/sbin/spctl", "/usr/bin/log"}, calls
 
 
@@ -219,26 +221,26 @@ def test_failed_boot_of_a_bundle_gatekeeper_let_through_is_not_blamed_on_it():
 
 def test_dialog_for_this_bundle_counts_as_blocked():
     with _fake_bundle() as (exe, _), _probes(FLAG, 3, SEALED, log=PROMPT):
-        gk = doctor.gatekeeper_report(exe, system="Darwin", since=0.0)
+        gk = doctor.gatekeeper_report(exe, system="Darwin", since=time.time())
     assert gk["blocked"] is True and "fix" in gk, gk
 
 
 def test_dialog_for_another_app_does_not_count():
     with _fake_bundle() as (exe, _), _probes(FLAG, 3, SEALED, log=OTHER_PROMPT):
-        gk = doctor.gatekeeper_report(exe, system="Darwin", since=0.0)
+        gk = doctor.gatekeeper_report(exe, system="Darwin", since=time.time())
     assert gk["blocked"] is False and "fix" not in gk, gk
 
 
 def test_unreadable_log_keeps_the_hint():
     # No evidence either way: the quarantined + rejected pair still stands.
     with _fake_bundle() as (exe, _), _probes(FLAG, 3, SEALED, log=None):
-        gk = doctor.gatekeeper_report(exe, system="Darwin", since=0.0)
+        gk = doctor.gatekeeper_report(exe, system="Darwin", since=time.time())
     assert gk["blocked"] is None and "fix" in gk, gk
 
 
 def test_log_is_not_read_unless_gatekeeper_could_be_the_cause():
     with _fake_bundle() as (exe, _), _probes(FLAG, 0, ACCEPTED, log=REJECTION) as calls:
-        gk = doctor.gatekeeper_report(exe, system="Darwin", since=0.0)
+        gk = doctor.gatekeeper_report(exe, system="Darwin", since=time.time())
     assert "blocked" not in gk and not any(a[0].endswith("/log") for a in calls), (gk, calls)
 
 
