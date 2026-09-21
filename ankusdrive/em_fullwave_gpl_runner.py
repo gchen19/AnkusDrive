@@ -64,11 +64,20 @@ Problems
 """
 import json
 import math
+import os
 import sys
 import tempfile
 import time
 
 SENTINEL_HEAD = "@@JSON@@"
+# Where the simulation directory goes. The worker sets ANKUSDRIVE_CASE_ROOT to the
+# managed case root (ankusdrive/cases.py, #437) so these are reaped with every other
+# solver case; unset, this falls back to the system temp dir. Read from the
+# environment rather than imported, because this runner imports no AnkusDrive code —
+# that is what keeps the GPL-3.0 engine at arm's length.
+CASE_ROOT = os.environ.get("ANKUSDRIVE_CASE_ROOT") or None
+
+
 SENTINEL_TAIL = "@@END@@"
 C0 = 299_792_458.0
 
@@ -155,7 +164,7 @@ def _waveguide_sweep(problem):
 
     n_cells = (mesh.GetQtyLines("x") * mesh.GetQtyLines("y") * mesh.GetQtyLines("z"))
 
-    sim = tempfile.mkdtemp(prefix="em_wg_")
+    sim = tempfile.mkdtemp(prefix="em_wg-", dir=CASE_ROOT)
     FDTD.Run(sim, cleanup=True, verbose=0)
 
     decay_out = _decay_fit(sim, decay, np.array(mesh.GetLines("z")))
@@ -328,7 +337,7 @@ def _dipole_s11(problem):
 
     port = FDTD.AddLumpedPort(1, 50.0, [-rad_mm, -rad_mm, -gap_mm / 2.0],
                               [rad_mm, rad_mm, gap_mm / 2.0], "z", 1.0)
-    sim = tempfile.mkdtemp(prefix="em_dip_")
+    sim = tempfile.mkdtemp(prefix="em_dip-", dir=CASE_ROOT)
     FDTD.Run(sim, cleanup=True, verbose=0)
 
     freq = np.linspace(f_start, f_stop, n_freq)

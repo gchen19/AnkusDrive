@@ -137,6 +137,13 @@ echo "== session_transcript tool: read-only, writes nothing, no replay-as-tool (
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_session_transcript.py; else python3 tests/test_session_transcript.py; fi
 
 echo
+echo "== Solver case directories: one root, a stated retention (#437) =="
+# Static tier (the reaping policy, the grace window, the GPL runner's boundary, and
+# that no handler still strands a directory); the worker tier needs FreeCAD and runs a
+# real solve to check its case_dir lands under the root and survives the job.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_case_cleanup.py; else python3 tests/test_case_cleanup.py; fi
+
+echo
 echo "== Analysis provenance: a transcript that audits simulations and solvers (#433) =="
 # Static tier (the environment record, home-collapsed solver paths, drift, and the
 # exporter keeping/checking analysis and solve results); the server tier needs mcp and

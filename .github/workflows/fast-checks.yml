@@ -132,6 +132,12 @@ jobs:
         # worker tiers SKIP without mcp / FreeCAD and run in run_all.
         run: python tests/test_session_transcript.py
 
+      - name: Solver case directories — one root, a stated retention (#437)
+        # Static tier here (the reaping policy and its grace window, the GPL runner's
+        # boundary, and an AST sweep that no handler still strands a directory). The
+        # worker tier SKIPs without FreeCAD and runs in run_all.
+        run: python tests/test_case_cleanup.py
+
       - name: Analysis provenance — the transcript audits simulations and solvers (#433)
         # Static tier here (the environment record, $HOME collapsed out of solver paths,
         # drift, and the exporter keeping and checking analysis + solve results). The

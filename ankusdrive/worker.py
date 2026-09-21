@@ -40,6 +40,10 @@ import Sketcher  # noqa: E402
 # scope rather than per-handler because the generator handlers stamp a designation
 # on every part they build, so it is on the hot path, not an occasional escape.
 from ankusdrive import orderable as _orderable  # noqa: E402
+# Solver case directories: one managed root with a stated retention, so a session's
+# decks outlive their job (a result names them, and a second tool is handed them)
+# without accumulating forever (issue #437).
+from ankusdrive import cases as _cases  # noqa: E402
 
 
 def _respond(obj):
@@ -12399,7 +12403,6 @@ def _tessellate_for_blender(shape, lin_mm, ang_rad):
 def _prepare_blender_job(p, blender):
     """Validate, tessellate, and write the Blender job. Returns the request dict the
     blocking and async handlers share (job_path, blender path, echo fields)."""
-    import tempfile
     from ankusdrive import blender_render as _br
     view = p.get("view", "iso")
     if view not in _RENDER_VIEWS:
@@ -12429,7 +12432,7 @@ def _prepare_blender_job(p, blender):
     coarse = {"draft": 3.0, "preview": 1.0, "final": 0.5}[quality]
     lin, ang = max(diag * 4e-4 * coarse, 1e-3), 0.2 * min(coarse, 1.5)
 
-    job_dir = tempfile.mkdtemp(prefix="ankusdrive_blender_")
+    job_dir = _cases.new("blender_render")
     out_dir = p.get("output_dir") or job_dir
     os.makedirs(out_dir, exist_ok=True)
     stem = "render"
@@ -12906,9 +12909,17 @@ def _h_solve_capabilities(p):
     prepared_case_only, solvers: {name: {available, kind, family, extra, and either
     path/module or install_hint}}, families: {family: {solvers, available, unwired,
     prepared_case_only, any_available}}, extras: {extra: [solver names]}} (see
-    ankusdrive/solvers.capabilities)."""
+    ankusdrive/solvers.capabilities), plus cases: {root, count, bytes,
+    bytes_exact, keep, max_gb, grace_s, reaping} — where every generated solver deck is written and the bound it
+    is held to, so "where did my solve go?" and "what will be deleted?" have an answer
+    (issue #437)."""
     from ankusdrive import solvers
-    return solvers.capabilities()
+    out = solvers.capabilities()
+    try:
+        out["cases"] = _cases.usage()
+    except Exception as e:                      # a diagnostic must not fail the report
+        out["cases"] = {"error": f"{type(e).__name__}: {e}"}
+    return out
 
 
 # --- FEM (decomposed) ---------------------------------------------------------
@@ -15388,7 +15399,6 @@ def _h_slice_gcode_submit(p):
     info = _require_solver("prusaslicer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs
     from ankusdrive.analysis import slicing as _slicing
@@ -15405,7 +15415,7 @@ def _h_slice_gcode_submit(p):
     analytic = None
     if body:                                         # export on the MAIN thread
         obj = _shape_handle_to_obj(body)
-        work_dir = tempfile.mkdtemp(prefix="slice_")
+        work_dir = _cases.new("slice")
         stl_path = os.path.join(work_dir, "body.stl")
         obj.Shape.exportStl(stl_path)
         bb = obj.Shape.BoundBox
@@ -15418,7 +15428,7 @@ def _h_slice_gcode_submit(p):
     elif stl_path:
         if not os.path.isfile(stl_path):
             raise ValueError(f"stl_path {stl_path!r} is not a file")
-        work_dir = tempfile.mkdtemp(prefix="slice_")
+        work_dir = _cases.new("slice")
     else:
         raise ValueError("provide a `body` handle or a prepared `stl_path`")
 
@@ -16005,7 +16015,10 @@ def _run_em_fullwave_gpl(problem, python_exe, timeout=600):
         os.path.dirname(os.path.abspath(__file__)), "em_fullwave_gpl_runner.py"))
     proc = subprocess.run(
         solvers.solver_argv("openems", [python_exe, runner], stdin=True),
-        input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout)
+        input=_json.dumps(problem), capture_output=True, text=True, timeout=timeout,
+        # the runner imports no AnkusDrive code, so the managed case root (#437)
+        # reaches it as an environment variable rather than an import
+        env={**os.environ, "ANKUSDRIVE_CASE_ROOT": _cases.root()})
     _, _, rest = proc.stdout.partition("@@JSON@@")
     body, _, _ = rest.partition("@@END@@")
     if not body:
@@ -16140,7 +16153,6 @@ def _h_fsi_pressure_plate_submit(p):
 
     from ankusdrive import jobs
     from ankusdrive.analysis import fsi_case
-    import tempfile as _tf
 
     params = {
         "inlet_velocity_m_s": float(p.get("inlet_velocity_m_s", 10.0)),
@@ -16157,7 +16169,7 @@ def _h_fsi_pressure_plate_submit(p):
     key = jobs.content_key("fsi_pressure_plate", params)
 
     def _work():
-        case_dir = _tf.mkdtemp(prefix="fsi_precice_")
+        case_dir = _cases.new("fsi_precice")
         built = fsi_case.write_fsi_case(case_dir, **params)
         out = fsi_case.run_coupled_fsi(case_dir, timeout_s=timeout)
         out["case_dir"] = case_dir
@@ -17009,7 +17021,6 @@ def _thermal_body_submit(p, info):
     groups, so `convection_faces` are the solid's 1-based face indices (boundary
     tag i == shape.Faces[i-1], verified live); every unlisted face is adiabatic.
     Degrades to {ok:false, reason, install} when ElmerGrid is missing."""
-    import tempfile
 
     from femmesh.gmshtools import GmshTools
 
@@ -17058,7 +17069,7 @@ def _thermal_body_submit(p, info):
             raise ValueError("element_order must be '1st' or '2nd'")
         mesh.ElementOrder = element_order
     doc.recompute()
-    case_dir = tempfile.mkdtemp(prefix="elmer_body_")
+    case_dir = _cases.new("elmer_body")
     # Mesh SERIALLY: Gmsh's parallel 3-D Delaunay (General.NumThreads, which
     # FreeCAD defaults to the host core count) is non-deterministic and, under CPU
     # contention, can silently fall back to a near-degenerate mesh that ignores the
@@ -17224,7 +17235,6 @@ def _molding_warpage_submit(p, info):
     rigid-body constraint, so a balanced field warps ~0 and an asymmetric one bows to
     the analytic curvature. Degrades to ``{ok:false, reason, install}`` upstream when
     ccx is absent."""
-    import tempfile
 
     from femmesh.gmshtools import GmshTools
 
@@ -17266,7 +17276,7 @@ def _molding_warpage_submit(p, info):
         mesh.CharacteristicLengthMax = char_length
     mesh.ElementOrder = "2nd"          # C3D10 quadratic tets bend without locking
     doc.recompute()
-    case_dir = tempfile.mkdtemp(prefix="warpage_ccx_")
+    case_dir = _cases.new("warpage_ccx")
     # Serial meshing for reproducibility (the parallel-Gmsh nondeterminism the thermal
     # bridge documents — a degenerate coarse mesh would mis-state the bending stiffness).
     with _gmsh_serial_meshing():
@@ -17455,9 +17465,8 @@ def _h_thermal_transient_submit(p):
     key = jobs.content_key("thermal_transient", {"slab": slab})
 
     def _work():
-        import tempfile
         from ankusdrive.analysis import elmer as _elmer
-        cdir = tempfile.mkdtemp(prefix="elmer_slab_")
+        cdir = _cases.new("elmer_slab")
         built = _elmer.write_slab_transient_case(cdir, **slab)
         proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
@@ -17559,10 +17568,9 @@ def _h_thermal_radiation_submit(p):
     key = jobs.content_key("thermal_radiation", {"plates": plates})
 
     def _work():
-        import tempfile
         from ankusdrive.analysis import elmer as _elmer
         from ankusdrive.analysis import thermal as _thermal
-        cdir = tempfile.mkdtemp(prefix="elmer_rad_")
+        cdir = _cases.new("elmer_rad")
         built = _elmer.write_radiation_plates_case(cdir, **plates)
         vf = _run_solver("elmer", [vf_bin, built["sif"]], cwd=cdir,
                             capture_output=True, text=True)
@@ -17640,7 +17648,6 @@ def _h_cht_channel_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs
     from ankusdrive.analysis import cht as _cht
@@ -17679,7 +17686,7 @@ def _h_cht_channel_submit(p):
     key = jobs.content_key("cht_channel", {"channel": params})
 
     def _work():
-        cdir = tempfile.mkdtemp(prefix="elmer_cht_")
+        cdir = _cases.new("elmer_cht")
         built = _cht.write_cht_channel_case(cdir, **params)
         proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
@@ -17725,7 +17732,6 @@ def _h_cht_graetz_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs
     from ankusdrive.analysis import cht as _cht
@@ -17762,7 +17768,7 @@ def _h_cht_graetz_submit(p):
     key = jobs.content_key("cht_graetz", {"channel": params})
 
     def _work():
-        cdir = tempfile.mkdtemp(prefix="elmer_graetz_")
+        cdir = _cases.new("elmer_graetz")
         built = _cht.write_graetz_channel_case(cdir, **params)
         proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
@@ -17810,7 +17816,6 @@ def _h_acoustic_fem_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs
     from ankusdrive.analysis import acoustics as _ac
@@ -17847,7 +17852,7 @@ def _h_acoustic_fem_submit(p):
         key = jobs.content_key("acoustic_fem", {"duct": params})
 
         def _work():
-            cdir = tempfile.mkdtemp(prefix="elmer_ac_duct_")
+            cdir = _cases.new("elmer_ac_duct")
             built = _ac.write_helmholtz_duct_case(cdir, **params)
             proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                                   capture_output=True, text=True)
@@ -17883,7 +17888,7 @@ def _h_acoustic_fem_submit(p):
         key = jobs.content_key("acoustic_fem", {"cavity": params})
 
         def _work_cavity():
-            cdir = tempfile.mkdtemp(prefix="elmer_ac_cav_")
+            cdir = _cases.new("elmer_ac_cav")
             built = _ac.write_helmholtz_cavity_case(cdir, **params)
             proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                                   capture_output=True, text=True)
@@ -17941,7 +17946,6 @@ def _h_harmonic_response_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs
     from ankusdrive.analysis import vibration as _vib
@@ -17978,7 +17982,7 @@ def _h_harmonic_response_submit(p):
     key = jobs.content_key("harmonic_response", {"beam": params})
 
     def _work():
-        cdir = tempfile.mkdtemp(prefix="elmer_frf_")
+        cdir = _cases.new("elmer_frf")
         built = _vib.write_harmonic_beam_case(cdir, **params)
         proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
@@ -18076,7 +18080,6 @@ def _h_em_conduction_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs
     from ankusdrive.analysis import em as _em
@@ -18091,7 +18094,7 @@ def _h_em_conduction_submit(p):
     key = jobs.content_key("em_conduction", {"strip": params})
 
     def _work():
-        cdir = tempfile.mkdtemp(prefix="elmer_dc_")
+        cdir = _cases.new("elmer_dc")
         built = _em.write_dc_strip_case(cdir, **params)
         proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
@@ -18131,7 +18134,6 @@ def _h_em_induction_heating_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs
     from ankusdrive.analysis import em as _em
@@ -18172,7 +18174,7 @@ def _h_em_induction_heating_submit(p):
     key = jobs.content_key("em_induction_heating", {"slab": params})
 
     def _work():
-        cdir = tempfile.mkdtemp(prefix="elmer_indheat_")
+        cdir = _cases.new("elmer_indheat")
         built = _em.write_induction_heating_case(cdir, **params)
         proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
@@ -18221,7 +18223,6 @@ def _h_em_induction_submit(p):
     info = _require_solver("elmer")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs
     from ankusdrive.analysis import em as _em
@@ -18236,7 +18237,7 @@ def _h_em_induction_submit(p):
     key = jobs.content_key("em_induction", {"skin": params})
 
     def _work():
-        cdir = tempfile.mkdtemp(prefix="elmer_skin_")
+        cdir = _cases.new("elmer_skin")
         built = _em.write_skin_effect_case(cdir, **params)
         proc = _run_solver("elmer", [elmer_bin, built["sif"]], cwd=cdir,
                               capture_output=True, text=True)
@@ -18500,9 +18501,8 @@ def _cfd_pipe_rans_submit(p):
         "na": n_axial, "nr": n_radial, "et": end_time}})
 
     def _work():
-        import tempfile
         from ankusdrive.analysis import openfoam as _of
-        cdir = tempfile.mkdtemp(prefix="foam_pipe_rans_")
+        cdir = _cases.new("foam_pipe_rans")
         built = _of.write_pipe_rans_case(
             cdir, diameter_m=D, length_m=L, velocity_m_s=velocity, nu_m2_s=nu,
             n_axial=n_axial, n_radial=n_radial, end_time=end_time)
@@ -18583,9 +18583,8 @@ def _cfd_pipe_submit(p):
         "na": n_axial, "nr": n_radial, "et": end_time}})
 
     def _work():
-        import tempfile
         from ankusdrive.analysis import openfoam as _of
-        cdir = tempfile.mkdtemp(prefix="foam_pipe_")
+        cdir = _cases.new("foam_pipe")
         built = _of.write_pipe_case(
             cdir, diameter_m=D, length_m=L, velocity_m_s=velocity, nu_m2_s=nu,
             n_axial=n_axial, n_radial=n_radial, end_time=end_time)
@@ -18628,7 +18627,6 @@ def _cfd_body_submit(p):
     info = _require_solver("openfoam")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs, solvers
     from ankusdrive.analysis import cfd as _cfd
@@ -18684,7 +18682,7 @@ def _cfd_body_submit(p):
     bbox_max = (bb.XMax * 1e-3, bb.YMax * 1e-3, bb.ZMax * 1e-3)
     loc = p.get("location_in_mesh_mm")
     base_cell = p.get("base_cell_mm")
-    case_dir = tempfile.mkdtemp(prefix="foam_body_")
+    case_dir = _cases.new("foam_body")
     _mb.write_snappy_internal_case(
         case_dir, stl_text=stl_text, bbox_min_m=bbox_min, bbox_max_m=bbox_max,
         inlet_velocity_m_s=vel_vec, nu_m2_s=nu,
@@ -18798,7 +18796,6 @@ def _cfd_channel_su2_submit(p):
     if not info["ok"]:
         return info
 
-    import tempfile
 
     from ankusdrive import jobs, solvers
     from ankusdrive.analysis import cfd as _cfd
@@ -18824,7 +18821,7 @@ def _cfd_channel_su2_submit(p):
         velocity = 50.0 * mu / (rho * 2.0 * height_mm / 1000.0)
     velocity = float(velocity)
 
-    case_dir = p.get("write_to") or tempfile.mkdtemp(prefix="su2_channel_")
+    case_dir = p.get("write_to") or _cases.new("su2_channel")
     built = _su2.write_channel_case(
         case_dir, height_mm=height_mm, length_mm=length_mm, velocity_m_s=velocity,
         rho_kg_m3=rho, mu_pa_s=mu,
@@ -18913,9 +18910,8 @@ def _cfd_flat_plate_rans_submit(p):
         "gy": grading_y, "H": height_m, "et": end_time}})
 
     def _work():
-        import tempfile
         from ankusdrive.analysis import openfoam as _of
-        cdir = tempfile.mkdtemp(prefix="foam_plate_rans_")
+        cdir = _cases.new("foam_plate_rans")
         built = _of.write_flat_plate_rans_case(
             cdir, velocity_m_s=velocity, nu_m2_s=nu, plate_length_m=L,
             thickness_m=thickness_m, nx_plate=nx_plate, n_y=n_y,
@@ -19004,9 +19000,8 @@ def _cfd_flat_plate_submit(p):
         "gy": grading_y, "H": height_m, "et": end_time}})
 
     def _work():
-        import tempfile
         from ankusdrive.analysis import openfoam as _of
-        cdir = tempfile.mkdtemp(prefix="foam_plate_")
+        cdir = _cases.new("foam_plate")
         built = _of.write_flat_plate_case(
             cdir, velocity_m_s=velocity, nu_m2_s=nu, plate_length_m=L,
             thickness_m=thickness_m, nx_plate=nx_plate, n_y=n_y, grading_y=grading_y,
@@ -19159,7 +19154,6 @@ def _cfd_external_body_submit(p):
     info = _require_solver("openfoam")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs, solvers
 
@@ -19176,7 +19170,7 @@ def _cfd_external_body_submit(p):
     if not gate["gated"] and gate["reason"]:
         warnings.append(gate["reason"])
 
-    case_dir = tempfile.mkdtemp(prefix="foam_tunnel_")
+    case_dir = _cases.new("foam_tunnel")
     built = _tunnel_write(inp, case_dir)
     dom = built["domain"]
     warnings.extend(dom["warnings"])
@@ -19352,7 +19346,6 @@ def _h_cfd_mesh_independence_submit(p):
     info = _require_solver("openfoam")
     if not info["ok"]:                               # graceful degradation (verified)
         return info
-    import tempfile
 
     from ankusdrive import jobs, solvers
     from ankusdrive.analysis import cfd as _cfd
@@ -19373,11 +19366,11 @@ def _h_cfd_mesh_independence_submit(p):
         metric = p.get("metric", "cd")
         # the coarsest level (multiplier 1.0) resolves the caller's own cell size;
         # every finer level is that size divided down, so all levels share one STL
-        coarsest = _tunnel_write(inp, tempfile.mkdtemp(prefix="foam_mesh_probe_"))
+        coarsest = _tunnel_write(inp, _cases.new("foam_mesh_probe"))
         cell0 = coarsest["domain"]["base_cell_m"]
         base_end = inp["end_time"]
         for label, mult in ladder:
-            cdir = tempfile.mkdtemp(prefix=f"foam_mesh_{label}_")
+            cdir = _cases.new(f"foam_mesh_{label}")
             cell = cell0 * mult
             inp = dict(inp, end_time=_level_end_time(base_end, mult))
             _tunnel_write(inp, cdir, base_cell_m=cell)
@@ -19406,7 +19399,7 @@ def _h_cfd_mesh_independence_submit(p):
         metric = p.get("metric", "pressure_drop_pa")
         from ankusdrive.analysis import openfoam as _of0
         for label, mult in ladder:
-            cdir = tempfile.mkdtemp(prefix=f"foam_mesh_{label}_")
+            cdir = _cases.new(f"foam_mesh_{label}")
             na = max(8, int(round(n_axial0 / mult)))    # mult <= 1 -> finer
             nr = max(3, int(round(n_radial0 / mult)))
             et = _level_end_time(end_time, mult)
@@ -19655,9 +19648,8 @@ def _molding_openinjmoldsim_build_and_run(p, of_bin):
         "hlow": pack_wall_h_low, "hhigh": pack_wall_h_high}})
 
     def _work():
-        import tempfile
         from ankusdrive.analysis import molding_fill as _mf
-        cdir = tempfile.mkdtemp(prefix="oims_fill_")
+        cdir = _cases.new("oims_fill")
         built = _mf.write_openinjmoldsim_case(
             cdir, resin=resin, length_m=length_m, height_m=height_m,
             depth_m=depth_m, nx=nx, ny=ny, peak_pressure_pa=peak_pa,
@@ -19854,9 +19846,8 @@ def _h_molding_fill_submit(p):
         "et": end_time_s, "rho": melt_rho, "nu": melt_nu, "carreau": carreau}})
 
     def _work():
-        import tempfile
         from ankusdrive.analysis import molding_fill as _mf
-        cdir = tempfile.mkdtemp(prefix="foam_mold_fill_")
+        cdir = _cases.new("foam_mold_fill")
         built = _mf.write_cavity_case(
             cdir, length_m=length_m, height_m=height_m, depth_m=depth_m,
             nx=nx, ny=ny, inject_velocity_m_s=U, end_time_s=end_time_s,

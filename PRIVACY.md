@@ -38,7 +38,7 @@ Everything below stays on your machine:
 |---|---|---|
 | Configuration: paths to FreeCAD and optional solvers | `~/.config/ankusdrive/config.toml` (Windows: `%APPDATA%\ankusdrive\config.toml`), or the path in `ANKUSDRIVE_CONFIG` | until you delete it |
 | Files you ask it to write: saved documents, exports, drawings, reports, lockfiles, project and item registries | the paths or directories you pass to a tool | until you delete them |
-| Solver working directories and renders | your system temp directory, or a `workdir` / `case_dir` you pass | temp files are cleaned up by the tools or your OS; a directory you supply keeps its files |
+| Solver working directories and renders | `<system temp>/ankusdrive-cases` (`ANKUSDRIVE_CASE_ROOT` to move it), or a `workdir` / `case_dir` you pass | kept so you can inspect the deck a result names, then reaped oldest-first past 64 directories or 4 GB, never within an hour of last being written (`ANKUSDRIVE_CASE_KEEP` / `ANKUSDRIVE_CASE_MAX_GB` / `ANKUSDRIVE_CASE_GRACE_S`; `ANKUSDRIVE_KEEP_SCRATCH=1` keeps everything). A directory you supply is never touched |
 | Background job results and open documents | the running server's memory | until the job is discarded or the server exits |
 | A journal of this session's tool calls (tool names, arguments, trimmed results), kept so the session can be exported as a script | the running server's memory; never written to disk | until the server exits |
 | Alongside a call that reached an external solver, where that solver resolved: its path or module and the substrate it ran through | the same in-memory journal; never written to disk | until the server exits |

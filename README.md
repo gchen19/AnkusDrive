@@ -283,6 +283,18 @@ solver var under `[solvers]` (`su2_path`, `elmer_path`, `openfoam_bashrc`, ...).
 still win when set; the file is the layer that survives an MCP host's minimal launch
 environment. `ankusdrive doctor` reports the file and which layer resolved each value.
 
+**Where a solve's files go:** every built-in solve writes its deck — a `.sif` plus
+mesh, an OpenFOAM case tree, a `.inp`, a sliced `.gcode` — into its own directory under
+`<system temp>/ankusdrive-cases`, and reports that directory as `case_dir`. They are
+kept, because a result names them and a second tool is handed them (a warpage solve
+consumes the cooling case a fill solve wrote), and they are **reaped oldest-first** once
+the root passes 64 directories or 4 GB — never touching one written within the last
+hour, so a running solve cannot be pulled out from under itself. `solve_capabilities`
+reports the root and the live numbers under `cases`. Tune with `ANKUSDRIVE_CASE_ROOT`,
+`ANKUSDRIVE_CASE_KEEP`, `ANKUSDRIVE_CASE_MAX_GB`, `ANKUSDRIVE_CASE_GRACE_S`, or turn
+reaping off with `ANKUSDRIVE_KEEP_SCRATCH=1`. A `case_dir` **you** supply is never
+touched, wherever it lives.
+
 **Platform note:** the solver *discovery* layer is fully cross-platform (per-OS install
 dirs, Windows `PATHEXT`/`.exe`, env overrides), so `ankusdrive doctor` gives an honest report
 on macOS/Linux/Windows. The **pip-wheel** families (MBD, topology, optics, fluids) install

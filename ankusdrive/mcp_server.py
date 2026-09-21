@@ -3307,9 +3307,15 @@ def solve_capabilities() -> dict:
     prepared_case_only when nothing can build it a case}}, families: {family:
     {solvers, available, unwired, prepared_case_only, any_available}}, extras:
     {extra: [solver names]} for `pip install ankusdrive[<extra>]`, toolsets: {enabled,
-    disabled: {family: {label, tools, enable}}}}. A family listed under
+    disabled: {family: {label, tools, enable}}}, cases: {root, count, bytes,
+    bytes_exact, keep, max_gb, grace_s, reaping}}. A family listed under
     `toolsets.disabled` has no tools registered in this session — tell the user its
-    `enable` instruction rather than concluding the capability does not exist."""
+    `enable` instruction rather than concluding the capability does not exist.
+
+    `cases` is where every generated solver deck is written (one managed root) and the
+    retention it is held to: at most `keep` directories and `max_gb` GB, reaped
+    oldest-first, never touching one younger than `grace_s` seconds. Point a user at
+    `cases.root` when they ask where a solve's files went (issue #437)."""
     out = _call("solve_capabilities")
     if isinstance(out, dict):
         out["toolsets"] = TOOLSETS
