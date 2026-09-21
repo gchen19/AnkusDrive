@@ -171,6 +171,7 @@ Test-Module 'Blender studio-render contract (#335)'  'test_blender_render.py'
 Test-Module 'Persistent config layer'                'test_config.py'
 # mcp-2.0.0 break is injected, never installed; the live half spawns the server.
 Test-Module "doctor's MCP preflight (#278)"          'test_doctor_mcp.py'
+Test-Module "doctor's Gatekeeper diagnosis (#310)"    'test_doctor_gatekeeper.py'
 Test-Module 'Planar-kinematics toys'                 'test_kinematics.py'
 Test-Module 'Internal-flow / Hagen-Poiseuille toys'  'test_cfd.py'
 Test-Module 'Solution verification (Richardson/GCI)'  'test_verification.py'

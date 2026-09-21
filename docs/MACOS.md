@@ -79,9 +79,13 @@ exemption. That is the same shape as a server Claude Desktop spawns.
 
 The failing row is what a broken code seal looks like to Gatekeeper
 (`spctl -a -vv`: `a sealed resource is missing or invalid`). The MCP host sees
-`ping: no response within 15.0s`, then `WorkerDied`, and
-`setup_status(verify_freecad_boot=true)` reports `resolved but did not boot: WorkerDied`,
-with nothing that points at Gatekeeper.
+`ping: no response within 15.0s`, then `WorkerDied`. To find out why, run
+`ankusdrive doctor`, or have the agent call `setup_status(verify_freecad_boot=true)`.
+After a failed boot, both check the bundle's quarantine flag, `spctl`'s verdict, and
+whether syspolicyd blocked that boot. If Gatekeeper was the cause, the `fix` says so
+and points here. It never prints the command that clears the flag.
+A bundle that Gatekeeper rejects now but let through before, such as one set up by the
+solver install, isn't blamed for an unrelated boot failure.
 
 Installing solver wheels into the bundle, as the solver guide says to, **does** break the
 seal. It is harmless only because the bundle has already passed once by then; the pip
