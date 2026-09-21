@@ -144,6 +144,14 @@ echo "== Solver case directories: one root, a stated retention (#437) =="
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_case_cleanup.py; else python3 tests/test_case_cleanup.py; fi
 
 echo
+echo "== Solver decks: a drifted replay says which input file moved (#437) =="
+# Static tier (the manifest, once-per-job snapshots, the transcript comparison, and
+# an AST sweep that every solver launch records its deck); the worker tier runs a real
+# CalculiX FEM solve, and the solver tier Elmer plus a recorded transcript replayed
+# with one input changed.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_case_deck.py; else python3 tests/test_case_deck.py; fi
+
+echo
 echo "== Analysis provenance: a transcript that audits simulations and solvers (#433) =="
 # Static tier (the environment record, home-collapsed solver paths, drift, and the
 # exporter keeping/checking analysis and solve results); the server tier needs mcp and

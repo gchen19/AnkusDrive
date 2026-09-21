@@ -138,6 +138,12 @@ jobs:
         # worker tier SKIPs without FreeCAD and runs in run_all.
         run: python tests/test_case_cleanup.py
 
+      - name: Solver decks — a drifted replay says which input file moved (#437)
+        # Static tier here (the manifest, once-per-job snapshots, the transcript's
+        # s.deck, and an AST sweep that every solver launch records its deck). The
+        # FEM and Elmer tiers SKIP without FreeCAD / Elmer and run in run_all.
+        run: python tests/test_case_deck.py
+
       - name: Analysis provenance — the transcript audits simulations and solvers (#433)
         # Static tier here (the environment record, $HOME collapsed out of solver paths,
         # drift, and the exporter keeping and checking analysis + solve results). The
