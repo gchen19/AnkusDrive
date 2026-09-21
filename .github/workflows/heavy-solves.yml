@@ -329,7 +329,10 @@ jobs:
 
       - name: Install FreeCAD 1.1 + AnkusDrive
         run: |
-          conda install -y "freecad>=1.1,<1.2"
+          # conda-forge's freecad does NOT pull calculix (FreeCAD.app and the AppImage
+          # bundle ccx; the conda package leaves it optional) — found by the ccx
+          # preflight below on this lane's first run. Native osx-arm64 build.
+          conda install -y "freecad>=1.1,<1.2" calculix
           python -m pip install -e .
           echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
           freecadcmd --version 2>&1 | head -1 || true

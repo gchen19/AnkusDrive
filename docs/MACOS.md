@@ -108,7 +108,7 @@ scripts/install-solvers.sh --list             # what resolves right now (≈ ank
 
 | Family | Solver | macOS status |
 |---|---|---|
-| Core FEM / warpage / impact dynamics | CalculiX `ccx` | ✅ **bundled** in FreeCAD.app's `Contents/Resources/bin` — nothing to install |
+| Core FEM / warpage / impact dynamics | CalculiX `ccx` | ✅ **bundled** in FreeCAD.app's `Contents/Resources/bin` — nothing to install. A **conda** FreeCAD does not pull it: `conda install -c conda-forge calculix` (native osx-arm64) |
 | MBD | MuJoCo | ✅ `pip install 'ankusdrive[mbd]'` (arm64 wheels; PyBullet has none and won't compile — the extra selects mujoco on Darwin) |
 | Topology | topopt / solidspy | ✅ `pip install 'ankusdrive[topology]'` |
 | Optics (sequential) | optiland / rayoptics | ✅ `pip install 'ankusdrive[optics]'` |
