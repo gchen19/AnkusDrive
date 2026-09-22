@@ -487,10 +487,13 @@ _SOLVERS: dict = {
         "freecad_bundled": True,
         # NB: there is NO `calculix` formula in core Homebrew (issue #192) — on macOS the
         # bundled FreeCAD ccx (auto-detected above) is the path, so don't suggest brew.
-        "install_hint": "auto-detected from FreeCAD's bundled ccx (every FreeCAD install "
-                        "ships it, all OSes) when FreeCAD is installed; otherwise "
-                        "'apt install calculix-ccx' (Linux) or point ANKUSDRIVE_CALCULIX_PATH "
-                        "at a ccx binary",
+        # A conda-forge FreeCAD is the exception: its package does not pull calculix
+        # (#311 — the hosted macOS lane found it), so that env needs it named.
+        "install_hint": "auto-detected from FreeCAD's bundled ccx (the FreeCAD.app / "
+                        "AppImage / Windows installs ship it) when FreeCAD is installed; a "
+                        "conda FreeCAD does not — 'conda install -c conda-forge calculix' "
+                        "(all OSes); otherwise 'apt install calculix-ccx' (Linux) or point "
+                        "ANKUSDRIVE_CALCULIX_PATH at a ccx binary",
     },
     # --- studio render: full Blender (Cycles) headless (issue #335) -----------
     # The render_photoreal backend for assemblies, per-part appearance and the studio

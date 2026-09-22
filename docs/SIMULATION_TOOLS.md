@@ -514,6 +514,24 @@ process. Several reuse existing AnkusDrive tools directly.
   `drop_impact` (`analysis/impact.py` — exact energy-balance G = h/d with
   pulse-shape bounds, fragility ↔ crush-stroke inversion for packaging). Toys in
   `tests/test_molding.py` / `tests/test_impact.py`.
+- **Impact dynamics (#311):** `drop_impact` escalates to `impact_dynamics_submit`
+  (`analysis/impact_case.py`) — the meshed part flown into a fixed rigid floor through
+  CalculiX `*DYNAMIC` penalty contact. `direction` is the way the part travels; any
+  3-vector works, so an edge or corner drop turns the floor instead of re-meshing.
+  Implicit HHT-α with ccx-adaptive stepping by default (ms-scale drops; `time_step_s`
+  opts in to a faster fixed step where contact comes on smoothly), explicit central
+  difference at the computed stable step for stress-wave events; optional bilinear
+  plasticity. Peak G, impulse, contact duration and restitution are reduced from the
+  floor-reaction history alone (v = v₀ − ∫F dt / m, exact for any mesh); peak von
+  Mises and its location come from the stress frames. The gate FAILS a run that ends
+  before the fall is arrested or whose energy grows. Closed-form twin: `bar_impact`
+  (St-Venant: σ = ρ·c₀·v₀, T = 2L/c₀, restitution 1, plastic-wave cap) — the exact
+  anchor the live gates in `tests/test_impact_case.py` hold ccx to within 1–3 %.
+  Contact is chosen from the strike geometry (`contact='auto'`): ccx's face-to-face
+  penalty never engages a corner strike and its node-to-face one gains energy on a
+  flat landing, so face contact + adaptive stepping serve flat/edge landings down to
+  45° and node contact + a fixed step anything sharper.
+  Runs on the host's `ccx` on every OS (FreeCAD bundles it) — not container-routed.
 
 ### 10. Machine-element rating  *(highest leverage on existing tools)*
 

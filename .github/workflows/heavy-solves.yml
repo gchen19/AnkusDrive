@@ -55,6 +55,7 @@ on:
       - "tests/test_meshbridge.py"
       - "tests/test_granular.py"
       - "tests/test_warpage.py"
+      - "tests/test_impact_case.py"
       - "tests/test_molding_fill.py"
       - "tests/test_molding_relay.py"
       - "scripts/ci-linux-preflight.sh"
@@ -291,6 +292,8 @@ jobs:
     # needs no VM — so it runs on a hosted Apple-Silicon runner, which cannot run
     # Multipass (no nested virtualization):
     #   * SU2's official x86_64 macOS binary under Rosetta 2 (live solve);
+    #   * impact dynamics (#311) on the host's FreeCAD-brought ccx — the live St-Venant
+    #     gates, natively on arm64 macOS, with no solver image involved;
     #   * the Darwin routing contracts;
     #   * the REAL macOS Multipass code path — bash_argv, multipass_vm_state,
     #     run_coupled_fsi, _stop_participant — driven unmodified against
@@ -324,7 +327,10 @@ jobs:
 
       - name: Install FreeCAD 1.1 + AnkusDrive
         run: |
-          conda install -y "freecad>=1.1,<1.2"
+          # conda-forge's freecad does NOT pull calculix (FreeCAD.app and the AppImage
+          # bundle ccx; the conda package leaves it optional) — found by the ccx
+          # preflight below on this lane's first run. Native osx-arm64 build.
+          conda install -y "freecad>=1.1,<1.2" calculix
           python -m pip install -e .
           echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
           freecadcmd --version 2>&1 | head -1 || true
@@ -346,13 +352,25 @@ jobs:
       - name: Preflight — Rosetta + SU2 resolve
         run: bash scripts/ci-macos-preflight.sh --su2
 
+      # Impact dynamics (#311) runs on the HOST's ccx on every OS — the one FreeCAD
+      # brings — not in the solver image. test_impact_case.py SKIPs without ccx, so
+      # prove it resolves first: a skip here would be the lane passing on nothing.
+      - name: Preflight — FreeCAD's ccx resolves natively
+        run: |
+          python - <<'PY'
+          from ankusdrive import solvers
+          ccx = solvers.ccx_bin()
+          assert ccx, "no ccx found beside freecadcmd — impact dynamics cannot run on macOS"
+          print("ccx:", ccx)
+          PY
+
       - name: Host-side macOS regressions
         env:
           ANKUSDRIVE_SKIP_PREFLIGHT: "1"   # the --su2 preflight above already ran
         run: >-
           bash tests/run_macos_heavy.sh
           tests/test_wsl_routing.py tests/test_su2_native.py tests/test_su2_case.py
-          tests/test_macos_relay_shim.py
+          tests/test_macos_relay_shim.py tests/test_impact_case.py
 
   heavy-vmdisk:
     name: arm64 solver image -> VM disk (for lane D)

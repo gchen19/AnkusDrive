@@ -5071,8 +5071,8 @@ def drop_impact(
     G_avg = h/d exactly (mass cancels); g_peak = pulse_factor·G_avg with `pulse`
     bounding the shape: 'constant' (ideal crush, 1×) | 'linear_spring' (elastic,
     2×) | 'half_sine' (π/2×). v = √(2gh). mass_g only adds peak_force_n and
-    energy_j. fidelity='exact'; no explicit impact-dynamics solve is shipped
-    (escalate_to=None — horizon scope).
+    energy_j. fidelity='exact'; where the part is stressed, or what an edge/corner
+    strike changes, is escalate_to='impact_dynamics_submit'.
 
     Returns {drop_height_mm, impact_velocity_m_s, pulse, pulse_factor,
     crush_distance_mm, g_avg, g_peak, pulse_duration_ms, deceleration_limit_g,
@@ -5085,6 +5085,126 @@ def drop_impact(
         if v is not None:
             params[k] = v
     return _call("drop_impact", **params)
+
+
+@mcp.tool()
+def bar_impact(
+    velocity_m_s: float,
+    length_mm: float,
+    youngs_gpa: float | None = None,
+    density_kg_m3: float | None = None,
+    material: str | None = None,
+    area_mm2: float | None = None,
+    yield_mpa: float | None = None,
+    tangent_mpa: float | None = None,
+) -> dict:
+    """St-Venant bar impact, exact (NO solver): a uniform bar striking a rigid wall
+    end-on. Face stress σ = ρ·c₀·v₀ with c₀ = √(E/ρ) — mass, area and length cancel,
+    so only a slower strike or a softer/lighter material lowers it; contact lasts
+    2L/c₀ and the bar leaves stress-free at the strike speed (restitution 1). Past
+    the yield velocity v_y = σ_y/(ρ·c₀) the face yields and a bilinear material
+    (`tangent_mpa`) caps at σ_y + ρ·c_p·(v₀ − v_y), c_p = √(E_t/ρ). E and ρ from
+    `youngs_gpa`/`density_kg_m3` or a Materials-DB `material` (which also supplies
+    yield). `area_mm2` adds force_n. The closed-form twin impact_dynamics_submit is
+    gated against; also the quick ceiling on what any strike at this speed can do to
+    this material. Uniaxial-stress (slender bar) theory.
+
+    Returns {wave_speed_m_s, stress_mpa, elastic_stress_mpa, force_n,
+    contact_duration_ms, rebound_velocity_m_s, yield_velocity_m_s, plastic,
+    plastic_wave_speed_m_s, fidelity, band_pct, valid_range_ok, warnings,
+    escalate_to}."""
+    params = {"velocity_m_s": velocity_m_s, "length_mm": length_mm}
+    for k, v in (("youngs_gpa", youngs_gpa), ("density_kg_m3", density_kg_m3),
+                 ("material", material), ("area_mm2", area_mm2),
+                 ("yield_mpa", yield_mpa), ("tangent_mpa", tangent_mpa)):
+        if v is not None:
+            params[k] = v
+    return _call("bar_impact", **params)
+
+
+@mcp.tool()
+def impact_dynamics_submit(
+    body: str,
+    drop_height_mm: float | None = None,
+    velocity_m_s: float | None = None,
+    direction: str | list[float] = "-z",
+    material: str | None = None,
+    youngs_mpa: float | None = None,
+    poisson: float | None = None,
+    density_kg_m3: float | None = None,
+    yield_mpa: float | None = None,
+    plastic: bool = False,
+    tangent_mpa: float | None = None,
+    method: str = "implicit",
+    duration_s: float | None = None,
+    gap_mm: float | None = None,
+    char_length_mm: float | None = None,
+    contact_stiffness_mpa_mm: float | None = None,
+    time_step_s: float | None = None,
+    max_time_step_s: float | None = None,
+    samples: int | None = None,
+    gravity: bool = True,
+    deceleration_limit_g: float | None = None,
+    contact: str = "auto",
+) -> dict:
+    """Transient DROP / IMPACT dynamics — the solve `drop_impact` escalates to. Meshes
+    `body`, flies it at `velocity_m_s` (or the free-fall speed of `drop_height_mm` —
+    exactly one) along `direction` into a fixed rigid floor through penalty contact,
+    and integrates the motion with CalculiX `*DYNAMIC`. Async: returns a job — poll
+    job_result. Degrades to {ok:false, reason, install} when ccx is absent.
+
+    `direction` is the way the part TRAVELS: '-z' (default), '+x', … or any 3-vector —
+    [-1,-1,-1] is a corner drop (the floor turns, the part is not re-meshed).
+    Material from `material` or explicit `youngs_mpa`/`poisson`/`density_kg_m3`
+    (required, no defaults — the answer scales with √(E·ρ)). `yield_mpa` arms the
+    stress criterion; `plastic=True` (+ `tangent_mpa`, bilinear) lets it yield
+    instead. `deceleration_limit_g` arms the fragility criterion.
+    `method`: 'implicit' (default; HHT-α, ccx steps adaptively — right for ms-scale
+    drops) | 'explicit' (central difference at the stable step — for stress-wave
+    events ≲ 100 µs; first-order tets). `time_step_s` on an implicit run switches to a
+    FIXED step: several times faster where contact comes on smoothly, but ccx stops
+    if an increment diverges (a flat face landing all at once does). `duration_s`
+    defaults to free flight + 10 wave round trips along the drop — enough for a stiff
+    body; a compliant one needs more, and the gate says so. `samples` is the single
+    output cadence ccx allows (force history AND stress frames; default sized to the
+    mesh). `contact`: 'auto' (default) | 'face' | 'node' — measured: ccx's face-to-face
+    penalty never engages a corner strike (the part falls through) and its
+    node-to-face one locks up on a broad flat landing, so 'auto' uses face contact
+    down to a 45° edge and node contact for anything sharper. `engagement_lag_mm`
+    reports how far the strike point sank before the contact pushed back.
+
+    Validated against the exact St-Venant bar (`bar_impact`): face force ρ·c₀·v₀·A,
+    contact duration 2L/c₀, restitution 1 and the plastic-wave cap all within ~1–3 %.
+    A real part is banded (~20 %): peak force depends on the penalty stiffness and
+    mesh, a stress peak AT the strike point is mesh-dependent, and a sharp wave front
+    rings ~20 % high. No friction, failure or erosion.
+
+    Returns the degradation dict, or {job_id, status, cache_hit}; poll job_result for
+    {ok, returncode, solver, case_dir, nodes, tets, method, direction, velocity_m_s,
+    drop_height_mm, duration_s, time_step_s, mass_g, strike_node, contact_faces,
+    contact, strike_alignment,
+    plastic, bar_stress_mpa, peak_force_n, peak_force_median3_n,
+    peak_force_time_s, peak_g, impulse_n_s,
+    contact_start_s, contact_duration_s, separated, arrested, rebound_velocity_m_s,
+    restitution, energy_end_ratio, energy_min_ratio, mass_check, samples,
+    contact_samples, engagement_lag_mm, peak_von_mises_mpa, peak_stress_node, peak_stress_time_s,
+    peak_stress_location_mm, force_history, gate} where gate is {pass, score,
+    fidelity:"solve", band_pct, checks, utilisation, warnings} — a run that ends
+    before the fall is arrested, or whose energy grows, FAILS."""
+    params: dict = {"body": body, "direction": direction, "method": method,
+                    "plastic": plastic, "gravity": gravity, "contact": contact}
+    for k, v in (("drop_height_mm", drop_height_mm), ("velocity_m_s", velocity_m_s),
+                 ("material", material), ("youngs_mpa", youngs_mpa),
+                 ("poisson", poisson), ("density_kg_m3", density_kg_m3),
+                 ("yield_mpa", yield_mpa), ("tangent_mpa", tangent_mpa),
+                 ("duration_s", duration_s), ("gap_mm", gap_mm),
+                 ("char_length_mm", char_length_mm),
+                 ("contact_stiffness_mpa_mm", contact_stiffness_mpa_mm),
+                 ("time_step_s", time_step_s), ("max_time_step_s", max_time_step_s),
+                 ("samples", samples), ("deceleration_limit_g", deceleration_limit_g)):
+        if v is not None:
+            params[k] = v
+    return _call("impact_dynamics_submit", **params)
 
 
 @mcp.tool()

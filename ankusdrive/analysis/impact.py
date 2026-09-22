@@ -15,12 +15,19 @@ means the average deceleration satisfies m·g·h = F̄·d, so
 Inverted, a deceleration limit G_lim needs crush d ≥ pulse_factor·h/G_lim —
 the cushion-sizing form. The pulse factor IS the design choice (an ideal
 crumple is twice as gentle as a spring for the same stroke); beyond these
-bounding shapes, real cushion-curve data or an explicit dynamics run (horizon
-scope — nothing shipped to escalate to) takes over. Lengths mm, mass g.
+bounding shapes, real cushion-curve data or the transient contact solve
+(``impact_dynamics_submit`` — ``analysis/impact_case.py``, issue #311) takes over.
+Lengths mm, mass g.
+
+``bar_impact`` is that solve's closed-form twin: St-Venant's elastic bar on a rigid
+wall, the one impact problem with an exact answer, plus its bilinear plastic-wave
+extension.
 """
 from __future__ import annotations
 
 import math
+
+from . import materials
 
 _G = 9.80665  # m/s^2
 
@@ -48,8 +55,8 @@ def drop_impact(
     G_avg = h/d and v = √(2gh) are exact (fidelity="exact"); the pulse factor is
     a stated idealization, not scatter, so band_pct is None. The stroke-mode
     pulse duration is the constant-force value t = 2d/v (other pulses are
-    within ~25 % of it). No explicit impact-dynamics solve is shipped
-    (``escalate_to=None`` — horizon scope in SIMULATION_NEXT.md).
+    within ~25 % of it). Where the part is stressed, and what an edge or corner
+    strike changes, is ``escalate_to='impact_dynamics_submit'``.
 
     Returns {drop_height_mm, impact_velocity_m_s, pulse, pulse_factor,
     crush_distance_mm, g_avg, g_peak, pulse_duration_ms, deceleration_limit_g,
@@ -112,5 +119,106 @@ def drop_impact(
         "band_pct": None,
         "valid_range_ok": not warnings,
         "warnings": warnings,
-        "escalate_to": None,
+        "escalate_to": "impact_dynamics_submit",
+    }
+
+
+def _prop(explicit, material, accessor, what):
+    """An explicit value, else ``accessor`` off a Materials-DB card."""
+    if explicit is not None:
+        if explicit <= 0:
+            raise ValueError(f"{what} must be > 0")
+        return float(explicit)
+    if material:
+        try:
+            val = materials.numeric(materials.get(material), accessor)
+        except (materials.MaterialNotFound, KeyError):
+            val = None
+        if val:
+            return val
+    raise ValueError(f"provide {what} or a material that carries it")
+
+
+def bar_impact(
+    velocity_m_s: float,
+    length_mm: float,
+    youngs_gpa: float | None = None,
+    density_kg_m3: float | None = None,
+    material: str | None = None,
+    area_mm2: float | None = None,
+    yield_mpa: float | None = None,
+    tangent_mpa: float | None = None,
+) -> dict:
+    """St-Venant bar impact (no solver) — a uniform bar striking a rigid wall end-on
+    at ``velocity_m_s``; the exact twin ``impact_dynamics_submit`` is gated against.
+
+    A compression wave leaves the struck face at the bar speed c₀ = √(E/ρ), bringing
+    the material behind it to rest at
+
+        σ = ρ·c₀·v₀                       (exact, 1-D elastic)
+
+    It reflects off the free end as a release wave, and when that returns — after
+    T = 2L/c₀ — the bar leaves stress-free at −v₀ (restitution 1). Mass, area and
+    length cancel from σ: the only way to lower it is a slower strike or a softer,
+    lighter material.
+
+    Past v_y = σ_y/(ρ·c₀) the face yields. For a bilinear material (tangent modulus
+    ``tangent_mpa``) an elastic precursor carries σ_y and a slower plastic wave
+    (c_p = √(E_t/ρ)) carries the rest, so σ = σ_y + ρ·c_p·(v₀ − v_y); perfectly
+    plastic (E_t = 0) caps at σ_y. Give ``yield_mpa`` (or a ``material`` that has it)
+    to get that branch; rebound and the 2L/c₀ duration are then no longer exact and
+    are returned as None.
+
+    Exact for uniaxial stress (a slender bar; ν drops out) — a squat body is 3-D and
+    its wave speed rises toward the dilatational one. Returns {wave_speed_m_s,
+    stress_mpa, elastic_stress_mpa, force_n, contact_duration_ms,
+    rebound_velocity_m_s, yield_velocity_m_s, plastic, plastic_wave_speed_m_s,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    if velocity_m_s <= 0 or length_mm <= 0:
+        raise ValueError("velocity_m_s and length_mm must be > 0")
+    if area_mm2 is not None and area_mm2 <= 0:
+        raise ValueError("area_mm2 must be > 0")
+    e_mpa = _prop(youngs_gpa, material, "youngs_gpa", "youngs_gpa") * 1e3
+    rho = _prop(density_kg_m3, material, "density_kg_m3", "density_kg_m3")
+    if yield_mpa is None and material:
+        try:
+            yield_mpa = materials.numeric(materials.get(material), "yield_mpa")
+        except (materials.MaterialNotFound, KeyError):
+            yield_mpa = None
+    if yield_mpa is not None and yield_mpa <= 0:
+        raise ValueError("yield_mpa must be > 0")
+    et = 0.0 if tangent_mpa is None else float(tangent_mpa)
+    if not (0.0 <= et < e_mpa):
+        raise ValueError("tangent_mpa must satisfy 0 <= tangent_mpa < E")
+
+    c0 = math.sqrt(e_mpa * 1e6 / rho)                       # m/s
+    elastic = rho * c0 * velocity_m_s / 1e6                 # MPa
+    v_y = yield_mpa * 1e6 / (rho * c0) if yield_mpa else None
+    plastic = v_y is not None and velocity_m_s > v_y
+    warnings: list[str] = []
+    cp = None
+    if plastic:
+        cp = math.sqrt(et * 1e6 / rho)
+        stress = yield_mpa + rho * cp * (velocity_m_s - v_y) / 1e6
+        warnings.append(
+            f"strike speed exceeds the yield velocity {v_y:.2f} m/s — the face "
+            "yields; stress is the bilinear plastic-wave value, not ρ·c₀·v₀")
+    else:
+        stress = elastic
+    return {
+        "wave_speed_m_s": round(c0, 3),
+        "stress_mpa": round(stress, 4),
+        "elastic_stress_mpa": round(elastic, 4),
+        "force_n": round(stress * area_mm2, 4) if area_mm2 is not None else None,
+        "contact_duration_ms": (None if plastic
+                                else round(2.0 * length_mm / 1e3 / c0 * 1e3, 6)),
+        "rebound_velocity_m_s": None if plastic else velocity_m_s,
+        "yield_velocity_m_s": round(v_y, 4) if v_y is not None else None,
+        "plastic": plastic,
+        "plastic_wave_speed_m_s": round(cp, 3) if cp is not None else None,
+        "fidelity": "exact",
+        "band_pct": None,
+        "valid_range_ok": not plastic,
+        "warnings": warnings,
+        "escalate_to": "impact_dynamics_submit",
     }

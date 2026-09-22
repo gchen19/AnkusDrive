@@ -14804,6 +14804,19 @@ def _h_drop_impact(p):
     return impact.drop_impact(**p)
 
 
+@handler("bar_impact")
+def _h_bar_impact(p):
+    """St-Venant bar impact, exact (no solver): face stress ρ·c₀·v₀, contact duration
+    2L/c₀, stress-free rebound at the strike speed; past the yield velocity the
+    bilinear plastic-wave cap σ_y + ρ·c_p·(v − v_y). The closed-form twin
+    impact_dynamics_submit is gated against. See ankusdrive.analysis.impact. Returns
+    {wave_speed_m_s, stress_mpa, elastic_stress_mpa, force_n, contact_duration_ms,
+    rebound_velocity_m_s, yield_velocity_m_s, plastic, plastic_wave_speed_m_s,
+    fidelity, band_pct, valid_range_ok, warnings, escalate_to}."""
+    from ankusdrive.analysis import impact
+    return impact.bar_impact(**p)
+
+
 @handler("thermal_transient_1d")
 def _h_thermal_transient_1d(p):
     """Analytic 1-D plane-wall transient (one-term Heisler series) — the closed-form
@@ -17431,6 +17444,214 @@ def _h_molding_warpage_submit(p):
     if not p.get("body"):
         raise ValueError("body (a shape handle) is required for the warpage solve")
     return _molding_warpage_submit(p, info)
+
+
+# --- impact dynamics (issue #311; CalculiX *DYNAMIC + penalty contact) ---------
+
+def _resolve_impact_props(p):
+    """(youngs_mpa, poisson, density_kg_m3, yield_mpa|None) for the impact solve, from
+    explicit params then the ``material`` card. No fallbacks: a drop result scales
+    with √(E·ρ), so a guessed material is a guessed answer — raise instead."""
+    from ankusdrive.analysis import materials as _materials
+    card = _materials.get(p["material"]) if p.get("material") else {}
+
+    def _pick(key, accessor, what):
+        v = p.get(key)
+        if v is None and card:
+            v = _materials.numeric(card, accessor)
+        if v is None:
+            raise ValueError(f"provide {what} or a material that carries it")
+        return float(v)
+
+    E = _pick("youngs_mpa", "youngs_mpa", "youngs_mpa")
+    nu = _pick("poisson", "poisson", "poisson")
+    rho = _pick("density_kg_m3", "density_kg_m3", "density_kg_m3")
+    sy = p.get("yield_mpa")
+    if sy is None and card:
+        sy = _materials.numeric(card, "yield_mpa")
+    return E, nu, rho, (float(sy) if sy is not None else None)
+
+
+def _impact_dynamics_submit(p, info):
+    """Transient drop/impact solve (#311). Gmsh-meshes the FreeCAD solid on the MAIN
+    thread (the jobs.py contract keeps all FreeCAD work out of the background fn) —
+    second-order tets for the implicit integrator, first-order for the explicit one,
+    whose lumped mass needs them — then writes the ``*DYNAMIC`` contact deck and runs
+    ``ccx`` in the background. Degrades upstream when ccx is absent."""
+    import math
+
+    from femmesh.gmshtools import GmshTools
+
+    from ankusdrive import jobs
+    from ankusdrive.analysis import impact as _screen
+    from ankusdrive.analysis import impact_case as _imp
+
+    ccx_bin = info["path"]
+    doc = _active_doc()
+    obj = _shape_handle_to_obj(p["body"])
+    h_drop, v = p.get("drop_height_mm"), p.get("velocity_m_s")
+    if (h_drop is None) == (v is None):
+        raise ValueError("give exactly one of drop_height_mm or velocity_m_s")
+    if h_drop is not None:
+        if h_drop <= 0:
+            raise ValueError("drop_height_mm must be > 0")
+        v = math.sqrt(2.0 * _imp.G0_MM_S2 * float(h_drop)) / 1e3
+    v = float(v)
+    method = p.get("method", "implicit")
+    if method not in ("implicit", "explicit"):
+        raise ValueError("method must be 'implicit' or 'explicit'")
+    E, nu, rho, sy = _resolve_impact_props(p)
+    plastic = bool(p.get("plastic", False))
+    if plastic and sy is None:
+        raise ValueError("plastic=True needs yield_mpa (or a material that carries it)")
+    direction = p.get("direction", "-z")
+    _imp.drop_direction(direction)                   # fail fast, before meshing
+    char_length = float(p.get("char_length_mm", 0.0))
+
+    # mesh + export on the MAIN thread; the temp FemMesh never outlives this call
+    mesh = ObjectsFem.makeMeshGmsh(doc, "ImpactMesh")
+    mesh.Shape = obj
+    if char_length > 0:
+        mesh.CharacteristicLengthMax = char_length
+    mesh.ElementOrder = "1st" if method == "explicit" else "2nd"
+    doc.recompute()
+    case_dir = _cases.new("impact_ccx")
+    with _gmsh_serial_meshing():
+        try:
+            err = GmshTools(mesh).create_mesh()
+            nodes_n, tets = mesh.FemMesh.NodeCount, mesh.FemMesh.TetraCount
+            if not tets:
+                raise RuntimeError(f"Gmsh produced no volume mesh ({err or 'no detail'})")
+            mesh.FemMesh.writeABAQUS(os.path.join(case_dir, "mesh.inp"), 2, False)
+        finally:
+            doc.removeObject(mesh.Name)
+            doc.recompute()
+
+    built = _imp.write_impact_case(
+        case_dir, mesh=_imp.parse_mesh_inp(os.path.join(case_dir, "mesh.inp")),
+        youngs_mpa=E, poisson=nu, density_kg_m3=rho, velocity_m_s=v,
+        direction=direction, duration_s=p.get("duration_s"), gap_mm=p.get("gap_mm"),
+        method=method, contact_stiffness_mpa_mm=p.get("contact_stiffness_mpa_mm"),
+        yield_mpa=sy if plastic else None, tangent_mpa=p.get("tangent_mpa"),
+        time_step_s=p.get("time_step_s"), max_time_step_s=p.get("max_time_step_s"),
+        gravity=bool(p.get("gravity", True)), samples=p.get("samples"),
+        contact=p.get("contact", "auto"))
+    g_limit = p.get("deceleration_limit_g")
+    twin = _screen.bar_impact(v, built["extent_mm"], youngs_gpa=E / 1e3,
+                              density_kg_m3=rho)
+
+    bb = obj.Shape.BoundBox
+    key = jobs.content_key("impact_dynamics", {"body": {
+        "volume": round(obj.Shape.Volume, 6), "area": round(obj.Shape.Area, 6),
+        "bbox": [round(c, 6) for c in (bb.XLength, bb.YLength, bb.ZLength)],
+        "char": char_length, "E": E, "nu": nu, "rho": rho, "sy": sy,
+        "plastic": plastic, "et": p.get("tangent_mpa"), "v": round(v, 9),
+        "dir": built["direction"], "dur": built["duration_s"], "gap": built["gap_mm"],
+        "method": method, "k": built["contact_stiffness_mpa_mm"],
+        "dt": built["time_step_s"], "adaptive": built["adaptive"],
+        "dtmax": p.get("max_time_step_s"),
+        "grav": built["gravity"], "samples": built["samples"], "glim": g_limit,
+        "contact": built["contact"]}})
+
+    def _work():
+        import subprocess
+        argv = [ccx_bin] + built["argv"][1:]
+        _cases.snapshot(case_dir)              # the deck, before ccx writes into it
+        proc = subprocess.run(argv, cwd=case_dir, capture_output=True, text=True)
+        hist = _imp.parse_impact_dat(
+            os.path.join(case_dir, built["job_name"] + ".dat"), tuple(built["direction"]))
+        out = {
+            "ok": proc.returncode == 0 and hist is not None,
+            "returncode": proc.returncode,
+            "solver": "calculix",
+            "case_dir": case_dir,
+            "nodes": nodes_n,
+            "tets": tets,
+            "method": method,
+            "direction": built["direction"],
+            "velocity_m_s": round(v, 6),
+            "drop_height_mm": h_drop,
+            "duration_s": built["duration_s"],
+            "time_step_s": built["time_step_s"],
+            "mass_g": round(built["mass_t"] * 1e6, 6),
+            "strike_node": built["lowest_node"],
+            "contact_faces": built["n_slave_faces"],
+            "contact": built["contact"],
+            "strike_alignment": built["strike_alignment"],
+            "plastic": plastic,
+            # the 1-D reference for THIS material and speed (ρ·c₀·v). A squat body
+            # landing flat runs above it — dilatational speed — and a corner far above
+            "bar_stress_mpa": twin["elastic_stress_mpa"],
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+        if hist is None:
+            out["reason"] = ("ccx produced no floor-reaction history — the dynamic "
+                             "solve failed (see stdout_tail)")
+            return out
+        red = _imp.reduce_impact(hist, mass_t=built["mass_t"],
+                                 velocity_mm_s=built["velocity_mm_s"],
+                                 gravity=built["gravity"], gap_mm=built["gap_mm"])
+        stress = _imp.parse_peak_stress_frd(
+            os.path.join(case_dir, built["job_name"] + ".frd"),
+            exclude_nodes=built["floor_nodes"])
+        out.update(red)
+        if stress:
+            out.update({"peak_von_mises_mpa": stress["peak_von_mises_mpa"],
+                        "peak_stress_node": stress["node"],
+                        "peak_stress_time_s": stress["time_s"],
+                        "peak_stress_location_mm": stress["location_mm"]})
+        step = max(1, len(hist["t"]) // 100)
+        out["force_history"] = [[t, round(f, 4)] for t, f in
+                                zip(hist["t"][::step], hist["force_n"][::step])]
+        out["gate"] = _imp.impact_gate(
+            red, stress, yield_mpa=sy, deceleration_limit_g=g_limit, plastic=plastic,
+            extent_mm=built["extent_mm"])
+        return out
+
+    return jobs.submit("impact_dynamics", _work, key=key,
+                       meta={"velocity_m_s": round(v, 6), "method": method,
+                             "direction": built["direction"], "tets": tets})
+
+
+@handler("impact_dynamics_submit")
+def _h_impact_dynamics_submit(p):
+    """Transient **drop / impact dynamics** via CalculiX ``*DYNAMIC`` with penalty
+    contact (issue #311), OFF the MCP channel — the solve `drop_impact` escalates to.
+    Degrades to ``{ok:false, reason, install}`` when ``ccx`` is absent (never raises on
+    a miss).
+
+    Flies the meshed `body` at `velocity_m_s` (or the free-fall speed of
+    `drop_height_mm` — exactly one) along `direction` ('-z' default, '+x' …, or any
+    3-vector: (-1,-1,-1) is a corner drop) into a fixed rigid floor normal to it.
+    Material from `material` or explicit `youngs_mpa`/`poisson`/`density_kg_m3`
+    (required — no defaults), `yield_mpa` for the stress criterion;
+    `plastic=True` (+ `tangent_mpa`) switches on bilinear plasticity.
+    `method='implicit'` (default, HHT-α, ccx-adaptive stepping, ms-scale drops,
+    2nd-order tets) or 'explicit' (central difference at the stable step, stress-wave
+    events, 1st-order tets). Optional: `duration_s` (default free flight + 10 wave
+    round trips along the drop), `gap_mm`, `char_length_mm`,
+    `contact_stiffness_mpa_mm`, `time_step_s` (implicit: run a FIXED step instead —
+    several times faster where contact comes on smoothly, but ccx stops if an
+    increment diverges), `max_time_step_s`, `samples`, `gravity`,
+    `deceleration_limit_g`, `contact` ('auto' default | 'face' | 'node' — ccx's
+    face-to-face penalty never engages a corner strike and its node-to-face one locks
+    up on a broad flat landing, so 'auto' picks by how squarely the strike point faces
+    the floor).
+
+    Poll job_result for `{ok, returncode, solver, case_dir, nodes, tets, method,
+    direction, velocity_m_s, mass_g, peak_force_n, peak_g, impulse_n_s,
+    contact_duration_s, separated, arrested, restitution, energy_end_ratio,
+    mass_check, peak_von_mises_mpa, peak_stress_location_mm, bar_stress_mpa,
+    force_history, gate}` — everything kinematic is reduced from the floor reaction by
+    Newton's second law. `gate` is the house verdict `{pass, score, fidelity:'solve',
+    band_pct, checks, utilisation, warnings}`: a run that ends before the fall is
+    arrested, or whose energy grows, FAILS rather than reporting a gentle drop."""
+    info = _require_solver("calculix")
+    if not info["ok"]:                               # graceful degradation
+        return info
+    if not p.get("body"):
+        raise ValueError("body (a shape handle) is required for the impact solve")
+    return _impact_dynamics_submit(p, info)
 
 
 @handler("thermal_transient_submit")
