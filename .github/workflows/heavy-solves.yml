@@ -446,6 +446,11 @@ jobs:
     timeout-minutes: 240
     env:
       RUN_HEAVY_SOLVES: "1"
+      # Job-wait ceilings in the tests are sized for native solves. Under emulation the
+      # RANS sphere in test_wind_tunnel took 554/592/706/811 s across runs and then
+      # crossed its 900 s ceiling while still solving: variance, not a regression.
+      # 2x keeps a hung job bounded well inside this job's 240 min.
+      HEAVY_SOLVE_TIME_SCALE: "2"
     defaults:
       run:
         shell: bash -el {0}   # login shell so the conda env stays activated

@@ -28,6 +28,16 @@ import os
 
 RUN_HEAVY_SOLVES = os.environ.get("RUN_HEAVY_SOLVES") == "1"
 
+# Wall-clock multiplier for a lane that runs the same solves slower than native — the
+# QEMU TCG lane (heavy-solves-macos-vm) sets it. A job-wait ceiling sized for a native
+# solve times out there on nothing but emulation variance, not on a wrong answer.
+TIME_SCALE = float(os.environ.get("HEAVY_SOLVE_TIME_SCALE") or 1.0)
+
+
+def scaled_timeout(seconds: float) -> float:
+    """``seconds`` stretched by the lane's HEAVY_SOLVE_TIME_SCALE (default 1)."""
+    return seconds * TIME_SCALE
+
 
 def skip_heavy(label: str = "") -> bool:
     """True (and prints a reason) when live external-solver solves are gated off.
