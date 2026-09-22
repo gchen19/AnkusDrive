@@ -19,6 +19,7 @@ mirroring the env vars (one key per ``ANKUSDRIVE_*`` var, lowercased, minus the
 prefix)::
 
     freecadcmd = "C:/Program Files/FreeCAD 1.1/bin/freecadcmd.exe"
+    journal_dir = "~/ankusdrive-journal"         # ANKUSDRIVE_JOURNAL_DIR (#433); unset = off
     [solvers]
     su2_path        = "C:/.../SU2_CFD.exe"       # ANKUSDRIVE_SU2_PATH
     elmer_path      = "C:/.../ElmerSolver.exe"   # ANKUSDRIVE_ELMER_PATH
@@ -165,12 +166,25 @@ def load() -> dict:
 
 def _config_key(env_var: str):
     """Map a ``ANKUSDRIVE_*`` env var to its config location: ``FREECADCMD`` and
-    ``TOOLSETS`` (#377) and ``ALLOW_RUN_SCRIPT`` (#378) are top-level keys; everything else
-    lives lowercased under ``[solvers]``."""
+    ``TOOLSETS`` (#377) and ``ALLOW_RUN_SCRIPT`` (#378) and the durable journal's
+    ``JOURNAL_*`` settings (#433) are top-level keys; everything else lives lowercased
+    under ``[solvers]``."""
     name = env_var[len(_ENV_PREFIX):] if env_var.startswith(_ENV_PREFIX) else env_var
-    if name in ("FREECADCMD", "TOOLSETS", "ALLOW_RUN_SCRIPT"):
+    if name in ("FREECADCMD", "TOOLSETS", "ALLOW_RUN_SCRIPT") or name.startswith("JOURNAL_"):
         return (name.lower(),)
     return ("solvers", name.lower())
+
+
+def _config_keys(env_var: str) -> list:
+    """Every config location ``env_var`` is read from, first match wins: the
+    canonical :func:`_config_key`, then an alias. The only alias is #433's proposed
+    spelling for the journal — ``[journal] dir`` for ``journal_dir``, and likewise
+    ``redact``, ``keep``, … — read but never written."""
+    keys = [_config_key(env_var)]
+    name = env_var[len(_ENV_PREFIX):] if env_var.startswith(_ENV_PREFIX) else env_var
+    if name.startswith("JOURNAL_"):
+        keys.append(("journal", name[len("JOURNAL_"):].lower()))
+    return keys
 
 
 def lookup(env_var: str) -> tuple:
@@ -179,13 +193,23 @@ def lookup(env_var: str) -> tuple:
     when neither sets it (the caller falls through to PATH/auto-discovery)."""
     if env := os.environ.get(env_var):
         return env, "env"
-    node: object = load()
-    for part in _config_key(env_var):
-        if not isinstance(node, dict) or part not in node:
-            return None, None
-        node = node[part]
-    if isinstance(node, str) and node:
-        return node, "config"
+    data = load()
+    for path in _config_keys(env_var):
+        node: object = data
+        for part in path:
+            if not isinstance(node, dict) or part not in node:
+                node = None
+                break
+            node = node[part]
+        if path[0] == "journal" or (len(path) == 1 and path[0].startswith("journal_")):
+            # the journal's settings are booleans and numbers (`redact = true`,
+            # `keep = 20`); every other key stays string-only, as it always was
+            if isinstance(node, bool):
+                return ("1" if node else "0"), "config"
+            if isinstance(node, (int, float)):
+                return str(node), "config"
+        if isinstance(node, str) and node:
+            return node, "config"
     return None, None
 
 

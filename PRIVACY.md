@@ -40,8 +40,9 @@ Everything below stays on your machine:
 | Files you ask it to write: saved documents, exports, drawings, reports, lockfiles, project and item registries | the paths or directories you pass to a tool | until you delete them |
 | Solver working directories and renders | `<system temp>/ankusdrive-cases` (`ANKUSDRIVE_CASE_ROOT` to move it), or a `workdir` / `case_dir` you pass | kept so you can inspect the deck a result names, then reaped oldest-first past 64 directories or 4 GB, never within an hour of last being written (`ANKUSDRIVE_CASE_KEEP` / `ANKUSDRIVE_CASE_MAX_GB` / `ANKUSDRIVE_CASE_GRACE_S`; `ANKUSDRIVE_KEEP_SCRATCH=1` keeps everything). A directory you supply is never touched |
 | Background job results and open documents | the running server's memory | until the job is discarded or the server exits |
-| A journal of this session's tool calls (tool names, arguments, trimmed results), kept so the session can be exported as a script | the running server's memory; never written to disk | until the server exits |
-| Alongside a call that reached an external solver, where that solver resolved: its path or module and the substrate it ran through | the same in-memory journal; never written to disk | until the server exits |
+| A journal of this session's tool calls (tool names, arguments, trimmed results), kept so the session can be exported as a script | the running server's memory | until the server exits |
+| Alongside a call that reached an external solver, where that solver resolved: its path or module and the substrate it ran through | the same in-memory journal | until the server exits |
+| **Only if you turn it on** (`ANKUSDRIVE_JOURNAL_DIR`, or `journal_dir` in the config file; off by default): the same journal on disk — one file per server session holding the environment header (AnkusDrive / Python / FreeCAD versions, OS and machine architecture, install kind, substrate) and, per call, the tool name, full arguments (including `run_script` code), the trimmed result, a SHA-256 digest of the full result, solver paths, and timestamps | `session-*.jsonl` files in the directory you name, readable only by your user account where the OS supports it | kept up to 50 files / 512 MB, oldest deleted first, never the running session's file or one written in the last hour (`ANKUSDRIVE_JOURNAL_KEEP` / `ANKUSDRIVE_JOURNAL_MAX_MB` / `ANKUSDRIVE_JOURNAL_GRACE_S`); a single session past 64 MB keeps arguments and digests but not result bodies (`ANKUSDRIVE_JOURNAL_FILE_MAX_MB`). Delete the files any time |
 
 A transcript you export with `session_transcript` carries that environment with it —
 AnkusDrive / FreeCAD / Python versions, your OS and machine architecture, and each
@@ -50,6 +51,18 @@ are rewritten relative to `WORKDIR` and a solver path under your home directory 
 collapsed to `~/…`, so the script says which install ran without naming you. It is
 still a description of your machine: read it before sharing, or export with
 `provenance=False`. AnkusDrive never sends it anywhere; where it goes is your choice.
+
+The on-disk journal is not rewritten that way: it is your own record on your own disk,
+so it keeps absolute paths, document names and whatever else your tool arguments
+contained. If those are sensitive — a client's name in a file path or a title block —
+set `ANKUSDRIVE_JOURNAL_REDACT=1` too. String values that look like paths, and names
+and labels (document names, title-block fields and the like), are then stored as
+SHA-256 hashes in arguments, results and error messages, and solver paths under your
+home directory as `~/…`. `run_script` code is never redacted, because it is the
+analysis being recorded. A redacted journal still proves *which* file or result was
+used — hash the candidate and compare — but it can no longer be replayed, and a short,
+guessable name can be recovered from its unsalted hash by trying candidates: redaction
+keeps names out of a file you share, it is not encryption.
 
 ## Sharing and retention
 

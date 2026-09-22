@@ -132,6 +132,13 @@ jobs:
         # worker tiers SKIP without mcp / FreeCAD and run in run_all.
         run: python tests/test_session_transcript.py
 
+      - name: Durable journal — opt-in on-disk record, retention, redaction, export (#433)
+        # Static tier here (stub tools: off by default writes nothing, header + one line
+        # per call, run_script verbatim + hashed, an unwritable dir never breaks a call,
+        # retention caps, redaction, a journal file exports to the transcript's script).
+        # The server tier SKIPs without mcp and runs in run_all.
+        run: python tests/test_journal_durable.py
+
       - name: Solver case directories — one root, a stated retention (#437)
         # Static tier here (the reaping policy and its grace window, the GPL runner's
         # boundary, and an AST sweep that no handler still strands a directory). The

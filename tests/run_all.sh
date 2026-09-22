@@ -137,6 +137,13 @@ echo "== session_transcript tool: read-only, writes nothing, no replay-as-tool (
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_session_transcript.py; else python3 tests/test_session_transcript.py; fi
 
 echo
+echo "== Durable journal: opt-in on-disk record, retention, redaction, export (#433) =="
+# Stub-tool tier (off by default, header + one line per call, run_script verbatim +
+# hashed, unwritable dir never breaks a call, caps, redaction, file -> same script) and
+# a server tier: journal_export of the live session equals session_transcript.
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_journal_durable.py; else python3 tests/test_journal_durable.py; fi
+
+echo
 echo "== Solver case directories: one root, a stated retention (#437) =="
 # Static tier (the reaping policy, the grace window, the GPL runner's boundary, and
 # that no handler still strands a directory); the worker tier needs FreeCAD and runs a

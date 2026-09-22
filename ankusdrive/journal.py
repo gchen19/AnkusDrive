@@ -40,10 +40,21 @@ Each entry:
 * ``code_sha256`` — for ``run_script``, the content hash of the submitted code. The
   code itself is in ``args`` verbatim; the digest is what a report cites (#433).
 
-Memory only. The journal lives in the server process and ends with it: nothing is
-written to disk (PRIVACY.md). It is capped at :data:`MAX_ENTRIES`; past the cap new
-calls are counted but not stored, and :func:`snapshot` says so. The start of a session
-is what replay needs, so the oldest entries are never the ones dropped.
+In memory by default. The journal lives in the server process and ends with it; this
+module itself never touches the disk (PRIVACY.md). It is capped at
+:data:`MAX_ENTRIES`; past the cap new calls are counted but not stored, and
+:func:`snapshot` says so. The start of a session is what replay needs, so the oldest
+entries are never the ones dropped.
+
+On disk only when asked (#433). With ``ANKUSDRIVE_JOURNAL_DIR`` (or ``journal_dir`` in
+config.toml) set, :func:`record` also hands each finished entry — plus the full result,
+for its digest, and the worker's FreeCAD version — to ``journal_store.append``, which
+appends it as one JSONL line to a per-session file with a provenance header, under a
+stated retention and optional redaction; ``journal_export`` / ``ankusdrive journal
+export`` turn that file back into what ``session_transcript`` returns, after the
+server is gone. Unset (the default), nothing is written anywhere. The disk path is
+best-effort in exactly the way the memory path is, and it is not subject to
+:data:`MAX_ENTRIES`: a call past the memory cap is still written.
 
 Journaling never changes what a tool returns or raises. A failure inside the journal
 itself is swallowed, never the tool's.
@@ -163,8 +174,9 @@ def _solvers_named(result: Any) -> list:
 
 def record(tool: str, args: dict, started: float, *, ok: bool, result: Any = None,
            error: BaseException | None = None, workspace: str, worker_pid,
-           seq: int, txn_depth: int) -> None:
-    """Store one finished call. Called by the wrapper; public for tests."""
+           seq: int, txn_depth: int, freecad: Any = None) -> None:
+    """Store one finished call. Called by the wrapper; public for tests. ``freecad`` is
+    the worker's booted FreeCAD version, used only by the durable journal."""
     entry = {"seq": seq, "tool": tool, "args": args, "ok": ok,
              "workspace": workspace, "worker_pid": worker_pid, "txn_depth": txn_depth,
              "elapsed_s": round(time.monotonic() - started, 3)}
@@ -182,13 +194,30 @@ def record(tool: str, args: dict, started: float, *, ok: bool, result: Any = Non
         _after_locked(entry)
         if len(_entries) >= MAX_ENTRIES:
             _state["dropped"] += 1
+        else:
+            _entries.append(entry)
+    _persist(entry, result if ok else None, freecad)
+
+
+def _persist(entry: dict, result: Any, freecad: Any) -> None:
+    """Hand the entry to the durable journal (#433) when it is on. The check is one
+    env/config lookup; the module is imported only once a directory is set. Never
+    raises — ``journal_store.append`` logs its own failures."""
+    try:
+        from ankusdrive import config
+        if not config.get("ANKUSDRIVE_JOURNAL_DIR"):
             return
-        _entries.append(entry)
+        from ankusdrive import journal_store
+        journal_store.append(entry, result, freecad=freecad)
+    except Exception:
+        pass
 
 
 def wrap(name: str, fn: Callable, workspace_of: Callable[[], str],
-         worker_pid_of: Callable[[str], Any]) -> Callable:
-    """Return ``fn`` wrapped to journal each call. Idempotent."""
+         worker_pid_of: Callable[[str], Any],
+         freecad_of: Callable[[str], Any] | None = None) -> Callable:
+    """Return ``fn`` wrapped to journal each call. Idempotent. ``freecad_of(workspace)``
+    returns that workspace's worker's FreeCAD version, or ``None`` (durable journal)."""
     if getattr(fn, "__ankusdrive_journaled__", False):
         return fn
 
@@ -208,31 +237,42 @@ def wrap(name: str, fn: Callable, workspace_of: Callable[[], str],
             result = fn(*a, **kwargs)
         except BaseException as e:
             _safe_record(name, args, started, ok=False, error=e, workspace=workspace,
-                         worker_pid_of=worker_pid_of, seq=seq, txn_depth=depth)
+                         worker_pid_of=worker_pid_of, freecad_of=freecad_of, seq=seq,
+                         txn_depth=depth)
             raise
         _safe_record(name, args, started, ok=True, result=result, workspace=workspace,
-                     worker_pid_of=worker_pid_of, seq=seq, txn_depth=depth)
+                     worker_pid_of=worker_pid_of, freecad_of=freecad_of, seq=seq,
+                     txn_depth=depth)
         return result
 
     journaled.__ankusdrive_journaled__ = True
     return journaled
 
 
-def _safe_record(name, args, started, *, worker_pid_of, workspace, **kw) -> None:
+def _safe_record(name, args, started, *, worker_pid_of, workspace, freecad_of=None,
+                 **kw) -> None:
     try:
+        freecad = None
+        if freecad_of is not None:
+            try:
+                freecad = freecad_of(workspace)
+            except Exception:
+                freecad = None
         record(name, args, started, workspace=workspace,
-               worker_pid=worker_pid_of(workspace), **kw)
+               worker_pid=worker_pid_of(workspace), freecad=freecad, **kw)
     except Exception:
         pass
 
 
 def apply(mcp, workspace_of: Callable[[], str],
-          worker_pid_of: Callable[[str], Any]) -> dict:
+          worker_pid_of: Callable[[str], Any],
+          freecad_of: Callable[[str], Any] | None = None) -> dict:
     """Wrap every tool registered on ``mcp`` (a FastMCP). Run after the server has
-    registered and filtered its tools. Returns ``{recorded_tools, max_entries}``."""
+    registered and filtered its tools. Returns ``{recorded_tools, max_entries}``.
+    ``freecad_of(workspace)`` feeds the durable journal's worker records (#433)."""
     tools = mcp._tool_manager._tools
     for name, tool in tools.items():
-        tool.fn = wrap(name, tool.fn, workspace_of, worker_pid_of)
+        tool.fn = wrap(name, tool.fn, workspace_of, worker_pid_of, freecad_of)
     return {"recorded_tools": len(tools), "max_entries": MAX_ENTRIES}
 
 

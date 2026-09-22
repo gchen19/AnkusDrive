@@ -156,6 +156,49 @@ def cmd_fem_cantilever(args):
     )
 
 
+def cmd_journal_list(args):
+    """The durable journal's sessions on disk (#433) — no worker needed."""
+    from . import journal_store
+    where = args.dir or journal_store.journal_dir()
+    if not where:
+        print("the durable journal is off: set ANKUSDRIVE_JOURNAL_DIR (or journal_dir "
+              "in config.toml), or pass --dir", file=sys.stderr)
+        sys.exit(1)
+    found = journal_store.sessions(where)
+    if args.json:
+        print(json.dumps({"dir": where, "sessions": found}, indent=2))
+        return
+    for s in found:
+        print(f"{s['session']}  {s['modified']}  {s['bytes']:>10} B  {s['file']}")
+    if not found:
+        print(f"no journal sessions in {where}", file=sys.stderr)
+
+
+def cmd_journal_export(args):
+    """A journal file -> the session_transcript record (#433). ``target`` is a session
+    id, ``latest``, or a path to a ``session-*.jsonl`` file (anywhere: this is the
+    user's own shell, not an MCP tool)."""
+    from . import journal_store
+    target = args.target
+    is_file = target.endswith(".jsonl") or Path(target).is_file()
+    try:
+        out = journal_store.export(
+            target, path=str(Path(target).expanduser()) if is_file else None,
+            where=args.dir, workspace=args.workspace,
+            include_read_only=args.include_read_only, checkpoints=not args.no_checkpoints,
+            prune_aborted=args.prune_aborted, provenance=not args.no_provenance)
+    except (ValueError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+    text = json.dumps(out, indent=2, default=str) + "\n" if args.json else out["script"]
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8", newline="\n")
+    else:
+        sys.stdout.write(text)
+    for w in out.get("warnings") or []:
+        print(f"warning: {w}", file=sys.stderr)
+
+
 def build_parser():
     from . import __version__
     p = argparse.ArgumentParser(prog="ankusdrive", description="FreeCAD CLI over a live worker.")
@@ -244,6 +287,33 @@ def build_parser():
                     help="print only the MCP host registration block "
                          "(mcpServers JSON + claude mcp add one-liner) and exit")
     ps.set_defaults(func=cmd_setup)
+
+    pj = sub.add_parser(
+        "journal",
+        help="The durable analysis journal (#433): list past sessions, or export one "
+             "as the same replay script + provenance record session_transcript gives.",
+    )
+    jsub = pj.add_subparsers(dest="journal_command", required=True)
+    pjl = jsub.add_parser("list", help="List the session files in the journal directory.")
+    pjl.add_argument("--dir", default=None,
+                     help="journal directory (default: ANKUSDRIVE_JOURNAL_DIR / journal_dir)")
+    pjl.add_argument("--json", action="store_true", help="emit JSON")
+    pjl.set_defaults(func=cmd_journal_list)
+    pje = jsub.add_parser("export", help="Export one session as a replay script.")
+    pje.add_argument("target", help="session id, 'latest', or a path to a session-*.jsonl")
+    pje.add_argument("-o", "--out", default=None, help="write here instead of stdout")
+    pje.add_argument("--json", action="store_true",
+                     help="the whole record (script, env, ledger, digests, provenance)")
+    pje.add_argument("--dir", default=None,
+                     help="journal directory (default: ANKUSDRIVE_JOURNAL_DIR / journal_dir)")
+    pje.add_argument("--workspace", default=None,
+                     help="workspace to export (default: current when the session ended)")
+    pje.add_argument("--include-read-only", action="store_true")
+    pje.add_argument("--no-checkpoints", action="store_true")
+    pje.add_argument("--prune-aborted", action="store_true")
+    pje.add_argument("--no-provenance", action="store_true",
+                     help="skip the environment record and its solver version probes")
+    pje.set_defaults(func=cmd_journal_export)
 
     pf = sub.add_parser("fem", help="FEM subcommands.")
     fsub = pf.add_subparsers(dest="fem_command", required=True)

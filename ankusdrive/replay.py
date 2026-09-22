@@ -273,6 +273,7 @@ SKIP_TOOLS = {
     "job_list": "job polling (replaced by s.wait)",
     "session_transcript": "the transcript tool itself",
     "save_transcript": "the transcript tool itself",
+    "journal_export": "the transcript tool itself",
 }
 _JOB_FETCH = {"job_result", "render_job"}
 _LINK_KEYS = {"handle", "job_id", "doc", "analysis"}
