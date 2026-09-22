@@ -818,12 +818,12 @@ def test_a_bogus_interpreter_override_is_reported_the_same_way():
         with _patch() as p:
             _container_host(p)
             _fake_container(p, pythons=(_C_OPENEMS_PY, _C_BEMPP_PY))
-            p.env(**{var: "/home/me/.venv-host/bin/python"})     # a HOST venv
+            p.env(**{var: "/srv/host-venv/bin/python"})     # a HOST venv
             assert solvers.solver_python(name) is None
             info = solvers.find_solver(name)
             assert info["available"] is False, info
             hint = info["wire_hint"]
-            assert f"{var}=/home/me/.venv-host/bin/python does not exist inside" in hint, hint
+            assert f"{var}=/srv/host-venv/bin/python does not exist inside" in hint, hint
             assert f"the image's own {own} is used" in hint, hint
         with _patch() as p:                  # present in the image, but the wrong python
             _container_host(p)
