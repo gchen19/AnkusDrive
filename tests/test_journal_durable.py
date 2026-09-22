@@ -133,7 +133,7 @@ def _cad_stub():
         return {"saved": path}
 
     def boom(**kw):
-        raise RuntimeError("cannot open /home/alice/client_x/secret.FCStd")
+        raise RuntimeError("cannot open /srv/alice/client_x/secret.FCStd")
 
     stub = _Stub(add_primitive=add_primitive, mass_properties=mass_properties,
                  run_script=run_script, h_estimate=h_estimate, render_view=render_view,
@@ -156,9 +156,9 @@ def _session(stub):
     stub.call("h_estimate", geometry="vertical_plate", length_m=0.1, delta_t_k=175.0)
     stub.call("run_script", code=CODE)
     stub.call("render_view", handle=box["handle"])
-    stub.call("save_document", path="/home/alice/client_x/bracket.FCStd")
+    stub.call("save_document", path="/srv/alice/client_x/bracket.FCStd")
     try:
-        stub.call("open_document", path="/home/alice/client_x/secret.FCStd")
+        stub.call("open_document", path="/srv/alice/client_x/secret.FCStd")
     except RuntimeError:
         pass
     return box
@@ -334,7 +334,7 @@ def test_redaction_hashes_names_and_paths_but_never_code():
         assert rs["args"]["code"] == CODE, "run_script code is never redacted"
         assert rs["code_sha256"] == "sha256:" + hashlib.sha256(CODE.encode()).hexdigest()
         save = calls[6]
-        path = "/home/alice/client_x/bracket.FCStd"
+        path = "/srv/alice/client_x/bracket.FCStd"
         want = "redacted:sha256:" + hashlib.sha256(path.encode()).hexdigest()
         assert save["args"]["path"] == want, save["args"]
         assert save["result"]["saved"] == want, "the same value hashes the same in a result"
