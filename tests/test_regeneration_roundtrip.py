@@ -42,6 +42,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
+from _mcp_python import HOST_DEPS, ensure_mcp_interpreter, mcp_skip_reason  # noqa: E402
 
 _STEEL = {"Name": "Steel", "YoungsModulus": "210000 MPa",
           "PoissonRatio": "0.30", "Density": "7900 kg/m^3"}
@@ -233,7 +235,7 @@ def test_run_script_honest_under_switch():
 
 def _prereqs_missing():
     if importlib.util.find_spec("mcp") is None:
-        return f"`mcp` not importable in {sys.executable}"
+        return f"{mcp_skip_reason()}"
     try:
         from ankusdrive import client
         path = client._resolve_freecadcmd()
@@ -245,6 +247,9 @@ def _prereqs_missing():
 
 
 def main():
+    # An interpreter with `mcp` (and the rest of the host deps), found by probing —
+    # not assumed to be the one run_all.sh started (#449). Re-execs, or returns.
+    ensure_mcp_interpreter(__file__, needs=HOST_DEPS)
     missing = _prereqs_missing()
     if missing:
         print(f"  SKIP regeneration round trip — {missing}")

@@ -30,6 +30,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 PKG = REPO / "ankusdrive"
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
+from _mcp_python import HOST_DEPS, ensure_mcp_interpreter, mcp_skip_reason  # noqa: E402
 
 
 def _replay():
@@ -512,7 +514,7 @@ def _tests():
     g = globals()
     out = [(n, g[n]) for n in sorted(g) if n.startswith("test_") and callable(g[n])]
     if importlib.util.find_spec("mcp") is None:
-        print(f"  SKIP worker tier — `mcp` not importable in {sys.executable}")
+        print(f"  SKIP worker tier — {mcp_skip_reason()}")
     elif not _freecad_available():
         print("  SKIP worker tier — freecadcmd not resolvable")
     else:
@@ -521,6 +523,9 @@ def _tests():
 
 
 def main():
+    # An interpreter with `mcp` (and the rest of the host deps), found by probing —
+    # not assumed to be the one run_all.sh started (#449). Re-execs, or returns.
+    ensure_mcp_interpreter(__file__, needs=HOST_DEPS)
     failures = []
     t_suite = time.time()
     tests = _tests()
