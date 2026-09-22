@@ -701,6 +701,39 @@ def test_no_encodingless_text_opens():
     )
 
 
+# Tests that judge `mcp` in THIS interpreter on purpose, each with its reason.
+_MCP_THIS_INTERPRETER_ONLY = {
+    # doctor reports on the interpreter it runs in; a re-exec would answer for a
+    # different one. run_all.sh already starts it with python3.
+    "tests/test_doctor_mcp.py",
+}
+_MCP_GATE = re.compile(r'find_spec\(\s*["\']mcp["\']\s*\)|^\s*(?:from|import) mcp\b', re.M)
+
+
+def test_mcp_tests_resolve_their_interpreter():
+    """A test that needs `mcp` finds an interpreter that has it via
+    tests/_mcp_python.py rather than skipping in whichever one started it (#317, #449).
+
+    run_all.sh starts these with $VENV_PY, which on the setup_local.sh layout is
+    FreeCAD's bundled python — never `mcp` — so a test judging only sys.executable
+    skipped its MCP tiers on every run while the suite still printed N/N passed.
+    """
+    offenders = []
+    for f in sorted((REPO / "tests").glob("*.py")):
+        rel = f.relative_to(REPO).as_posix()
+        if f.name == "_mcp_python.py" or rel in _MCP_THIS_INTERPRETER_ONLY:
+            continue
+        src = f.read_text(encoding="utf-8")
+        if _MCP_GATE.search(src) and "ensure_mcp_interpreter(" not in src:
+            offenders.append(rel)
+    assert not offenders, (
+        "these tests gate on `mcp` without tests/_mcp_python.ensure_mcp_interpreter, so "
+        "they skip wherever the starting interpreter lacks it (call it first in main(), "
+        "or add the file to _MCP_THIS_INTERPRETER_ONLY with its reason):\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 def test_mcp_dependency_is_ceiling_pinned():
     """pyproject's mcp dependency must carry a <2 upper bound (issue #277).
 

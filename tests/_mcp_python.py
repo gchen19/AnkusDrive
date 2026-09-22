@@ -31,6 +31,13 @@ wrong question and pass for a venv with no ``mcp`` in it. Such a caller sets
 ``ANKUSDRIVE_TEST_MCP_THIS_PYTHON=1``: no re-exec, and a missing ``mcp`` FAILS
 (exit 1) instead of skipping, because the caller has said it must be there.
 
+TIERED TESTS (#449). Most MCP-using tests also have tiers that need no ``mcp`` and
+ran fine under whatever interpreter started them. They re-exec the whole script,
+so a candidate must not break those tiers: they pass ``needs=HOST_DEPS`` and only
+an interpreter carrying the package's full core dependency set qualifies. When
+none does, they keep running their other tiers and SKIP the MCP ones with
+``mcp_skip_reason()``.
+
 Each candidate is PROBED (``-c "import mcp"``), never judged by its path — the same
 reason ``ankusdrive/solvers.py`` probes solvers instead of trusting a directory.
 """
@@ -48,6 +55,11 @@ REPO = Path(__file__).resolve().parent.parent
 _REEXEC_FLAG = "ANKUSDRIVE_TEST_MCP_REEXEC"
 # Set by a caller that wants THIS interpreter judged, never swapped (see PINNING).
 PIN_FLAG = "ANKUSDRIVE_TEST_MCP_THIS_PYTHON"
+
+# pyproject's core `dependencies`, as import names. `pip install -e .` puts all three
+# in any interpreter it puts `mcp` in, so requiring them costs a real install nothing
+# and keeps a re-exec from landing a test's non-MCP tiers somewhere they can't run.
+HOST_DEPS = ("mcp", "numpy", "PIL")
 
 
 def venv_python(root: Path) -> Path:
@@ -77,23 +89,24 @@ def candidate_pythons():
     return out
 
 
-def imports_mcp(python: Path) -> bool:
-    """Ask an interpreter, rather than inferring from its path."""
+def imports_mcp(python: Path, needs=("mcp",)) -> bool:
+    """Ask an interpreter whether it imports every module in *needs*, rather than
+    inferring from its path."""
     try:
         return subprocess.run(
-            [str(python), "-c", "import mcp"],
+            [str(python), "-c", "import " + ", ".join(needs)],
             capture_output=True, timeout=120,
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
 
-def ensure_mcp_interpreter(script: str):
+def ensure_mcp_interpreter(script: str, needs=("mcp",)):
     """Make sure *script* runs under an interpreter that can import `mcp`.
 
     Returns ``None`` when this interpreter already can. Otherwise re-execs *script*
-    (with the current argv) under the first candidate that can, and does not
-    return. If none can, returns the list of interpreters asked, for the caller's
+    (with the current argv) under the first candidate that imports everything in
+    *needs*, and does not return. If none can, returns the list of interpreters asked, for the caller's
     SKIP message. Under ``ANKUSDRIVE_TEST_MCP_THIS_PYTHON=1`` a missing `mcp` exits 1.
     """
     if importlib.util.find_spec("mcp") is not None:
@@ -107,8 +120,15 @@ def ensure_mcp_interpreter(script: str):
     if not os.environ.get(_REEXEC_FLAG):
         here = os.path.abspath(sys.executable)
         for cand in tried:
-            if os.path.abspath(str(cand)) != here and imports_mcp(cand):
+            if os.path.abspath(str(cand)) != here and imports_mcp(cand, needs):
                 os.environ[_REEXEC_FLAG] = "1"
                 sys.stdout.flush()
                 os.execv(str(cand), [str(cand), str(Path(script).resolve()), *sys.argv[1:]])
     return tried
+
+
+def mcp_skip_reason(needs=HOST_DEPS) -> str:
+    """The SKIP text for a tier that found no qualifying interpreter: names what was
+    required and every interpreter asked, not just this one."""
+    return (f"`mcp` not importable here, and no interpreter imports {', '.join(needs)} "
+            "(tried: " + ", ".join(str(c) for c in candidate_pythons()) + ")")

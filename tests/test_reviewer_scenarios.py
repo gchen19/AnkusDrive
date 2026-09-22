@@ -37,6 +37,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
+from _mcp_python import HOST_DEPS, ensure_mcp_interpreter, mcp_skip_reason  # noqa: E402
 
 # The numbers docs/REVIEWER_GUIDE.md quotes. Change them together.
 PLATE_VOLUME_MM3 = 60 * 40 * 10 - 4 * math.pi * 2.75 ** 2 * 10          # 23,049.67
@@ -163,8 +165,11 @@ def _freecad_available() -> bool:
 
 
 def main():
+    # An interpreter with `mcp` (and the rest of the host deps), found by probing —
+    # not assumed to be the one run_all.sh started (#449). Re-execs, or returns.
+    ensure_mcp_interpreter(__file__, needs=HOST_DEPS)
     if importlib.util.find_spec("mcp") is None:
-        print(f"  SKIP test_reviewer_scenarios — `mcp` not importable in {sys.executable}")
+        print(f"  SKIP test_reviewer_scenarios — {mcp_skip_reason()}")
         return
     if not _freecad_available():
         print("  SKIP test_reviewer_scenarios — freecadcmd not resolvable")
