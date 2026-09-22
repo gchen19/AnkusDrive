@@ -261,9 +261,15 @@ Blender at all. See [`SOLVERS_MACOS.md`](SOLVERS_MACOS.md).
   it used to be trusted and then sourced in a container that has openfoam2512 — the
   solve failing with `blockMesh: command not found`, naming nothing useful. AnkusDrive
   now checks such a path inside the running container and, when it is not there, says
-  so instead. While the container is stopped there is nothing to ask, so the override
-  is still trusted; either clear those entries or set them to what the image publishes
-  (`docker exec <container> env | grep ANKUSDRIVE_`).
+  so instead. That holds for the probed solvers too (#443): a stale
+  `ANKUSDRIVE_ELMER_PATH`, `ANKUSDRIVE_YADE`, `ANKUSDRIVE_OPENEMS_PYTHON` or
+  `ANKUSDRIVE_BEMPP_PYTHON` — typical on a Mac moving from a native or Multipass setup —
+  is reported as not resolving, naming the variable and the image's own copy. It is
+  never silently swapped for that copy: an override that is set is what you asked for,
+  so clearing it is your call. While the container is stopped there is nothing to ask,
+  so the override is still trusted; either clear those entries or set them to what the
+  image publishes (`docker exec <container> env | grep ANKUSDRIVE_`). The preCICE
+  stack's variables are not checked this way yet.
 - **Prepared `case_dir`s must live under the mounted scratch.** A case directory you
   pass in yourself is used at its host path, so it only exists inside the container
   if it is under `$TMPDIR`.
