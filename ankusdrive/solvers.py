@@ -1589,10 +1589,16 @@ def _override_candidates(name: str, spec: dict) -> list:
     ``ANKUSDRIVE_<NAME>_PATH`` then the spec's ``env_aliases`` (the documented
     per-solver variable names, e.g. the FSI stack's ANKUSDRIVE_CCX_PRECICE). Each
     resolves through the config layer (env -> config.toml). No existence check."""
+    return [value for _, value in _override_vars(name, spec)]
+
+
+def _override_vars(name: str, spec: dict) -> list:
+    """:func:`_override_candidates` with the variable each came from, as
+    ``[(var, value)]`` — so a hint names the variable the user actually set."""
     out = []
     for var in (f"ANKUSDRIVE_{name.upper()}_PATH", *spec.get("env_aliases", ())):
         if value := _config.get(var):
-            out.append(value)
+            out.append((var, value))
     return out
 
 
@@ -1731,16 +1737,21 @@ def _vm_binary_path(name: str, spec: dict):
         # #419 (YADE, Elmer): without an override the running container is probed,
         # never assumed to hold the solver. An override is honoured, but checked
         # inside the container (#422) — a host path in a config.toml is absolute too.
+        # One that names nothing there is REPORTED, not stepped over (#443): falling
+        # back to the image's copy would quietly discard what the user set, and the
+        # override that wins by precedence is the one they meant. _unwired_found names
+        # it in the hint. Only a stopped/absent container still trusts it — there is
+        # nothing to ask.
         if not container_available():
             return None
         if container_excludes(name):         # the image says it left this one out
             return None
-        for c in _override_candidates(name, spec):
-            if not c.startswith("/"):
-                continue
-            if container_state() == "running" and not container_file_exists(c):
-                continue                     # names nothing in this image
-            return c
+        if override := next(iter(_override_candidates(name, spec)), None):
+            if not override.startswith("/"):
+                return None                  # can never name an in-container file
+            if container_state() == "running" and not container_file_exists(override):
+                return None                  # names nothing in this image
+            return override
         return _container_binary(spec)
     if not (spec.get("substrate_bins") and _opaque_substrate_available()):
         return None
@@ -1822,8 +1833,10 @@ def _unwired_found(name: str, spec: dict):
             env = (spec.get("interpreter", {}).get("env")
                    or f"ANKUSDRIVE_{name.upper()}_PATH")
             reason = container_excludes(name)
-            override = next((c for c in _override_candidates(name, spec)
-                             if c.startswith("/")), None)
+            interp = spec.get("interpreter")
+            override = _config.get(env) if interp else None
+            if not interp and (set_ := _override_vars(name, spec)):
+                env, override = set_[0]          # the variable that won by precedence
             if reason:
                 # the image SAYS it left this one out (#422) — no point hunting paths
                 key = manifest_key(name)
@@ -1831,13 +1844,29 @@ def _unwired_found(name: str, spec: dict):
                         f"`bash tools/build_solver_image.sh --solvers \"<yours> {key}\"`, "
                         f"or use the full {_SOLVER_IMAGE}. "
                         f"See docs/CONTAINER_SUBSTRATE.md")
-            elif override and not container_file_exists(override):
-                # an override naming a HOST path is the config.toml trap (#422): it is
-                # absolute, so it looks like an in-container path and is trusted
-                hint = (f"{env}={override} does not exist inside container {cname!r} — "
-                        f"that looks like a path from a HOST install. Clear it, or set it "
-                        f"to what the image publishes: `{eng} exec {cname} env | grep "
-                        f"ANKUSDRIVE_`. See docs/CONTAINER_SUBSTRATE.md")
+            elif override:
+                # #443: an override the container cannot use is reported, not stepped
+                # over — say which one, why, and whether the image would have its own
+                where = f"container {cname!r}"
+                if not override.startswith("/"):
+                    why = f"is not an absolute path, so it names nothing inside {where}"
+                elif not container_file_exists(override):
+                    # a HOST path is the config.toml trap (#422): absolute, so it looks
+                    # like an in-container path
+                    why = (f"does not exist inside {where} — that looks like a path from "
+                           f"a HOST install or an older image")
+                else:
+                    why = (f"exists inside {where} but does not import "
+                           f"{', '.join(interp['requires'])}" if interp
+                           else f"is not runnable inside {where}")
+                own = (interp.get("container_python") if interp
+                       else _container_binary(spec))
+                fix = (f"Clear it and the image's own {own} is used"
+                       if own and own != override
+                       else f"Clear it, or set it to what the image publishes: "
+                            f"`{eng} exec {cname} env | grep ANKUSDRIVE_`")
+                hint = (f"{env}={override} {why}. An override that is set is used, "
+                        f"never stepped over. {fix}. See docs/CONTAINER_SUBSTRATE.md")
             else:
                 hint = (f"the solver container {cname!r} is running but {name} did not "
                         f"resolve inside it — the image may not include it (the full "
@@ -1978,6 +2007,16 @@ def _interpreter_candidates(spec: dict) -> list:
     return out
 
 
+def _container_imports(python: str, requires) -> bool:
+    """Whether in-container interpreter ``python`` imports every module in
+    ``requires`` — asked IN the running container, via find_spec (no import runs)."""
+    probe = ("import importlib.util,sys;"
+             f"sys.exit(0 if all(importlib.util.find_spec(m) for m in {tuple(requires)!r}) "
+             "else 1)")
+    r = _container_probe(container_engine(), container_name(), (python, "-c", probe))
+    return bool(r) and r[0] == 0
+
+
 def _interpreter_python(name: str, spec: dict):
     """The interpreter that runs dedicated-interpreter solver ``name``, or None.
 
@@ -1993,18 +2032,14 @@ def _interpreter_python(name: str, spec: dict):
             return None
         if container_excludes(name):         # the image says it left this one out
             return None
+        # An override is the only candidate when set (#443): one the container cannot
+        # run is reported by _unwired_found, never silently replaced by the image's
+        # own venv — the same rule as a binary override in _vm_binary_path.
         cfg = spec["interpreter"]
-        probe = ("import importlib.util,sys;"
-                 f"sys.exit(0 if all(importlib.util.find_spec(m) for m in {tuple(requires)!r}) "
-                 "else 1)")
-        for c in dict.fromkeys(filter(None, (_config.get(cfg["env"]),
-                                             cfg.get("container_python")))):
-            if not c.startswith("/"):
-                continue
-            r = _container_probe(container_engine(), container_name(), (c, "-c", probe))
-            if r and r[0] == 0:
-                return c
-        return None
+        c = _config.get(cfg["env"]) or cfg.get("container_python")
+        if not c or not c.startswith("/"):
+            return None
+        return c if _container_imports(c, requires) else None
     seen = set()
     for c in [*_interpreter_candidates(spec), sys.executable]:
         if not c or c in seen or not os.path.isfile(c):

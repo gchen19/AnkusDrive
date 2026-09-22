@@ -577,11 +577,15 @@ def test_openems_and_bempp_are_asked_inside_the_container():
         interp = [a for a in probes if a[0] not in ("cat", "sh", "test")]
         assert {a[0] for a in interp} == {_C_OPENEMS_PY, _C_BEMPP_PY}, probes
         assert all("find_spec" in a[2] for a in interp), probes
-        # the override is tried first, and a relative one is never trusted
+        # a relative override is never trusted — and never stepped over either (#443):
+        # it is reported, and the container is not even asked about it
         probes.clear()
         p.env(ANKUSDRIVE_OPENEMS_PYTHON="venv/bin/python")
-        assert solvers.solver_python("openems") == _C_OPENEMS_PY
-        assert [a[0] for a in probes if a[0] not in ("cat",)] == [_C_OPENEMS_PY], probes
+        assert solvers.solver_python("openems") is None
+        assert [a for a in probes if a[0] not in ("cat", "test")] == [], probes
+        info = solvers.find_solver("openems")
+        assert "ANKUSDRIVE_OPENEMS_PYTHON=venv/bin/python is not an absolute path" \
+            in info["wire_hint"], info["wire_hint"]
         # kraken is not container-routed: the host decides, the container is never asked
         probes.clear()
         solvers.find_solver("kraken")
@@ -780,6 +784,75 @@ def test_an_unreachable_container_still_trusts_an_override():
         p.set(solvers, "_container_inspect", lambda eng, name: None)   # absent
         p.env(ANKUSDRIVE_OPENFOAM_BASHRC=_C_BASHRC)
         assert solvers.openfoam_bashrc() == _C_BASHRC
+
+# --- an override the container cannot use is reported, never stepped over (#443) ---
+
+def test_a_bogus_binary_override_is_reported_not_trusted_or_discarded():
+    """#443: under `container`, ANKUSDRIVE_ELMER_PATH=/bogus once came back "ready via
+    elmer (in container)" and the solve failed — with the ElmerGrid/ViewFactors legs
+    SKIPping beside a path that does not exist. The override is now asked about, and
+    one that names nothing in the image is a named miss. It is NOT quietly replaced
+    by the image's own copy either: an override that is set is what the user meant,
+    so the hint names it, says why, and says what clearing it would give them."""
+    for name, var, own in (("elmer", "ANKUSDRIVE_ELMER_PATH", _C_ELMER),
+                           ("yade", "ANKUSDRIVE_YADE", _C_YADE)):       # the alias too
+        with _patch() as p:
+            _container_host(p)
+            _fake_container(p, holds=(_C_ELMER, _C_YADE))
+            p.env(**{var: "/bogus/" + name})
+            info = solvers.find_solver(name)
+            assert info["available"] is False, ("a bogus override was trusted", info)
+            assert info["status"] == "unwired", info
+            hint = info["wire_hint"]
+            assert f"{var}=/bogus/{name} does not exist inside container" in hint, hint
+            assert f"Clear it and the image's own {own} is used" in hint, hint
+            assert solvers.routes_through_container(name) is True
+
+
+def test_a_bogus_interpreter_override_is_reported_the_same_way():
+    """The interpreter solvers used to probe the override, fail, and fall back to the
+    image's venv without a word — `doctor` said ready with no hint the setting was
+    ignored. Same decision as the binaries now: reported, never discarded."""
+    for name, var, own in (("bempp", "ANKUSDRIVE_BEMPP_PYTHON", _C_BEMPP_PY),
+                           ("openems", "ANKUSDRIVE_OPENEMS_PYTHON", _C_OPENEMS_PY)):
+        with _patch() as p:
+            _container_host(p)
+            _fake_container(p, pythons=(_C_OPENEMS_PY, _C_BEMPP_PY))
+            p.env(**{var: "/srv/host-venv/bin/python"})     # a HOST venv
+            assert solvers.solver_python(name) is None
+            info = solvers.find_solver(name)
+            assert info["available"] is False, info
+            hint = info["wire_hint"]
+            assert f"{var}=/srv/host-venv/bin/python does not exist inside" in hint, hint
+            assert f"the image's own {own} is used" in hint, hint
+        with _patch() as p:                  # present in the image, but the wrong python
+            _container_host(p)
+            _fake_container(p, holds=("/usr/bin/python3",), pythons=(own,))
+            p.env(**{var: "/usr/bin/python3"})
+            info = solvers.find_solver(name)
+            assert info["available"] is False, info
+            assert "exists inside container" in info["wire_hint"], info["wire_hint"]
+            assert "does not import" in info["wire_hint"], info["wire_hint"]
+
+
+def test_a_good_override_still_wins_and_an_unreachable_container_still_trusts():
+    """The two cases the report must not disturb: an override the image really has is
+    used as-is (no PATH scan), and with the container stopped there is nothing to ask,
+    so the override is trusted exactly as before (#422)."""
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, holds=("/srv/elmer/ElmerSolver", _C_ELMER),
+                        pythons=("/srv/bempp/python", _C_BEMPP_PY))
+        p.env(ANKUSDRIVE_ELMER_PATH="/srv/elmer/ElmerSolver",
+              ANKUSDRIVE_BEMPP_PYTHON="/srv/bempp/python")
+        assert solvers.find_solver("elmer")["path"] == "/srv/elmer/ElmerSolver"
+        assert solvers.solver_python("bempp") == "/srv/bempp/python"
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, state=json.dumps({"Status": "exited", "Running": False}))
+        p.env(ANKUSDRIVE_ELMER_PATH="/bogus/elmer")
+        assert solvers._vm_binary_path("elmer", solvers._spec("elmer")) == "/bogus/elmer"
+
 
 # --- is this image ours? (#423) ---------------------------------------------------
 
