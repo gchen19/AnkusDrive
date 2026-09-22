@@ -546,7 +546,7 @@ every day.
 | Tolerance ↔ cost | `tolerance_cost_check` (per-dimension IT grade, the cheapest process that holds it naturally, a relative cost index, and a flag when a dimension is tighter than the declared process can hold without a secondary operation), `suggest_loosening` (*the loosest tolerance that works* — greedy loosening, every step re-verified against `tolerance_stackup`'s cpk); `cost_estimate(tolerance_class=…)` puts the same curve in the rollup |
 | Design control / PLM | items & part numbers (`items_new`, `items_validate`, `items_resolve`, `items_check_manifest`), recipes (`recipe`, `recipe_list`, `recipe_schema`, `recipe_validate`), feature templates (`feature_instantiate`, `feature_list`, `feature_schema`, `feature_validate`), variant families (`family_materialize`, `family_validate`), lifecycle/revision (`lifecycle_transition`, `lifecycle_editable`, `lifecycle_classify_change`, `lifecycle_apply_change`), change control (`eco_create`, `eco_validate`, `change_impact`, `where_used`, `baseline_create`, `baseline_verify`), interface registry + substitutability (`get_interface`, `substitutability_check`), projects (`scaffold_project`, `project_validate`, `project_check_references`, `project_resolve_manifest`) |
 | Operations | `transaction_open`, `transaction_commit`, `transaction_abort` |
-| Session transcripts | `session_transcript`: the session so far as a Python script that regenerates it (model, drawings, simulations) through these same tools. Handles are variables, job polls are one `s.wait(job)`, measured results are `s.check()` lines that stop a drifted replay, and paths are relative to `WORKDIR`. It is also the **analysis provenance** record: every hand-calc and solve is kept and checked whole, `run_script` carries its SHA-256, and a `PROVENANCE` block names AnkusDrive / FreeCAD / platform / substrate plus every solver the session reached — path, substrate and probed version. Read-only: it returns the script as text. Tool calls are kept in server memory only ([PRIVACY.md](PRIVACY.md)) |
+| Session transcripts | `session_transcript`: the session so far as a Python script that regenerates it (model, drawings, simulations) through these same tools. Handles are variables, job polls are one `s.wait(job)`, measured results are `s.check()` lines that stop a drifted replay, and paths are relative to `WORKDIR`. It is also the **analysis provenance** record: every hand-calc and solve is kept and checked whole, `run_script` carries its SHA-256, and a `PROVENANCE` block names AnkusDrive / FreeCAD / platform / substrate plus every solver the session reached — path, substrate and probed version. Read-only: it returns the script as text. Tool calls are kept in server memory unless you opt into the durable journal: `ANKUSDRIVE_JOURNAL_DIR` appends every call to a per-session JSONL file, and `journal_export` / `ankusdrive journal export` turn a past session back into the same record ([PRIVACY.md](PRIVACY.md)) |
 
 All tools return JSON; geometry-creating tools return a `handle` (e.g.
 `pad_1`) that subsequent calls reference. The heavy simulation families return
@@ -652,6 +652,44 @@ to `~/…`, so the record says which install without saying who. `session_transc
 also returns the record as `provenance` for attaching to a report; pass
 `provenance=False` to skip it and the version probes it runs.
 
+### Keeping the record: the durable journal
+
+A transcript lives as long as the server does. For analysis that feeds a design
+decision, turn on the durable journal — it is **off by default**, and one setting
+enables it:
+
+```bash
+export ANKUSDRIVE_JOURNAL_DIR=~/ankusdrive-journal     # or journal_dir = "..." in config.toml
+```
+
+Every tool call is then appended to `session-<start>-<pid>-<id>.jsonl` in that
+directory: a header with the environment (AnkusDrive / Python / platform / substrate),
+the FreeCAD each worker booted, and one line per call — arguments whole (`run_script`
+code verbatim with its SHA-256), the trimmed result, the solver each solve resolved
+to, and `result_digest`, a SHA-256 over the **full** result, so a result the journal
+had to trim is still pinned. Writes are best-effort: a journal that cannot be written
+logs a warning and never fails or changes a tool call.
+
+After the server has exited, the file turns back into what `session_transcript`
+would have returned — replay script, recorded environment, ordered call ledger with
+digests:
+
+```bash
+ankusdrive journal list
+ankusdrive journal export latest -o transcript.py      # --json for the whole record
+```
+
+or, from an agent, `journal_export(session="latest")` (omit `session` to list).
+
+Retention is stated, not left to the OS: at most 50 session files and 512 MB
+(`ANKUSDRIVE_JOURNAL_KEEP`, `ANKUSDRIVE_JOURNAL_MAX_MB`), oldest first, never the live
+session's file or one written in the last hour (`ANKUSDRIVE_JOURNAL_GRACE_S`); one
+session past 64 MB (`ANKUSDRIVE_JOURNAL_FILE_MAX_MB`) keeps arguments and digests but
+drops result bodies. `ANKUSDRIVE_JOURNAL_REDACT=1` hashes paths and names (document
+names, labels, title-block fields) in arguments, results and errors — never
+`run_script` code or handles. The trade-off: a redacted journal is auditable by
+digest, but the script it exports is not runnable.
+
 ### What the CLI is (and isn't)
 
 The CLI is **not the agent surface** — it's a human-debugging + transport
@@ -665,6 +703,7 @@ tool. Seven subcommands:
 | `ankusdrive run <script.py>` | Execute arbitrary FreeCAD Python in a live worker (set `__result__` to return JSON) |
 | `ankusdrive mcp` | **Start the MCP server over stdio** — this is how an MCP host launches AnkusDrive |
 | `ankusdrive fem cantilever` | Run the built-in canned demo |
+| `ankusdrive journal list` / `export <session\|latest\|file>` | Read the opt-in durable journal: list past sessions, export one as a replay script + provenance record |
 
 Agents do not invoke the CLI. They speak MCP via stdio after the host has
 launched `ankusdrive mcp`. The CLI's job is (a) to start that server and

@@ -203,6 +203,7 @@ NOT_YET_CLASSIFIED = {
     'render_photoreal', 'render_view', 'render_views', 'resolve_edge', 'resolve_face',
     'restart_worker', 'use_workspace', 'list_workspaces', 'close_workspace',
     'session_transcript',   # host-side (#409): a pure function of the call journal
+    'journal_export',       # host-side (#433): a pure function of a journal file
     'revolve', 'run_script', 'save_document', 'scale_shape', 'seal_check',
     'section_view', 'set_active_document', 'set_property', 'set_title_block',
     'set_visibility', 'shell_solid', 'solve_capabilities', 'substitutability_check',

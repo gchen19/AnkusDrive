@@ -46,7 +46,7 @@ table below, plus explicit overrides where the name alone reads badly.
 from __future__ import annotations
 
 READ_ONLY = frozenset("""
-ping list_workspaces session_transcript version list_objects list_documents get_object
+ping list_workspaces session_transcript journal_export version list_objects list_documents get_object
 measure_distance measure_angle bounding_box min_clearance mass_properties
 check_shape check_airtight_path classify_face_sides list_faces list_edges query_faces
 resolve_face resolve_edge verify_feature close_sketch list_assembly_parts

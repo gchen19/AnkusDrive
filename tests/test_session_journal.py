@@ -248,7 +248,8 @@ def test_journal_writes_nothing_to_disk():
         if isinstance(n, ast.Call):
             name = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
             assert name not in {"open", "write_text", "write_bytes", "dump", "mkdir"}, \
-                f"journal.py calls {name}() — the journal is memory-only (PRIVACY.md)"
+                (f"journal.py calls {name}() — journal.py is memory-only; the opt-in "
+                 f"disk journal lives in journal_store.py (#433, PRIVACY.md)")
 
 
 # --- server (needs mcp) -------------------------------------------------------------

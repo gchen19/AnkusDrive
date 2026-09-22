@@ -272,6 +272,32 @@ def session_transcript(workspace: str | None = None, include_read_only: bool = F
     return result
 
 
+@mcp.tool()
+def journal_export(session: str | None = None, workspace: str | None = None,
+                   provenance: bool = True) -> dict:
+    """Export a past session from the on-disk journal (off by default; on with
+    ANKUSDRIVE_JOURNAL_DIR) as session_transcript would have: the replay script, the
+    recorded environment, and the ordered call ledger with each result's SHA-256.
+    Read-only. session: an id or "latest"; omit to list sessions. workspace: default
+    is the one current when the session ended. provenance=False skips solver version
+    probes. A redacted journal (ANKUSDRIVE_JOURNAL_REDACT) exports an audit record,
+    not a runnable script. More options: `ankusdrive journal export`.
+
+    Returns {enabled, dir, live_session, sessions} when listing, else {session,
+    workspace, env, script, ledger, warnings, prerequisites, truncated, redacted,
+    integrity, provenance, ...}."""
+    from . import journal_store as _js
+    if session is None:
+        where = _js.journal_dir()
+        listed = _js.sessions(where) if where else []
+        return {"enabled": where is not None, "dir": where,
+                "live_session": _js.status()["session"],
+                "sessions": [{k: v for k, v in s.items() if k != "file"} for s in listed]}
+    out = _js.export(session, workspace=workspace, provenance=provenance)
+    out.pop("file", None)
+    return out
+
+
 def _session_provenance(ws: str, entries: list) -> dict | None:
     """The environment record for a transcript: the session's own versions plus every
     solver its entries reached. FreeCAD's version comes from the worker, and only if
@@ -8476,7 +8502,9 @@ from ankusdrive import script_policy as _script_policy  # noqa: E402
 RUN_SCRIPT = _script_policy.apply(mcp)
 
 # Last, journal every tool still registered, so a session can be exported as a script
-# that regenerates it (#407, epic #309). Memory only; never changes a result.
+# that regenerates it (#407, epic #309). Memory only unless ANKUSDRIVE_JOURNAL_DIR is
+# set, which also appends each call to a per-session JSONL file (#433). Never changes
+# a result.
 from ankusdrive import journal as _journal  # noqa: E402
 
 
@@ -8485,8 +8513,15 @@ def _worker_pid(name: str):
     return w.proc.pid if w is not None else None
 
 
+def _worker_freecad(name: str):
+    """The FreeCAD version a workspace's worker booted, read off the worker object —
+    never an RPC, so the durable journal (#433) costs a tool call nothing here."""
+    w = _workers.get(name)
+    return getattr(w, "freecad_version", None) if w is not None else None
+
+
 JOURNAL = _journal.apply(mcp, workspace_of=lambda: _current_workspace,
-                         worker_pid_of=_worker_pid)
+                         worker_pid_of=_worker_pid, freecad_of=_worker_freecad)
 
 
 def run():
