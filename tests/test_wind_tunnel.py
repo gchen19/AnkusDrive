@@ -29,11 +29,11 @@ sys.path.insert(0, str(REPO))
 from ankusdrive import Worker  # noqa: E402
 from ankusdrive import solvers  # noqa: E402
 from ankusdrive.analysis import cfd  # noqa: E402
-from tests.heavy_solve import skip_heavy  # noqa: E402
+from tests.heavy_solve import scaled_timeout, skip_heavy  # noqa: E402
 
 
 def _await_job(w, job_id, timeout_s=900):
-    deadline = time.monotonic() + timeout_s
+    deadline = time.monotonic() + scaled_timeout(timeout_s)
     status = None
     while time.monotonic() < deadline:
         status = w.call("job_status", job_id=job_id)
