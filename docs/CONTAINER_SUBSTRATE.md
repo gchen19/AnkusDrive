@@ -21,8 +21,15 @@ replaces multi-hour source builds with one `pull`. Its component licences are li
 in [`docker/heavy-solvers/LICENSES.md`](../docker/heavy-solvers/LICENSES.md).
 
 It is **public** (no login needed) and **multi-arch** — `linux/amd64` and `linux/arm64`,
-each built natively — so on Apple Silicon it runs native, not emulated. `latest` follows
-the default branch; every build is also tagged `sha-<commit>`. **Pin a digest or a
+each built natively — so on Apple Silicon it runs native, not emulated. Two solver sets
+are published, each signed:
+
+| tag | carries | for |
+|---|---|---|
+| `:latest` = `:full` (and `:sha-<commit>`) | every solver below | the default |
+| `:openfoam` (and `:openfoam-sha-<commit>`) | ESI OpenFOAM only — CFD and the snappyHexMesh meshbridge | a CFD-only machine; roughly half the download |
+
+`latest`/`full`/`openfoam` follow the default branch. **Pin a digest or a
 `sha-` tag** for anything reproducible: the same suite CI runs pins a digest in
 [`heavy-solves.yml`](../.github/workflows/heavy-solves.yml).
 
@@ -187,8 +194,9 @@ reaches the network.
 
 ## Building an image with only the solvers you want
 
-The published image carries every solver. If you only need some of them, build your
-own — nothing is compiled, the prebuilt solver trees are copied, so it takes minutes:
+`:full` carries every solver and `:openfoam` only OpenFOAM. For any other set, build
+your own — nothing is compiled, the prebuilt solver trees are copied, so it takes
+minutes:
 
 ```bash
 tools/build_solver_image.sh --solvers "openfoam fsi" -t my-solvers:dev

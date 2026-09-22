@@ -34,6 +34,7 @@ on:
       - "scripts/install-freecad-appimage.sh"
       - "scripts/install-renderers.sh"
       - "scripts/ci-linux-preflight.sh"
+      - "scripts/ci-container-preflight.sh"
       - "tools/build_openinjmoldsim.sh"
       - "ankusdrive/solvers.py"
       - ".github/workflows/heavy-image.yml"
@@ -45,6 +46,7 @@ on:
       - "scripts/install-freecad-appimage.sh"
       - "scripts/install-renderers.sh"
       - "scripts/ci-linux-preflight.sh"
+      - "scripts/ci-container-preflight.sh"
       - "tools/build_openinjmoldsim.sh"
       - "ankusdrive/solvers.py"
       - ".github/workflows/heavy-image.yml"
@@ -337,7 +339,7 @@ jobs:
 
 
   slim:
-    name: Slim solver image (${{ matrix.platform.arch }})
+    name: Slim solver image (${{ matrix.set }}, ${{ matrix.platform.arch }})
     # The same source stages the heavy image assembles, minus FreeCAD, the driver venv
     # and every -dev package: what a user actually runs under the container substrate
     # (#422). It builds from the stage caches, so it USUALLY adds minutes, not another
@@ -357,6 +359,11 @@ jobs:
         platform:
           - { arch: amd64, runner: ubuntu-latest }
           - { arch: arm64, runner: ubuntu-24.04-arm }
+        # The two PUBLISHED solver sets (#422): `full` (:latest / :full) and `openfoam`
+        # (:openfoam, the minimal CFD set). Anything else is a local
+        # tools/build_solver_image.sh build. A PR builds only `full` — slim-subset
+        # already proves the openfoam selection there, on one arch, far cheaper.
+        set: ${{ fromJSON(github.event_name == 'pull_request' && '["full"]' || '["full","openfoam"]') }}
     steps:
       - name: Free disk space
         run: |
@@ -376,10 +383,19 @@ jobs:
           file: docker/heavy-solvers/Dockerfile
           target: slim
           platforms: linux/${{ matrix.platform.arch }}
+          # `openfoam` switches every other solver off; the same WITH_* args drive the
+          # copies, the apt selection, the manifest and the checks (#422 part B).
           build-args: |
             BUILT_SOURCE=published
             BUILT_COMMIT=${{ github.sha }}
             BUILT_WORKFLOW=.github/workflows/heavy-image.yml
+            WITH_OPENFOAM=on
+            WITH_ELMER=${{ matrix.set == 'full' && 'on' || 'off' }}
+            WITH_YADE=${{ matrix.set == 'full' && 'on' || 'off' }}
+            WITH_OPENEMS=${{ matrix.set == 'full' && 'on' || 'off' }}
+            WITH_FSI=${{ matrix.set == 'full' && 'on' || 'off' }}
+            WITH_OIMS=${{ matrix.set == 'full' && 'on' || 'off' }}
+            WITH_BEMPP=${{ matrix.set == 'full' && 'on' || 'off' }}
           # The slim stage's own RUN steps are the gate: every solver's DT_NEEDED must
           # resolve (tools/container_runtime_deps.sh --check, so the trimmed package
           # list is complete on THIS arch) and every solver must actually run. A PR
@@ -394,7 +410,8 @@ jobs:
             type=registry,ref=${{ env.IMAGE }}:cache-elmer-${{ matrix.platform.arch }}
             type=registry,ref=${{ env.IMAGE }}:cache-bempp-${{ matrix.platform.arch }}
             type=registry,ref=${{ env.SLIM_IMAGE }}:cache-slim-${{ matrix.platform.arch }}
-          cache-to: ${{ env.CAN_WRITE == 'true' && format('type=registry,ref={0}:cache-slim-{1},mode=max', env.SLIM_IMAGE, matrix.platform.arch) || '' }}
+          # only `full` writes the slim cache; a subset writing it would evict full's layers
+          cache-to: ${{ env.CAN_WRITE == 'true' && matrix.set == 'full' && format('type=registry,ref={0}:cache-slim-{1},mode=max', env.SLIM_IMAGE, matrix.platform.arch) || '' }}
       - name: Report the size a user downloads
         run: |
           docker buildx imagetools inspect "${{ env.SLIM_IMAGE }}@${{ steps.build.outputs.digest }}" \
@@ -411,7 +428,7 @@ jobs:
       - if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: slim-digest-${{ matrix.platform.arch }}
+          name: slim-digest-${{ matrix.set }}-${{ matrix.platform.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -480,6 +497,30 @@ jobs:
             'source "$ANKUSDRIVE_OPENFOAM_BASHRC" >/dev/null 2>&1; simpleFoam -help >/dev/null'
           full=$(docker run --rm ankusdrive-solvers:subset du -sx --exclude=/proc --exclude=/sys / | cut -f1)
           echo "subset filesystem: $((full / 1024)) MB" >> "$GITHUB_STEP_SUMMARY"
+      # The HOST side of the same claim: with the subset image as the solver container,
+      # AnkusDrive's own discovery must resolve openfoam through it and report the other
+      # six as excluded by the image — never "ready" (#422 part C). This is the path a
+      # user of :openfoam takes, run through the same preflight Lane B uses on :full.
+      # Discovery is stdlib-only, so the runner's python3 needs nothing installed.
+      - name: Preflight — the host reports what the subset image left out
+        env:
+          ANKUSDRIVE_SUBSTRATE: container
+          EXPECT_SOLVERS: openfoam
+          PREFLIGHT_HOST_FREECAD: "0"
+        run: |
+          set -euo pipefail
+          scratch="$RUNNER_TEMP/scratch"
+          mkdir -p "$scratch"
+          export TMPDIR="$scratch"
+          docker run -d --name ankusdrive-solvers --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp --tmpfs /tmp:rw,exec,size=2g -v "$scratch:$scratch" \
+            ankusdrive-solvers:subset sleep infinity
+          # export what the image publishes, as a user would — including the FSI and
+          # openInjMoldSim paths if the image still names them, so their absence is
+          # proven by probing rather than by never being asked
+          while IFS= read -r kv; do export "$kv"; done < <(docker exec ankusdrive-solvers env \
+            | grep -E '^ANKUSDRIVE_(OPENFOAM_PATH|OPENFOAM_BASHRC|FSI_OPENFOAM_BASHRC|CCX_PRECICE|PRECICE_LIB|OPENFOAM_ADAPTER_LIB|OPENINJMOLDSIM|OPENINJMOLDSIM_BASHRC)=' || true)
+          bash scripts/ci-container-preflight.sh
 
   scan:
     name: Scan the slim image (vulnerabilities + secrets)
@@ -560,11 +601,15 @@ jobs:
           category: trivy-slim-image
 
   slim-manifest:
-    name: Publish slim multi-arch manifest
+    name: Publish slim multi-arch manifest (${{ matrix.set }})
     needs: slim
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        set: [full, openfoam]
     permissions:
       contents: read
       packages: write
@@ -575,7 +620,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: slim-digest-*
+          pattern: slim-digest-${{ matrix.set }}-*
           path: ${{ runner.temp }}/digests
           merge-multiple: true
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -588,10 +633,14 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.SLIM_IMAGE }}
+          # full:     :latest, :full, :sha-<c>, :<date>
+          # openfoam: :openfoam, :openfoam-sha-<c>, :openfoam-<date>
+          # (a `cond && '' || x` expression always yields x — hence the != form)
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=schedule,pattern={{date 'YYYYMMDD'}}
-            type=sha,format=short
+            type=raw,value=latest,enable=${{ matrix.set == 'full' && '{{is_default_branch}}' || 'false' }}
+            type=raw,value=${{ matrix.set }},enable={{is_default_branch}}
+            type=schedule,pattern={{date 'YYYYMMDD'}},prefix=${{ matrix.set != 'full' && format('{0}-', matrix.set) || '' }}
+            type=sha,format=short,prefix=${{ matrix.set == 'full' && 'sha-' || format('{0}-sha-', matrix.set) }}
       - name: Join the per-arch digests under the tags
         working-directory: ${{ runner.temp }}/digests
         run: |
@@ -608,7 +657,7 @@ jobs:
           digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
-            echo "### ankusdrive-solvers — slim, for ANKUSDRIVE_SUBSTRATE=container (linux/amd64 + linux/arm64)"
+            echo "### ankusdrive-solvers (${{ matrix.set }}) — slim, for ANKUSDRIVE_SUBSTRATE=container (linux/amd64 + linux/arm64)"
             echo "Pin in docs/CONTAINER_SUBSTRATE.md: \`$SLIM_IMAGE@$digest\`"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "PIN $SLIM_IMAGE@$digest"
@@ -670,7 +719,7 @@ jobs:
       # Kept either way: when it did not fit, this is the only copy.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sbom-slim
+          name: sbom-slim-${{ matrix.set }}
           path: sbom.cdx.json
           retention-days: 90
 

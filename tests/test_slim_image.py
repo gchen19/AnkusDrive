@@ -472,6 +472,60 @@ def test_the_image_is_scanned_for_secrets_and_cves():
     assert (REPO / ".trivyignore").is_file(), "waivers need a reviewed home"
 
 
+# --- the published sets, and the lane that tests what users pull (#422) ------------
+
+def _job(wf: str, name: str) -> str:
+    start = wf.index(f"\n  {name}:")
+    nxt = re.search(r"\n  [a-z-]+:\n", wf[start + 3:])
+    return wf[start:start + 3 + (nxt.start() if nxt else len(wf))]
+
+
+def test_full_and_openfoam_are_both_published_and_signed():
+    """#422 promises two prebuilt tags: `:full` (= latest) and `:openfoam`. Each needs
+    its own per-arch build, its own manifest, its own signature — and the openfoam
+    build must actually switch the other six solvers off."""
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    slim, publish = _job(wf, "slim"), _job(wf, "slim-manifest")
+    assert '["full","openfoam"]' in slim, "main must build both published sets"
+    for solver in PREFIXES:
+        assert f"WITH_{solver.upper()}=${{{{ matrix.set == 'full' && 'on' || 'off' }}}}" \
+            in slim, f"the openfoam set does not switch {solver} off"
+    assert "slim-digest-${{ matrix.set }}-" in slim and \
+        "slim-digest-${{ matrix.set }}-*" in publish, \
+        "each set must publish its OWN digests, or one manifest joins both sets"
+    assert "set: [full, openfoam]" in publish
+    assert "type=raw,value=${{ matrix.set }}" in publish, "no :full / :openfoam tag"
+    assert "'{{is_default_branch}}'" in publish, ":latest must stay default-branch only"
+    assert "Attest build provenance (slim)" in publish, "every published set is signed"
+    # a subset build must never overwrite the full build's layer cache
+    assert "matrix.set == 'full' && format('type=registry,ref={0}:cache-slim" in slim
+
+
+def test_the_subset_is_preflighted_from_the_host():
+    """The manifest is only worth something if the HOST honours it: the subset job
+    runs the container preflight with every other solver expected to be excluded."""
+    job = _job(WORKFLOW.read_text(encoding="utf-8"), "slim-subset")
+    assert "scripts/ci-container-preflight.sh" in job
+    assert "EXPECT_SOLVERS: openfoam" in job
+    pre = (REPO / "scripts" / "ci-container-preflight.sh").read_text(encoding="utf-8")
+    assert "does not include" in pre, "an excluded solver must be checked BY its hint"
+    assert "EXPECT_SOLVERS is set but the image has no" in pre, \
+        "a subset image without a manifest must fail the preflight"
+
+
+def test_lane_b_runs_on_the_image_users_pull():
+    """Lane B exists to test the container substrate; testing it against the CI image
+    proved the relay but not the image anyone ships with it (#422)."""
+    wf = (REPO / ".github" / "workflows" / "heavy-solves.yml").read_text(encoding="utf-8")
+    lane = _job(wf, "heavy-solves-container")
+    m = re.search(r"SOLVER_IMAGE: (\S+)", lane)
+    assert m, "lane B has no SOLVER_IMAGE pin"
+    assert m.group(1).startswith("ghcr.io/gchen19/ankusdrive-solvers@sha256:"), \
+        f"lane B must pin the slim image by digest, not {m.group(1)}"
+    assert "ankusdrive-heavy" not in lane, "lane B still references the CI image"
+    assert "--tmpfs /tmp" in lane, "lane B must start the container as the docs do"
+
+
 def _discover():
     g = globals()
     return [(n, g[n]) for n in sorted(g) if n.startswith("test_") and callable(g[n])]

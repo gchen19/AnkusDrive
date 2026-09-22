@@ -110,7 +110,8 @@ jobs:
     env:
       # Digest-pinned multi-arch manifest: a rebuild of the image never changes what
       # these lanes test until this line changes. heavy-image.yml's `manifest` job
-      # summary prints the digest to pin. Keep heavy-solves-container's pin in lockstep.
+      # summary prints the digest to pin. Keep heavy-vmdisk's pin in lockstep; lane B pins
+      # the slim solver image separately (#422).
       HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:70fcf977584c7c4981f925ba3cb300ec4d2d1b72854e9ae7c5398a321ad11e68  # sha-d636ac2, linux/amd64 + linux/arm64 — SIGNED (#423)
     steps:
       # Not `container:` — that pulls the image before any step, leaving no chance to
@@ -170,7 +171,7 @@ jobs:
     # Lane B of #341 (#362). The RELAY half of what the macOS VM lane verifies, with real
     # solves: the test process runs on the runner HOST with ANKUSDRIVE_SUBSTRATE=container
     # (#361), and every OpenFOAM, YADE, Elmer, openEMS and Bempp solve (#419) crosses
-    # `docker exec` into a sidecar built from the same pinned image — opaque in-container
+    # `docker exec` into a sidecar running the pinned slim solver image (#422) — opaque in-container
     # paths, the case dir at the same absolute path, no stdin, pidfile stop. The host has
     # FreeCAD but deliberately none of those solvers, so a solve that bypassed the relay
     # fails instead of passing; the preflight asserts that, and every other way this lane
@@ -185,8 +186,12 @@ jobs:
     env:
       RUN_HEAVY_SOLVES: "1"
       ANKUSDRIVE_SUBSTRATE: container
-      # keep in lockstep with heavy-solves-hosted's pin
-      HEAVY_IMAGE: ghcr.io/gchen19/ankusdrive-heavy@sha256:70fcf977584c7c4981f925ba3cb300ec4d2d1b72854e9ae7c5398a321ad11e68  # sha-d636ac2, linux/amd64 + linux/arm64 — SIGNED (#423)
+      # The image USERS pull under this substrate (#422): ankusdrive-solvers, the slim
+      # runtime-only image — not the CI image the other lanes run inside. Testing the
+      # relay against the heavy image proved the relay, not what anyone ships with it.
+      # Its own pin, bumped from the "Publish slim multi-arch manifest (full)" summary;
+      # the heavy lanes' pins move separately.
+      SOLVER_IMAGE: ghcr.io/gchen19/ankusdrive-solvers@sha256:0a584038ab8e8d41dd1a97126cfe848dd8d71bfb0b7466aab89ca9ad07e9e49b  # :full sha-65024aa, linux/amd64 + linux/arm64 — SIGNED (#423)
     defaults:
       run:
         shell: bash -el {0}   # login shell so the conda env stays activated
@@ -242,14 +247,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REQUIRE_ATTESTATION: "1"
         run: |
-          if gh attestation verify "oci://$HEAVY_IMAGE" --repo "$GITHUB_REPOSITORY" \
+          if gh attestation verify "oci://$SOLVER_IMAGE" --repo "$GITHUB_REPOSITORY" \
                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/heavy-image.yml"; then
-            echo "provenance verified for $HEAVY_IMAGE"
+            echo "provenance verified for $SOLVER_IMAGE"
           elif [ "$REQUIRE_ATTESTATION" = "1" ]; then
-            echo "::error::$HEAVY_IMAGE has no verifiable provenance from this repo"
+            echo "::error::$SOLVER_IMAGE has no verifiable provenance from this repo"
             exit 1
           else
-            echo "::warning::$HEAVY_IMAGE has no verifiable provenance (pinned before #423; bump the pin to a signed image and set REQUIRE_ATTESTATION=1)"
+            echo "::warning::$SOLVER_IMAGE has no verifiable provenance (pinned before #423; bump the pin to a signed image and set REQUIRE_ATTESTATION=1)"
           fi
 
       - name: Start the solver container
@@ -257,9 +262,11 @@ jobs:
           scratch="$RUNNER_TEMP/scratch"
           mkdir -p "$scratch"
           echo "TMPDIR=$scratch" >> "$GITHUB_ENV"
-          docker pull "$HEAVY_IMAGE"
+          docker pull "$SOLVER_IMAGE"
+          # the documented run (docs/CONTAINER_SUBSTRATE.md), so the lane tests what users do
           docker run -d --name ankusdrive-solvers --user "$(id -u):$(id -g)" \
-            -e HOME=/tmp -v "$scratch:$scratch" "$HEAVY_IMAGE" sleep infinity
+            -e HOME=/tmp --tmpfs /tmp:rw,exec,size=2g -v "$scratch:$scratch" \
+            "$SOLVER_IMAGE" sleep infinity
           docker exec ankusdrive-solvers env \
             | grep -E '^ANKUSDRIVE_(OPENFOAM_PATH|OPENFOAM_BASHRC|FSI_OPENFOAM_BASHRC|CCX_PRECICE|PRECICE_LIB|OPENFOAM_ADAPTER_LIB|OPENINJMOLDSIM|OPENINJMOLDSIM_BASHRC)=' \
             | tee -a "$GITHUB_ENV"

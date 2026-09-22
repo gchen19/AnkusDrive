@@ -177,6 +177,14 @@ Every absent solver **degrades cleanly** — the family returns `{ok: false, rea
 rather than crashing — so an incomplete solver set never breaks the server; those tools
 just report "not available" with the fix. `ankusdrive doctor` shows the current state.
 
+**Container substrate on a Mac: pull `ghcr.io/gchen19/ankusdrive-solvers`, not
+`ankusdrive-heavy`.** The solver image is runtime-only (#422) — about 0.9 GB compressed
+on arm64, against 4.5 GB for the heavy image, which is the **CI** image and carries
+FreeCAD, a driver venv and toolchains a Mac host never runs. `:openfoam` is smaller
+still if CFD is all you need, and `tools/build_solver_image.sh --solvers "…"
+--from-published` builds any other set in minutes with no compile — so OpenFOAM-7 is
+never built on a Mac. See [`CONTAINER_SUBSTRATE.md`](CONTAINER_SUBSTRATE.md).
+
 ## OpenFOAM-backed families via Multipass (CFD / FSI / molding)
 
 OpenFOAM has no native macOS build; [openfoam.org](https://openfoam.org/version/macos/)
