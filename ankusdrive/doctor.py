@@ -131,9 +131,11 @@ def config_report() -> dict:
 def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> dict:
     """Resolve FreeCAD and, if ``probe_version``, boot it once to read the version.
 
-    Returns ``{available, path, exists, source, version?, fix?, error?}``.
+    Returns ``{available, path, exists, source, version?, fix?, error?, gatekeeper?}``.
     ``available`` is True only when the binary exists on disk; ``version`` is filled
-    when the boot succeeds, else ``error`` carries why it couldn't be verified."""
+    when the boot succeeds, else ``error`` carries why it couldn't be verified. On
+    macOS a failed boot also carries ``gatekeeper`` (see ``gatekeeper_report``), and
+    ``fix`` when Gatekeeper is what refused it."""
     path = _resolve_freecadcmd()
     exists = bool(path) and os.path.isfile(path)
     report = {
@@ -151,6 +153,7 @@ def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> di
         # Boot the worker once purely to confirm FreeCAD actually runs and read its
         # version. Time-boxed; any failure downgrades to "resolved but unverified"
         # rather than aborting the whole report.
+        boot_start = time.time()
         try:
             from .client import Worker
             w = Worker(boot_timeout=boot_timeout)
@@ -160,7 +163,131 @@ def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> di
                 w.shutdown()
         except Exception as e:  # noqa: BLE001 — doctor must never crash on a bad boot
             report["error"] = f"resolved but did not boot: {type(e).__name__}: {e}"
+            gk = gatekeeper_report(path, since=boot_start)
+            if gk is not None:
+                report["gatekeeper"] = gk
+                if gk.get("fix"):
+                    report["fix"] = gk["fix"]
     return report
+
+
+# --- macOS Gatekeeper (issue #310) ---------------------------------------------
+#
+# A quarantined FreeCAD whose code seal was broken before it ever ran is killed by
+# Gatekeeper behind a dialog nobody at an MCP host sees; the boot then fails as a bare
+# `WorkerDied`. This names the cause. It deliberately does NOT print the command that
+# clears the quarantine flag: a broken seal means the bundle changed after FreeCAD
+# signed it, the report is read by an agent that can run shell commands, and whether
+# to trust the change is the user's call (docs/MACOS.md, "Gatekeeper and quarantine").
+
+_GATEKEEPER_DOC = f"{_REPO_URL}/blob/main/docs/MACOS.md#gatekeeper-and-quarantine"
+
+# Absolute: MCP hosts spawn the server with a minimal PATH, and spctl lives in
+# /usr/sbin, which that PATH leaves out.
+_XATTR, _SPCTL, _LOG = "/usr/bin/xattr", "/usr/sbin/spctl", "/usr/bin/log"
+
+
+def _run(argv: list, timeout: float = 60.0):
+    """subprocess.run, capturing text. A module-level seam so tests can inject."""
+    import subprocess
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+
+
+def _app_bundle(path: str):
+    """The enclosing ``*.app`` directory of ``path``, or None when it isn't in one."""
+    for parent in Path(path).resolve().parents:
+        if parent.suffix == ".app":
+            return str(parent)
+    return None
+
+
+def _bundle_id(bundle: str):
+    """CFBundleIdentifier from the bundle's Info.plist, or None."""
+    import plistlib
+    try:
+        with open(os.path.join(bundle, "Contents", "Info.plist"), "rb") as f:
+            return plistlib.load(f).get("CFBundleIdentifier")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _gatekeeper_blocked_since(bundle: str, since: float):
+    """Did syspolicyd put up a dialog for this bundle, or kill a process on a
+    Gatekeeper rejection, since ``since``? True/False, or None when the unified log
+    couldn't be read. A rejection line names no path (it logs ``<private>``), so it
+    counts on its own; a dialog line counts only with this bundle's identifier."""
+    start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(since - 1))
+    try:
+        r = _run([_LOG, "show", "--style", "compact", "--start", start, "--predicate",
+                  'process == "syspolicyd" AND (eventMessage CONTAINS "Gatekeeper '
+                  'rejection" OR eventMessage CONTAINS "Prompt shown")'])
+    except Exception:  # noqa: BLE001
+        return None
+    if r.returncode != 0:
+        return None
+    bid = _bundle_id(bundle)
+    for line in r.stdout.splitlines():
+        if "Gatekeeper rejection" in line:
+            return True
+        if "Prompt shown" in line and bid and f"(id: {bid})" in line:
+            return True
+    return False
+
+
+def gatekeeper_report(path: str, system: str | None = None, since: float | None = None):
+    """Why macOS might have refused to run ``path``: its bundle's quarantine flag,
+    Gatekeeper's verdict on the bundle, and — given ``since``, the boot's start time —
+    whether syspolicyd actually blocked it then. Every probe is read-only.
+
+    Returns None off macOS or outside an ``.app``; otherwise
+    ``{bundle, quarantined, quarantine?, assessment, detail, blocked?, fix?}`` where
+    ``assessment`` is ``accepted`` / ``rejected`` / ``unknown``. ``fix`` is set only
+    when the bundle is quarantined, Gatekeeper rejects it, and the log does not show
+    the boot going unblocked. A rejected assessment alone is not enough: a bundle
+    that passed once before its seal broke (the documented solver install) keeps
+    running, so blaming Gatekeeper for its failed boot would send the user after the
+    wrong cause."""
+    if (system or platform.system()) != "Darwin":
+        return None
+    bundle = _app_bundle(path)
+    if bundle is None:
+        return None
+    rep: dict = {"bundle": bundle}
+    try:
+        q = _run([_XATTR, "-p", "com.apple.quarantine", bundle])
+        rep["quarantined"] = q.returncode == 0 and bool(q.stdout.strip())
+        if rep["quarantined"]:
+            rep["quarantine"] = q.stdout.strip()
+    except Exception as e:  # noqa: BLE001 — a diagnosis must never crash the report
+        rep["quarantined"] = None
+        rep["quarantine_error"] = f"{type(e).__name__}: {e}"
+    try:
+        a = _run([_SPCTL, "--assess", "-vv", "--type", "execute", bundle])
+        text = (a.stdout + a.stderr).strip()
+        rep["assessment"] = "accepted" if a.returncode == 0 else "rejected"
+        rep["detail"] = text.splitlines()[0] if text else ""
+    except Exception as e:  # noqa: BLE001
+        rep["assessment"] = "unknown"
+        rep["detail"] = f"{type(e).__name__}: {e}"
+    if not (rep.get("quarantined") and rep["assessment"] == "rejected"):
+        return rep
+    if since is not None:
+        rep["blocked"] = _gatekeeper_blocked_since(bundle, since)
+    if rep.get("blocked") is False:
+        rep["note"] = ("Gatekeeper rejects this bundle's current state, but it did not "
+                       "block this boot (it passed the bundle before), so look elsewhere "
+                       "for why FreeCAD did not start.")
+        return rep
+    why = ("its code seal is broken: files changed after FreeCAD signed it"
+           if "sealed resource" in rep["detail"] else rep["detail"])
+    rep["fix"] = (
+        f"macOS Gatekeeper refuses to run this quarantined FreeCAD ({why}). "
+        f"See what changed: codesign --verify --deep --strict -v '{bundle}'. "
+        "If anything is modified, or added files aren't packages you installed "
+        "yourself, download FreeCAD again from the official release and verify its "
+        "SHA-256. Trusting the changed bundle is the user's decision; don't clear "
+        f"the quarantine flag on their behalf. Details: {_GATEKEEPER_DOC}")
+    return rep
 
 
 def _toolsets_report() -> dict:
@@ -439,6 +566,15 @@ def _fmt_freecad(fc: dict) -> list[str]:
         lines.append(f"{_MARK['unwired']} FreeCAD (unverified)  {fc['path']}")
         if fc.get("error"):
             lines.append(f"        {fc['error']}")
+        gk = fc.get("gatekeeper")
+        if gk:
+            q = gk.get("quarantine") if gk.get("quarantined") else "not quarantined"
+            lines.append(f"        gatekeeper: {gk['assessment']} ({gk.get('detail', '')}); "
+                         f"quarantine: {q}")
+            if gk.get("note"):
+                lines.append(f"        {gk['note']}")
+        if fc.get("fix"):
+            lines.append(f"        fix: {fc['fix']}")
     else:
         lines.append(f"{_MARK['missing']} FreeCAD not found")
         lines.append(f"        fix: {fc['fix']}")

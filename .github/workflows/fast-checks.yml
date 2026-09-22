@@ -162,6 +162,11 @@ jobs:
         # prove the assertion can fail. Seconds, no FreeCAD, no network.
         run: python tests/test_package_data.py
 
+      - name: doctor — a Gatekeeper-killed FreeCAD boot is named, never bypassed (#310)
+        # xattr/spctl are injected, so this runs on the Linux runner. Pins that the fix
+        # never spells the quarantine-clearing command: the report reaches an agent.
+        run: python tests/test_doctor_gatekeeper.py
+
   introspection-image:
     # Glama builds the root Dockerfile and reads the tool list over stdio; a failed
     # build drops the listing from search, and awesome-mcp-servers needs it passing

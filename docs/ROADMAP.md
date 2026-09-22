@@ -546,8 +546,8 @@ a backlog nobody reads:
 - **"Session transcript" tool** — dump the call history as a re-runnable Python
   script, for reproducibility and human audit. → **#309**
 - ~~**Async `fem_run`** so long solves don't block the MCP channel.~~ → **#308** ✓ `fem_run_submit`
-- **Verify the macOS Gatekeeper / quarantine path** under non-interactive launch.
-  → **#310**
+- ~~**Verify the macOS Gatekeeper / quarantine path** under non-interactive launch.~~
+  → **#310** ✓ verified: a notarized download launches with no prompt (see docs/MACOS.md)
 - ~~`mass_properties`, `bounding_box` — useful enough to pull in earlier than
   Slice 5; cheap.~~ ✓ both shipped.
 

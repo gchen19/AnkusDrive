@@ -309,6 +309,10 @@ echo "== doctor's MCP preflight (#278; injects the mcp-2.0.0 break, spawns the s
 python3 tests/test_doctor_mcp.py
 
 echo
+echo "== doctor's macOS Gatekeeper diagnosis (#310; xattr/spctl injected; any platform) =="
+python3 tests/test_doctor_gatekeeper.py
+
+echo
 echo "== Planar-kinematics toys (Grashof / stroke / DOF; pure-Python; no FreeCAD) =="
 python3 tests/test_kinematics.py
 
