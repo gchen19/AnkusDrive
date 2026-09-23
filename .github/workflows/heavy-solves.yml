@@ -191,7 +191,7 @@ jobs:
       # relay against the heavy image proved the relay, not what anyone ships with it.
       # Its own pin, bumped from the "Publish slim multi-arch manifest (full)" summary;
       # the heavy lanes' pins move separately.
-      SOLVER_IMAGE: ghcr.io/gchen19/ankusdrive-solvers@sha256:0a584038ab8e8d41dd1a97126cfe848dd8d71bfb0b7466aab89ca9ad07e9e49b  # :full sha-65024aa, linux/amd64 + linux/arm64 — SIGNED (#423)
+      SOLVER_IMAGE: ghcr.io/gchen19/ankusdrive-solvers@sha256:6cb4f319addb2dbc406757ec92dc3b7892025879eb5995a1d48dcbd735e044be  # :full sha-7eeae98, linux/amd64 + linux/arm64 — SIGNED (#423)
     defaults:
       run:
         shell: bash -el {0}   # login shell so the conda env stays activated
