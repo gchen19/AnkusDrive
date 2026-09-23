@@ -21,6 +21,152 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
+## [0.5.6] — 2026-09-23
+
+The release that makes a result auditable and a Mac a real solver host. Every tool
+call is now journalled, so a session can be exported as a Python script that
+regenerates the model and its simulations. The script checks every number a solve
+reported, names the exact solver binary and version that produced it, and diffs the
+input deck the solver was handed. With one setting the journal also goes to disk,
+where it outlasts the session. On macOS, YADE, Elmer, openEMS and Bempp now run
+through the container substrate alongside OpenFOAM. That container is a new
+runtime-only solver image, about a fifth of the CI image's download, signed and
+scanned, and it records which solvers it contains so `doctor` cannot report a missing
+one as ready. There is also a new explicit impact solver and one checked against an
+exact closed-form answer, CalculiX that no longer blocks the MCP channel, and fixes to
+STEP export and to the openEMS gate that change what a user gets back.
+
+### Added
+
+- **Session journal and `session_transcript`.** Every MCP tool call is recorded in
+  memory with its full arguments and a trimmed result. `session_transcript` returns the
+  session as a Python script that regenerates the model, drawings and simulations
+  through the same tools in a fresh worker. Handles become variables, job polls
+  become `s.wait(job)`, and absolute paths become `WORKDIR`-relative. Inspection
+  calls are dropped unless a later call used them, but analysis calls (hand calcs,
+  FEM, every `*_submit`) never are. Each analysis result is checked whole: every
+  number becomes `s.check`, and its verdict fields (fidelity, correlation, solver,
+  gate pass) become `s.expect`. A replay that reaches a different solver therefore
+  stops at that step rather than returning a plausible figure. The script opens
+  with a `PROVENANCE` record (AnkusDrive, FreeCAD, platform, substrate, and every
+  solver the session reached with its path, substrate and probed version).
+  `s.provenance()` re-resolves that record on the replaying machine and prints what
+  moved. `run_script` code is carried verbatim with its SHA-256
+  ([#407](https://github.com/gchen19/AnkusDrive/issues/407),
+  [#408](https://github.com/gchen19/AnkusDrive/issues/408),
+  [#409](https://github.com/gchen19/AnkusDrive/issues/409),
+  [#410](https://github.com/gchen19/AnkusDrive/issues/410),
+  [#433](https://github.com/gchen19/AnkusDrive/issues/433)).
+- **Durable journal and `journal_export`**, opt-in. `ANKUSDRIVE_JOURNAL_DIR` (or
+  `journal_dir` in config.toml) writes one JSONL file per session: an environment
+  header, then one line per call with a SHA-256 of the full result. Old files are
+  removed oldest-first past 50 files or 512 MB, never the live session's file.
+  `ANKUSDRIVE_JOURNAL_REDACT=1` hashes paths and names, but never `run_script` code; a
+  redacted journal can be checked but not replayed. `journal_export` and
+  `ankusdrive journal list|export` turn a past session's file into the same record
+  `session_transcript` gives. Off by default
+  ([#433](https://github.com/gchen19/AnkusDrive/issues/433)).
+- **Every solve records the deck it was handed.** A job snapshots its case (file
+  list plus per-file SHA-256) when its first solver step launches, and the result
+  carries it as `deck` next to `case_dir`. On replay, `s.deck(...)` reports whether the
+  input matched, so a drifted number is attributed to the problem or to the solver
+  ([#437](https://github.com/gchen19/AnkusDrive/issues/437)).
+- **Impact dynamics:** `impact_dynamics_submit` (a CalculiX `*DYNAMIC` penalty-contact
+  solve) and `bar_impact` (the closed form). They are gated against St-Venant's exact
+  elastic bar striking a rigid wall (face stress `ρ·c₀·v₀`, contact time `2L/c₀`,
+  rebound at the strike speed) and against the plastic-wave cap past yield. This was
+  the last unbuilt row of `docs/SIMULATION_NEXT.md`
+  ([#311](https://github.com/gchen19/AnkusDrive/issues/311)).
+- **`fem_run_submit`** runs a CalculiX solve as a background job, so a long FEM run no
+  longer blocks the MCP channel. `fem_run` stays for solves that take seconds
+  ([#308](https://github.com/gchen19/AnkusDrive/issues/308)).
+- **YADE, Elmer, openEMS and Bempp run through the container substrate**
+  (`ANKUSDRIVE_SUBSTRATE=container`), probed inside the running container with no
+  exports needed. On a Mac this brings DEM, every Elmer family, full-wave EM and
+  acoustic BEM in with one `docker pull`
+  ([#419](https://github.com/gchen19/AnkusDrive/issues/419)).
+- **`ghcr.io/gchen19/ankusdrive-solvers`**, a runtime-only solver image for the
+  container substrate: 0.88 GB compressed on arm64 and 1.15 GB on amd64, against 4.5 /
+  5.3 GB for the CI image. Tags: `:latest`/`:full` for every solver, and `:openfoam`
+  for OpenFOAM alone. `tools/build_solver_image.sh --solvers "…" --from-published`
+  builds any other set in minutes with no compile. Every image writes
+  `/etc/ankusdrive/solvers.json`, and discovery reads it first, so a solver an image
+  leaves out is reported as "this image does not include …", never as ready
+  ([#422](https://github.com/gchen19/AnkusDrive/issues/422)).
+- **Signed, scanned solver images.** Both images carry Sigstore build provenance and a
+  CycloneDX SBOM, and are scanned for secrets and fixable critical CVEs.
+  `scripts/verify-container-image.sh` and `ankusdrive doctor --verify-image` check an
+  image against this repository's workflow. `doctor` also reports a container that
+  runs with more privilege than the documented `docker run` grants
+  ([#423](https://github.com/gchen19/AnkusDrive/issues/423)).
+- `scripts/install-solvers.sh elmer` source-builds a pinned Elmer on Linux (including
+  arm64, which has no package) and on macOS
+  ([#384](https://github.com/gchen19/AnkusDrive/issues/384)).
+- `pocket` and `hole` accept `strict=True`, which escalates their "removed everything"
+  and "removed nothing" warnings to errors, as `boolean_op` already did
+  ([#287](https://github.com/gchen19/AnkusDrive/issues/287)).
+- `solve_capabilities` reports the case root, with its live size and the retention
+  policy ([#437](https://github.com/gchen19/AnkusDrive/issues/437)).
+
+### Changed
+
+- **Solver case directories live under one root with a stated retention.** Cases are
+  written to `<system temp>/ankusdrive-cases` (`ANKUSDRIVE_CASE_ROOT` moves it). Past
+  64 directories or 4 GB, the oldest are removed first, but never one written in the
+  last hour (`ANKUSDRIVE_CASE_KEEP` / `_MAX_GB` / `_GRACE_S`;
+  `ANKUSDRIVE_KEEP_SCRATCH=1` keeps everything). A directory you pass in is never
+  touched. Directories left loose in the system temp dir by earlier versions are not
+  moved or cleaned up
+  ([#437](https://github.com/gchen19/AnkusDrive/issues/437)).
+- **Under the container substrate, an override the container cannot use is now
+  reported instead of replaced.** A stale `ANKUSDRIVE_ELMER_PATH`, `ANKUSDRIVE_YADE`,
+  `ANKUSDRIVE_OPENEMS_PYTHON` or `ANKUSDRIVE_BEMPP_PYTHON`, or a host install's path
+  in config.toml, now leaves that family not ready. The hint names the variable and the
+  image's own copy that clearing it would give. **Check `ankusdrive doctor` after
+  upgrading** if you moved a Mac from a native or Multipass setup
+  ([#443](https://github.com/gchen19/AnkusDrive/issues/443),
+  [#422](https://github.com/gchen19/AnkusDrive/issues/422)).
+- **`em_fullwave` is gated on the solved field.** The documented `fc_ratio` gate never
+  read the FDTD field: openEMS computes the port's `beta` analytically, so even a
+  truncated run passed. A new `alpha_ratio` gate fits the solved field's decay below
+  cutoff against the exact value, and the dipole mesh is now resolved finely enough
+  for its resonance to be meaningful
+  ([#398](https://github.com/gchen19/AnkusDrive/issues/398)–[#403](https://github.com/gchen19/AnkusDrive/issues/403)).
+- `docs/SOLVERS_MACOS.md` and `docs/MACOS.md` no longer call the container-reachable
+  families unavailable, and recommend the solver image over the CI image. The macOS
+  Gatekeeper caveat is retired: a server Claude Desktop launches from a never-run,
+  notarized FreeCAD passes without a dialog, and `doctor` diagnoses a blocked boot
+  ([#310](https://github.com/gchen19/AnkusDrive/issues/310),
+  [#432](https://github.com/gchen19/AnkusDrive/pull/432)).
+
+### Fixed
+
+- **STEP/IGES export of an assembly wrote an empty file and reported success.**
+  Exporting an `App::Part` (links or plain features) produced 1,640 bytes with no
+  faces, and `release_package` shipped that to vendors. The resolved shape is now
+  exported, and an export with no geometry is an error
+  ([#434](https://github.com/gchen19/AnkusDrive/issues/434)).
+- `export_shape` with no `object` exported the first shape in the document (after a
+  cut, the consumed base) instead of the final one. It also crashed once an FEM mesh
+  existed. Both are fixed at every site that walked the document the same way
+  ([#414](https://github.com/gchen19/AnkusDrive/issues/414)).
+- A transcript replay now lists a prepared `case_dir` / `sif` / `case` / `deck` under
+  Prerequisites instead of pointing at a directory nobody was asked to create
+  ([#437](https://github.com/gchen19/AnkusDrive/issues/437)).
+- A native install's `config.toml` path is no longer sourced inside a container that
+  lacks it, which used to fail with `blockMesh: command not found`
+  ([#422](https://github.com/gchen19/AnkusDrive/issues/422)).
+- `pocket`/`hole` no longer reject `strict` on the MCP surface with `TypeError`
+  ([#287](https://github.com/gchen19/AnkusDrive/issues/287)).
+
+### Security
+
+- The solver images' build inputs are pinned: CalculiX over HTTPS with a SHA-256,
+  preCICE by commit, and the OpenFOAM apt repo key checked instead of piped to
+  `bash`. The documented `docker run` is least-privilege (`--network none`,
+  `--cap-drop ALL`, `--read-only`, `no-new-privileges`, non-root)
+  ([#423](https://github.com/gchen19/AnkusDrive/issues/423)).
+
 ## [0.5.5] — 2026-09-13
 
 The release that answers Anthropic's Software Directory Policy point by point. A
@@ -621,7 +767,8 @@ Before the first tag, in April 2026: the initial CLI and MCP scaffold over FreeC
 1.1.1, and Phase 2 — the full core mechanical-design surface, roughly 72 MCP tools.
 Those commits are in the git history rather than in this file.
 
-[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/gchen19/AnkusDrive/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/gchen19/AnkusDrive/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/gchen19/AnkusDrive/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/gchen19/AnkusDrive/compare/v0.5.2...v0.5.3
