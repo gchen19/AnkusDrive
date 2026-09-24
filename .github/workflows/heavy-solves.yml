@@ -212,7 +212,7 @@ jobs:
       # The HOST: FreeCAD + the driver deps, exactly test.yml's provisioning — which
       # carries no OpenFOAM, as this lane requires.
       - name: Set up Miniforge (conda-forge)
-        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
+        uses: conda-incubator/setup-miniconda@be893c923ea9cf1cf7cd510fbdde27c7e18cbdcb # v4.1.0
         with:
           miniforge-version: latest
           channels: conda-forge
@@ -324,7 +324,7 @@ jobs:
       # FreeCAD on the host: test_su2_case's channel gates drive the real worker. Same
       # conda-forge pin as the Linux lanes, so every lane tests one FreeCAD line.
       - name: Set up Miniforge (conda-forge)
-        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
+        uses: conda-incubator/setup-miniconda@be893c923ea9cf1cf7cd510fbdde27c7e18cbdcb # v4.1.0
         with:
           miniforge-version: latest
           channels: conda-forge
@@ -468,7 +468,7 @@ jobs:
       # through the real worker (the solves cross into the VM; the geometry does not).
       # Same conda-forge pin as every other lane.
       - name: Set up Miniforge (conda-forge)
-        uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
+        uses: conda-incubator/setup-miniconda@be893c923ea9cf1cf7cd510fbdde27c7e18cbdcb # v4.1.0
         with:
           miniforge-version: latest
           channels: conda-forge
