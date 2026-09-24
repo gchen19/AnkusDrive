@@ -332,10 +332,20 @@ _SOLVERS: dict = {
             "Darwin":  ("/usr/local/bin", "/opt/homebrew/bin"),
             "Windows": (r"C:\Program Files\yade\bin",),
         },
+        # YADE is Linux-only: upstream ships no Windows build, so on Windows the
+        # distro install IS the install (issue #463). Probed glob-only through
+        # \\wsl$ and launched by _wsl_routed_argv — the same key that makes
+        # the OpenFOAM families resolvable there. dirs["Windows"] above stays for a
+        # hypothetical native port; it is not what resolves in practice.
+        "substrate_bins": ("/usr/bin", "/usr/local/bin", "/opt/yade/bin",
+                           "~/opt/yade/bin"),
         "install_hint": "source-build YADE (GPL-3.0; not on PyPI/conda-noble): "
                         "scripts/install-solvers.sh dem_gpl  (cmake build into "
-                        "~/opt/yade), or your distro's 'yade'/'yade-dem' package; "
-                        "then ensure `yade` is on PATH or set ANKUSDRIVE_YADE / "
+                        "~/opt/yade), or your distro's 'yade'/'yade-dem' package "
+                        "(Ubuntu 26.04+ ships one). On Windows install it INSIDE "
+                        "the WSL distro: the in-distro binary is what resolves and "
+                        "what `wsl -e` launches (#463). "
+                        "Then ensure `yade` is on PATH or set ANKUSDRIVE_YADE / "
                         "ANKUSDRIVE_YADE_PATH. Driven out-of-process only via "
                         "ankusdrive/dem_gpl_runner.py.",
     },
@@ -647,11 +657,41 @@ def wsl_posix(path: str) -> str:
     return path
 
 
+def win_to_posix(path: str) -> str:
+    """A Windows drive path as the WSL distro sees it: ``C:\\x\\y`` -> ``/mnt/c/x/y``.
+
+    The mirror image of :func:`wsl_posix` (\\\\wsl$ -> POSIX). This direction is what
+    hands a HOST file to an in-distro program: the ``*_runner.py`` scripts live in the
+    installed package directory on the Windows filesystem, and a ``wsl -e <prog>``
+    launch needs the ``/mnt`` form to read them (issue #463).
+
+    Anything that is not a drive-letter path — a POSIX path, a bare flag, a JSON
+    blob — passes through untouched, so this is safe to map over a whole argv.
+    Assumes the default automount at ``/mnt``; a distro with ``automount`` disabled,
+    or a non-default ``root =`` in /etc/wsl.conf, is not covered."""
+    if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
+        rest = path[2:].replace("\\", "/")
+        return "/mnt/" + path[0].lower() + (rest if rest.startswith("/") else "/" + rest)
+    return path
+
+
 def _posix_isfile(path: str) -> bool:
     """``os.path.isfile`` that, on Windows, checks a leading-``/`` POSIX path
-    through the \\\\wsl$ mirror of the resolved distro."""
+    through the \\\\wsl$ mirror of the resolved distro.
+
+    A SYMLINK in the distro cannot be stat'd through that redirector: ``isfile`` and
+    ``exists`` both answer False for it while ``lexists`` sees the link itself. Distro
+    binaries are routinely symlinks (anything under Debian alternatives;
+    ``/usr/bin/python3 -> python3.x``), and :func:`_posix_glob` lists them happily — so
+    taking ``isfile`` alone would discover a solver and then declare it missing. The
+    link is accepted, guarded by ``isdir`` so a symlinked DIRECTORY is never mistaken
+    for a program. Filesystem-only either way: nothing in the distro is executed
+    (see :func:`wsl_unc`)."""
     if platform.system() == "Windows" and path.startswith("/"):
-        return wsl_available() and os.path.isfile(wsl_unc(path))
+        if not wsl_available():
+            return False
+        unc = wsl_unc(path)
+        return os.path.isfile(unc) or (os.path.lexists(unc) and not os.path.isdir(unc))
     return os.path.isfile(path)
 
 
@@ -1418,11 +1458,38 @@ def solver_file_exists(solver: str, path: str) -> bool:
     return os.path.isfile(path)
 
 
+def _wsl_routed_argv(argv: list) -> list | None:
+    """``argv`` wrapped in the wsl launcher when it names an IN-DISTRO program, else
+    None (meaning: leave argv alone).
+
+    The direct-launch twin of :func:`bash_argv`'s ``wsl`` branch (#193), for the
+    runners that exec a solver binary or interpreter instead of a bash script — YADE's
+    ``dem_gpl_runner`` is the case that motivated it (issue #463). Without this, a
+    ``yade`` resolved inside the distro was discovered (``via: "wsl"``) and then handed
+    to a native ``subprocess.run``, which cannot exec a Linux path.
+
+    Routing is decided by the resolved program's SHAPE — a leading ``/`` on Windows
+    under the ``wsl`` substrate — which is exactly the test that tags ``via: "wsl"`` in
+    find_solver, so discovery and launch can never disagree about where a solver runs.
+    Host arguments are mapped through :func:`win_to_posix`, so the runner script on
+    ``C:`` is readable from inside the distro with no copy.
+
+    No ``-i``: unlike ``<engine> exec``, wsl.exe passes the caller's stdin through
+    already, which is what the sentinel-JSON runners need."""
+    if not (argv and platform.system() == "Windows"
+            and argv[0].startswith("/") and substrate() == "wsl"):
+        return None
+    d = wsl_distro()
+    return ["wsl", *(["-d", d] if d else []), "-e", *[win_to_posix(a) for a in argv]]
+
+
 def solver_argv(name: str, argv, cwd: str | None = None, *, stdin: bool = False) -> list:
     """The argv that launches solver ``name``'s process: ``argv`` unchanged unless the
     solver is container-routed (:func:`routes_through_container`), then
-    ``[<engine>, "exec", ["-i"], ["-w", <cwd>], <container>, *argv]`` — the direct-
-    launch twin of :func:`bash_argv` (#419).
+    ``[<engine>, "exec", ["-i"], ["-w", <cwd>], <container>, *argv]``, or resolved
+    inside the WSL distro, then ``["wsl", "-d", <distro>, "-e", *argv]`` with host
+    paths mapped to ``/mnt`` (:func:`_wsl_routed_argv`) — the direct-launch twin of
+    :func:`bash_argv` (#419, #463).
 
     ``cwd`` is the case dir, meaningful inside the container because the host scratch
     is mounted at the same path. ``stdin=True`` adds ``-i`` and is ONLY for a launch
@@ -1432,6 +1499,8 @@ def solver_argv(name: str, argv, cwd: str | None = None, *, stdin: bool = False)
     ``-e`` (an ``env=`` on the host Popen would stop at the exec client)."""
     argv = [str(a) for a in argv]
     spec = _spec(name)
+    if (wrapped := _wsl_routed_argv(argv)) is not None:
+        return wrapped
     if not _container_routed(spec):
         return argv
     env = [f for k, v in spec.get("container_env", {}).items() for f in ("-e", f"{k}={v}")]
