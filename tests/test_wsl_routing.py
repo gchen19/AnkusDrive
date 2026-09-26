@@ -520,8 +520,8 @@ def _discover():
 def test_win_to_posix_maps_drive_paths_only():
     """C:\\x\\y -> /mnt/c/x/y. A POSIX path, a bare flag and a JSON blob pass through
     untouched, which is what makes the mapping safe over a whole argv (#463)."""
-    assert solvers.win_to_posix(r"C:\Users\me\ankusdrive\dem_gpl_runner.py") == \
-        "/mnt/c/Users/me/ankusdrive/dem_gpl_runner.py"
+    assert solvers.win_to_posix(r"C:\Users\you\ankusdrive\dem_gpl_runner.py") == \
+        "/mnt/c/Users/you/ankusdrive/dem_gpl_runner.py"
     assert solvers.win_to_posix(r"D:\cases") == "/mnt/d/cases"
     assert solvers.win_to_posix("C:/already/forward") == "/mnt/c/already/forward"
     assert solvers.win_to_posix("/usr/bin/yade") == "/usr/bin/yade"
@@ -533,13 +533,13 @@ def test_solver_argv_routes_in_distro_yade_through_wsl():
     """#463: the DEM launch that used to be handed to a native subprocess. An
     in-distro yade plus a runner living on C: becomes
     ``wsl -d <distro> -e /usr/bin/yade -x -n /mnt/c/.../dem_gpl_runner.py``."""
-    runner = r"C:\Users\me\ankusdrive\dem_gpl_runner.py"
+    runner = r"C:\Users\you\ankusdrive\dem_gpl_runner.py"
     with _patch() as p:
         _fake_windows(p)
         argv = solvers.solver_argv("yade", ["/usr/bin/yade", "-x", "-n", runner],
                                    stdin=True)
         assert argv == ["wsl", "-d", "Ubuntu", "-e", "/usr/bin/yade", "-x", "-n",
-                        "/mnt/c/Users/me/ankusdrive/dem_gpl_runner.py"], argv
+                        "/mnt/c/Users/you/ankusdrive/dem_gpl_runner.py"], argv
         # wsl.exe already passes the caller's stdin through, so the -i that
         # `<engine> exec` needs would be a wsl.exe flag error here
         assert "-i" not in argv, argv
