@@ -13,6 +13,12 @@ exercised on any host OS. Pins:
     ``_posix_glob`` maps UNC hits back to POSIX and expands ``~`` to the LINUX
     home, and resolvers return POSIX paths (the form embedded into the in-distro
     bash scripts).
+  * Direct launches into the distro (#463) — ``win_to_posix`` maps a host path to
+    its ``/mnt`` form, ``solver_argv`` wraps an in-distro program in
+    ``["wsl","-d",<distro>,"-e",…]`` (no ``-i``: wsl.exe already passes stdin) and
+    leaves a native Windows binary alone, and YADE resolves through \\wsl$ with
+    ``via: "wsl"`` — the DEM path that used to be discovered and then handed to a
+    native subprocess that cannot exec a Linux path.
   * ``find_solver("openfoam")`` — an in-distro binary resolves ``available`` with
     ``via: "wsl"`` (propagated by ``require_solver``); a bashrc-only hit reports
     ``unwired`` with the runs-via-WSL wire hint; no WSL at all stays ``absent``
@@ -509,6 +515,97 @@ def test_fsi_routes_participants_through_multipass_on_macos():
 def _discover():
     g = globals()
     return [(n, g[n]) for n in sorted(g) if n.startswith("test_") and callable(g[n])]
+
+
+def test_win_to_posix_maps_drive_paths_only():
+    """C:\\x\\y -> /mnt/c/x/y. A POSIX path, a bare flag and a JSON blob pass through
+    untouched, which is what makes the mapping safe over a whole argv (#463)."""
+    assert solvers.win_to_posix(r"C:\Users\you\ankusdrive\dem_gpl_runner.py") == \
+        "/mnt/c/Users/you/ankusdrive/dem_gpl_runner.py"
+    assert solvers.win_to_posix(r"D:\cases") == "/mnt/d/cases"
+    assert solvers.win_to_posix("C:/already/forward") == "/mnt/c/already/forward"
+    assert solvers.win_to_posix("/usr/bin/yade") == "/usr/bin/yade"
+    assert solvers.win_to_posix("-x") == "-x"
+    assert solvers.win_to_posix('{"problem":"ping"}') == '{"problem":"ping"}'
+
+
+def test_solver_argv_routes_in_distro_yade_through_wsl():
+    """#463: the DEM launch that used to be handed to a native subprocess. An
+    in-distro yade plus a runner living on C: becomes
+    ``wsl -d <distro> -e /usr/bin/yade -x -n /mnt/c/.../dem_gpl_runner.py``."""
+    runner = r"C:\Users\you\ankusdrive\dem_gpl_runner.py"
+    with _patch() as p:
+        _fake_windows(p)
+        argv = solvers.solver_argv("yade", ["/usr/bin/yade", "-x", "-n", runner],
+                                   stdin=True)
+        assert argv == ["wsl", "-d", "Ubuntu", "-e", "/usr/bin/yade", "-x", "-n",
+                        "/mnt/c/Users/you/ankusdrive/dem_gpl_runner.py"], argv
+        # wsl.exe already passes the caller's stdin through, so the -i that
+        # `<engine> exec` needs would be a wsl.exe flag error here
+        assert "-i" not in argv, argv
+
+
+def test_solver_argv_leaves_a_host_binary_alone_on_windows():
+    """The wsl branch keys off the RESOLVED path's shape, not the platform: a native
+    Windows binary is still launched directly, with no launcher and no translation."""
+    with _patch() as p:
+        _fake_windows(p)
+        native = r"C:\Program Files\yade\bin\yade.exe"
+        assert solvers.solver_argv("yade", [native, "-x"]) == [native, "-x"]
+
+
+def test_solver_argv_posix_host_is_never_wrapped():
+    """On Linux a POSIX path IS the host path — no wsl.exe exists to wrap it with."""
+    with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Linux"))
+        argv = ["/usr/bin/yade", "-x", "-n", "/tmp/dem_gpl_runner.py"]
+        assert solvers.solver_argv("yade", list(argv)) == argv
+
+
+def test_yade_resolves_in_distro_via_wsl():
+    """#463 discovery half: an apt `yade` at /usr/bin/yade is found through the
+    \\wsl$ mirror (substrate_bins) and tagged via:'wsl', so doctor says "(in WSL)"
+    and the launcher above knows to route it."""
+    unc = r"\\wsl$\Ubuntu\usr\bin\yade"
+    with _patch() as p:
+        _fake_windows(p)
+        p.set(glob, "glob", lambda pat, recursive=False: [unc] if pat == unc else [])
+        p.set(solvers.os.path, "isfile", lambda x: x == unc)
+        info = solvers.find_solver("yade")
+        assert info["available"] is True and info["status"] == "ok", info
+        assert info["path"] == "/usr/bin/yade", info
+        assert info["via"] == "wsl", info
+
+
+def test_yade_without_wsl_stays_absent_on_windows():
+    """No wsl.exe: nothing is probed through \\wsl$, and DEM is plainly absent
+    rather than resolving a Windows path that upstream YADE does not ship."""
+    with _patch() as p:
+        _fake_windows(p, wsl_exe=None)
+        p.set(glob, "glob", lambda pat, recursive=False: [])
+        p.set(solvers.os.path, "isfile", lambda x: False)
+        info = solvers.find_solver("yade")
+        assert info["available"] is False and info["status"] == "absent", info
+
+
+def test_posix_isfile_accepts_a_symlinked_in_distro_binary():
+    """A distro symlink cannot be stat'd through \\wsl$: isfile answers False while
+    lexists sees the link. The link is accepted — _posix_glob lists symlinked binaries
+    (Debian alternatives), and rejecting them here would discover a solver and then
+    declare it missing. A symlinked DIRECTORY is still not a program (#463)."""
+    link = r"\\wsl$\Ubuntu\usr\bin\yade"
+    linkdir = r"\\wsl$\Ubuntu\opt\yade"
+    with _patch() as p:
+        _fake_windows(p)
+        p.set(solvers.os.path, "isfile", lambda x: False)
+        p.set(solvers.os.path, "lexists", lambda x: x in (link, linkdir))
+        p.set(solvers.os.path, "isdir", lambda x: x == linkdir)
+        assert solvers._posix_isfile("/usr/bin/yade") is True
+        assert solvers._posix_isfile("/opt/yade") is False
+        # a real file still resolves the plain way
+        p.set(solvers.os.path, "isfile", lambda x: x == link)
+        p.set(solvers.os.path, "lexists", lambda x: False)
+        assert solvers._posix_isfile("/usr/bin/yade") is True
 
 
 def main():
