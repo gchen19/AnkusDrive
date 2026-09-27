@@ -320,6 +320,10 @@ echo "== doctor's macOS Gatekeeper diagnosis (#310; xattr/spctl injected; any pl
 python3 tests/test_doctor_gatekeeper.py
 
 echo
+echo "== Worker sys.path: host venv wheels never shadow FreeCAD's PySide6/numpy (#468; no FreeCAD) =="
+python3 tests/test_worker_venv_shadowing.py
+
+echo
 echo "== Planar-kinematics toys (Grashof / stroke / DOF; pure-Python; no FreeCAD) =="
 python3 tests/test_kinematics.py
 
