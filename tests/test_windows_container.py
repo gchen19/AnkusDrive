@@ -124,7 +124,7 @@ def test_setup_creates_the_container_and_records_the_config():
         assert made[:5] == ["wsl", "-d", "Ubuntu", "-e", "docker"], made
         scratch = "/mnt/c/Users/you/AppData/Local/Temp"
         assert f"{scratch}:{scratch}" in made and "1000:1000" in made, made
-        text = Path(rep["config"]).read_text()
+        text = Path(rep["config"]).read_text(encoding="utf-8")
         assert 'substrate = "container"' in text and "/opt/yade/bin/yade" in text, text
         assert rep["families"] == {"dem": True}
         assert "wsl -d Ubuntu -e docker" in container_setup.render(rep)
