@@ -270,6 +270,124 @@ Windows (`test_merge_modal_gate`, `test_render::test_fem_colormap_monotonic_grad
 run the **real** solve — their gates consult `ankusdrive.solvers.ccx_bin()`, which finds
 FreeCAD's bundled `ccx.exe` even though it isn't on PATH.
 
+## Linux-only solvers: Docker inside WSL (recommended)
+
+OpenFOAM (CFD, preCICE FSI, injection-molding fill), YADE (DEM), openEMS (full-wave
+EM) and Bempp (acoustic BEM) have no practical Windows builds. Rather than building
+each one inside WSL (hours per solver), run them all from AnkusDrive's prebuilt solver
+image, with Docker running **inside your WSL distro**. AnkusDrive, FreeCAD and the
+MCP server stay native Windows. Only the solver processes run in the container.
+One command sets it up.
+
+### What you need
+
+- Windows 10 22H2 or Windows 11, with virtualization enabled in the BIOS/UEFI (Task
+  Manager → Performance → CPU shows **Virtualization: Enabled**).
+- AnkusDrive installed and working (`ankusdrive doctor` finds FreeCAD), from pipx, uv
+  or a clone.
+- About 5 GB free on the drive that holds WSL (the image is 4.75 GB unpacked).
+- Administrator rights **once**, to install WSL. Nothing else needs them.
+
+You do **not** need Docker Desktop. If you already use it, that works too: turn on
+*Settings → Resources → WSL integration* for your distro and skip `--install-engine`
+below.
+
+### Step 1: install WSL (skip if `wsl -l -v` already lists a distro)
+
+In an **elevated** PowerShell:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Reboot when asked, then open **Ubuntu** from the Start menu once and create your Linux
+user name and password. Check that it is WSL **2**:
+
+```powershell
+wsl -l -v          # VERSION column must say 2
+```
+
+### Step 2: set up the solver container
+
+In a normal (not elevated) PowerShell:
+
+```powershell
+ankusdrive container setup --install-engine
+```
+
+From a clone, use `.venv\Scripts\ankusdrive container setup --install-engine`, or
+`pwsh scripts\install-solvers.ps1 docker`, which runs the same command.
+
+It does four things, and skips any that are already done:
+
+1. **Engine.** If the distro has no `docker`, installs Docker Engine from Ubuntu's own
+   archive (`apt install docker.io`, run as root through `wsl -u root`, so it never
+   asks for your Linux password). It also adds your Linux user to the `docker` group
+   and turns on systemd in `/etc/wsl.conf` if it was off. Without `--install-engine`
+   it never changes your distro; it only tells you what is missing.
+2. **Image.** Pulls `ghcr.io/gchen19/ankusdrive-solvers:latest`, which is public and
+   signed. Expect several minutes the first time.
+3. **Container.** Creates `ankusdrive-solvers` with your `%TEMP%` mounted at its WSL
+   path (`/mnt/c/Users/<you>/AppData/Local/Temp`), no network, all capabilities
+   dropped, and a read-only root filesystem, and runs it as your Linux user. It uses
+   `--restart unless-stopped`, so the container comes back by itself after WSL shuts
+   an idle distro down.
+4. **Config.** Writes `substrate = "container"` and the solver paths *inside* the
+   container to `%APPDATA%\ankusdrive\config.toml`, where MCP hosts pick them up.
+
+It finishes by listing the solver families that are now ready.
+
+### Step 3: restart your MCP host and check
+
+Quit and reopen Claude Desktop (or whichever MCP host you use) so its AnkusDrive
+server re-reads the config. Then run:
+
+```powershell
+ankusdrive doctor
+```
+
+The Linux-only families now show `ready via … (in container)`.
+
+**If setup prints a `WARNING: ANKUSDRIVE_… is set in your environment`**, an older
+native install left a user environment variable behind (commonly
+`ANKUSDRIVE_ELMER_PATH` from `install-solvers.ps1 elmer`). Environment variables take
+precedence over the config file, so the container's path would never be used. Remove
+the variable with the command the warning prints, e.g.
+`[Environment]::SetEnvironmentVariable('ANKUSDRIVE_ELMER_PATH', $null, 'User')`, then
+restart the MCP host.
+
+### Living with it
+
+- **First call after an idle period is slow.** WSL stops the distro when nothing has
+  used it for a while. The next solver call starts it again, along with Docker and the
+  container, which takes about 15–20 s. AnkusDrive waits for it.
+- **Case files live in `%TEMP%\ankusdrive-cases`**, on the Windows side, so results
+  parse natively. If you set `ANKUSDRIVE_CASE_ROOT`, keep it **under `%TEMP%`**,
+  because that is the only directory the container can see.
+- **Update the solvers:** `ankusdrive container setup --recreate` pulls the latest
+  image and rebuilds the container. For reproducible results, pin one build with
+  `--image ghcr.io/gchen19/ankusdrive-solvers:sha-<commit>`.
+- **Remove it:** `wsl -e docker rm -f ankusdrive-solvers`, then delete the
+  `substrate = "container"` line from `config.toml`. Also delete the solver lines
+  whose paths start with `/opt` or `/usr` (they name locations inside the container).
+  AnkusDrive falls back to the native Windows solvers and the `wsl` substrate.
+- **Elmer switches too.** With the container substrate on, Elmer runs from the image
+  like the other Linux solvers, even if the native Windows zip is installed.
+  CalculiX, SU2, PrusaSlicer, Blender and the pip-wheel solvers stay native.
+
+### Verified on Windows 11 (WSL 2.7, Ubuntu 26.04, Docker Engine 29.1.3)
+
+A fresh Python 3.11 venv, then `ankusdrive container setup`, then real solves through
+the `wsl -d Ubuntu -e docker exec` relay:
+
+| Family | Solver in the image | Result |
+|---|---|---|
+| cfd | OpenFOAM 2512 | laminar pipe (Re 498) converged, `rc=0`, 12 s |
+| dem | YADE | 656-sphere pour settled, bulk φ = 0.602 (same numbers as a Linux host) |
+| thermal_transient | Elmer | 120-step slab transient, `rc=0` |
+| em_fullwave | openEMS | WR-90 cutoff 6.575 GHz vs 6.557 analytic (ratio 1.003); evanescent decay ratio 0.997 |
+| acoustics_bem | Bempp | pulsating-sphere radiation (ka = 3.66) solved, 624 elements |
+
 ## Per-solver Windows reality
 
 | Family | Solver | Windows status |
@@ -284,10 +402,10 @@ FreeCAD's bundled `ccx.exe` even though it isn't on PATH.
 | Transient/radiation thermal | Elmer | ✅ verified native (26.2, portable no-GUI zip via `install-solvers.ps1 elmer` — note: no winget package exists); covers CHT, low-frequency EM, acoustic + harmonic FEM and the geometry bridge (#205) |
 | Slicing | PrusaSlicer | ✅ Windows installer; `ANKUSDRIVE_PRUSASLICER_PATH` |
 | Studio render (photoreal) | Blender (Cycles) | ✅ **verified native** ([#335](https://github.com/gchen19/AnkusDrive/issues/335)): `scripts\install-solvers.ps1 blender` drops the pinned portable zip under `%LOCALAPPDATA%\AnkusDrive\solvers` and `solvers.py` globs `blender.exe` out of it — **no admin, no env var, no PATH entry**. GPU is picked automatically: OptiX/CUDA (NVIDIA), **HIP** (AMD), oneAPI (Intel), else CPU. ⚠️ The `blender-winget` target / `winget install BlenderFoundation.Blender` **does not work**: winget fetches the MSI from `download.blender.org`, which answers 403 to scripted clients (`0x80190193`) — the same challenge that made the portable target try mirrors first. Use `install-solvers.ps1 blender` |
-| Acoustics (BEM) | bempp-cl | ⚠️ needs an OpenCL ICD; dedicated venv (`ANKUSDRIVE_BEMPP_PYTHON`) |
-| Full-wave EM | openEMS | ⚠️ prebuilt Windows binaries exist upstream, but not yet wired into the installer scripts |
-| DEM (granular) | YADE (GPL) | ⚠️ no native Windows build — **WSL** |
-| CFD/FSI/molding | OpenFOAM + preCICE + openInjMoldSim | ✅ **WSL2-backed, verified** ([#193](https://github.com/gchen19/AnkusDrive/issues/193)): discovery probes `\\wsl$\<distro>` (glob-only, side-effect-free) and launches route through `wsl -e bash`, so the server itself stays native Windows. Provision with `scripts/install-solvers.ps1 wsl` (one-time prerequisite: `wsl --install -d Ubuntu`) |
+| Acoustics (BEM) | bempp-cl | ✅ via [Docker in WSL](#linux-only-solvers-docker-inside-wsl-recommended). Natively it needs an OpenCL ICD and a dedicated venv (`ANKUSDRIVE_BEMPP_PYTHON`) |
+| Full-wave EM | openEMS | ✅ via [Docker in WSL](#linux-only-solvers-docker-inside-wsl-recommended). Prebuilt Windows binaries exist upstream but are not wired into the installer scripts |
+| DEM (granular) | YADE (GPL) | ✅ via [Docker in WSL](#linux-only-solvers-docker-inside-wsl-recommended). There is no native Windows build |
+| CFD/FSI/molding | OpenFOAM + preCICE + openInjMoldSim | ✅ **WSL2-backed, verified** ([#193](https://github.com/gchen19/AnkusDrive/issues/193)): discovery probes `\\wsl$\<distro>` (glob-only, side-effect-free) and launches route through `wsl -e bash`, so the server itself stays native Windows. The simplest route is the prebuilt image, [Docker in WSL](#linux-only-solvers-docker-inside-wsl-recommended). Alternatively, build natively in the distro with `scripts/install-solvers.ps1 wsl` (one-time prerequisite: `wsl --install -d Ubuntu`) |
 
 Every absent solver **degrades cleanly** — the family returns `{ok: false, reason, install}`
 rather than crashing — so an incomplete solver set never breaks the server; those tools just
@@ -316,9 +434,13 @@ native Windows, and only the OpenFOAM subprocesses cross into the distro:
   `/mnt/...`). Source builds (FSI stack, OF7-org + openInjMoldSim) belong in the distro
   home (`~`), not `/mnt/c` — the 9P mount is slow for compiles. Case I/O on `/mnt/c` is
   fine at AnkusDrive's validation-case scale.
-- **Docker** was evaluated and rejected for Windows (it runs on WSL2 anyway — strictly
-  more machinery; see the decision record in #193). macOS remains documented-unsupported
-  with clean degradation.
+- **Docker**: #193 first rejected it as extra machinery on top of WSL2. That was
+  before the prebuilt solver image existed. With the image, Docker inside WSL is the
+  shortest route to every Linux-only solver, because it replaces the source builds
+  below with one pull. See
+  [Linux-only solvers: Docker inside WSL](#linux-only-solvers-docker-inside-wsl-recommended).
+  Building natively in the distro, described here, still works and is still
+  supported.
 
 Without WSL (or with an unprovisioned distro), these families still degrade cleanly to
 `{ok: false, reason, install}` with the WSL setup hint.

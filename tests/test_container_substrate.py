@@ -168,8 +168,7 @@ def test_bad_selection_raises_a_named_error_never_a_silent_default():
     found) somewhere the user never chose."""
     cases = (("Linux", "ANKUSDRIVE_SUBSTRATE", "docker", "not a substrate"),
              ("Linux", "ANKUSDRIVE_SUBSTRATE", "wsl", "only applies on Windows"),
-             ("Darwin", "ANKUSDRIVE_SUBSTRATE", "wsl", "only applies on Windows"),
-             ("Windows", "ANKUSDRIVE_SUBSTRATE", "container", "not supported on Windows"))
+             ("Darwin", "ANKUSDRIVE_SUBSTRATE", "wsl", "only applies on Windows"))
     for system, var, value, needle in cases:
         with _patch() as p:
             p.set(solvers, "platform", _fake_platform(system))
@@ -188,6 +187,89 @@ def test_bad_selection_raises_a_named_error_never_a_silent_default():
             assert "ANKUSDRIVE_CONTAINER_ENGINE" in str(e) and "lxc" in str(e), e
         else:
             raise AssertionError("an unsupported engine did not raise")
+
+
+def _windows_container_host(p, distro="Ubuntu"):
+    """A Windows host with ANKUSDRIVE_SUBSTRATE=container and a WSL distro — where the
+    engine lives (no docker.exe on the Windows PATH at all)."""
+    p.set(solvers, "platform", _fake_platform("Windows"))
+    p.set(solvers.shutil, "which", lambda n: r"C:\Windows\System32\wsl.exe" if n == "wsl" else None)
+    p.set(solvers, "_wsl_registry_distro", lambda: distro)
+    p.env(ANKUSDRIVE_SUBSTRATE="container")
+
+
+def test_windows_container_substrate_relays_the_engine_through_wsl():
+    """On Windows the Linux engine runs inside the WSL distro, so every engine call is
+    `wsl -d <distro> -e <engine> ...`, and a Windows case dir crosses as its
+    /mnt/<drive> path — the path the container mounts the scratch at."""
+    with _patch() as p:
+        _windows_container_host(p)
+        assert solvers.substrate() == "container"
+        assert solvers.container_available()
+        assert solvers.container_cli() == "wsl -d Ubuntu -e docker"
+        case = r"C:\Users\me\AppData\Local\Temp\ankusdrive-cases\foam-1"
+        want_w = "/mnt/c/Users/me/AppData/Local/Temp/ankusdrive-cases/foam-1"
+        assert solvers.bash_argv("simpleFoam", case) == [
+            "wsl", "-d", "Ubuntu", "-e", "docker", "exec", "-w", want_w,
+            "ankusdrive-solvers", "bash", "-c", "simpleFoam"]
+        runner = r"C:\Users\me\AppData\Local\Temp\ankusdrive-runners\ab\dem_gpl_runner.py"
+        argv = solvers.solver_argv("yade", ["/usr/bin/yade", "-x", "-n", runner], stdin=True)
+        assert argv[:6] == ["wsl", "-d", "Ubuntu", "-e", "docker", "exec"], argv
+        assert "-i" in argv and argv[-4:] == [
+            "/usr/bin/yade", "-x", "-n",
+            "/mnt/c/Users/me/AppData/Local/Temp/ankusdrive-runners/ab/dem_gpl_runner.py"]
+
+
+def test_windows_container_probes_and_inspects_go_through_wsl():
+    seen = []
+
+    class _Proc:
+        returncode, stdout = 0, '{"Running": true, "Status": "running"}'
+
+    def fake_run(argv, **kw):
+        seen.append(list(argv))
+        return _Proc()
+    with _patch() as p:
+        _windows_container_host(p, distro="Ubuntu-24.04")
+        p.set(subprocess, "run", fake_run)
+        assert solvers.container_state() == "running"
+        solvers.container_path_exists("/opt/elmer/bin/ElmerSolver")
+    assert seen and all(a[:5] == ["wsl", "-d", "Ubuntu-24.04", "-e", "docker"] for a in seen), seen
+
+
+def test_windows_container_without_wsl_is_named_not_assumed():
+    with _patch() as p:
+        _windows_container_host(p)
+        p.set(solvers, "_wsl_registry_distro", lambda: None)
+        assert not solvers.container_available()
+        assert solvers.container_state() == "absent"
+        assert "wsl --install" in solvers._no_engine_note()
+
+
+def test_container_path_translates_only_windows_drive_paths():
+    with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Windows"))
+        assert solvers.container_path(r"D:\scratch\case") == "/mnt/d/scratch/case"
+        assert solvers.container_path("C:/Temp/x") == "/mnt/c/Temp/x"
+        for keep in ("/usr/lib/openfoam", "-x", "flap", r"\\wsl$\Ubuntu\tmp"):
+            assert solvers.container_path(keep) == keep, keep
+    with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Linux"))
+        assert solvers.container_path(r"C:\odd-but-posix-name") == r"C:\odd-but-posix-name"
+
+
+def test_windows_run_command_mounts_temp_at_its_wsl_path():
+    with _patch() as p:
+        _windows_container_host(p)
+        p.set(tempfile, "gettempdir", lambda: r"C:\Users\Jo Smith\AppData\Local\Temp")
+        cmd = solvers.container_run_command()
+    scratch = "/mnt/c/Users/Jo Smith/AppData/Local/Temp"
+    assert cmd.startswith("wsl -d Ubuntu -e docker run -d --name ankusdrive-solvers "), cmd
+    assert f'-v "{scratch}:{scratch}"' in cmd and "--restart unless-stopped" in cmd, cmd
+    # the least-privilege flags (#423) are the same on every host
+    for flag in ("--network none", "--cap-drop ALL", "--read-only",
+                 "--security-opt no-new-privileges"):
+        assert flag in cmd, flag
 
 
 def test_engine_and_container_name_defaults_and_overrides():

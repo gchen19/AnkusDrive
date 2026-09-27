@@ -102,11 +102,76 @@ def reaping_disabled() -> bool:
     return bool(os.environ.get("ANKUSDRIVE_KEEP_SCRATCH"))
 
 
+# --- private directories a WSL-hosted container can still enter -------------------
+# 0700 keeps a case private on a shared POSIX /tmp. On Windows, Python (3.11.10+,
+# 3.12.4+) turns mode=0o700 into an ACL holding only OWNER RIGHTS, SYSTEM and
+# Administrators — and a container running in WSL, reaching the directory through
+# the distro's /mnt/<drive> mount, cannot pass that ACL even as the same user, while
+# the WSL shell can: "chdir … permission denied" on every solve. %TEMP% is already
+# per-user, so there a directory made with the default mode inherits an ACL that is
+# just as private (the user, SYSTEM, Administrators) and that the container can use.
+# Only under the container substrate on Windows; everywhere else, 0700 as before.
+
+_repaired: set = set()
+
+
+def _container_scratch() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        from ankusdrive import solvers
+        return solvers.substrate() == "container"
+    except Exception:
+        return False
+
+
+def _inherit_acl(path: str) -> None:
+    """Replace an owner-only ACL an earlier run left on ``path`` with the inherited
+    one. Once per directory per process; never fails a solve."""
+    if path in _repaired:
+        return
+    _repaired.add(path)
+    import subprocess
+    try:
+        subprocess.run(["icacls", path, "/reset"], capture_output=True, timeout=30,
+                       stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def private_dir(path: str) -> str:
+    """``os.makedirs(path, 0o700, exist_ok=True)``, or on Windows under the container
+    substrate the inherit-from-%TEMP% equivalent the container can enter."""
+    if _container_scratch():
+        os.makedirs(path, exist_ok=True)
+        _inherit_acl(path)
+    else:
+        os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
+
+
+def private_mkdtemp(prefix: str, dir: str | None = None) -> str:
+    """``tempfile.mkdtemp`` with :func:`private_dir`'s Windows-container exception."""
+    if not _container_scratch():
+        return tempfile.mkdtemp(prefix=prefix, dir=dir)
+    import secrets
+    base = dir or tempfile.gettempdir()
+    for _ in range(100):
+        path = os.path.join(base, prefix + secrets.token_hex(4))
+        try:
+            os.mkdir(path)                       # default mode: inherits the parent's ACL
+        except FileExistsError:
+            continue
+        return path
+    raise FileExistsError(f"no free temporary name under {base} for {prefix!r}")
+
+
 def root(create: bool = True) -> str:
-    """The directory every generated case lives under. Created on demand, 0700."""
+    """The directory every generated case lives under. Created on demand, private
+    (0700; see :func:`private_dir` for Windows under the container substrate)."""
     path = _cfg("ANKUSDRIVE_CASE_ROOT", "") or os.path.join(tempfile.gettempdir(), ROOT_NAME)
     if create:
-        os.makedirs(path, mode=0o700, exist_ok=True)
+        private_dir(path)
     return path
 
 
@@ -120,7 +185,7 @@ def new(kind: str) -> str:
         reap()
     except Exception:
         pass
-    return tempfile.mkdtemp(prefix=f"{base}-", dir=where)
+    return private_mkdtemp(f"{base}-", where)
 
 
 def _entries(where: str) -> list:

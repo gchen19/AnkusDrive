@@ -209,7 +209,11 @@ checks your interpreter *before* pip runs, so a too-new CPython says so instead 
 failing inside the resolver.
 
 Optional solvers (SU2, Elmer, PrusaSlicer, WSL-backed OpenFOAM) come afterwards via
-`scripts\install-solvers.ps1`. Full per-solver reality, the test suite, and the WSL2
+`scripts\install-solvers.ps1`. For the Linux-only solvers (OpenFOAM, FSI,
+injection molding, YADE, openEMS, Bempp), run `ankusdrive container setup
+--install-engine` once WSL is installed. It runs them from the prebuilt image with
+Docker inside WSL
+([how](docs/WINDOWS.md#linux-only-solvers-docker-inside-wsl-recommended)). Full per-solver reality, the test suite, and the WSL2
 route: [`docs/WINDOWS.md`](docs/WINDOWS.md).
 
 ### Ubuntu 24.04+ / containers (apt has no FreeCAD)

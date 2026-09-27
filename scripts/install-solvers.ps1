@@ -31,6 +31,13 @@
     * YADE, openEMS, bempp - still need Linux mechanisms; same WSL route works
       manually (see docs/WINDOWS.md).
 
+  EVERY LINUX-ONLY SOLVER AT ONCE: the 'docker' target runs
+  `ankusdrive container setup --install-engine`: Docker Engine inside the WSL distro
+  (no Docker Desktop needed; its WSL integration works too), the prebuilt solver image
+  (OpenFOAM, preCICE FSI, openInjMoldSim, YADE, Elmer, openEMS, Bempp), the solver
+  container with %TEMP% mounted, and substrate = "container" in config.toml. One
+  pull instead of the multi-hour builds above. See docs/WINDOWS.md.
+
   STUDIO RENDER (issue #335): the 'blender' target installs full Blender for
   render_photoreal's studio backend - the pinned official portable zip (SHA-256
   checked) extracted under -Dir, where ankusdrive/solvers.py discovers blender.exe with
@@ -55,7 +62,7 @@
   to it so a user who found only this script isn't stranded.
 
 .PARAMETER Targets
-  Any of: core pip su2 prusaslicer elmer wsl blender blender-msi blender-winget all list.
+  Any of: core pip su2 prusaslicer elmer wsl docker blender blender-msi blender-winget all list.
   Default (no args) = pip + guidance.
 
 .PARAMETER Dir
@@ -71,6 +78,7 @@
   pwsh scripts\install-solvers.ps1 su2 prusaslicer -Persist
   pwsh scripts\install-solvers.ps1 blender               # studio render backend (no admin)
   pwsh scripts\install-solvers.ps1 blender-msi           # same, per-machine (needs admin)
+  pwsh scripts\install-solvers.ps1 docker               # Linux-only solvers via Docker in WSL
   pwsh scripts\install-solvers.ps1 list                 # ankusdrive doctor
 #>
 [CmdletBinding()]
@@ -365,6 +373,19 @@ function Install-WslSolvers {
     Write-Host 'Override the probed distro with ANKUSDRIVE_WSL_DISTRO (env or config.toml).'
 }
 
+function Install-WslDocker {
+    Write-Host '== Linux-only solvers from the prebuilt image, Docker inside WSL2 =='
+    # All the steps live in `ankusdrive container setup` (ankusdrive/container_setup.py),
+    # so a pipx/uv user without this repo runs the same thing by typing it.
+    if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
+        throw 'WSL not installed: run "wsl --install -d Ubuntu" (elevated), reboot, open Ubuntu once, then re-run this target'
+    }
+    if (Test-Path $venvPy) { & $venvPy -m ankusdrive container setup --install-engine }
+    elseif (Get-Command ankusdrive -ErrorAction SilentlyContinue) { & ankusdrive container setup --install-engine }
+    else { throw 'no AnkusDrive install found - run scripts\install-core.ps1 first' }
+    if ($LASTEXITCODE -ne 0) { throw 'ankusdrive container setup failed (see above)' }
+}
+
 function Show-List {
     if (Test-Path $venvPy) { & $venvPy -m ankusdrive doctor }
     else { Write-Warning 'no .venv - cannot run ankusdrive doctor' }
@@ -380,12 +401,13 @@ foreach ($t in $Targets) {
         'prusa'       { Install-Prusa; $did = $true }
         'elmer'       { Install-Elmer; $did = $true }
         'wsl'         { Install-WslSolvers; $did = $true }
+        'docker'      { Install-WslDocker; $did = $true }
         'blender'     { Install-Blender; $did = $true }
         'blender-msi' { Install-BlenderMsi; $did = $true }
         'blender-winget' { Install-BlenderWinget; $did = $true }
         'all'         { Install-Pip; Install-SU2; Install-Prusa; Install-Elmer; $did = $true }
         'list'        { Show-List; $did = $true }
-        default       { Write-Warning "unknown target '$t' (use: core pip su2 prusaslicer elmer wsl blender blender-msi blender-winget all list)" }
+        default       { Write-Warning "unknown target '$t' (use: core pip su2 prusaslicer elmer wsl docker blender blender-msi blender-winget all list)" }
     }
 }
 if (-not $did) { Install-Pip }

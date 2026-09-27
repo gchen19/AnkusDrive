@@ -647,6 +647,29 @@ def _fmt_container_image(img: dict) -> list[str]:
     return lines
 
 
+# On Windows every Linux-only solver's own hint is a Linux recipe (apt, source
+# builds, install-solvers.sh) that only works typed into the WSL distro. The solver
+# image carries all of them, and one command provisions it there.
+CONTAINER_SETUP_HINT = ("ankusdrive container setup --install-engine  (runs the "
+                        "prebuilt solver image with Docker inside WSL; docs/WINDOWS.md)")
+
+
+def _container_route_hint(solver_names, system: str | None = None) -> list[str]:
+    """The ``or:`` line offering the container route, on Windows, for a family the
+    image can run, unless the container substrate is already selected (its own hints
+    then say what is missing)."""
+    if (system or platform.system()) != "Windows":
+        return []
+    try:
+        if solvers.substrate() == "container":
+            return []
+    except ValueError:
+        return []
+    if not any(solvers.container_carries(s) for s in solver_names):
+        return []
+    return [f"        or:    {CONTAINER_SETUP_HINT}"]
+
+
 def _fmt_solvers(caps: dict) -> list[str]:
     lines = []
     families = caps["families"]
@@ -688,6 +711,7 @@ def _fmt_solvers(caps: dict) -> list[str]:
             st = solver_states[name]
             lines.append(f"{_MARK['absent']} {fam:<16} absent")
             lines.append(f"        fix:   {st.get('install_hint')}")
+        lines += _container_route_hint(info["solvers"])
         # A solver can RESOLVE and still not make the family usable: nothing in
         # AnkusDrive builds a case for it, so only a hand-prepared case_dir reaches it
         # (SU2, issue #237). It is deliberately not counted as ready above, but

@@ -320,6 +320,10 @@ echo "== doctor's macOS Gatekeeper diagnosis (#310; xattr/spctl injected; any pl
 python3 tests/test_doctor_gatekeeper.py
 
 echo
+echo "== Container substrate on Windows: Docker in WSL, container setup, scratch ACLs (faked; any platform) =="
+python3 tests/test_windows_container.py
+
+echo
 echo "== Planar-kinematics toys (Grashof / stroke / DOF; pure-Python; no FreeCAD) =="
 python3 tests/test_kinematics.py
 

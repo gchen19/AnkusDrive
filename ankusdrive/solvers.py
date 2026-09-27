@@ -37,6 +37,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import platform
+import re
 import shutil
 import sys
 
@@ -740,11 +741,6 @@ def substrate() -> str:
                          f"expected one of: {', '.join(_SUBSTRATES)}")
     if raw == "wsl" and system != "Windows":
         raise ValueError("ANKUSDRIVE_SUBSTRATE=wsl only applies on Windows hosts")
-    if raw == "container" and system == "Windows":
-        # a Windows case dir (C:\...) has no same-path meaning inside a Linux
-        # container; path translation for Docker Desktop on Windows is not built yet
-        raise ValueError("ANKUSDRIVE_SUBSTRATE=container is not supported on Windows "
-                         "hosts yet — use wsl")
     return raw
 
 
@@ -764,12 +760,87 @@ def container_name() -> str:
     return _config.get("ANKUSDRIVE_CONTAINER") or _DEFAULT_CONTAINER
 
 
+# --- the container substrate on Windows: the engine lives in WSL ------------------
+# A Linux container needs a Linux engine, and on Windows that engine runs inside the
+# WSL2 distro: Docker Engine installed there (scripts/install-solvers.ps1 docker), or
+# Docker Desktop with its WSL integration, which puts the same `docker` CLI in the
+# distro. So every engine call is relayed as `wsl -d <distro> -e <engine> ...` — the
+# same distro the wsl substrate uses — and the same-path scratch contract holds in
+# the distro's view of the Windows disk: the container mounts %TEMP% at its
+# /mnt/<drive>/... path, and every host path handed across is translated to that form
+# (:func:`container_path`). One Windows path, one Linux path, both sides agree.
+
+def container_relay() -> list:
+    """The argv prefix that reaches the container engine: ``[]`` where the engine is a
+    host CLI, ``["wsl", "-d", <distro>, "-e"]`` on Windows, where it lives in WSL."""
+    if platform.system() != "Windows":
+        return []
+    d = wsl_distro()
+    return ["wsl", *(["-d", d] if d else []), "-e"]
+
+
+# Booting an idle WSL distro, then dockerd, then the restart-policy container takes
+# ~15-20 s (measured: 17 s on a Windows 11 box). A 5 s inspect would call a healthy
+# container "absent" on the first tool call after every idle shutdown.
+_WSL_COLD_START_S = 60.0
+
+
+def _engine_timeout(env_var: str, default: float) -> float:
+    """``env_var`` when set, else ``default`` — raised to cover a WSL cold start when
+    the engine is relayed into WSL."""
+    raw = _config.get(env_var)
+    if raw:
+        return float(raw)
+    return max(default, _WSL_COLD_START_S) if container_relay() else default
+
+
+def _engine_cmd(engine: str) -> list:
+    """``[*relay, engine]`` — the head of every engine invocation."""
+    return [*container_relay(), engine]
+
+
+def container_cli() -> str:
+    """The engine command as a user types it, for hints: ``docker``, or
+    ``wsl -d Ubuntu -e docker`` on Windows."""
+    return " ".join(_engine_cmd(container_engine()))
+
+
+_WIN_DRIVE = re.compile(r"^([A-Za-z]):[\\/]")
+
+
+def container_path(path: str) -> str:
+    """A host path as the container sees it. On Windows a drive path is rewritten to
+    the distro's mount of that drive — ``C:\\Users\\me\\AppData\\Local\\Temp\\x`` ->
+    ``/mnt/c/Users/me/AppData/Local/Temp/x`` — which is where the container mounts
+    the scratch. Everything else, and every path off Windows, passes through: there
+    the scratch is mounted at its own path."""
+    if platform.system() != "Windows" or not isinstance(path, str):
+        return path
+    m = _WIN_DRIVE.match(path)
+    if not m:
+        return path
+    return f"/mnt/{m.group(1).lower()}/" + path[3:].replace("\\", "/")
+
+
+def _no_engine_note() -> str:
+    """Why :func:`container_available` is False, for a ``found_at``."""
+    if platform.system() == "Windows":
+        return "(no WSL distro to run the engine in — `wsl --install -d Ubuntu`)"
+    return f"(no `{container_engine()}` on PATH)"
+
+
 def container_available() -> bool:
-    """True when the ``container`` substrate is selected AND its engine CLI is on PATH
-    — the container twin of :func:`multipass_available`, and just as weak a signal:
-    the container's filesystem is opaque from the host, so this proves the substrate
-    can be reached, never that a solver is provisioned inside it."""
-    return substrate() == "container" and shutil.which(container_engine()) is not None
+    """True when the ``container`` substrate is selected AND its engine can be reached
+    — its CLI on PATH, or on Windows a WSL distro to relay into (the engine is inside
+    it, where the host cannot look without running it; :func:`container_state` does).
+    The container twin of :func:`multipass_available`, and just as weak a signal: the
+    container's filesystem is opaque from the host, so this proves the substrate can
+    be reached, never that a solver is provisioned inside it."""
+    if substrate() != "container":
+        return False
+    if platform.system() == "Windows":
+        return wsl_available()
+    return shutil.which(container_engine()) is not None
 
 
 def _opaque_substrate_available() -> bool:
@@ -898,7 +969,8 @@ def _container_inspect_exec(engine: str, name: str, timeout_s: float):
     import subprocess
     try:
         proc = subprocess.run(
-            [engine, "container", "inspect", "--format", "{{json .State}}", name],
+            [*_engine_cmd(engine), "container", "inspect", "--format", "{{json .State}}",
+             name],
             capture_output=True, text=True, timeout=timeout_s,
             stdin=subprocess.DEVNULL)      # never steal the caller's stdin (#223)
     except (OSError, subprocess.SubprocessError):
@@ -915,7 +987,7 @@ def _container_inspect(engine: str, name: str):
     hit = _ctr_info_cache.get((engine, name))
     if hit and hit[0] > now:
         return hit[1]
-    timeout_s = float(_config.get("ANKUSDRIVE_MULTIPASS_TIMEOUT_S") or 5.0)
+    timeout_s = _engine_timeout("ANKUSDRIVE_MULTIPASS_TIMEOUT_S", 5.0)
     payload = _container_inspect_exec(engine, name, timeout_s)
     _ctr_info_cache[(engine, name)] = (now + ttl, payload)
     return payload
@@ -970,11 +1042,39 @@ def container_run_command() -> str:
     They are not a sandbox for hostile code — a bind-mounted scratch is still a hole,
     and an agent chooses the geometry the solver reads. They are the difference
     between a solver bug being contained and being a foothold."""
-    return (f'{container_engine()} run -d --name {container_name()} '
-            f'--user "$(id -u):$(id -g)" -e HOME=/tmp '
-            f'--network none --cap-drop ALL --security-opt no-new-privileges '
-            f'--read-only --tmpfs /tmp:rw,exec,size=2g '
-            f'-v "$TMPDIR:$TMPDIR" {_SOLVER_IMAGE} sleep infinity')
+    if platform.system() == "Windows":
+        # Engine in WSL: the distro's default user (uid 1000 on a stock install) and
+        # %TEMP% at its /mnt/<drive> path. `ankusdrive container setup` runs it with
+        # the distro's real uid.
+        import tempfile
+        return " ".join(_q(a) for a in container_run_argv(
+            "1000:1000", container_path(tempfile.gettempdir())))
+    argv = container_run_argv('"$(id -u):$(id -g)"', "$TMPDIR")
+    return " ".join('"$TMPDIR:$TMPDIR"' if a == "$TMPDIR:$TMPDIR" else a for a in argv)
+
+
+# Least privilege (#423) — see container_run_command for why each is here.
+_RUN_FLAGS = ("-e", "HOME=/tmp", "--network", "none", "--cap-drop", "ALL",
+              "--security-opt", "no-new-privileges", "--read-only",
+              "--tmpfs", "/tmp:rw,exec,size=2g")
+
+
+def container_run_argv(user: str, scratch: str, image: str = _SOLVER_IMAGE) -> list:
+    """The argv behind :func:`container_run_command`: create the solver container
+    running as ``user`` with ``scratch`` bind-mounted at the same path. On Windows it
+    is relayed into WSL and gets ``--restart unless-stopped``: WSL shuts an idle
+    distro down, and the next relayed call boots the distro, dockerd and — with the
+    policy — the container."""
+    restart = ["--restart", "unless-stopped"] if platform.system() == "Windows" else []
+    return [*_engine_cmd(container_engine()), "run", "-d", "--name", container_name(),
+            *restart, "--user", user, *_RUN_FLAGS, "-v", f"{scratch}:{scratch}",
+            image, "sleep", "infinity"]
+
+
+def _q(arg: str) -> str:
+    """Double-quote an argument with a space for a copy-paste hint (PowerShell and
+    bash both read "a b" as one argument)."""
+    return f'"{arg}"' if " " in arg else arg
 
 
 # --- container-routed solvers beyond OpenFOAM (issue #419) ------------------------
@@ -986,6 +1086,17 @@ def _container_routed(spec: dict) -> bool:
     solver are ignored: they are not what ``<engine> exec`` runs."""
     return (bool(spec.get("substrate_bins") or spec.get("container"))
             and substrate() == "container")
+
+
+def container_carries(name: str) -> bool:
+    """Whether the solver image carries solver ``name`` (the OpenFOAM-backed set or a
+    ``"container": True`` entry), whichever substrate is selected — what doctor asks
+    before offering the container route for a family that is not ready."""
+    try:
+        spec = _spec(name)
+    except ValueError:
+        return False
+    return bool(spec.get("substrate_bins") or spec.get("container"))
 
 
 def routes_through_container(name: str) -> bool:
@@ -1004,7 +1115,7 @@ def _container_probe_exec(engine: str, name: str, argv: tuple, timeout_s: float)
     has nothing to send."""
     import subprocess
     try:
-        proc = subprocess.run([engine, "exec", name, *argv], capture_output=True,
+        proc = subprocess.run([*_engine_cmd(engine), "exec", name, *argv], capture_output=True,
                               text=True, timeout=timeout_s, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -1023,7 +1134,7 @@ def _container_probe(engine: str, name: str, argv: tuple):
     hit = _ctr_probe_cache.get(key)
     if hit and hit[0] > now:
         return hit[1]
-    timeout_s = float(_config.get("ANKUSDRIVE_CONTAINER_PROBE_TIMEOUT_S") or 30.0)
+    timeout_s = _engine_timeout("ANKUSDRIVE_CONTAINER_PROBE_TIMEOUT_S", 30.0)
     result = _container_probe_exec(engine, name, tuple(argv), timeout_s)
     _ctr_probe_cache[key] = (now + ttl, result)
     return result
@@ -1146,7 +1257,7 @@ def _container_inspect_config_exec(engine: str, name: str, timeout_s: float):
     try:
         # container -> image ref, then image -> repo digests (the container object
         # does not carry them)
-        proc = subprocess.run([engine, "container", "inspect", "--format",
+        proc = subprocess.run([*_engine_cmd(engine), "container", "inspect", "--format",
                                "{{.Config.Image}}", name],
                               capture_output=True, text=True, timeout=timeout_s,
                               stdin=subprocess.DEVNULL)
@@ -1155,7 +1266,7 @@ def _container_inspect_config_exec(engine: str, name: str, timeout_s: float):
         ref = (proc.stdout or "").strip()
         if not ref:
             return None
-        proc = subprocess.run([engine, "image", "inspect", "--format",
+        proc = subprocess.run([*_engine_cmd(engine), "image", "inspect", "--format",
                                "{{json .RepoDigests}}", ref],
                               capture_output=True, text=True, timeout=timeout_s,
                               stdin=subprocess.DEVNULL)
@@ -1175,7 +1286,7 @@ def _container_inspect_config(engine: str, name: str):
     hit = _ctr_probe_cache.get(key)
     if hit and hit[0] > now:
         return hit[1]
-    timeout_s = float(_config.get("ANKUSDRIVE_MULTIPASS_TIMEOUT_S") or 5.0)
+    timeout_s = _engine_timeout("ANKUSDRIVE_MULTIPASS_TIMEOUT_S", 5.0)
     payload = _container_inspect_config_exec(engine, name, timeout_s)
     _ctr_probe_cache[key] = (now + ttl, payload)
     return payload
@@ -1364,7 +1475,8 @@ def _container_inspect_privileges_exec(engine: str, name: str, timeout_s: float)
     fmt = ('{{.HostConfig.NetworkMode}}|{{.Config.User}}'
            '|{{json .HostConfig.CapDrop}}|{{.HostConfig.ReadonlyRootfs}}')
     try:
-        proc = subprocess.run([engine, "container", "inspect", "--format", fmt, name],
+        proc = subprocess.run([*_engine_cmd(engine), "container", "inspect", "--format", fmt,
+                               name],
                               capture_output=True, text=True, timeout=timeout_s,
                               stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
@@ -1381,7 +1493,7 @@ def _container_inspect_privileges(engine: str, name: str):
     hit = _ctr_probe_cache.get(key)
     if hit and hit[0] > now:
         return hit[1]
-    timeout_s = float(_config.get("ANKUSDRIVE_MULTIPASS_TIMEOUT_S") or 5.0)
+    timeout_s = _engine_timeout("ANKUSDRIVE_MULTIPASS_TIMEOUT_S", 5.0)
     payload = _container_inspect_privileges_exec(engine, name, timeout_s)
     _ctr_probe_cache[key] = (now + ttl, payload)
     return payload
@@ -1435,8 +1547,9 @@ def solver_argv(name: str, argv, cwd: str | None = None, *, stdin: bool = False)
     if not _container_routed(spec):
         return argv
     env = [f for k, v in spec.get("container_env", {}).items() for f in ("-e", f"{k}={v}")]
-    return [container_engine(), "exec", *(["-i"] if stdin else []), *env,
-            *(["-w", cwd] if cwd else []), container_name(), *argv]
+    return [*_engine_cmd(container_engine()), "exec", *(["-i"] if stdin else []), *env,
+            *(["-w", container_path(cwd)] if cwd else []), container_name(),
+            *(container_path(a) for a in argv)]
 
 
 def stage_runner(name: str, runner: str) -> str:
@@ -1461,7 +1574,9 @@ def stage_runner(name: str, runner: str) -> str:
     if _owned_with_bytes(dest, data):
         return dest
     try:
-        os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+        from ankusdrive import cases as _cases
+        _cases.private_dir(base)
+        _cases.private_dir(os.path.dirname(dest))
         if _owned_by_me(base) and _owned_by_me(os.path.dirname(dest)):
             tmp = f"{dest}.{os.getpid()}.tmp"
             with open(tmp, "wb") as f:
@@ -1471,7 +1586,8 @@ def stage_runner(name: str, runner: str) -> str:
                 return dest
     except OSError:
         pass
-    private = tempfile.mkdtemp(prefix="ankusdrive-runner-")   # 0700, unpredictable name
+    from ankusdrive import cases as _cases
+    private = _cases.private_mkdtemp("ankusdrive-runner-")    # 0700, unpredictable name
     dest = os.path.join(private, os.path.basename(runner))
     with open(dest, "wb") as f:
         f.write(data)
@@ -1533,7 +1649,8 @@ def bash_argv(script: str, case_dir: str | None = None) -> list:
         body = f"cd {shlex.quote(case_dir)} && {script}" if case_dir else script
         return ["multipass", "exec", foam_instance(), "--", "bash", "-c", body]
     if sub == "container":
-        return [container_engine(), "exec", *(["-w", case_dir] if case_dir else []),
+        return [*_engine_cmd(container_engine()), "exec",
+                *(["-w", container_path(case_dir)] if case_dir else []),
                 container_name(), "bash", "-c", script]
     return ["bash", "-c", script]
 
@@ -1816,11 +1933,11 @@ def _unwired_found(name: str, spec: dict):
     if spec.get("container") and _container_routed(spec):
         # #419: under `container` a host venv or binary is irrelevant; what is missing
         # is the container, its running state, or the solver inside that image
-        eng, cname = container_engine(), container_name()
+        eng, cname = container_cli(), container_name()
         state = container_state(cname)
         if state == "absent":
             found_at = ("container substrate" if container_available()
-                        else f"container substrate (no `{eng}` on PATH)")
+                        else f"container substrate {_no_engine_note()}")
             hint = (f"no solver container {cname!r} — create it from the prebuilt solver "
                     f"image, with the host scratch mounted at the same path: "
                     f"{container_run_command()}. See docs/CONTAINER_SUBSTRATE.md")
@@ -1891,10 +2008,10 @@ def _unwired_found(name: str, spec: dict):
         # `<engine> exec` sources — so the container's state decides the hint, the
         # same three-way read as the Multipass branch below.
         if cfg.get("container") and substrate() == "container":
-            eng, name = container_engine(), container_name()
+            eng, name = container_cli(), container_name()
             state = container_state(name)
             if state == "absent" and not container_available():
-                found_at = f"container substrate (no `{eng}` on PATH)"
+                found_at = f"container substrate {_no_engine_note()}"
             elif state == "absent":
                 found_at = "container substrate"
             else:
