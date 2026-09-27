@@ -6964,7 +6964,11 @@ def dem_pack_submit(
     friction angle; `young_pa` the contact modulus; `density` the grain density.
     Returns {job_id, status, cache_hit, oracle} (poll job_status / job_result);
     the job result carries the oracle band PLUS the measured {packing_fraction,
-    in_band, n_settled, settled_height_m, mean_coordination, positions:[[x,y,z,r]]}.
+    packing_fraction_bulk, in_band, gated_on, gated_fraction, n_settled,
+    settled_height_m, mean_coordination, positions:[[x,y,z,r]]}. `in_band` judges
+    the wall-free bulk φ (the whole-bed φ is deflated by loose wall and surface
+    layers); it falls back to the whole-bed φ only when the bed is too small to
+    have a bulk region, and `gated_on` names which fraction was judged.
     Absent YADE: {ok:false, reason, install, oracle}."""
     params = {"n_spheres": n_spheres, "radius_m": radius_m,
               "box_m": box_m or [0.06, 0.06], "friction_deg": friction_deg,

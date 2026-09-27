@@ -16360,7 +16360,10 @@ def _h_dem_pack_submit(p):
     Knobs: n_spheres, radius_m, box_m([Lx,Ly]), friction_deg, young_pa, density,
     steps. Returns {job_id, status, cache_hit} (poll job_status / job_result);
     the job result is the oracle band PLUS the measured {packing_fraction,
-    n_settled, settled_height_m, mean_coordination, positions:[[x,y,z,r],...]}."""
+    packing_fraction_bulk, in_band, gated_on, gated_fraction, n_settled,
+    settled_height_m, mean_coordination, positions:[[x,y,z,r],...]}. in_band
+    judges the wall-free bulk φ (whole-bed φ only when the bed has no bulk
+    region); gated_on names which one."""
     from ankusdrive import jobs
     from ankusdrive.analysis import granular
 
@@ -16386,8 +16389,11 @@ def _h_dem_pack_submit(p):
         res = _run_dem_gpl(problem, yade_exe, timeout=timeout)
         res["oracle"] = oracle
         if res.get("ok") and res.get("packing_fraction") is not None:
-            lo, hi = oracle["band"]
-            res["in_band"] = lo <= res["packing_fraction"] <= hi
+            # #471: gate the wall-free bulk φ the RCP band describes; the
+            # whole-bed φ only when the bed is too small to have a bulk region
+            res.update(granular.pack_band_gate(
+                res["packing_fraction"], res.get("packing_fraction_bulk"),
+                oracle["band"]))
             res["backend"] = "YADE (subprocess-isolated, GPL-3.0)"
         return res
 

@@ -105,6 +105,25 @@ def test_packing_oracle():
           f"(RLP {rlp} < RCP < FCC {fcc:.4f})")
 
 
+def test_pack_band_gate():
+    """#471: dem_pack_submit's in_band judges the wall-free BULK φ, not the
+    whole-bed φ that loose wall/surface layers deflate. The issue's default-run
+    numbers (whole 0.502, bulk 0.602) must pass; a bed too small to have a bulk
+    region (bulk None) falls back to the whole-bed φ; a bulk φ out of band fails
+    even when the whole-bed φ happens to sit inside it."""
+    band = g.packing_fraction("random_close")["band"]
+    got = g.pack_band_gate(0.50191, 0.602349, band)
+    assert got == {"in_band": True, "gated_on": "packing_fraction_bulk",
+                   "gated_fraction": 0.602349}, got
+    shallow = g.pack_band_gate(0.50191, None, band)
+    assert shallow["gated_on"] == "packing_fraction" and not shallow["in_band"], shallow
+    assert g.pack_band_gate(0.62, None, band)["in_band"]
+    loose_bulk = g.pack_band_gate(0.62, 0.55, band)
+    assert not loose_bulk["in_band"] and loose_bulk["gated_fraction"] == 0.55, loose_bulk
+    print(f"    pack gate: bulk 0.602 in {band} (whole-bed 0.502 would fail); "
+          f"no bulk → whole-bed fallback")
+
+
 def test_beverloo_oracle():
     """Beverloo discharge closed form: mass flow W ∝ (D−k·d)^2.5. A two-outlet
     sweep at fixed grain size recovers the flow exponent EXACTLY at the granular
