@@ -45,7 +45,7 @@ def _path_setup_case(tmp_path):
     # the package parent carries a different one (the venv's). FreeCAD's must win.
     fc_sp = tmp_path / "fc_site"
     fc_sp.mkdir()
-    (fc_sp / "shadowme.py").write_text("WHO = 'freecad'\n")
+    (fc_sp / "shadowme.py").write_text("WHO = 'freecad'\n", encoding="utf-8")
     parent = WORKER.parent.parent
     probe = textwrap.dedent(f"""
         import os, sys
@@ -59,7 +59,7 @@ def _path_setup_case(tmp_path):
               == os.path.normcase({str(parent)!r}))
         print(shadowme.WHO)
     """)
-    (parent / "shadowme.py").write_text("WHO = 'venv'\n")
+    (parent / "shadowme.py").write_text("WHO = 'venv'\n", encoding="utf-8")
     try:
         # -I: no PYTHONPATH/user site, so only the setup under test orders sys.path.
         out = subprocess.run([sys.executable, "-I", "-c", probe], cwd=tmp_path,
