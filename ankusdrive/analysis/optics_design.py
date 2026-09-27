@@ -26,6 +26,18 @@ from __future__ import annotations
 
 import math
 
+
+def dist_version(dist: str, module=None) -> str:
+    """Installed version of distribution ``dist``, read from its metadata. A module's
+    ``__version__`` is only the fallback: optiland 0.6.2 ships ``__version__ =
+    "0.6.1"``, so the attribute misreports the build that actually ran (#468)."""
+    try:
+        from importlib.metadata import version
+        return version(dist)
+    except Exception:
+        return getattr(module, "__version__", "unknown")
+
+
 # ---- analytic oracle (no optiland needed) ------------------------------------
 
 
@@ -119,7 +131,7 @@ def analyze(system: dict, want_spot: bool = True) -> dict:
     out = {
         "ok": True,
         "backend": "optiland",
-        "optiland_version": getattr(optiland, "__version__", "unknown"),
+        "optiland_version": dist_version("optiland", optiland),
         "efl_mm": round(efl, 6),
         "bfl_mm": (round(bfl, 6) if bfl is not None else None),
         "fno": round(fno, 6),

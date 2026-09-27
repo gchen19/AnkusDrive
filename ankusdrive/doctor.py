@@ -159,6 +159,9 @@ def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> di
             w = Worker(boot_timeout=boot_timeout)
             try:
                 report["version"] = ".".join(w.freecad_version)
+                wp = worker_python_report(getattr(w, "worker_python", None))
+                if wp:
+                    report["worker_python"] = wp
             finally:
                 w.shutdown()
         except Exception as e:  # noqa: BLE001 — doctor must never crash on a bad boot
@@ -169,6 +172,55 @@ def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> di
                 if gk.get("fix"):
                     report["fix"] = gk["fix"]
     return report
+
+
+def _worker_reads_host_packages() -> bool:
+    """True when the worker's sys.path carries this host's site-packages: in a wheel
+    install (pipx, uv tool, venv) the package's parent directory IS that
+    site-packages, and the worker appends it (#468). A source checkout's parent is
+    the repo, so the worker sees none of the host's compiled wheels."""
+    import ankusdrive
+    return Path(ankusdrive.__file__).resolve().parent.parent.name in (
+        "site-packages", "dist-packages")
+
+
+def _reinstall_hint(mm: str) -> str:
+    """Rebuild THIS install on Python ``mm`` (e.g. "3.11"), per install kind (#347)."""
+    k = install_kind.kind()
+    if k == "pipx":
+        return f"pipx reinstall --python {mm} ankusdrive"
+    if k == "uv_tool":
+        return (f"uv tool install --reinstall --python {mm} \"ankusdrive[<your extras>]\"")
+    if k == "venv":
+        return (f"recreate the venv on Python {mm} (`py -{mm} -m venv .venv` on Windows, "
+                f"`python{mm} -m venv .venv` elsewhere) and reinstall into it")
+    return f"run AnkusDrive under Python {mm}"
+
+
+def worker_python_report(worker_python, host_version=None,
+                         reads_host_packages=None) -> dict | None:
+    """Does FreeCAD's embedded Python match the host venv whose wheels it imports?
+
+    The worker falls back to the host venv's site-packages for anything FreeCAD
+    does not bundle (rayoptics, optiland, pybullet, ...). Those compiled wheels only
+    load when both interpreters share a major.minor: a venv on 3.12 beside
+    FreeCAD 1.1's 3.11 fails every worker-side optics call (#468). Returns None when
+    the worker did not say (an older worker); arguments default to this process."""
+    if not worker_python:
+        return None
+    wmm = tuple(worker_python[:2])
+    hmm = tuple((host_version or sys.version_info)[:2])
+    reads = _worker_reads_host_packages() if reads_host_packages is None else reads_host_packages
+    rep = {"version": ".".join(map(str, worker_python)), "host": ".".join(map(str, hmm)),
+           "reads_host_packages": reads, "match": wmm == hmm}
+    if reads and wmm != hmm:
+        mm = ".".join(map(str, wmm))
+        rep["warning"] = (
+            f"FreeCAD's Python is {mm} but this install's venv is "
+            f"{rep['host']}: the worker imports the venv's compiled wheels "
+            "(numpy-based solvers, optics), which do not load across Python versions")
+        rep["fix"] = _reinstall_hint(mm)
+    return rep
 
 
 # --- macOS Gatekeeper (issue #310) ---------------------------------------------
@@ -562,6 +614,12 @@ def _fmt_freecad(fc: dict) -> list[str]:
     if fc.get("version"):
         lines.append(f"{_MARK['ok']} FreeCAD {fc['version']}  {fc['path']}")
         lines.append(f"        source: {fc['source']}")
+        wp = fc.get("worker_python")
+        if wp:
+            lines.append(f"        python: {wp['version']} (host venv {wp['host']})")
+            if wp.get("warning"):
+                lines.append(f"        {_MARK['unwired']} {wp['warning']}")
+                lines.append(f"        fix: {wp['fix']}")
     elif fc.get("exists"):
         lines.append(f"{_MARK['unwired']} FreeCAD (unverified)  {fc['path']}")
         if fc.get("error"):

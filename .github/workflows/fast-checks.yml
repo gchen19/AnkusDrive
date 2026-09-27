@@ -179,6 +179,12 @@ jobs:
         # ACL exception and doctor's container-route hint. No engine, no FreeCAD.
         run: python tests/test_windows_container.py
 
+      - name: Worker sys.path — host venv wheels never shadow FreeCAD's Qt/numpy (#468)
+        # Runs the worker's real path-setup lines in a subprocess: the package parent
+        # (a wheel install's venv site-packages) must land LAST. Plus doctor's
+        # FreeCAD-vs-venv Python mismatch check. No FreeCAD.
+        run: python tests/test_worker_venv_shadowing.py
+
   introspection-image:
     # Glama builds the root Dockerfile and reads the tool list over stdio; a failed
     # build drops the listing from search, and awesome-mcp-servers needs it passing

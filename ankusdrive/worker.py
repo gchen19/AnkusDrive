@@ -11,8 +11,8 @@ Wire format: newline-delimited JSON, one object per line.
   response: {"id": "r1", "result": ...}                    or
             {"id": "r1", "error": {"type": ..., "message": ..., "traceback": ...}}
 
-The very first response line is `{"ready": true, "freecad": [...]}`, emitted
-before entering the dispatch loop so the host can confirm the worker booted.
+The very first response line is `{"ready": true, "freecad": [...], "python": [...]}`,
+emitted before entering the dispatch loop so the host can confirm the worker booted.
 """
 import contextlib
 import json
@@ -25,7 +25,19 @@ import traceback
 # This file is launched as a bare script (`freecadcmd worker.py`), so the repo
 # root isn't on sys.path. Add it so pure-Python `ankusdrive.analysis.*` modules
 # (materials, tolerance, ...) are importable from handlers below.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+#
+# In a wheel install (pipx, uv tool, venv) that directory is the host venv's
+# site-packages, whose compiled wheels were built for the host's Python and Qt,
+# not FreeCAD's. It goes at the front only long enough to bind `ankusdrive`
+# (submodules then resolve through the package's own __path__), then moves to the
+# END: FreeCAD's bundled numpy/PySide6/shiboken6 win, venv-only packages
+# (rayoptics, optiland, ...) still resolve. At the front, the venv's PySide6
+# shadowed FreeCAD's and broke on the Qt DLLs FreeCAD had already loaded (#468).
+_PKG_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PKG_PARENT)
+import ankusdrive  # noqa: E402,F401
+sys.path.remove(_PKG_PARENT)
+sys.path.append(_PKG_PARENT)
 
 
 _RESPONSE_FD = os.dup(1)
@@ -15838,10 +15850,11 @@ def _h_optics_raytrace(p):
                  key=lambda b: b["intensity"], reverse=True)[:3]
     theta_c = optics.critical_angle(n1, n2)
     import rayoptics as _ro
+    from ankusdrive.analysis import optics_design as _optics_design
     return {
         "ok": True,
         "backend": "rayoptics",
-        "rayoptics_version": getattr(_ro, "__version__", "unknown"),
+        "rayoptics_version": _optics_design.dist_version("rayoptics", _ro),
         "n_rays": n_rays,
         "n1": n1,
         "n2": n2,
@@ -21727,7 +21740,8 @@ def _main():
     # mainthread.call() tell "I am a background job, enqueue and wait" from "I am
     # already the main thread, just run it".
     mainthread.bind()
-    _respond({"ready": True, "freecad": list(App.Version())[:3]})
+    _respond({"ready": True, "freecad": list(App.Version())[:3],
+              "python": list(sys.version_info[:3])})
     for line in sys.stdin:
         line = line.strip()
         if not line:

@@ -175,6 +175,8 @@ class Worker:
         if not ready.get("ready"):
             raise WorkerDied(f"worker did not report ready, got: {ready!r}")
         self.freecad_version = ready.get("freecad")
+        # FreeCAD's embedded interpreter, [major, minor, micro]; None from an older worker.
+        self.worker_python = ready.get("python")
 
     def _drain_stderr(self):
         for line in self.proc.stderr:
