@@ -314,6 +314,7 @@ def test_runs_in_substrate_follows_the_selection_not_the_os():
 
 def test_container_run_command_mounts_the_scratch_at_the_same_path():
     with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Linux"))   # Windows relays via WSL
         p.env(ANKUSDRIVE_CONTAINER_ENGINE="podman", ANKUSDRIVE_CONTAINER="foam")
         cmd = solvers.container_run_command()
         assert cmd.startswith("podman run -d --name foam "), cmd
@@ -437,6 +438,7 @@ def test_inspect_read_is_bounded_and_never_takes_stdin():
             returncode, stdout = 0, '{"Running": true}'
         return R()
     with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Linux"))   # Windows relays via WSL
         p.set(subprocess, "run", fake_run)
         out = solvers._container_inspect_exec("podman", "foam", 3.0)
     assert out == '{"Running": true}'
@@ -746,6 +748,7 @@ def test_container_probe_is_bounded_and_never_takes_stdin():
             returncode, stdout = 0, "/opt/yade/bin/yade\n"
         return R()
     with _patch() as p:
+        p.set(solvers, "platform", _fake_platform("Linux"))   # Windows relays via WSL
         p.set(subprocess, "run", fake_run)
         out = solvers._container_probe_exec("podman", "foam", ("sh", "-c", "x"), 7.0)
     assert out == (0, "/opt/yade/bin/yade\n")

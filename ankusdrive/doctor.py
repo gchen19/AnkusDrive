@@ -711,7 +711,6 @@ def _fmt_solvers(caps: dict) -> list[str]:
             st = solver_states[name]
             lines.append(f"{_MARK['absent']} {fam:<16} absent")
             lines.append(f"        fix:   {st.get('install_hint')}")
-        lines += _container_route_hint(info["solvers"])
         # A solver can RESOLVE and still not make the family usable: nothing in
         # AnkusDrive builds a case for it, so only a hand-prepared case_dir reaches it
         # (SU2, issue #237). It is deliberately not counted as ready above, but
@@ -721,6 +720,8 @@ def _fmt_solvers(caps: dict) -> list[str]:
             st = solver_states[name]
             lines.append(f"        note:  {name} resolves ({st.get('path') or st.get('module')})")
             lines.append(f"               but {st['prepared_case_only']}")
+        # last, so the family's own notes stay next to its status line
+        lines += _container_route_hint(info["solvers"])
     return lines
 
 
