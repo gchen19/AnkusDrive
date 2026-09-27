@@ -116,13 +116,13 @@ def test_setup_creates_the_container_and_records_the_config():
         run, calls = _fake_distro()
         p.set(container_setup.subprocess, "run", run)
         p.set(container_setup.tempfile, "gettempdir",
-              lambda: r"C:\Users\me\AppData\Local\Temp")
+              lambda: r"C:\Users\you\AppData\Local\Temp")
         p.set(solvers, "capabilities", lambda: {"families": {"dem": {"available": True}}})
         rep = container_setup.setup()
         assert rep["ok"], rep
         made = next(c for c in calls if "run" in c and "-d" in c)
         assert made[:5] == ["wsl", "-d", "Ubuntu", "-e", "docker"], made
-        scratch = "/mnt/c/Users/me/AppData/Local/Temp"
+        scratch = "/mnt/c/Users/you/AppData/Local/Temp"
         assert f"{scratch}:{scratch}" in made and "1000:1000" in made, made
         text = Path(rep["config"]).read_text()
         assert 'substrate = "container"' in text and "/opt/yade/bin/yade" in text, text

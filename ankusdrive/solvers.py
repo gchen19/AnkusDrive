@@ -810,8 +810,8 @@ _WIN_DRIVE = re.compile(r"^([A-Za-z]):[\\/]")
 
 def container_path(path: str) -> str:
     """A host path as the container sees it. On Windows a drive path is rewritten to
-    the distro's mount of that drive — ``C:\\Users\\me\\AppData\\Local\\Temp\\x`` ->
-    ``/mnt/c/Users/me/AppData/Local/Temp/x`` — which is where the container mounts
+    the distro's mount of that drive — ``C:\\Users\\you\\AppData\\Local\\Temp\\x`` ->
+    ``/mnt/c/Users/you/AppData/Local/Temp/x`` — which is where the container mounts
     the scratch. Everything else, and every path off Windows, passes through: there
     the scratch is mounted at its own path."""
     if platform.system() != "Windows" or not isinstance(path, str):

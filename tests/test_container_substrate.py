@@ -207,17 +207,17 @@ def test_windows_container_substrate_relays_the_engine_through_wsl():
         assert solvers.substrate() == "container"
         assert solvers.container_available()
         assert solvers.container_cli() == "wsl -d Ubuntu -e docker"
-        case = r"C:\Users\me\AppData\Local\Temp\ankusdrive-cases\foam-1"
-        want_w = "/mnt/c/Users/me/AppData/Local/Temp/ankusdrive-cases/foam-1"
+        case = r"C:\Users\you\AppData\Local\Temp\ankusdrive-cases\foam-1"
+        want_w = "/mnt/c/Users/you/AppData/Local/Temp/ankusdrive-cases/foam-1"
         assert solvers.bash_argv("simpleFoam", case) == [
             "wsl", "-d", "Ubuntu", "-e", "docker", "exec", "-w", want_w,
             "ankusdrive-solvers", "bash", "-c", "simpleFoam"]
-        runner = r"C:\Users\me\AppData\Local\Temp\ankusdrive-runners\ab\dem_gpl_runner.py"
+        runner = r"C:\Users\you\AppData\Local\Temp\ankusdrive-runners\ab\dem_gpl_runner.py"
         argv = solvers.solver_argv("yade", ["/usr/bin/yade", "-x", "-n", runner], stdin=True)
         assert argv[:6] == ["wsl", "-d", "Ubuntu", "-e", "docker", "exec"], argv
         assert "-i" in argv and argv[-4:] == [
             "/usr/bin/yade", "-x", "-n",
-            "/mnt/c/Users/me/AppData/Local/Temp/ankusdrive-runners/ab/dem_gpl_runner.py"]
+            "/mnt/c/Users/you/AppData/Local/Temp/ankusdrive-runners/ab/dem_gpl_runner.py"]
 
 
 def test_windows_container_probes_and_inspects_go_through_wsl():
@@ -261,9 +261,9 @@ def test_container_path_translates_only_windows_drive_paths():
 def test_windows_run_command_mounts_temp_at_its_wsl_path():
     with _patch() as p:
         _windows_container_host(p)
-        p.set(tempfile, "gettempdir", lambda: r"C:\Users\Jo Smith\AppData\Local\Temp")
+        p.set(tempfile, "gettempdir", lambda: r"C:\Users\you there\AppData\Local\Temp")
         cmd = solvers.container_run_command()
-    scratch = "/mnt/c/Users/Jo Smith/AppData/Local/Temp"
+    scratch = "/mnt/c/Users/you there/AppData/Local/Temp"
     assert cmd.startswith("wsl -d Ubuntu -e docker run -d --name ankusdrive-solvers "), cmd
     assert f'-v "{scratch}:{scratch}"' in cmd and "--restart unless-stopped" in cmd, cmd
     # the least-privilege flags (#423) are the same on every host
