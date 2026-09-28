@@ -20,7 +20,10 @@ Measured in JSON characters of the tool list, the same unit the budget was set i
 Needs the ``mcp`` package (not FreeCAD); SKIPs, saying so, when it is not importable
 in this interpreter.
 
-Run:  .venv/bin/python3 tests/test_toolsets_budget.py
+On failure (or with ``-v``) the ten largest tool definitions are printed — the
+cheapest place to trim a description back under budget (#459).
+
+Run:  .venv/bin/python3 tests/test_toolsets_budget.py [-v]
 """
 import importlib.util
 import json
@@ -36,7 +39,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
 from _mcp_python import HOST_DEPS, ensure_mcp_interpreter, mcp_skip_reason  # noqa: E402
 
-BUDGET_CHARS = 140_000          # bundle default measured at 124,921 (2026-09-13)
+BUDGET_CHARS = 140_000          # bundle default measured at 124,921 (2026-09-13); 139,099 → ~124k after #459's trims
 
 
 def _tools_list(toolsets: str) -> list:
@@ -74,6 +77,12 @@ def _tools_list(toolsets: str) -> list:
             p.kill()
 
 
+def _largest(tools: list, n: int = 10) -> str:
+    """The n biggest tool definitions, by JSON characters — where a trim pays off (#459)."""
+    sized = sorted(((len(json.dumps(t)), t["name"]) for t in tools), reverse=True)[:n]
+    return "\n".join(f"      {size:6d}  {name}" for size, name in sized)
+
+
 def test_bundle_default_fits_the_budget():
     from ankusdrive import toolsets
     tools = _tools_list(",".join(toolsets.BUNDLE_DEFAULT))
@@ -81,10 +90,12 @@ def test_bundle_default_fits_the_budget():
     names = {t["name"] for t in tools}
     want = frozenset().union(*(toolsets.FAMILIES[f] for f in toolsets.BUNDLE_DEFAULT))
     print(f"    bundle default {toolsets.BUNDLE_DEFAULT}: {len(tools)} tools, {chars} chars (~{chars // 4} tokens), budget {BUDGET_CHARS}")
+    if chars > BUDGET_CHARS or "-v" in sys.argv:
+        print(f"    largest tool definitions:\n{_largest(tools)}")
     assert names == want, f"served {sorted(names ^ want)[:8]} differ from the bundle default's families"
     assert chars <= BUDGET_CHARS, (
         f"bundle default tools/list is {chars} chars, over the {BUDGET_CHARS} budget — move tools out of "
-        f"{toolsets.BUNDLE_DEFAULT} or trim the longest descriptions (#377)")
+        f"{toolsets.BUNDLE_DEFAULT} or trim the longest descriptions (#377); largest:\n{_largest(tools)}")
 
 
 def test_all_serves_everything_and_off_means_absent():

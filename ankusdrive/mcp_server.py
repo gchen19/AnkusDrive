@@ -738,30 +738,17 @@ def chamfer_edges(
     handle: str, edges: list, size: float = 1.0, name: str = "Chamfer",
     per_edge: bool = False, allow_partial: bool = False,
 ) -> dict:
-    """Chamfer (bevel) specific edges of a shaped Part object — the direct-shape
-    counterpart to fillet_edges.
+    """Chamfer (bevel) edges of a shaped Part object — fillet_edges' counterpart.
 
-    handle: handle of the object to chamfer (e.g. 'box_1', a boolean result).
-    edges: non-empty list of edge references. Each may be a tag ('e_...' from
-        list_edges, preferred), an 'EdgeN' string, or a bare 1-based integer
-        index.
-    size: symmetric chamfer leg distance in mm (applied equally to both faces
-        meeting at the edge, i.e. dist1 = dist2 = size). Must be > 0. Default 1.0.
-    name: label for the resulting feature object. Default 'Chamfer'.
-    per_edge: add the edges one at a time, validating after each, instead of in
-        a single apply. Slower; for geometry known to be blend-hostile.
-    allow_partial: accept a partial result instead of aborting. Off by default.
+    edges: e_* tags (preferred), 'EdgeN' strings, or 1-based ints.
+    size: symmetric leg distance mm (> 0).
+    per_edge / allow_partial: as fillet_edges.
+    The base object is hidden. Validated exactly like fillet_edges (#283).
 
-    The base object is hidden (consumed into the chamfer feature). Validated
-    exactly like fillet_edges (issue #283) — Shape.isValid(), unchanged solid
-    count, no growth of the tight bounding box — before a handle is issued.
-
-    Returns {handle, name, volume (mm^3), edges (resolved 1-based indices
-    actually chamfered), checks {valid, solids, envelope_ok,
-    envelope_growth_mm, envelope_tol_mm}, mode ('batch' | 'per_edge'), partial};
-    when partial is True, also skipped_edges and a warnings entry. On a failed
-    check the feature is removed from the document and BlendCheckFailed is
-    raised naming the offending edges — never a handle to corrupt geometry.
+    Returns {handle, name, volume (mm^3), edges (indices chamfered), checks {valid,
+    solids, envelope_ok, envelope_growth_mm, envelope_tol_mm}, mode, partial};
+    when partial, also skipped_edges and a warning. On a failed check the feature
+    is removed and BlendCheckFailed names the offending edges.
     """
     params = {"handle": handle, "edges": edges, "size": size, "name": name,
               "per_edge": per_edge, "allow_partial": allow_partial}
@@ -775,22 +762,16 @@ def shell_solid(
     thickness: float,
     name: str = "Shell",
 ) -> dict:
-    """Hollow a raw Part solid into a thin-walled shell (the direct-shape
-    counterpart to `thickness`, which only works on PartDesign bodies).
+    """Hollow a raw Part solid into a thin-walled shell (`thickness` does the same
+    for PartDesign bodies).
 
-    handle: handle of the solid to hollow (e.g. a box/cylinder from
-    add_primitive, or any shaped Part::Feature).
-    faces: NON-EMPTY list of the faces to REMOVE — these become the shell's
-    openings. Each entry is a face tag (f_..., from list_faces/query_faces,
-    preferred and edit-stable), a 'FaceN' string, or a 1-based integer index.
-    thickness: wall thickness in mm, must be > 0. The wall is grown INWARD, so
-    the part's outer dimensions are preserved.
+    faces: NON-EMPTY list of faces to REMOVE (the openings) — f_* tags
+        (preferred), 'FaceN', or 1-based ints.
+    thickness: wall mm (> 0), grown INWARD so outer dimensions are kept.
 
-    The consumed input solid is hidden (its geometry now lives in the shell).
-    Returns {handle (starts 'shell_'), name, volume (mm^3 of the resulting
-    walls), wall_thickness (mm), removed_faces (list of 1-based face indices
-    that were opened)}. Raises if faces is empty, thickness <= 0, an index is
-    out of range, or the offset is too large to produce a valid shell.
+    The input is hidden. Returns {handle (starts 'shell_'), name, volume (mm^3),
+    wall_thickness, removed_faces}. Raises on empty faces, thickness <= 0, a bad
+    index, or an offset too large for a valid shell.
     """
     params = {
         "handle": handle,
@@ -873,31 +854,17 @@ def engrave_text(
     font: str | None = None,
     name: str = "Text",
 ) -> dict:
-    """Engrave (cut) or emboss (add) extruded text onto a planar face of a solid.
+    """Engrave (cut) or emboss (add) extruded text on a planar face of a solid,
+    centred on the face centroid. The host is replaced by the returned handle.
 
-    The text is rendered in a system TrueType font, extruded, laid flat on the
-    chosen face centred on its centroid, then booleaned into the host solid.
+    face: planar face — f_* tag (preferred), 'FaceN', or int.
+    size: cap height mm. depth: engrave/emboss depth mm.
+    mode: 'engrave' (removes material) | 'emboss' (adds).
+    position: optional [u, v] mm offset from the centroid along the text's X/Y.
+    font: absolute path to a .ttf/.ttc. Omitted: only macOS Arial/Helvetica are
+        probed, so elsewhere it raises — pass a path.
 
-    handle: the host solid to mark.
-    face: the planar face to put the text on — a stable f_* tag (preferred), a
-        'FaceN' index string, or an int. Must be a flat (planar) face. Get a tag
-        from list_faces / query_faces.
-    text: the string to render (non-empty).
-    size: cap height of the text in mm (default 5.0).
-    depth: extrusion/engraving depth in mm (default 0.5). Engrave recesses the
-        text this far below the surface; emboss raises it this far above.
-    mode: 'engrave' (default) cuts the text into the solid (removes material);
-        'emboss' fuses raised text onto the surface (adds material).
-    position: optional [u, v] in-face offset in mm from the face centroid, along
-        the text's local X (u) and Y (v) axes. Omit to centre on the face.
-    font: optional absolute path to a .ttf/.ttc font file. If omitted, common
-        macOS fonts are auto-probed (Arial, then Helvetica). If none is found and
-        none is supplied, the call raises RuntimeError — pass an explicit path.
-    name: label for the resulting solid (default 'Text').
-
-    Returns {handle, name, volume, text, mode, depth} where volume is the mm^3 of
-    the resulting solid (less than the input for engrave, more for emboss). The
-    host solid is consumed/hidden and replaced by the returned handle.
+    Returns {handle, name, volume (mm^3 of the result), text, mode, depth}.
     """
     params = {"handle": handle, "face": face, "text": text, "size": size,
               "depth": depth, "mode": mode, "name": name}
@@ -918,33 +885,19 @@ def add_rib(
     name: str = "Rib",
 ) -> dict:
     """Add a reinforcing rib/web inside a PartDesign Body by thickening an OPEN
-    sketch profile into a wall that fuses with the body's surrounding material.
+    sketch spine (line, arc, or connected polyline; NOT a closed loop) into a wall
+    that fuses with the surrounding material. The sketch plane sets orientation.
 
-    Args:
-      body: handle of the PartDesign Body (from make_body) to add the rib to.
-      sketch: handle of a sketch holding an OPEN spine (a single line, arc, or
-        connected polyline) that defines where the rib runs. Must NOT be a
-        closed loop. The sketch's attachment plane sets the rib's orientation.
-      thickness: rib wall thickness in mm (> 0).
-      midplane: if True (default) the wall is centered on the spine, growing
-        thickness/2 to each side; if False it grows from one side.
-      reversed: flip the extrusion sense (use if the rib lands on the wrong
-        side of its sketch plane).
-      name: object label.
+    thickness: wall thickness mm (> 0).
+    midplane: centre the wall on the spine (default) or grow one side.
+    reversed: flip if the rib lands on the wrong side of its sketch plane.
 
-    Returns a dict: {handle (starts 'rib_'), name, volume (the whole Body's
-    Shape.Volume in mm^3 after the rib — strictly greater than before the rib,
-    since a rib only adds material), thickness}.
-
-    Fallback behaviour the caller should know: FreeCAD's native PartDesign::Rib
-    type is unavailable in AnkusDrive's headless runtime, so the rib is built as
-    an equivalent midplane PartDesign::Pad — the open spine is offset by
-    +/-thickness/2 into a closed footprint and padded across the body so it
-    reaches the surrounding walls. For the usual straight or smoothly-curved
-    spine this matches a Rib; very intricate spines may differ from the native
-    tool. Raises ValueError if the profile is closed/empty/degenerate or
-    thickness <= 0, and RuntimeError if the rib adds no material (spine does not
-    span between walls)."""
+    Returns {handle (starts 'rib_'), name, volume (the Body's mm^3 after — always
+    greater), thickness}. Headless FreeCAD lacks PartDesign::Rib, so it is built
+    as an equivalent midplane Pad of the offset spine; very intricate spines may
+    differ. Raises ValueError on a closed/degenerate profile or thickness <= 0,
+    RuntimeError if the rib adds nothing (spine does not span between walls).
+    """
     params = {
         "body": body,
         "sketch": sketch,
@@ -964,23 +917,15 @@ def transform(
     angle: float = 0.0,
     relative: bool = True,
 ) -> dict:
-    """Move and/or rotate an existing object in place — first-class replacement
-    for hand-poking an object's Placement via set_property.
+    """Move and/or rotate an object in place (no new handle) — use instead of
+    editing Placement via set_property.
 
-    handle: object to move (any object with a Placement: primitive, body, feature).
-    translate: [x, y, z] translation in mm (default no translation).
-    rotate_axis: rotation axis as a 3-vector [x, y, z] (need not be unit length;
-                 default [0, 0, 1], the Z axis).
-    angle: rotation about rotate_axis in DEGREES (default 0 = no rotation).
-    relative: True (default) composes this move ONTO the object's current
-              placement (incremental); False sets it as the ABSOLUTE placement,
-              discarding the object's prior placement.
+    translate: [x, y, z] mm.
+    rotate_axis: [x, y, z], any length (default Z); angle: DEGREES about it,
+        around the object's local origin.
+    relative: True composes onto the current placement; False sets it absolutely.
 
-    The same object is moved — NO new handle is created. The rotation is applied
-    about the object's local origin (combine with translate to pivot elsewhere).
-
-    Returns {handle, name, placement: {base:[x,y,z] mm, axis:[x,y,z],
-    angle_deg}} describing the object's resulting placement.
+    Returns {handle, name, placement: {base [x,y,z] mm, axis, angle_deg}}.
     """
     params = {"handle": handle, "angle": angle, "relative": relative}
     if translate is not None:
@@ -1057,26 +1002,16 @@ def measure_distance(
     a_ref: str | None = None,
     b_ref: str | None = None,
 ) -> dict:
-    """Minimum distance between two entities, in mm. The workhorse measurement
-    tool: lets a blind agent verify gaps, clearances, and contact.
+    """Minimum (closest-approach) distance between two entities, mm — verify gaps,
+    clearances, and contact. 0 means touching or interpenetrating; for overlap
+    volume use min_clearance / interference_check.
 
-    Args:
-        a: handle of the first object.
-        b: handle of the second object.
-        a_ref: optional sub-shape selector on `a` to measure FROM instead of the
-               whole solid -- an f_* face tag, an e_* edge tag, or a literal
-               "FaceN"/"EdgeN" (1-based). Omit to use the whole shape.
-        b_ref: optional sub-shape selector on `b` (same forms as a_ref).
+    a, b: object handles.
+    a_ref, b_ref: optional sub-shape to measure from instead of the whole solid —
+        an f_* / e_* tag or "FaceN"/"EdgeN" (1-based).
 
-    Measures the minimum (closest-approach) distance, so distance_mm = 0 means
-    the two entities touch or interpenetrate. This does NOT report overlap
-    volume -- use min_clearance / interference_check for penetration depth.
-
-    Returns a dict (no handle; this is a measurement):
-        distance_mm: float -- minimum gap in mm (0.0 when touching/intersecting).
-        point_on_a:  [x, y, z] mm -- closest point on a (or its sub-shape).
-        point_on_b:  [x, y, z] mm -- closest point on b (or its sub-shape).
-        touching:    bool -- True when distance_mm < 1e-7.
+    Returns {distance_mm, point_on_a ([x,y,z] mm), point_on_b, touching
+    (distance_mm < 1e-7)}. A measurement: no handle.
     """
     params = {"a": a, "b": b}
     if a_ref is not None:
@@ -1112,57 +1047,31 @@ def measure_angle(a: str, a_ref: str, b: str, b_ref: str) -> dict:
 @mcp.tool()
 def bounding_box(handle: str, oriented: bool = False, tight: bool = False,
                  deflection: float | None = None) -> dict:
-    """Axis-aligned bounding box (AABB) of a shaped object. All lengths in mm,
-    in world coordinates. This is a measurement — it returns numbers, not a new
-    object, and does not modify the model.
+    """Axis-aligned bounding box (AABB) of a shaped object, mm, world coordinates.
+    A measurement: returns numbers, creates nothing.
 
-    KNOWN QUIRK (issue #284): min/max/size are FreeCAD/OCC's ANALYTIC box, which
-    is an UPPER bound, not the true extent. OCC boxes a trimmed face using its
-    untrimmed carrier surface, so a planar cut through fillets, chamfers, lofts
-    or a sphere can report several mm of material that is not there — a real
-    case had a trim plane at X=-32.0 reported as X=-36.7. Before you conclude a
-    part is the wrong size, check "verified" (and pass tight=True): the analytic
-    box over-estimating a correct part looks exactly like a wrong part.
+    QUIRK (#284): min/max/size are OCC's ANALYTIC box, an UPPER bound. A trimmed
+    face is boxed by its untrimmed carrier surface, so cuts through fillets,
+    chamfers, lofts or spheres can report mm of material that isn't there (a real
+    trim at X=-32.0 read -36.7). Before calling a part wrong-sized, check
+    `verified` and pass tight=True.
 
-    handle:     the object to measure.
-    oriented:   if True, also compute the tightest box at any orientation (the
-                oriented bounding box, OBB) and return it under "oriented"; if
-                the build can't compute it, "oriented" is null. Default False.
-                This is about ORIENTATION, not tightness — it comes from the same
-                analytic geometry and inherits the same over-estimate.
-    tight:      if True, also tessellate the shape and return the mesh-derived
-                box under "tight" — the trustworthy numbers when the analytic box
-                over-estimates. Opt-in because tessellation is not free (~1.4s on
-                a 200mm plate with 60 filleted holes). Default False.
-    deflection: mesh chord tolerance in mm for tight=True. Default diagonal/2000
-                (floor 0.001mm); larger is coarser and faster.
+    oriented:   also return the minimum-volume box at any orientation (OBB) under
+                "oriented" (null if unsupported). Same analytic over-estimate.
+    tight:      also tessellate and return the mesh-derived box under "tight" —
+                the trustworthy numbers. Opt-in: ~1.4s on a 200mm plate with 60
+                filleted holes.
+    deflection: mesh chord tolerance mm for tight (default diagonal/2000, floor
+                0.001).
 
-    Returns a dict:
-      min      [x,y,z] mm — lower corner of the analytic AABB (upper bound)
-      max      [x,y,z] mm — upper corner of the analytic AABB (upper bound)
-      size     [x,y,z] mm — extents (max - min) along X, Y, Z
-      center   [x,y,z] mm — AABB center point
-      diagonal float  mm — space-diagonal length of the AABB
-      oriented null, or {size:[x,y,z] mm, center:[x,y,z] mm, diagonal: mm} when
-               oriented=True and supported — the minimum-volume box at the
-               shape's best orientation (size is its three edge lengths).
-      verified how far min/max above can be trusted:
-               "exact"         — proven tight (the shape's own vertices reach all
-                                 six faces of the analytic box).
-               "mesh_agrees"   — tight=True found no disagreement beyond the mesh
-                                 tolerance.
-               "unverified"    — unproven, the usual verdict on a curved part.
-                                 Treat min/max/size as an upper bound only, and
-                                 re-run with tight=True to measure.
-               "over_estimate" — tight=True proved the analytic box overshoots.
-                                 Use "tight"; min/max/size are wrong-big.
-      tight    null unless tight=True, else {min, max, size, center, diagonal,
-               deflection, triangles} measured off the mesh. Accurate to about
-               `deflection`; the true box lies between "tight" and the analytic
-               box, never outside them.
-      warnings list of strings (empty when there is nothing to say): which face
-               over-estimates and by how many mm, or that an unverified box has
-               not been checked.
+    Returns {min, max, size, center ([x,y,z] mm, analytic), diagonal (mm),
+    oriented (null | {size, center, diagonal}), verified, tight (null |
+    {min, max, size, center, diagonal, deflection, triangles}), warnings (which
+    face over-estimates, by how many mm)}.
+    verified: "exact" (vertices touch all six faces) | "mesh_agrees" (tight found
+    no disagreement) | "unverified" (usual on curved parts: upper bound only,
+    re-run tight=True) | "over_estimate" (use "tight"; min/max/size wrong-big).
+    The true box lies between "tight" and the analytic box.
     """
     params = {"handle": handle}
     if oriented:
@@ -1198,33 +1107,16 @@ def min_clearance(a: str, b: str) -> dict:
 
 @mcp.tool()
 def check_shape(handle: str) -> dict:
-    """Check a shaped object's geometry validity and topology before you build on
-    it. Inspection only — measures, returns no handle, mutates nothing, and does
-    NOT auto-repair. Use it as a guard after booleans/sweeps/imports to confirm
-    you have one clean watertight solid.
+    """Check a shaped object's validity and topology before building on it — a
+    guard after booleans/sweeps/imports. Inspection only; does NOT auto-repair.
+    Watertight does not mean an internal channel is unobstructed: for ducts and
+    manifolds use check_airtight_path.
 
-    Note: a watertight solid can still have a BLOCKED or LEAKY enclosed-flow path
-    — watertightness says the shell is closed, not that an internal channel is
-    unobstructed and leak-free. For ducts/manifolds/adapters use
-    check_airtight_path(inlet, outlet) to verify the flow path.
-
-    handle: the object to inspect.
-
-    Returns a dict (volumes in mm3):
-      valid            (bool)  OCC topology/geometry is sound
-      watertight_solid (bool)  exactly one solid AND valid AND closed — the
-                               'safe to keep building' verdict
-      shape_type       (str)   e.g. 'Solid', 'Shell', 'Compound', 'Wire'
-      closed           (bool)  no free boundary edges
-      solids           (int)   number of solids (want 1 for a part)
-      shells           (int)   number of shells
-      faces            (int)   number of faces
-      edges            (int)   number of edges
-      volume_mm3       (float) total volume (0 for open/2D shapes)
-      is_null          (bool)  the shape is empty
-      check            (str)   present only when valid is False — diagnostics
-                               were printed to the worker log
-      check_error      (str)   present only if the diagnostic pass itself raised
+    Returns {valid (OCC topology/geometry sound), watertight_solid (one solid AND
+    valid AND closed — the 'safe to keep building' verdict), shape_type ('Solid',
+    'Shell', 'Compound', ...), closed (no free edges), solids (want 1), shells,
+    faces, edges, volume_mm3 (0 for open/2D), is_null, check (only when invalid;
+    diagnostics in the worker log), check_error (only if diagnostics raised)}.
     """
     return _call("check_shape", handle=handle)
 
@@ -1304,35 +1196,19 @@ def section_view(
     emit_profile: bool = False,
     name: str = "Section",
 ) -> dict:
-    """Cut a solid with a plane and return the cross-section it exposes. This is
-    the best way to "see inside" a part blind: it measures the cut area and its
-    extent, and can optionally emit the section outline as a new object for
-    rendering/export. Units: mm (lengths), mm^2 (areas).
+    """Cut a solid with a plane and measure the exposed cross-section — the way to
+    "see inside" a part blind. Does not modify the input. mm / mm^2.
 
-    handle: the solid to slice (a AnkusDrive handle).
-    plane: "XY", "XZ", or "YZ" (world datum planes) OR a datum-plane handle.
-           World normals follow FreeCAD: XY -> +Z, XZ -> -Y, YZ -> +X. A datum
-           handle uses its local +Z as the cutting normal.
-    offset: shift of the cutting plane along its normal, in mm (default 0 = the
-            plane through the world origin / datum origin). E.g. plane="XY",
-            offset=10 cuts at z=10.
-    emit_profile: when True, add a Part::Feature holding the section wires to the
-            document, register it, and return its handle (raises if the plane
-            misses the shape). Default False = measure only, no new geometry.
-    name: object name for the emitted profile (only used when emit_profile=True).
+    plane: "XY", "XZ", "YZ" (normals +Z, -Y, +X, as FreeCAD) or a datum-plane
+        handle (its local +Z).
+    offset: plane shift along its normal, mm (plane="XY", offset=10 cuts z=10).
+    emit_profile: also add the section wires as a new registered object and return
+        its handle (raises if the plane misses). Default: measure only.
+    name: the emitted profile's name.
 
-    Does not modify the input geometry. Returns a dict:
-      plane: str (echoed),
-      offset_mm: float (echoed),
-      normal: [x, y, z] unit cutting-plane normal,
-      section_area_mm2: float — total area of the closed cross-section wires,
-      wire_count: int — number of section wires found (0 means the plane misses
-                  the shape),
-      closed_wire_count: int — how many of those wires are closed,
-      bbox: {min:[x,y,z], max:[x,y,z], size:[dx,dy,dz]} of the section, or None
-            when the plane misses the shape,
-      handle: str — handle of the emitted profile (ONLY when emit_profile=True),
-      name: str — its FreeCAD object name (ONLY when emit_profile=True).
+    Returns {plane, offset_mm, normal, section_area_mm2 (closed wires),
+    wire_count (0 = plane misses), closed_wire_count, bbox ({min, max, size} or
+    None), handle?, name? (only with emit_profile)}.
     """
     params = {
         "handle": handle,
@@ -1509,25 +1385,19 @@ def pocket(
 ) -> dict:
     """Subtract a pad of `length` mm from the body. through_all ignores length.
 
-    through ('wall'|'body'): preferred over through_all. 'wall' ray-casts the
-    body to find the first exit boundary and cuts exactly one wall thick —
-    correct for solids (one wall = full thickness) AND shelled bodies. 'body'
-    is the legacy ThroughAll; on a shelled body it punches through every wall
-    and ruins the cavity. Implies direction='into_body'. Result carries
-    wall_depth_mm so the caller can verify.
-    direction (preferred over `reversed`): 'into_body' makes the cut actually
-    remove material; 'away_from_body' extrudes outside the body. The tool
-    probes both Reversed values and picks the one matching intent.
-    reversed: legacy raw flag, used only if neither `through` nor `direction`
-    is set.
-    strict: raise instead of warning on a degenerate pocket (see below).
+    through ('wall'|'body'): preferred over through_all. 'wall' ray-casts to the
+      first exit and cuts exactly one wall — right for solids AND shelled bodies;
+      'body' (legacy ThroughAll) punches every wall of a shell. Implies
+      direction='into_body'; result carries wall_depth_mm.
+    direction ('into_body'|'away_from_body', preferred over the legacy raw
+      `reversed`, honoured only when neither is set): the tool probes both
+      Reversed values and picks the one that does / does not remove material.
+    strict: raise instead of warn on a degenerate pocket.
 
-    Returns {handle, name, volume, removed_volume, volume_ratio}, plus
-    `warnings` ONLY when the pocket removed the whole body or removed nothing
-    (the same two degenerate outcomes as boolean_op's cut). Warn-don't-fail is
-    the default; pass strict=True in a scripted recipe to turn both into an
-    error instead. direction='away_from_body' is an explicit request to remove
-    nothing, so it never warns and never raises."""
+    Returns {handle, name, volume, removed_volume, volume_ratio}, plus `warnings`
+    ONLY when the pocket removed the whole body or nothing (strict=True makes
+    those errors). direction='away_from_body' never warns.
+    """
     params = {
         "sketch": sketch, "length": length,
         "through_all": through_all, "reversed": reversed, "name": name,
@@ -1627,43 +1497,30 @@ def hole(
     name: str = "Hole",
     strict: bool = False,
 ) -> dict:
-    """Drill a parametric Hole from a sketch (one or more circles).
+    """Drill a parametric Hole from a sketch (one or more circles) placed on a face
+    of an existing body feature. Lengths mm.
 
-    sketch: handle of a sketch placed on a face of an existing body feature.
     depth_type: 'Dimension' (use `depth`) or 'ThroughAll'.
-    cut_type: 'None' | 'Counterbore' | 'Countersink' | 'Counterdrill'.
-              When non-None, cut_diameter (head clearance) and cut_depth apply.
-    threaded=True applies a tap. thread_type / thread_size are COUPLED enums —
-    valid thread_size values DEPEND on thread_type ('M4' fits 'ISOMetricProfile'
-    but not 'UNC'). Use list_thread_options() to discover thread_type values
-    and list_thread_options(thread_type=...) for that type's valid sizes.
-    intended_for ('print'|'machine'|'drawing'): drives ModelThread default when
-    threaded=True so the caller doesn't have to know what ModelThread means.
-      print   → ModelThread=True. Required for 3D-printed threaded holes —
-                the screw must engage the printed thread geometry; a smooth
-                pilot won't tap itself.
-      machine → ModelThread=False. CAM software reads thread metadata and
-                drives a physical tap. Modeling thread bloats files and
-                fights patterns/fillets.
-      drawing → ModelThread=False. Drawings annotate threads symbolically.
-    Explicit model_thread overrides intended_for.
-    through ('wall'|'body'): preferred over depth_type/depth. 'wall' ray-casts
-    to the first exit boundary and drills exactly one wall thick — critical on
-    shelled bodies where 'body' (ThroughAll) would destroy the cavity. Implies
-    direction='into_body'. Result carries wall_depth_mm.
-    direction (preferred over `reversed`): 'into_body' picks the Reversed value
-    that actually removes material; 'away_from_body' picks the value that
-    removes none. Hole and Pocket interpret the raw flag differently.
-    reversed: legacy raw flag, used only if neither `through` nor `direction`
-    is set.
-    strict: raise instead of warning on a degenerate hole (see below).
+    cut_type: 'None' | 'Counterbore' | 'Countersink' | 'Counterdrill'; when not
+      'None', cut_diameter (head clearance) and cut_depth apply.
+    threaded=True taps it. thread_type / thread_size are COUPLED enums ('M4' fits
+      'ISOMetricProfile', not 'UNC') — discover them with list_thread_options().
+    intended_for ('print'|'machine'|'drawing'): sets the ModelThread default when
+      threaded. print → modelled thread (a printed pilot won't self-tap);
+      machine/drawing → cosmetic thread (CAM/drawings read the metadata; modelled
+      threads bloat files and fight patterns/fillets). model_thread overrides it.
+    through ('wall'|'body'): preferred over depth_type. 'wall' ray-casts to the
+      first exit and drills exactly one wall — use it on shelled bodies, where
+      'body' (ThroughAll) destroys the cavity. Implies direction='into_body';
+      result carries wall_depth_mm.
+    direction ('into_body'|'away_from_body', preferred over the legacy raw
+      `reversed`, honoured only when neither is set; Hole and Pocket read it
+      differently): picks the Reversed value that does / does not remove material.
+    strict: raise instead of warn on a degenerate hole.
 
-    Returns {handle, name, volume, removed_volume, volume_ratio}, plus
-    `warnings` ONLY when the hole consumed the whole body or removed nothing
-    (the same two degenerate outcomes as boolean_op's cut). Warn-don't-fail is
-    the default; pass strict=True in a scripted recipe to turn both into an
-    error instead. direction='away_from_body' is an explicit request to remove
-    nothing, so it never warns and never raises.
+    Returns {handle, name, volume, removed_volume, volume_ratio}, plus `warnings`
+    ONLY when the hole consumed the whole body or removed nothing (strict=True
+    makes those errors). direction='away_from_body' never warns.
     """
     params = {
         "sketch": sketch, "diameter": diameter, "depth_type": depth_type,
@@ -2006,33 +1863,24 @@ def fillet_edges(
     handle: str, edges: list, radius: float = 1.0,
     per_edge: bool = False, allow_partial: bool = False,
 ) -> dict:
-    """Fillet edges of a shaped Part object. `edges` accepts tags (e_... from
-    list_edges, preferred), 'EdgeN' strings, or bare 1-based ints. `radius` is
-    the blend radius in mm (> 0).
+    """Fillet edges of a shaped Part object. `edges`: e_* tags (preferred), 'EdgeN'
+    strings, or 1-based ints; `radius` mm (> 0).
 
-    Every result is validated before a handle comes back (issue #283): this OCC
-    build's fillet is edge- and order-sensitive enough to produce corrupt
-    geometry with no exception at all — a 20 mm cube filleted on all 12 edges at
-    r=11 returns one solid with a LARGER volume and a 13 mm larger bounding box.
-    The checks are Shape.isValid(), an unchanged solid count, and no growth of
-    the tight bounding box (a fillet only removes or holds the envelope).
+    Validated before a handle is issued (#283) — this OCC fillet can silently
+    return corrupt geometry (a 20 mm cube, all 12 edges at r=11, comes back one
+    LARGER solid). Checks: Shape.isValid(), unchanged solid count, no growth of
+    the tight bounding box.
 
-    per_edge: skip the single-shot apply and add the edges one at a time,
-        validating after each. Slower (one recompute per edge); for geometry
-        already known to be blend-hostile.
-    allow_partial: accept a partial result instead of aborting. Off by default.
+    per_edge: add edges one at a time, validating each (slower; for blend-hostile
+        geometry).
+    allow_partial: accept a partial result instead of aborting (off by default).
 
-    Returns {handle, name, volume (mm^3), edges (the 1-based indices actually
-    filleted), checks {valid, solids, envelope_ok, envelope_growth_mm,
-    envelope_tol_mm}, mode ('batch' | 'per_edge'), partial}. When partial is
-    True the reply also carries skipped_edges and a warnings entry saying the
-    solid is NOT the part that was asked for.
-
-    On failure the handler retries per edge to find the culprits, removes the
-    failed feature from the document and raises BlendCheckFailed naming the
-    offending edges and the subset that does fillet cleanly. It never returns a
-    handle to corrupt geometry, and never quietly drops a fillet unless
-    allow_partial was asked for.
+    Returns {handle, name, volume (mm^3), edges (indices filleted), checks {valid,
+    solids, envelope_ok, envelope_growth_mm, envelope_tol_mm}, mode ('batch' |
+    'per_edge'), partial}; when partial, also skipped_edges and a warning that the
+    solid is NOT the part asked for. On failure it retries per edge, removes the
+    feature and raises BlendCheckFailed naming the offending edges and the subset
+    that fillets cleanly — never a handle to corrupt geometry.
     """
     return _call("fillet_edges", handle=handle, edges=edges, radius=radius,
                  per_edge=per_edge, allow_partial=allow_partial)
@@ -2040,25 +1888,16 @@ def fillet_edges(
 
 @mcp.tool()
 def boolean_op(op: str, base: str, tool: str, strict: bool = False) -> dict:
-    """Boolean operation on two existing objects, referenced by their handles.
+    """Boolean operation on two objects by handle.
 
     op: 'cut' (base minus tool), 'fuse' (union), or 'common' (intersection).
-    base, tool: handles returned from add_primitive (e.g. 'box_1', 'cylinder_1').
-    strict: raise instead of warning on a degenerate cut (see below).
+    strict: raise instead of warning on a degenerate cut.
 
-    Returns {handle, volume, removed_volume, volume_ratio}, plus `warnings` —
-    a list of strings — ONLY when the cut looks degenerate; the key is absent
-    on a clean op, so `"warnings" in result` is the test.
-      removed_volume: base_volume - result_volume, mm3. Positive means material
-        went away (always so for cut/common); NEGATIVE on a fuse, where it is
-        the volume the tool added.
-      volume_ratio: result_volume / base_volume, or None when the base was empty.
-    The two warned cases are cut-only, and each means the cut did not do what
-    was asked: annihilation (result ~ 0 — the tool swallowed the base, so every
-    later feature operates on nothing) and miss (result == base — the tool never
-    intersected the base, so nothing was removed). Warn-don't-fail is the
-    default because cutting everything away is legitimate in some workflows;
-    pass strict=True in a scripted recipe to turn both into an error instead.
+    Returns {handle, volume, removed_volume (base - result mm3; negative on a
+    fuse), volume_ratio (result/base, None if base empty)}, plus `warnings` ONLY
+    on a degenerate cut ("warnings" in result is the test): annihilation (result
+    ~0 — later features operate on nothing) or miss (result == base — nothing
+    removed). Warn-don't-fail by default; strict=True makes both errors.
     """
     return _call("boolean_op", op=op, base=base, tool=tool, strict=strict)
 
@@ -2715,31 +2554,24 @@ def add_dimension(
     views: list | None = None,
     tolerance: dict | None = None,
 ) -> dict:
-    """Add dimension(s) to a drawing page.
-
-    Modes (pick one):
-      * auto=True: overall horizontal + vertical extent dimensions for every
-        part-view (or only those named in `views`, by name or projection code).
-      * view + edge=<edge tag>: dimension the true length of a model edge,
-        projected into that view. The printed value is the real measured
-        length, not the foreshortened projection.
-      * view + kind='diameter'|'radius' + edge=<circular edge tag>: a ⌀/R
-        dimension of a hole or arc.
-      * view + kind='angle' + face=<conical face tag>: the half-angle (or, by
-        default, the 2× included angle) of a conical face — the curved angle a
-        machinist sets for a chamfer cone / countersink / taper (issue #108).
-        Pass half_angle=True to call out the half-angle instead.
-      * view + from_point/to_point ([x,y,z] model points): dimension between
-        two 3D points.
+    """Add dimension(s) to a drawing page. Modes (pick one):
+      * auto=True: overall horizontal + vertical extents for every part-view (or
+        only `views`, by name or projection code).
+      * view + edge=<edge tag>: true length of a model edge (the real length, not
+        the foreshortened projection).
+      * view + kind='diameter'|'radius' + edge=<circular edge tag>: ⌀/R of a hole
+        or arc.
+      * view + kind='angle' + face=<conical face tag>: included angle (2×) of a
+        cone/countersink/taper; half_angle=True for the half-angle.
+      * view + from_point/to_point ([x,y,z] model points): point to point.
     view: a view handle, object name, or projection code ('Front', 'Top', ...).
     kind: 'aligned' (default) | 'horizontal' | 'vertical' | 'diameter' | 'radius'
-          | 'angle'.
-    tolerance: optional, rendered next to the value (a machinist needs it to make
-      the part to size): {"sym": 0.1} for ±0.1, {"plus": .., "minus": ..} for an
-      asymmetric tolerance, or {"fit": "H7"} / {"fit": "H7/g6"} to look up ISO 286
-      hole-side limits at the dimension's basic size.
-    Returns {dimensions: [{handle, name, type, value}, ...]} — value is the
-    true measured size of each dimension created.
+      | 'angle'.
+    tolerance: rendered next to the value: {"sym": 0.1} for ±0.1, {"plus": ..,
+      "minus": ..}, or {"fit": "H7"} / {"fit": "H7/g6"} (ISO 286 hole-side limits
+      at the basic size).
+    Returns {dimensions: [{handle, name, type, value}, ...]}; value is the true
+    measured size.
     """
     params: dict = {"page": page}
     if tolerance is not None:
@@ -2805,12 +2637,11 @@ def set_title_block(
     project: str | None = None,
     units: str | None = None,
 ) -> dict:
-    """Populate the drawing's title block. FreeCAD's default template is a bare
-    sheet, so AnkusDrive composes its own block in the bottom-right corner on SVG/PDF
-    export. Scale, sheet size, units, and part name are auto-derived from the page;
-    the fields here override or add to them (a machinist needs material + scale +
-    units to cut from the sheet). Calling this opts the page into rendering the
-    block. Returns {handle, name, fields}."""
+    """Populate the drawing's title block (composed bottom-right on SVG/PDF export;
+    calling this opts the page into rendering it). Scale, sheet size, units and
+    part name are auto-derived; these fields override or add to them. Returns
+    {handle, name, fields}.
+    """
     params: dict = {"page": page}
     for k, v in (("part", part), ("material", material), ("rev", rev),
                  ("drawn_by", drawn_by), ("date", date),
@@ -2824,36 +2655,25 @@ def set_title_block(
 def drawing_gate(page: str, process: str = "auto",
                  datums_declared: bool = False,
                  require_ballooned: bool = False) -> dict:
-    """Manufacturing-completeness gate for a drawing page: does the placed
-    dimension set fully and non-redundantly reconstruct the part? A green render
-    is not a manufacturable drawing — this validates the *drawing* itself, the way
-    the geometry-realizes-declaration gate validates an assembly.
+    """Manufacturing-completeness gate for a drawing page: do the placed dimensions
+    fully and non-redundantly reconstruct the part? Reads the real solid + placed
+    dimensions and accounts degrees of freedom, process-aware: 'prismatic' needs
+    each hole located X/Y from a datum and the block sized W×H×T; 'turned' needs
+    only Ø + axial length per step. process='auto' infers it.
 
-    Reads the real solid + the placed dimensions and accounts degrees of freedom,
-    process-aware: a 'prismatic' (milled/plate) part must locate each hole by X/Y
-    from a datum and size the block W×H×T; a 'turned' part is concentric, so a step
-    needs only Ø + axial length. process='auto' infers it from the geometry.
+    Datum discipline (a location not measured from a datum face → no_datum) turns
+    on when faces carry role='datum' (annotate_face), or with datums_declared=True.
+    require_ballooned=True also fails unballooned characteristics (not_ballooned;
+    see balloon_drawing), as a release flow does.
 
     Returns {ok, violations, slots_total, slots_covered, process, features,
-    dimensions, enumerated_features, datum_faces, section_recommended}.
-    `section_recommended` ({recommended, reasons, feature_ids}) advises whether the
-    part has internal geometry that needs a cross-section (see add_section_view).
-    Each violation has a `code`
-    (under = a feature size/location is missing; redundant = a DOF dimensioned more
-    than once; conflict = dimensioned twice with disagreeing values; extra = a dim
-    that pins nothing; no_datum = a location not taken from a datum) and a human
-    `reason`. ok=True (empty violations) means the drawing is manufacturing-complete.
-
-    Datum-origin discipline turns on automatically when the part has faces annotated
-    role='datum' (annotate_face): a location dimension not measured from a datum face
-    is then flagged no_datum. Set datums_declared=True to force the check on even
-    without annotated datums.
-
-    require_ballooned=True additionally demands that every characteristic carries an
-    inspection balloon (see balloon_drawing) — the requirement a release flow imposes
-    when the drawing must ship with an inspection plan. Unballooned characteristics
-    become `not_ballooned` violations and fail the gate. The `ballooned`
-    ({ok, total, ballooned, missing}) summary is reported either way."""
+    dimensions, enumerated_features, datum_faces, section_recommended ({recommended,
+    reasons, feature_ids}; see add_section_view), ballooned ({ok, total, ballooned,
+    missing})}. Each violation has a `code` (under = size/location missing;
+    redundant = DOF dimensioned twice; conflict = twice with disagreeing values;
+    extra = pins nothing; no_datum; not_ballooned) and a `reason`. ok=True means
+    manufacturing-complete.
+    """
     return _call("drawing_gate", page=page, process=process,
                  datums_declared=datums_declared,
                  require_ballooned=require_ballooned)
@@ -2895,29 +2715,25 @@ def add_gdt_callout(page: str, control: str, zone: float,
                     mmc_bonus: float = 0.0, modifier: str = "",
                     view: str = "", x: float = 20.0, y: float = 40.0,
                     name: str = "Fcf") -> dict:
-    """Place a GD&T feature control frame on a drawing page.
+    """Place a GD&T feature control frame on a drawing page, so the tolerance is
+    declared on the print: it renders as a compartmented symbol and
+    inspection_plan / fai_report read it back as a ballooned characteristic.
 
-    Declaring geometric tolerance ON THE DRAWING (rather than only checking a
-    measurement with gdt_check) is what makes it inspectable: the frame renders as a
-    real compartmented symbol, and inspection_plan / fai_report read it back as a
-    characteristic with its own balloon and measurement method.
+    control: ASME Y14.5 characteristic, as gdt_check accepts: flatness,
+        straightness, circularity, cylindricity, profile_line, profile_surface,
+        perpendicularity, parallelism, angularity, position, concentricity, runout,
+        total_runout.
+    zone: tolerance zone mm (Ø-prefixed for position, concentricity, circularity,
+        cylindricity).
+    datums: ordered datum reference frame, e.g. ["A", "B", "C"]. With datums the
+        plan routes it to CMM; datum-free form controls go to the surface plate.
+    feature: optional enumerated feature id (drawing_gate `enumerated_features`).
+    mmc_bonus: material-condition bonus tolerance, mm.
+    modifier: free text in the tolerance compartment (e.g. "Ⓜ").
+    x / y: page position mm (origin bottom-left, +Y up).
 
-    control: an ASME Y14.5 geometric characteristic — the same vocabulary gdt_check
-        accepts: flatness, straightness, circularity, cylindricity, profile_line,
-        profile_surface, perpendicularity, parallelism, angularity, position,
-        concentricity, runout, total_runout.
-    zone: tolerance zone in mm (rendered with a Ø for the diametral controls —
-        position, concentricity, circularity, cylindricity).
-    datums: the ordered datum reference frame, e.g. ["A", "B", "C"]. A control with
-        datums is CMM work; a datum-free form control is surface-plate work, and the
-        inspection plan picks the instrument accordingly.
-    feature: optionally the enumerated feature id (drawing_gate's
-        `enumerated_features`) the frame controls.
-    mmc_bonus: material-condition bonus tolerance carried into inspection, mm.
-    modifier: free text printed in the tolerance compartment (e.g. "Ⓜ").
-    x / y: page position in mm (origin bottom-left, +Y up, like add_annotation).
-
-    Returns {handle, name, control, zone, datums, text}."""
+    Returns {handle, name, control, zone, datums, text}.
+    """
     params: dict = {"page": page, "control": control, "zone": zone,
                     "mmc_bonus": mmc_bonus, "modifier": modifier, "view": view,
                     "x": x, "y": y, "name": name}
@@ -2930,45 +2746,36 @@ def add_gdt_callout(page: str, control: str, zone: float,
 
 @mcp.tool()
 def balloon_drawing(page: str, renumber: bool = False) -> dict:
-    """Number every characteristic on a drawing page with an inspection balloon —
-    each dimension, feature control frame, and feature note gets a numbered circle
-    beside it, rendered on SVG/PDF export. This is the print a quality engineer
-    actually works from, and the key inspection_plan and fai_report row against.
+    """Number every characteristic on a drawing page (dimensions, feature control
+    frames, feature notes) with an inspection balloon, rendered on SVG/PDF export;
+    inspection_plan and fai_report key their rows on it.
 
-    Balloon numbers are an IDENTITY, not an ordinal. They are persisted on the
-    FreeCAD objects, so: re-running on an unchanged page reassigns nothing; adding a
-    dimension appends the next number rather than renumbering the print; and a
-    deleted dimension RETIRES its number instead of passing it to a different
-    feature — an inspection record written against balloon 7 can never come to mean
-    something else. Pass renumber=True to deliberately discard the numbering and
-    start from 1 (which invalidates any inspection record already written).
+    Numbers are a persistent IDENTITY: re-running reassigns nothing, a new
+    dimension gets the next number, a deleted one RETIRES its number (never reused).
+    renumber=True restarts from 1 and invalidates existing inspection records.
+    Call after dimensions are placed and fit_page has run.
 
-    Call it after the dimensions are placed and fit_page has run. Returns
-    {count, balloons, assigned, kept, retired, next_balloon}; `balloons` maps each
-    source object name to its number."""
+    Returns {count, balloons (source object name -> number), assigned, kept,
+    retired, next_balloon}.
+    """
     return _call("balloon_drawing", page=page, renumber=renumber)
 
 
 @mcp.tool()
 def inspection_plan(page: str, ratio: float = 10.0) -> dict:
-    """The characteristic list for a drawing page as data: every dimension, feature
-    control frame, and feature note, ballooned, with nominal, limits, and a suggested
-    measurement method per row.
-
-    The method follows the tolerance rather than a guess: the gauge-maker's `ratio`:1
-    rule (default 10:1 — the instrument must resolve a tenth of the tolerance band)
-    walked down a per-family instrument ladder, so a loose feature isn't sent to the
-    CMM and a tight bore isn't signed off with a caliper. A bore takes the pin/bore
-    gauge ladder (a micrometer can't reach inside one); a GD&T control referencing a
-    datum frame is CMM work; a datum-free form control is surface-plate work. The
-    required resolution is exact arithmetic, the instrument mapping is shop
-    convention — hence fidelity='correlation'.
+    """The ballooned characteristic list for a drawing page as data (every dimension,
+    feature control frame, feature note), with nominal, limits, and a suggested
+    measurement method per row. The method follows the tolerance: the `ratio`:1
+    gauge rule (default 10:1) walked down a per-family instrument ladder (bores
+    use pin/bore gauges; datum-referenced GD&T → CMM; datum-free form → surface
+    plate). Resolution is exact; instrument mapping is shop convention, hence
+    fidelity='correlation'.
 
     Returns {ok, characteristics, count, by_method, unmeasurable, retired,
-    next_balloon, fidelity, band_pct, basis}. ok=False means a characteristic cannot
-    be inspected as drawn — an untoleranced size the inspector has no limits to
-    accept or reject against (code no_tolerance), or a band finer than any instrument
-    on its ladder (code no_instrument) — with `unmeasurable` naming which and why."""
+    next_balloon, fidelity, band_pct, basis}. ok=False means something cannot be
+    inspected as drawn: no_tolerance (untoleranced size) or no_instrument (band
+    finer than any instrument), named in `unmeasurable`.
+    """
     return _call("inspection_plan", page=page, ratio=ratio)
 
 
@@ -2977,31 +2784,23 @@ def fai_report(page: str, results: dict | None = None, path: str | None = None,
                part: str | None = None, rev: str | None = None,
                reference: str = "", ratio: float = 10.0) -> dict:
     """First-article inspection report for a drawing page, shaped like AS9102 Rev B
-    Form 3.
+    Form 3: one row per ballooned characteristic with the Form 3 fields, limits,
+    suggested method, and computed status.
 
-    Each ballooned characteristic becomes a row carrying the AS9102 fields (Char No. /
-    Reference Location / Characteristic Designator / Requirement / Results /
-    Designed-Qualified Tooling / Nonconformance Number / Notes) plus its limits, the
-    suggested measurement method, and a computed status.
+    results: balloon number -> measured value; rows are accepted/rejected against
+        limits. For `position` pass {"x":.., "y":..} (deviation 2·√(x²+y²), as
+        gdt_check). Omit for a BLANK form: every row 'not_evaluated', never a pass.
+    path: optionally write .csv (data), .svg or .pdf (printable table).
+    part / rev: identity stamped in; default page part name / title-block rev.
+    reference: AS9102 field 6 (Reference Location); defaults to each
+        characteristic's view.
 
-    results: balloon number -> measured value; each row is then accepted or rejected
-        against its limits. For a `position` control you may pass {"x":.., "y":..} and
-        the diametral deviation 2·√(x²+y²) is used, matching gdt_check. Omit it
-        entirely to get a BLANK form for the inspector — every row comes back
-        'not_evaluated', never a silent pass.
-    path: optionally write the report — .csv (the data), .svg or .pdf (a printable
-        paginated table).
-    part / rev: identity stamped into the file; default to the page's part name and
-        title-block revision.
-    reference: AS9102 field 6 (Reference Location), e.g. the sheet/zone; defaults to
-        the view each characteristic is dimensioned on.
-
-    THIS IS NOT A CERTIFIED AS9102 SUBMISSION — it reproduces the Form 3 field layout
-    so a real form can be filled from it, and says so on every artifact it writes.
+    NOT a certified AS9102 submission (every artifact says so).
 
     Returns {ok, columns, rows, summary, disclaimer, part, rev, plan_ok,
-    unmeasurable, path?, size?, format?}; ok=False means at least one characteristic
-    measured out of limits."""
+    unmeasurable, path?, size?, format?}; ok=False means a characteristic measured
+    out of limits.
+    """
     params: dict = {"page": page, "reference": reference, "ratio": ratio}
     for k, v in (("results", results), ("path", path), ("part", part), ("rev", rev)):
         if v is not None:
@@ -3011,20 +2810,14 @@ def fai_report(page: str, results: dict | None = None, path: str | None = None,
 
 @mcp.tool()
 def add_thumbnail(page: str, name: str = "IsoThumb") -> dict:
-    """Place a small isometric pictorial of the part in the top-right corner of the
-    sheet — the "glance" reference a machinist uses to grok the 3-D shape before
-    reading the orthographic views — IF it fits there without crowding the existing
-    views and dimensions.
+    """Place a small isometric pictorial (vector TechDraw view) in the sheet's
+    top-right corner IF it fits without crowding existing views/dimensions. It is
+    pinned there, never dimensioned, and ignored by drawing_gate. Call it AFTER
+    views, dimensions and fit_page.
 
-    It is a real TechDraw isometric projection rendered through the same path as the
-    other views (a vector line drawing, not a raster), scaled to fit a reserved
-    top-right box and pinned to that corner (fit_page leaves it put, and it is never
-    dimensioned or counted by the manufacturability gate). Best-effort: when the
-    top-right corner is already occupied it returns {placed: False, reason} rather
-    than overlapping content. Call it AFTER placing the views and dimensions (and
-    after fit_page) so "fits" is judged against the final layout.
-
-    Returns {placed, box, scale?, view?, reason?}."""
+    Returns {placed, box, scale?, view?, reason?}; placed=False with a reason when
+    the corner is occupied.
+    """
     return _call("add_thumbnail", page=page, name=name)
 
 
@@ -3032,19 +2825,17 @@ def add_thumbnail(page: str, name: str = "IsoThumb") -> dict:
 def add_section_view(page: str, auto: bool = True, process: str = "auto",
                      name: str = "Section", symbol: str = "A") -> dict:
     """Add a cross-section view when the part has internal features the outline /
-    hidden-line views convey ambiguously — a counterbore, a blind hole/bore, or a
-    pocket. The need is judged automatically from the real solid (the same feature
-    enumeration the manufacturability gate uses); the cut runs lengthwise through
-    such a feature so its bore profile and depth read directly, and the view is
-    placed in clear space beside the existing views.
+    hidden-line views convey ambiguously (counterbore, blind hole/bore, pocket).
+    The need is judged from the real solid; the cut runs lengthwise through such a
+    feature and the view is placed in clear space.
 
-    auto (default True): add the section ONLY if the part actually has hidden
-        internal geometry; otherwise return {added: False, recommended: False}. Set
-        auto=False to force a section regardless.
-    process: 'auto' (default) | 'prismatic' | 'turned' — how features are enumerated.
+    auto (default True): add it ONLY if hidden internal geometry exists, else
+        return {added: False, recommended: False}; auto=False forces a section.
+    process: 'auto' | 'prismatic' | 'turned' — how features are enumerated.
 
     Returns {added, recommended, reasons, feature_ids, view?, normal?, origin?}.
-    (drawing_gate also reports `section_recommended` so you can decide in advance.)"""
+    drawing_gate's `section_recommended` tells you in advance.
+    """
     return _call("add_section_view", page=page, auto=auto, process=process,
                  name=name, symbol=symbol)
 
