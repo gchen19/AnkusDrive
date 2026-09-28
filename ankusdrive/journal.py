@@ -39,6 +39,13 @@ Each entry:
   not probed here — that costs a subprocess, and the exporter fills it in later.
 * ``code_sha256`` — for ``run_script``, the content hash of the submitted code. The
   code itself is in ``args`` verbatim; the digest is what a report cites (#433).
+* ``rejected`` — ``True`` on a call refused **before the tool ran**: its arguments
+  failed FastMCP/pydantic validation, or it named no registered tool (#457). Such a
+  call never reaches the wrapped ``fn``, so :func:`apply` also wraps the tool
+  manager's ``call_tool``, the layer that validates, and records it there as
+  ``ok: False`` with the validation error and the **raw** arguments as sent. It
+  changed nothing in the model, so the exporter skips it; it is in the journal because
+  an audit wants to see the agent get an input wrong and retry.
 
 In memory by default. The journal lives in the server process and ends with it; this
 module itself never touches the disk (PRIVACY.md). It is capped at
@@ -48,7 +55,7 @@ entries are never the ones dropped.
 
 On disk only when asked (#433). With ``ANKUSDRIVE_JOURNAL_DIR`` (or ``journal_dir`` in
 config.toml) set, :func:`record` also hands each finished entry — plus the full result,
-for its digest, and the worker's FreeCAD version — to ``journal_store.append``, which
+for its digest, and the worker's FreeCAD identity — to ``journal_store.append``, which
 appends it as one JSONL line to a per-session file with a provenance header, under a
 stated retention and optional redaction; ``journal_export`` / ``ankusdrive journal
 export`` turn that file back into what ``session_transcript`` returns, after the
@@ -66,6 +73,7 @@ import hashlib
 import json
 import threading
 import time
+from contextvars import ContextVar
 from typing import Any, Callable
 
 MAX_ENTRIES = 20_000
@@ -79,6 +87,11 @@ _lock = threading.Lock()
 _entries: list[dict] = []
 _state = {"seq": 0, "dropped": 0}
 _txn: dict[str, list] = {}         # workspace -> [worker_pid, depth]
+# Set by the tool-manager wrapper around each call: a one-item list the journaled fn
+# flips to True, so the manager knows whether a failure happened before the tool ran
+# (#457). A mutable holder, so a sync tool run in a worker thread (a copied context)
+# still reports back.
+_reached: ContextVar = ContextVar("ankusdrive_journal_reached", default=None)
 
 
 def compact(value: Any, _depth: int = 0) -> Any:
@@ -174,12 +187,15 @@ def _solvers_named(result: Any) -> list:
 
 def record(tool: str, args: dict, started: float, *, ok: bool, result: Any = None,
            error: BaseException | None = None, workspace: str, worker_pid,
-           seq: int, txn_depth: int, freecad: Any = None) -> None:
+           seq: int, txn_depth: int, freecad: Any = None, rejected: bool = False) -> None:
     """Store one finished call. Called by the wrapper; public for tests. ``freecad`` is
-    the worker's booted FreeCAD version, used only by the durable journal."""
+    the worker's FreeCAD identity, used only by the durable journal. ``rejected`` marks
+    a call refused before the tool ran (#457)."""
     entry = {"seq": seq, "tool": tool, "args": args, "ok": ok,
              "workspace": workspace, "worker_pid": worker_pid, "txn_depth": txn_depth,
              "elapsed_s": round(time.monotonic() - started, 3)}
+    if rejected:
+        entry["rejected"] = True
     if ok:
         entry["result"] = compact(result)
     else:
@@ -217,12 +233,19 @@ def wrap(name: str, fn: Callable, workspace_of: Callable[[], str],
          worker_pid_of: Callable[[str], Any],
          freecad_of: Callable[[str], Any] | None = None) -> Callable:
     """Return ``fn`` wrapped to journal each call. Idempotent. ``freecad_of(workspace)``
-    returns that workspace's worker's FreeCAD version, or ``None`` (durable journal)."""
+    returns that workspace's worker's FreeCAD identity ``{version, build, python}``, or
+    ``None`` (durable journal)."""
     if getattr(fn, "__ankusdrive_journaled__", False):
         return fn
 
     @functools.wraps(fn)
     def journaled(*a, **kwargs):
+        try:
+            reached = _reached.get()
+            if reached is not None:
+                reached[0] = True
+        except Exception:
+            pass
         try:
             started = time.monotonic()
             workspace = workspace_of()
@@ -264,15 +287,68 @@ def _safe_record(name, args, started, *, worker_pid_of, workspace, freecad_of=No
         pass
 
 
+def _record_rejected(name, arguments, started, error, *, workspace_of, worker_pid_of,
+                     freecad_of) -> None:
+    """Record a call refused before its tool ran (#457). FastMCP raises
+    ``ToolError(...) from ValidationError``; the cause is the error worth keeping.
+    Never raises."""
+    try:
+        workspace = workspace_of()
+        args = _copy_args(dict(arguments or {}))
+        with _lock:
+            _state["seq"] += 1
+            seq = _state["seq"]
+            depth = _txn_depth_locked(workspace, worker_pid_of(workspace))
+        cause = error.__cause__ if isinstance(error.__cause__, Exception) else error
+        _safe_record(str(name), args, started, ok=False, error=cause, workspace=workspace,
+                     worker_pid_of=worker_pid_of, freecad_of=freecad_of, seq=seq,
+                     txn_depth=depth, rejected=True)
+    except Exception:
+        pass
+
+
+def wrap_manager(manager, workspace_of: Callable[[], str],
+                 worker_pid_of: Callable[[str], Any],
+                 freecad_of: Callable[[str], Any] | None = None) -> None:
+    """Wrap ``manager.call_tool`` (a FastMCP ``ToolManager``) so a call that fails
+    before reaching its tool's ``fn`` — argument validation, an unknown name — is
+    journaled too (#457). A call that reached ``fn`` is left to :func:`wrap`, which
+    records it: nothing is recorded twice. Idempotent."""
+    original = getattr(manager, "call_tool", None)
+    if original is None or getattr(original, "__ankusdrive_journaled__", False):
+        return
+
+    @functools.wraps(original)
+    async def call_tool(name, arguments, *a, **kw):
+        reached = [False]
+        started = time.monotonic()
+        token = _reached.set(reached)
+        try:
+            return await original(name, arguments, *a, **kw)
+        except Exception as e:
+            if not reached[0]:
+                _record_rejected(name, arguments, started, e, workspace_of=workspace_of,
+                                 worker_pid_of=worker_pid_of, freecad_of=freecad_of)
+            raise
+        finally:
+            _reached.reset(token)
+
+    call_tool.__ankusdrive_journaled__ = True
+    manager.call_tool = call_tool
+
+
 def apply(mcp, workspace_of: Callable[[], str],
           worker_pid_of: Callable[[str], Any],
           freecad_of: Callable[[str], Any] | None = None) -> dict:
-    """Wrap every tool registered on ``mcp`` (a FastMCP). Run after the server has
+    """Wrap every tool registered on ``mcp`` (a FastMCP), and the tool manager's call
+    path for calls rejected before a tool runs (#457). Run after the server has
     registered and filtered its tools. Returns ``{recorded_tools, max_entries}``.
     ``freecad_of(workspace)`` feeds the durable journal's worker records (#433)."""
-    tools = mcp._tool_manager._tools
+    manager = mcp._tool_manager
+    tools = manager._tools
     for name, tool in tools.items():
         tool.fn = wrap(name, tool.fn, workspace_of, worker_pid_of, freecad_of)
+    wrap_manager(manager, workspace_of, worker_pid_of, freecad_of)
     return {"recorded_tools": len(tools), "max_entries": MAX_ENTRIES}
 
 

@@ -177,6 +177,9 @@ class Worker:
         self.freecad_version = ready.get("freecad")
         # FreeCAD's embedded interpreter, [major, minor, micro]; None from an older worker.
         self.worker_python = ready.get("python")
+        # The worker's `version` result ({freecad: full App.Version(), python}), sent
+        # with the ready line (#458); None from an older worker.
+        self.version_info = ready.get("version")
 
     def _drain_stderr(self):
         for line in self.proc.stderr:

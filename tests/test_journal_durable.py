@@ -43,7 +43,13 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
 from _mcp_python import HOST_DEPS, ensure_mcp_interpreter, mcp_skip_reason  # noqa: E402
 
-from ankusdrive import journal, journal_store, replay  # noqa: E402
+from ankusdrive import journal, journal_store, provenance, replay  # noqa: E402
+
+# A worker's `version` result — what it also sends with its ready line (#458).
+FREECAD = {"freecad": ["1", "1", "0", "43210 (Git)", "https://example.invalid/FreeCAD.git main",
+                       "2026/01/01 00:00:00", "main", "34a9716668b1" + "0" * 28],
+           "python": "3.11.14"}
+FREECAD_ID = {"version": "1.1.0", "build": "34a9716668b1", "python": "3.11.14"}
 
 _VARS = ("ANKUSDRIVE_JOURNAL_DIR", "ANKUSDRIVE_JOURNAL_REDACT", "ANKUSDRIVE_JOURNAL_KEEP",
          "ANKUSDRIVE_JOURNAL_MAX_MB", "ANKUSDRIVE_JOURNAL_FILE_MAX_MB",
@@ -103,7 +109,7 @@ class _Stub:
     def apply(self):
         return journal.apply(self, workspace_of=lambda: self.ws,
                              worker_pid_of=lambda _ws: self.pid,
-                             freecad_of=lambda _ws: ["1", "1", "0", "R1", "main"])
+                             freecad_of=lambda _ws: provenance.freecad_identity(FREECAD))
 
     def call(self, _tool, **kw):
         return self._tool_manager._tools[_tool].fn(**kw)
@@ -190,7 +196,8 @@ def test_enabled_writes_header_then_calls_in_order():
         assert os.path.basename(env.file()) == f"session-{sid}.jsonl"
         workers = [x for x in rest if x["type"] == "worker"]
         calls = [x for x in rest if x["type"] == "call"]
-        assert len(workers) == 1 and workers[0]["freecad"][:3] == ["1", "1", "0"], workers
+        assert len(workers) == 1 and workers[0]["freecad"] == FREECAD_ID, \
+            ("the worker line carries the FreeCAD identity the live PROVENANCE does", workers)
         assert [c["seq"] for c in calls] == list(range(1, 8)), [c["seq"] for c in calls]
         assert [c["tool"] for c in calls] == [e["tool"] for e in journal.snapshot()["entries"]]
         assert all(c["session"] == sid and c["ts"].endswith("Z") for c in calls)
@@ -372,12 +379,14 @@ def test_config_file_spellings():
 def _expected_script(ws, provenance=False):
     """What session_transcript builds from the in-memory journal, minus the server."""
     snap = journal.snapshot(ws)
-    prov = None
-    if provenance:
-        from ankusdrive import provenance as p
-        prov = p.from_entries(snap["entries"], freecad=None)
+    prov = _expected_provenance(ws) if provenance else None
     return replay.export(snap["entries"], workspace=ws, truncated=snap["truncated"],
                          provenance=prov)["script"]
+
+
+def _expected_provenance(ws):
+    """session_transcript's PROVENANCE: built from the worker's live `version` result."""
+    return provenance.from_entries(journal.snapshot(ws)["entries"], freecad=FREECAD)
 
 
 def test_export_round_trips_to_the_transcript_script():
@@ -401,7 +410,10 @@ def test_export_round_trips_to_the_transcript_script():
         assert out["env"]["ankusdrive"] and not out["truncated"]
         # provenance: the recorded env + this machine's solver identities
         out = journal_store.export(sid, workspace="default", provenance=True)
-        assert out["provenance"]["env"]["freecad"]["version"] == "1.1.0", out["provenance"]
+        assert out["provenance"]["env"]["freecad"] == FREECAD_ID, out["provenance"]
+        assert out["provenance"] == _expected_provenance("default"), \
+            "the on-disk PROVENANCE differs from the live one (#458)"
+        assert out["script"] == _expected_script("default", provenance=True)
         # a torn last line and a missing seq are reported, not fatal
         with open(path, "a", encoding="utf-8") as fh:
             fh.write('{"type": "call", "seq": 12, "tool": "ping", "ok": true, "args": {}, '
@@ -409,6 +421,29 @@ def test_export_round_trips_to_the_transcript_script():
         out = journal_store.export(sid, workspace="default", provenance=False)
         assert out["integrity"]["bad_lines"] == 1 and out["integrity"]["gaps"] == [[10, 11]]
         assert out["truncated"] and any("missing" in w for w in out["warnings"])
+
+
+def test_freecad_identity_from_boot_info_and_old_worker_lines():
+    """#458: the worker line's FreeCAD dict comes off the worker's boot info — the full
+    `version` result when the worker sends it, else the older ``[major, minor, patch]``
+    plus Python — and a journal written before #458 (a bare version list) still
+    exports its version."""
+    assert provenance.freecad_identity(FREECAD) == FREECAD_ID
+    assert provenance.freecad_identity(None, ["1", "0", "2"], [3, 11, 14]) == {
+        "version": "1.0.2", "python": "3.11.14"}
+    assert provenance.freecad_identity(None, None, None) is None
+    assert provenance._freecad_version({"freecad": FREECAD_ID}) == FREECAD_ID
+    with _Env() as env:
+        stub = _cad_stub()
+        stub.call("add_primitive")
+        path = env.file()
+        lines = env.lines()
+        for x in lines:
+            if x["type"] == "worker":
+                x["freecad"] = ["1", "1", "0", "R1", "main"]      # the pre-#458 shape
+        Path(path).write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+        out = journal_store.export("latest", workspace="default", provenance=True)
+        assert out["provenance"]["env"]["freecad"]["version"] == "1.1.0", out["provenance"]
 
 
 def test_export_rejects_anything_but_a_session_id():
@@ -473,6 +508,11 @@ def server_test_live_session_export_matches_session_transcript():
             asyncio.run(mcp_server.mcp._tool_manager.call_tool("use_workspace", {"name": ""}))
         except Exception:
             pass
+        bad = {"geometry": "vertical_plate", "length_m": 0.1, "delta_t_k": 175.0}
+        try:        # #457: refused at argument validation, never reaches the tool
+            asyncio.run(mcp_server.mcp._tool_manager.call_tool("h_estimate", bad))
+        except Exception:
+            pass
         sid = journal_store.status()["session"]
         listing = tools["journal_export"].fn()
         assert [s["session"] for s in listing["sessions"]] == [sid] and \
@@ -482,8 +522,14 @@ def server_test_live_session_export_matches_session_transcript():
         got = tools["journal_export"].fn(session=sid, provenance=False)
         assert got["script"] == want, "journal_export differs from session_transcript"
         assert "file" not in got, "the MCP result does not name a local path"
-        tools = [x["tool"] for x in env.lines() if x["type"] == "call"]
-        assert tools[:3] == ["journal_export", "list_workspaces", "use_workspace"], tools
+        calls = [x for x in env.lines() if x["type"] == "call"]
+        tools = [x["tool"] for x in calls]
+        assert tools[:4] == ["journal_export", "list_workspaces", "use_workspace",
+                             "h_estimate"], tools
+        rej = calls[3]
+        assert rej["seq"] == 4 and rej["ok"] is False and rej["rejected"] is True, rej
+        assert rej["args"] == bad and "characteristic_mm" in rej["error"], rej
+        assert "h_estimate" not in got["script"], "a rejected call is not replayed"
 
 
 def _tests():

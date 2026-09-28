@@ -623,7 +623,12 @@ def export(entries: list, *, workspace: str = "default", include_read_only: bool
     job_waited = set()
     for e in entries:
         tool, seq = e["tool"], e["seq"]
-        if tool in SKIP_TOOLS:
+        if e.get("rejected"):
+            # refused at argument validation, before the tool ran (#457): it changed
+            # nothing, so the script has no line for it, not even a comment
+            kind[seq] = "skip"
+            skipped.append({"seq": seq, "tool": tool, "reason": "rejected before running"})
+        elif tool in SKIP_TOOLS:
             kind[seq] = "skip"
             skipped.append({"seq": seq, "tool": tool, "reason": SKIP_TOOLS[tool]})
         elif not e.get("ok"):

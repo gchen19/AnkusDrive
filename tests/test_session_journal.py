@@ -8,7 +8,9 @@ when its prerequisite is missing:
     results returned by identity and errors re-raised as the same object, compaction
     of bulky results, the entry cap keeps the oldest calls, workspace / worker-pid /
     transaction-depth tracking, idempotent wrapping, a failing journal never breaks a
-    tool, thread-safe ordering; and the server applies it after every tool filter.
+    tool, thread-safe ordering; the server applies it after every tool filter; and a
+    call refused at argument validation is recorded (once, in order) and never
+    replayed (#457).
   * **server** (needs ``mcp``) — every registered tool is journaled, and a call through
     FastMCP returns what the unwrapped function returns and records it; a raising tool
     raises the same error and records it.
@@ -54,6 +56,59 @@ class _Stub:
 
     def call(self, _tool, **kw):
         return self._tool_manager._tools[_tool].fn(**kw)
+
+
+class _ToolError(Exception):
+    pass
+
+
+class _Manager:
+    """A FastMCP ``ToolManager`` stand-in with its call path: an unknown name or a
+    missing required argument is refused before ``fn`` runs, raised the way FastMCP
+    raises it (``ToolError(...) from <validation error>``)."""
+
+    def __init__(self, required, **fns):
+        self._tools = {n: SimpleNamespace(fn=f) for n, f in fns.items()}
+        self.required = required
+
+    async def call_tool(self, name, arguments, context=None, convert_result=False):
+        tool = self._tools.get(name)
+        if tool is None:
+            raise _ToolError(f"Unknown tool: {name}")
+        missing = [a for a in self.required.get(name, ()) if a not in arguments]
+        try:
+            if missing:
+                raise ValueError(f"{len(missing)} validation error: {missing[0]} Field required")
+        except ValueError as e:
+            raise _ToolError(f"Error executing tool {name}: {e}") from e
+        try:
+            return tool.fn(**arguments)
+        except Exception as e:
+            raise _ToolError(f"Error executing tool {name}: {e}") from e
+
+
+def _manager_stub(j):
+    def h_estimate(geometry, length_m, characteristic_mm, **kw):
+        return {"h_w_m2k": 7.9}
+
+    def add_primitive(kind="box"):
+        return {"handle": "h1"}
+
+    def boom():
+        raise RuntimeError("tool ran and failed")
+
+    stub = _Stub()
+    stub._tool_manager = _Manager({"h_estimate": ("geometry", "length_m",
+                                                  "characteristic_mm")},
+                                  h_estimate=h_estimate, add_primitive=add_primitive,
+                                  boom=boom)
+    stub.apply(j)
+    return stub
+
+
+def _run(stub, name, args):
+    import asyncio
+    return asyncio.run(stub._tool_manager.call_tool(name, args))
 
 
 # --- static -------------------------------------------------------------------------
@@ -252,6 +307,78 @@ def test_journal_writes_nothing_to_disk():
                  f"disk journal lives in journal_store.py (#433, PRIVACY.md)")
 
 
+def test_call_rejected_at_validation_is_recorded_in_order():
+    """#457: a call refused before its tool runs is journaled at the tool manager, as
+    ok: False with the validation error and the raw arguments, in seq order."""
+    j = _journal()
+    stub = _manager_stub(j)
+    assert _run(stub, "add_primitive", {"kind": "box"}) == {"handle": "h1"}
+    bad = {"geometry": "vertical_plate", "length_m": 0.1, "delta_t_k": 175.0}
+    try:
+        _run(stub, "h_estimate", bad)
+    except _ToolError as e:
+        assert "characteristic_mm" in str(e), "the client's error is unchanged"
+    else:
+        raise AssertionError("the invalid call was not refused")
+    try:
+        _run(stub, "no_such_tool", {"x": 1})
+    except _ToolError:
+        pass
+    assert _run(stub, "h_estimate", {**bad, "characteristic_mm": 100.0}) == {"h_w_m2k": 7.9}
+    entries = j.snapshot()["entries"]
+    assert [(e["seq"], e["tool"], e["ok"]) for e in entries] == [
+        (1, "add_primitive", True), (2, "h_estimate", False), (3, "no_such_tool", False),
+        (4, "h_estimate", True)], entries
+    rej = entries[1]
+    assert rej["rejected"] is True and rej["args"] == bad, rej
+    assert rej["error"].startswith("ValueError: ") and "characteristic_mm" in rej["error"], \
+        "the validation error (the cause), not FastMCP's wrapper"
+    assert rej["workspace"] == "default" and rej["worker_pid"] == 100
+    assert entries[2]["rejected"] is True and "Unknown tool" in entries[2]["error"]
+    assert "rejected" not in entries[0] and "rejected" not in entries[3]
+
+
+def test_call_that_reached_its_tool_is_not_recorded_twice():
+    j = _journal()
+    stub = _manager_stub(j)
+    try:
+        _run(stub, "boom", {})
+    except _ToolError:
+        pass
+    entries = j.snapshot()["entries"]
+    assert len(entries) == 1, f"recorded {len(entries)} times: {entries}"
+    assert not entries[0]["ok"] and "rejected" not in entries[0]
+    assert entries[0]["error"] == "RuntimeError: tool ran and failed", entries[0]
+    j.wrap_manager(stub._tool_manager, lambda: "default", lambda _ws: 100)   # idempotent
+    try:
+        _run(stub, "h_estimate", {})
+    except _ToolError:
+        pass
+    assert j.snapshot()["count"] == 2
+
+
+def test_rejected_calls_leave_the_replay_script_unchanged():
+    """The exporter skips a rejected call outright — no line, not even a comment."""
+    from ankusdrive import replay
+    j = _journal()
+    stub = _manager_stub(j)
+    _run(stub, "add_primitive", {"kind": "box"})
+    try:
+        _run(stub, "h_estimate", {"geometry": "vertical_plate"})
+    except _ToolError:
+        pass
+    entries = j.snapshot()["entries"]
+    out = replay.export(entries, workspace="default")
+    kept = replay.export([e for e in entries if not e.get("rejected")], workspace="default")
+    def body(script):       # all but the header's call count, which honestly includes it
+        return [ln for ln in script.splitlines() if not ln.startswith("Exported by ")]
+    assert body(out["script"]) == body(kept["script"]), "a rejected call changed the script"
+    assert "from 2 recorded calls (1 replayed, 1 skipped)" in out["script"]
+    assert "h_estimate" not in out["script"] and not out["warnings"], out["warnings"]
+    assert {"seq": 2, "tool": "h_estimate", "reason": "rejected before running"} \
+        in out["skipped"], out["skipped"]
+
+
 # --- server (needs mcp) -------------------------------------------------------------
 
 def server_test_every_tool_journaled_and_results_unchanged():
@@ -277,6 +404,24 @@ def server_test_every_tool_journaled_and_results_unchanged():
     assert [e["tool"] for e in entries] == ["list_workspaces", "use_workspace"], entries
     assert entries[0]["ok"] and entries[0]["result"] == direct and entries[0]["worker_pid"] is None
     assert not entries[1]["ok"] and entries[1]["args"] == {"name": ""} and "non-empty" in entries[1]["error"]
+    assert "rejected" not in entries[1], "a call that reached its tool is not a rejection"
+
+    # #457: arguments that fail FastMCP's validation never reach fn, and are still here
+    journal.clear()
+    bad = {"geometry": "vertical_plate", "length_m": 0.1, "delta_t_k": 175.0}
+    try:
+        asyncio.run(mcp_server.mcp._tool_manager.call_tool("h_estimate", bad))
+    except Exception as e:
+        assert "characteristic_mm" in str(e), e
+    else:
+        raise AssertionError("h_estimate with missing arguments was not refused")
+    asyncio.run(mcp_server.mcp._tool_manager.call_tool("list_workspaces", {}))
+    entries = journal.snapshot()["entries"]
+    assert [(e["seq"], e["tool"], e["ok"]) for e in entries] == [
+        (1, "h_estimate", False), (2, "list_workspaces", True)], entries
+    rej = entries[0]
+    assert rej["rejected"] is True and rej["args"] == bad, rej
+    assert rej["error"].startswith("ValidationError: ") and "characteristic_mm" in rej["error"], rej
 
 
 # --- worker (needs FreeCAD) ---------------------------------------------------------

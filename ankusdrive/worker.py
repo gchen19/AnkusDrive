@@ -11,7 +11,8 @@ Wire format: newline-delimited JSON, one object per line.
   response: {"id": "r1", "result": ...}                    or
             {"id": "r1", "error": {"type": ..., "message": ..., "traceback": ...}}
 
-The very first response line is `{"ready": true, "freecad": [...], "python": [...]}`,
+The very first response line is `{"ready": true, "freecad": [...], "python": [...],
+"version": {...}}` (``version`` = the `version` method's result),
 emitted before entering the dispatch loop so the host can confirm the worker booted.
 """
 import contextlib
@@ -21746,8 +21747,12 @@ def _main():
     # mainthread.call() tell "I am a background job, enqueue and wait" from "I am
     # already the main thread, just run it".
     mainthread.bind()
+    # "version" is exactly what the `version` method returns (full App.Version(), build
+    # and git hash included), so the host can record the worker's identity without an
+    # RPC — the durable journal's worker line carries it (#458).
     _respond({"ready": True, "freecad": list(App.Version())[:3],
-              "python": list(sys.version_info[:3])})
+              "python": list(sys.version_info[:3]),
+              "version": _h_version(None)})
     for line in sys.stdin:
         line = line.strip()
         if not line:
