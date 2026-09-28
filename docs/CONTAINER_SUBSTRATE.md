@@ -288,8 +288,26 @@ Blender at all. See [`SOLVERS_MACOS.md`](SOLVERS_MACOS.md).
   never silently swapped for that copy: an override that is set is what you asked for,
   so clearing it is your call. While the container is stopped there is nothing to ask,
   so the override is still trusted; either clear those entries or set them to what the
-  image publishes (`docker exec <container> env | grep ANKUSDRIVE_`). The preCICE
-  stack's variables are not checked this way yet.
+  image publishes (`docker exec <container> env | grep ANKUSDRIVE_`).
+
+  The preCICE stack's variables get the same treatment (#460):
+  `ANKUSDRIVE_CCX_PRECICE`, `ANKUSDRIVE_PRECICE_PATH`, `ANKUSDRIVE_PRECICE_LIB`,
+  `ANKUSDRIVE_OPENFOAM_ADAPTER_LIB` and `ANKUSDRIVE_FSI_OPENFOAM_BASHRC` (or
+  `ANKUSDRIVE_OPENFOAM_BASHRC` when the FSI one is unset, since the fluid then
+  sources that). One that names nothing in the running container is reported by
+  `fsi_stack_status()` (`overrides`, `hint`), by the FSI solve's refusal and by
+  `doctor`, which says `fsi unwired (precice)` rather than `ready` while any of them
+  is wrong. The report names the variable and the path the image publishes for it.
+  Unlike the probed solvers, clearing an FSI variable does not fall back to the
+  image's copy, because the stack is never probed. The fix is to set it to that
+  path. A stale variable is never stepped over for another one either: a bad
+  `ANKUSDRIVE_CCX_PRECICE` does not give way to `ANKUSDRIVE_PRECICE_PATH`, and a
+  bad FSI bashrc does not give way to the general one. `doctor` keeps the three
+  cases apart. Your override names nothing in the image: it names the variable. The
+  image was built without FSI: its manifest says so, and no override would help.
+  The image publishes no path for the variable: it is an older or custom image that
+  may not carry the stack. Under `container` a path that exists only on the host is
+  never taken as proof, because it is not what `<engine> exec` sees.
 - **Prepared `case_dir`s must live under the mounted scratch.** A case directory you
   pass in yourself is used at its host path, so it only exists inside the container
   if it is under `$TMPDIR`.

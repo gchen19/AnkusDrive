@@ -16219,7 +16219,10 @@ def _h_fsi_pressure_plate_submit(p):
     if not stack["ok"]:
         return {"ok": False, "solver": "precice",
                 "reason": "fsi stack incomplete: " + ", ".join(stack["missing"]),
-                "install": solvers.find_solver("precice").get("install_hint"),
+                # a rejected in-container override is named, not answered with a
+                # build recipe for a stack the image already has (#460)
+                "install": (stack.get("hint")
+                            or solvers.find_solver("precice").get("install_hint")),
                 "stack": stack}
 
     from ankusdrive import jobs
