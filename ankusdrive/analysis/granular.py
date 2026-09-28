@@ -133,6 +133,26 @@ def packing_fraction(
     }
 
 
+def pack_band_gate(packing_fraction, packing_fraction_bulk, band):
+    """Gate a settled DEM bed against a packing band (issue #471).
+
+    The RCP band describes BULK packing. The whole-bed fraction of a finite box
+    includes the loosely packed wall and free-surface layers, which deflate it
+    well below RCP for a bed only a few diameters across. So gate on the
+    wall-free ``packing_fraction_bulk`` when the runner could define an interior
+    cell, and fall back to the whole-bed value only when the bed is too shallow
+    or narrow to have one (bulk is None). Returns {in_band, gated_on,
+    gated_fraction}; ``gated_on`` is 'packing_fraction_bulk' or
+    'packing_fraction'."""
+    if packing_fraction_bulk is not None:
+        gated_on, phi = "packing_fraction_bulk", packing_fraction_bulk
+    else:
+        gated_on, phi = "packing_fraction", packing_fraction
+    lo, hi = band
+    return {"in_band": lo <= phi <= hi, "gated_on": gated_on,
+            "gated_fraction": phi}
+
+
 # --- Beverloo hopper discharge ------------------------------------------------
 
 def beverloo_discharge(
