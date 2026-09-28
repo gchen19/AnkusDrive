@@ -330,7 +330,7 @@ def append(entry: dict, result: Any = None, *, freecad: Any = None) -> bool:
         if where is None:
             return False
         rec = dict(entry)
-        if entry.get("ok"):
+        if entry.get("ok") and not rec.get("result_digest"):
             rec["result_digest"] = digest(result)
         if redacting():
             rec = redact_entry(rec)

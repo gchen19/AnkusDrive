@@ -694,6 +694,19 @@ names, labels, title-block fields) in arguments, results and errors — never
 `run_script` code or handles. The trade-off: a redacted journal is auditable by
 digest, but the script it exports is not runnable.
 
+To make the record travel with the model, save with
+`save_document(path, attach_provenance=True)` (off by default). The document then
+carries the same record — replay script, environment and solver identities, ledger
+with each result's SHA-256 — in its `Meta` map, which survives FreeCAD re-saving the
+file. It covers the calls that built *that* document: the saving workspace's current
+worker, from the `new_document` / `open_document` that produced it, while it was the
+active document, successful calls only. `ANKUSDRIVE_JOURNAL_REDACT` applies to it too.
+A save without the flag removes an earlier record. Read it back without FreeCAD:
+
+```bash
+ankusdrive journal export bracket.FCStd -o transcript.py   # --json for the whole record
+```
+
 ### What the CLI is (and isn't)
 
 The CLI is **not the agent surface** — it's a human-debugging + transport

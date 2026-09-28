@@ -3404,6 +3404,7 @@ def _h_save_document(p):
 
     if p.get("visibility_hygiene", True):
         _apply_visibility_hygiene(doc)
+    _set_provenance_meta(doc, p.get("provenance"))
     doc.saveAs(path)
 
     fitted = False
@@ -3414,7 +3415,28 @@ def _h_save_document(p):
             _patch_fcstd_camera(path, _fit_camera_xml(cx, cy, cz, diag))
             fitted = True
 
-    return {"path": path, "size": os.path.getsize(path), "camera_fit": fitted}
+    out = {"path": path, "size": os.path.getsize(path), "camera_fit": fitted}
+    if p.get("provenance") is not None:
+        out["provenance_attached"] = True
+    return out
+
+
+_PROVENANCE_META_KEY = "AnkusDriveProvenance"   # fcstd_provenance.META_KEY (#462)
+
+
+def _set_provenance_meta(doc, record):
+    """Store ``record`` (a JSON string) in the document's Meta map, or drop an earlier
+    one when ``record`` is None, so a file never keeps a record that no longer
+    describes it. Meta is plain XML in Document.xml: it survives FreeCAD's own
+    save/reopen, and fcstd_provenance.read needs no FreeCAD to get it back."""
+    meta = dict(doc.Meta)
+    if record is None:
+        if _PROVENANCE_META_KEY not in meta:
+            return
+        meta.pop(_PROVENANCE_META_KEY)
+    else:
+        meta[_PROVENANCE_META_KEY] = record
+    doc.Meta = meta
 
 
 @handler("open_document")

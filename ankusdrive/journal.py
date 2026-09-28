@@ -37,6 +37,9 @@ Each entry:
   evidence until you can say which binary produced it, and the answer moves during a
   session: a substrate change relocates every solver under it (#433). The version is
   not probed here — that costs a subprocess, and the exporter fills it in later.
+* ``result_digest`` — ``sha256:`` over the canonical JSON of the **full** result
+  (``journal_store.digest``), so a record that keeps only the compacted copy still
+  pins the real value (#433, #462).
 * ``code_sha256`` — for ``run_script``, the content hash of the submitted code. The
   code itself is in ``args`` verbatim; the digest is what a report cites (#433).
 
@@ -172,6 +175,16 @@ def _solvers_named(result: Any) -> list:
     return out
 
 
+def _digest(result: Any):
+    """``sha256:`` over the full result's canonical JSON (``journal_store.digest``) —
+    the value the durable journal and an attached .FCStd record (#462) cite."""
+    try:
+        from ankusdrive import journal_store
+        return journal_store.digest(result)
+    except Exception:
+        return None
+
+
 def record(tool: str, args: dict, started: float, *, ok: bool, result: Any = None,
            error: BaseException | None = None, workspace: str, worker_pid,
            seq: int, txn_depth: int, freecad: Any = None) -> None:
@@ -182,6 +195,7 @@ def record(tool: str, args: dict, started: float, *, ok: bool, result: Any = Non
              "elapsed_s": round(time.monotonic() - started, 3)}
     if ok:
         entry["result"] = compact(result)
+        entry["result_digest"] = _digest(result)
     else:
         entry["error"] = f"{type(error).__name__}: {error}"
     if tool == "run_script" and isinstance(args.get("code"), str):

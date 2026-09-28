@@ -35,6 +35,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .client import Worker, WorkerError
 from . import render as _render
+from . import fcstd_provenance as _fcstd_prov
 
 
 mcp = FastMCP("ankusdrive")
@@ -334,7 +335,8 @@ def open_document(path: str) -> dict:
 
 
 @mcp.tool()
-def save_document(path: str, visibility_hygiene: bool = True) -> dict:
+def save_document(path: str, visibility_hygiene: bool = True,
+                  attach_provenance: bool = False) -> dict:
     """Save the active document to the given .FCStd path.
 
     visibility_hygiene (default True): before saving, hide any object that has
@@ -342,8 +344,33 @@ def save_document(path: str, visibility_hygiene: bool = True) -> dict:
     of a Body, every feature inside a Body's Group, etc.). Without this the
     re-opened doc double-renders intermediates on top of the final shape — a
     failure mode that looks identical to broken geometry. Pass False to keep
-    explicit set_visibility overrides intact."""
-    return _call("save_document", path=path, visibility_hygiene=visibility_hygiene)
+    explicit set_visibility overrides intact.
+    attach_provenance: embed this document's journal_export record (PRIVACY.md)."""
+    if not attach_provenance:
+        return _call("save_document", path=path, visibility_hygiene=visibility_hygiene)
+    if os.path.splitext(path)[1].lower() not in ("", ".fcstd"):
+        raise ValueError("attach_provenance needs a .FCStd path: an interchange "
+                         "format has nowhere to keep the record")
+    record = _provenance_record()
+    out = _call("save_document", path=path, visibility_hygiene=visibility_hygiene,
+                provenance=_fcstd_prov.dumps(record))
+    out["provenance"] = {"calls": record["scope"]["calls"], "anchor": record["scope"]["anchor"],
+                         "redacted": record["redacted"], "warnings": record["warnings"]}
+    return out
+
+
+def _provenance_record() -> dict:
+    """The #462 record for the active document of the current workspace (read back
+    with `ankusdrive journal export file.FCStd`)."""
+    from . import journal as _j
+    ws = _current_workspace
+    docs = _call("list_documents")
+    active = next((d["name"] for d in docs if d.get("active")), None)
+    if active is None:
+        raise RuntimeError("no active document")
+    return _fcstd_prov.build(
+        _j.snapshot(ws)["entries"], doc=active, workspace=ws, worker_pid=_worker_pid(ws),
+        provenance_of=lambda entries: _session_provenance(ws, entries))
 
 
 @mcp.tool()

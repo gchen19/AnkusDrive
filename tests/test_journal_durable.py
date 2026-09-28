@@ -204,8 +204,9 @@ def test_enabled_writes_header_then_calls_in_order():
         assert render["result_digest"] == expected
         failed = calls[6]
         assert not failed["ok"] and "result_digest" not in failed and "secret" in failed["error"]
-        # the memory entry is untouched by the disk path
-        assert "result_digest" not in journal.snapshot()["entries"][0]
+        # the memory entry carries the same digest (#462), computed once
+        mem = journal.snapshot()["entries"][4]
+        assert mem["result_digest"] == render["result_digest"], mem
 
 
 def test_run_script_code_verbatim_and_hashed_on_disk():
