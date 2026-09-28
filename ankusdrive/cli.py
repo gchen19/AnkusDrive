@@ -156,6 +156,21 @@ def cmd_fem_cantilever(args):
     )
 
 
+def cmd_container_setup(args):
+    """Provision the container substrate (Windows: Docker inside WSL) end to end."""
+    from . import container_setup
+    if hasattr(sys.stdout, "reconfigure"):       # the report has non-ASCII; cp1252 consoles
+        sys.stdout.reconfigure(encoding="utf-8")
+    rep = container_setup.setup(install_engine=args.install_engine, image=args.image,
+                                recreate=args.recreate, write_config=not args.no_config)
+    if args.json:
+        print(json.dumps(rep, indent=2))
+    else:
+        print(container_setup.render(rep))
+    if not rep["ok"]:
+        sys.exit(1)
+
+
 def cmd_journal_list(args):
     """The durable journal's sessions on disk (#433) — no worker needed."""
     from . import journal_store
@@ -314,6 +329,29 @@ def build_parser():
     pje.add_argument("--no-provenance", action="store_true",
                      help="skip the environment record and its solver version probes")
     pje.set_defaults(func=cmd_journal_export)
+
+    pk = sub.add_parser(
+        "container",
+        help="The container substrate: run the Linux-only solvers from the prebuilt "
+             "solver image (on Windows, Docker inside WSL).",
+    )
+    ksub = pk.add_subparsers(dest="container_command", required=True)
+    pks = ksub.add_parser(
+        "setup",
+        help="Pull the solver image, create the solver container with the scratch "
+             "mounted, and record the substrate + in-container paths in config.toml.")
+    pks.add_argument("--install-engine", action="store_true",
+                     help="Windows: if the WSL distro has no docker, install Docker "
+                          "Engine into it (apt docker.io, as root)")
+    pks.add_argument("--image", default=None,
+                     help="solver image (default: ghcr.io/gchen19/ankusdrive-solvers:latest;"
+                          " pin a sha- tag or digest for reproducibility)")
+    pks.add_argument("--recreate", action="store_true",
+                     help="remove and recreate an existing solver container")
+    pks.add_argument("--no-config", action="store_true",
+                     help="do not write config.toml")
+    pks.add_argument("--json", action="store_true", help="emit JSON")
+    pks.set_defaults(func=cmd_container_setup)
 
     pf = sub.add_parser("fem", help="FEM subcommands.")
     fsub = pf.add_subparsers(dest="fem_command", required=True)

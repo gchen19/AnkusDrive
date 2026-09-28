@@ -69,6 +69,13 @@ use:
 
 ## Setup
 
+**One command does all of it:** `ankusdrive container setup`. It pulls the image,
+creates the container with the scratch mounted, and writes the substrate and the
+in-container paths to `config.toml`, on any OS. On Windows it also installs Docker
+Engine into WSL when you add `--install-engine`
+([WINDOWS.md](WINDOWS.md#linux-only-solvers-docker-inside-wsl-recommended)). The manual
+steps it automates:
+
 1. Choose the substrate. Set it in the environment, or as `substrate = "container"`
    under `[solvers]` in the AnkusDrive config file:
 
@@ -257,8 +264,13 @@ Blender at all. See [`SOLVERS_MACOS.md`](SOLVERS_MACOS.md).
 
 ## Limits
 
-- **Not on Windows hosts yet.** A Windows case dir has no same-path meaning inside a
-  Linux container. Use the WSL substrate there.
+- **Windows runs the engine in WSL.** A Windows case dir has no meaning inside a
+  Linux container, so on Windows every engine call goes through
+  `wsl -d <distro> -e docker …`. The container mounts `%TEMP%` at its WSL path
+  (`/mnt/c/…`), and each host path handed across is rewritten to that form
+  (`solvers.container_path`). Case and runner directories are created so they inherit
+  `%TEMP%`'s per-user ACL. Python's Windows `0o700` ACL would lock the container out.
+  Setup and details: [WINDOWS.md](WINDOWS.md#linux-only-solvers-docker-inside-wsl-recommended).
 - **Only the solvers listed above** use the container. SU2, CalculiX (`ccx` for
   warpage and core FEM), PrusaSlicer, Blender, KrakenOS and the pip-wheel solvers
   resolve on the host as usual.
