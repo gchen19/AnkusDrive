@@ -23,7 +23,10 @@ line (UTF-8, ``\\n`` on every OS):
   journal's own settings (``redact``, the caps). Rewritten, marked ``reopened``, if the
   file disappears under a live session (deleted by hand, reaped by another server).
 * ``{"type": "worker", workspace, worker_pid, freecad}`` — the first time a call sees a
-  new worker, with the FreeCAD version it booted. Read off the worker object; no RPC.
+  new worker, with the FreeCAD it booted as ``{version, build, python}`` — the same
+  dict the live PROVENANCE carries (#458). Read off the worker's boot info; no RPC.
+  (A journal from before #458 holds a bare ``[major, minor, patch, ...]`` list there;
+  export still reads it.)
 * ``{"type": "call", ts, session, ...}`` — one per tool call: exactly the entry
   :func:`journal.record` built (``seq``, ``tool``, ``args``, ``ok``, ``result`` or
   ``error``, ``workspace``, ``worker_pid``, ``txn_depth``, ``elapsed_s``, ``solvers``,

@@ -8309,10 +8309,16 @@ def _worker_pid(name: str):
 
 
 def _worker_freecad(name: str):
-    """The FreeCAD version a workspace's worker booted, read off the worker object —
-    never an RPC, so the durable journal (#433) costs a tool call nothing here."""
+    """The FreeCAD a workspace's worker booted, as the same ``{version, build, python}``
+    dict the live PROVENANCE carries (#458). Read off the worker's boot info — never
+    an RPC, so the durable journal (#433) costs a tool call nothing here."""
     w = _workers.get(name)
-    return getattr(w, "freecad_version", None) if w is not None else None
+    if w is None:
+        return None
+    from . import provenance as _prov
+    return _prov.freecad_identity(getattr(w, "version_info", None),
+                                  getattr(w, "freecad_version", None),
+                                  getattr(w, "worker_python", None))
 
 
 JOURNAL = _journal.apply(mcp, workspace_of=lambda: _current_workspace,

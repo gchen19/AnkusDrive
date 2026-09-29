@@ -34,6 +34,7 @@ import shlex
 import subprocess
 import sys
 import threading
+from typing import Any
 
 PROBE_TIMEOUT_S = 30.0
 
@@ -275,6 +276,8 @@ def _freecad_version(payload: dict) -> dict:
     two FreeCAD 1.1.0 builds from different commits are different FreeCADs."""
     out: dict = {}
     raw = payload.get("freecad")
+    if isinstance(raw, dict):               # already flattened (a durable worker line, #458)
+        return {k: str(raw[k]) for k in ("version", "build", "python") if raw.get(k)}
     if isinstance(raw, (list, tuple)) and len(raw) >= 3:
         out["version"] = ".".join(str(x) for x in raw[:3])
         rest = [str(x) for x in raw[3:] if x and str(x) != "Unknown"]
@@ -287,6 +290,27 @@ def _freecad_version(payload: dict) -> dict:
     if payload.get("python"):
         out["python"] = str(payload["python"])
     return out
+
+
+def freecad_identity(version_info: Any = None, freecad: Any = None,
+                     python: Any = None) -> dict | None:
+    """A worker's FreeCAD identity from its boot info, as :func:`_freecad_version`
+    flattens the live ``version`` result: ``{version, build, python}`` (#458).
+
+    ``version_info`` is the ready line's ``version`` (the ``version`` method's own
+    result); an older worker sends only ``freecad`` (``[major, minor, patch]``) and
+    ``python`` (``[major, minor, micro]``), which give ``{version, python}``. ``None``
+    when there is nothing to report."""
+    if isinstance(version_info, dict) and version_info.get("freecad"):
+        out = _freecad_version(version_info)
+    else:
+        payload: dict = {"freecad": freecad}
+        if isinstance(python, (list, tuple)) and python:
+            payload["python"] = ".".join(str(x) for x in python)
+        elif isinstance(python, str):
+            payload["python"] = python
+        out = _freecad_version(payload)
+    return out or None
 
 
 def drift(recorded: dict, current: dict | None = None) -> list:
