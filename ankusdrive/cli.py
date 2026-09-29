@@ -195,6 +195,8 @@ def cmd_journal_export(args):
     user's own shell, not an MCP tool)."""
     from . import journal_store
     target = args.target
+    if target.lower().endswith(".fcstd"):
+        return _export_fcstd(args)
     is_file = target.endswith(".jsonl") or Path(target).is_file()
     try:
         out = journal_store.export(
@@ -204,6 +206,30 @@ def cmd_journal_export(args):
             prune_aborted=args.prune_aborted, provenance=not args.no_provenance)
     except (ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+    text = json.dumps(out, indent=2, default=str) + "\n" if args.json else out["script"]
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8", newline="\n")
+    else:
+        sys.stdout.write(text)
+    for w in out.get("warnings") or []:
+        print(f"warning: {w}", file=sys.stderr)
+
+
+def _export_fcstd(args):
+    """The provenance record ``save_document(attach_provenance=True)`` embedded in a
+    .FCStd (#462) — read from the zip, no worker or journal directory needed."""
+    import zipfile
+    from xml.etree.ElementTree import ParseError
+    from . import fcstd_provenance
+    try:
+        out = fcstd_provenance.read(str(Path(args.target).expanduser()))
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, ParseError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if out is None:
+        print(f"error: {args.target} carries no AnkusDrive provenance (save it with "
+              f"save_document(attach_provenance=True))", file=sys.stderr)
         sys.exit(1)
     text = json.dumps(out, indent=2, default=str) + "\n" if args.json else out["script"]
     if args.out:
@@ -314,8 +340,10 @@ def build_parser():
                      help="journal directory (default: ANKUSDRIVE_JOURNAL_DIR / journal_dir)")
     pjl.add_argument("--json", action="store_true", help="emit JSON")
     pjl.set_defaults(func=cmd_journal_list)
-    pje = jsub.add_parser("export", help="Export one session as a replay script.")
-    pje.add_argument("target", help="session id, 'latest', or a path to a session-*.jsonl")
+    pje = jsub.add_parser("export", help="Export one session as a replay script, or the "
+                                         "provenance a .FCStd was saved with.")
+    pje.add_argument("target", help="session id, 'latest', a path to a session-*.jsonl, "
+                                    "or a .FCStd saved with attach_provenance")
     pje.add_argument("-o", "--out", default=None, help="write here instead of stdout")
     pje.add_argument("--json", action="store_true",
                      help="the whole record (script, env, ledger, digests, provenance)")

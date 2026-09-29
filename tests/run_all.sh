@@ -144,6 +144,10 @@ echo "== Durable journal: opt-in on-disk record, retention, redaction, export (#
 if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_journal_durable.py; else python3 tests/test_journal_durable.py; fi
 
 echo
+echo "== Provenance attached to a saved .FCStd: which calls, reopen, redaction (#462) =="
+if [ -x "$VENV_PY" ]; then "$VENV_PY" tests/test_fcstd_provenance.py; else python3 tests/test_fcstd_provenance.py; fi
+
+echo
 echo "== Solver case directories: one root, a stated retention (#437) =="
 # Static tier (the reaping policy, the grace window, the GPL runner's boundary, and
 # that no handler still strands a directory); the worker tier needs FreeCAD and runs a
