@@ -251,7 +251,7 @@ Test-Module 'Revision + lifecycle state machine'         'test_lifecycle.py'
 Test-Module 'Modularity eval ladder'                     'test_modularity_eval.py'
 Test-Module 'Change orders + where-used impact'          'test_change.py'
 Test-Module 'Host-agnostic builder contract'             'test_component_contract_check.py'
-Invoke-Step 'Host-agnostic builder demo' @('example\host_agnostic_builder_demo.py')
+Invoke-Step 'Host-agnostic builder demo' @('examples\design\host_agnostic_builder_demo.py')
 
 Invoke-Step 'Orchestration selftest'  @('-m', 'orchestration.selftest')
 Invoke-Step 'Orchestration dryrun'    @('-m', 'orchestration.dryrun')

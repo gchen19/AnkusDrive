@@ -1,9 +1,9 @@
-# AnkusDrive examples
+# Design and multi-agent examples
 
 ## Phase 0 multi-agent walkthrough
 
 `phase0_walkthrough.py` is the runnable proof-of-concept for
-[`docs/MULTI_AGENT.md`](../docs/MULTI_AGENT.md) §12 (Phase 0): a team of agents
+[`docs/MULTI_AGENT.md`](../../docs/MULTI_AGENT.md) §12 (Phase 0): a team of agents
 **partitions** a design into components, builds them independently, then a
 coordinator **merges** them into one assembly and runs the verification gates —
 all with **today's** AnkusDrive tools, zero new code.
@@ -18,7 +18,7 @@ hand so the model is visible.
 ### Run it
 
 ```bash
-.venv/bin/python3 example/phase0_walkthrough.py
+.venv/bin/python3 examples/design/phase0_walkthrough.py
 ```
 
 (The host venv needs Pillow + numpy for the render step; renders are skipped

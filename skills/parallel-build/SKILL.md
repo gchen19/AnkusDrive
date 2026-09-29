@@ -25,10 +25,10 @@ each builder is *any* MCP-connected agent with the full tool surface — not a
 special bundled loop.
 
 This skill is the runnable recipe. Its falsifiable proof is
-[`example/host_agnostic_builder_demo.py`](../../example/host_agnostic_builder_demo.py):
+[`examples/design/host_agnostic_builder_demo.py`](../../examples/design/host_agnostic_builder_demo.py):
 a plain-code orchestrator that decomposes a 3-part stacked bracket into three
 briefs, builds each in its own worker, self-gates each, then merges and passes
-every integration gate. Run it: `.venv/bin/python3 example/host_agnostic_builder_demo.py`.
+every integration gate. Run it: `.venv/bin/python3 examples/design/host_agnostic_builder_demo.py`.
 
 ## The loop
 

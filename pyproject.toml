@@ -205,7 +205,7 @@ Issues = "https://github.com/gchen19/AnkusDrive/issues"
 # Fast "real-bug" lint for the CI fast lane (no FreeCAD needed). Throwaway
 # probe scripts and the example tree aren't part of the shipped surface.
 target-version = "py310"
-extend-exclude = ["scratch", "example"]
+extend-exclude = ["scratch", "examples"]
 
 [tool.ruff.lint]
 # E9 = syntax errors; F = pyflakes (undefined names, redefinitions, bad
@@ -223,7 +223,7 @@ version = { attr = "ankusdrive.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["ankusdrive*"]
-exclude = ["tests*", "scratch*", "example*", "docs*"]
+exclude = ["tests*", "scratch*", "examples*", "docs*"]
 
 [tool.setuptools.package-data]
 # Everything the package reads back off disk at runtime. This list is NOT

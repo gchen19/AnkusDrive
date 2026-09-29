@@ -12,7 +12,7 @@
 > [#141 revision + lifecycle state machine](../ankusdrive/lifecycle.py) (PR #154) ·
 > [#142 ECO / where-used / baselines](../ankusdrive/change.py) (PR #160) ·
 > [#143 project container + ref-integrity](../ankusdrive/project.py) (PR #158).
-> Runnable showcase: `example/design_hierarchy_*` (PRs #163, #164). Read the §0
+> Runnable showcase: `examples/design/design_hierarchy_*` (PRs #163, #164). Read the §0
 > table below as the *original problem statement*; the "Today" column is a
 > historical snapshot, not current state.
 
@@ -47,7 +47,7 @@ substrate (manifest + resolve step + published interfaces + lockfile) but not th
 | Master/global parameters | **Partial** — `shared_parameters` + the resolve step (`sum`/`grid_mm`) write literal values into slices coordinator-side | `MULTI_AGENT.md` §11.1; `ankusdrive/manifest.py:resolve_constraints` |
 | Driving→driven relations (formulas) | **No** — resolve does sum-to-target only; no general expression DAG, no driving/driven distinction | `ankusdrive/manifest.py` |
 | Intra-part parametric model (change a number → regen) | **No** — every generator bakes a static B-rep solid and deletes the parametric helper | `worker.py:_h_add_gear` (`doc.removeObject(g.Name)  # keep a static solid`) |
-| Variant / family / design table | **No** — multi-part is hand-rolled Python loops; each output is an independent static file | `example/gearbox_manifest.py` |
+| Variant / family / design table | **No** — multi-part is hand-rolled Python loops; each output is an independent static file | `examples/design/gearbox_manifest.py` |
 | Feature templates with declared inputs (PowerCopy/UDF) | **No** | — |
 | Revision / version / lifecycle state | **No** — `.FCStd` files carry no rev or maturity; lockfile is a change-*detector*, not a version store | `worker.py:assembly_lock` |
 | ECO / change order / where-used | **Partial** — `assembly_lock_check` classifies drift+staleness over the dependency graph, but there is no change *record*, effectivity, or item-level impact report | `MULTI_AGENT.md` §9 |
@@ -77,7 +77,7 @@ parametric model," and the answer is already latent in the codebase:
 > **The build recipe is the feature tree. The parameters are its inputs.
 > Regeneration is re-running the recipe.**
 
-`example/gearbox_manifest.py`'s `build_manifest(params)` is exactly this — a pure
+`examples/design/gearbox_manifest.py`'s `build_manifest(params)` is exactly this — a pure
 function from parameters to geometry, deterministic by construction (the determinism
 suite, #123/#127, already guarantees same-inputs→same-bytes). Formalizing *that* as a
 first-class, named, declared-input object is the keystone (§2.1). It gives us
@@ -331,7 +331,7 @@ calls. The general shape, then the per-item gates:
   guaranteed (the determinism suite, #123/#127). Every new object below is a pure function
   of text inputs, so its test is "run twice, diff bytes" plus "reference inputs → reference
   artifact." Scripted reference builders stand in for agents so the suite runs free —
-  exactly as `example/gearbox_manifest.py` and `tests/test_typed_interfaces.py` already do.
+  exactly as `examples/design/gearbox_manifest.py` and `tests/test_typed_interfaces.py` already do.
 
 | Work item | Reference (must pass) | Negative controls (must each be caught) |
 |---|---|---|

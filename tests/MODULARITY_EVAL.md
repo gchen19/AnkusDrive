@@ -90,7 +90,7 @@ predicate).
 ### Toy 1 — family regen, and the measured payoff
 
 The modular design is **one shared recipe + a row of data per variant**; the
-hand-rolled baseline (the `example/gearbox_manifest.py` shape) is **N independent
+hand-rolled baseline (the `examples/design/gearbox_manifest.py` shape) is **N independent
 inline blocks**, each re-spelling the build rule and its own bookkeeping (part
 number, item, file path). Both build byte-identical geometry — that is the
 correctness half. The payoff half is **edits-to-change-the-family**, measured off

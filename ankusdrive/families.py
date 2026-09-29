@@ -3,7 +3,7 @@ Design tables — a variant family from a row x column table (issue #138, the B1
 work item of docs/DESIGN_HIERARCHY.md §2 Theme B).
 
 "Make all variants of a gear" today means a hand-rolled Python loop emitting
-independent static files (example/gearbox_manifest.py). This module replaces the
+independent static files (examples/design/gearbox_manifest.py). This module replaces the
 loop with the universal MCAD primitive for variant families — the *design table*
 (SolidWorks design tables / Creo family tables / Inventor iParts):
 

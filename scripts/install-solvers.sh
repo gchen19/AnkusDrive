@@ -367,13 +367,13 @@ build_optics_gallery() {
   log "bootstrapping the optics gallery (install both lanes, then render every figure)"
   pip_install_extra optics            # sequential: optiland + rayoptics (permissive)
   pip_install_extra optics_gpl        # non-sequential: KrakenOS (GPL-3.0, prints its notice)
-  local gens="examples/optics_gallery.py examples/optics_gallery_3d.py examples/optics_ball_lens.py"
+  local gens="examples/optics/optics_gallery.py examples/optics/optics_gallery_3d.py examples/optics/optics_ball_lens.py"
   for g in $gens; do
     [ -f "$REPO_ROOT/$g" ] || die "generator not found: $g (run from a AnkusDrive checkout)"
     log "render $g"
     ( cd "$REPO_ROOT" && "$PY" "$g" >/dev/null ) || die "rendering $g failed"
   done
-  ok "optics gallery written to $REPO_ROOT/examples/optics_gallery/  ($(ls "$REPO_ROOT"/examples/optics_gallery/*.png 2>/dev/null | wc -l | tr -d ' ') PNGs)"
+  ok "optics gallery written to $REPO_ROOT/examples/optics/optics_gallery/  ($(ls "$REPO_ROOT"/examples/optics/optics_gallery/*.png 2>/dev/null | wc -l | tr -d ' ') PNGs)"
 }
 
 # --- acoustics_bem: Bempp exterior-acoustics BEM (MIT, dedicated venv) ----------

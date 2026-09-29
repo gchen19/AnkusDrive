@@ -20,7 +20,7 @@ Maps each RFC concept onto an existing tool:
   - recursive BOM (§5/§6)         -> bom_extract (single level here)
   - visual gate (§6)              -> render_view -> PNG
 
-Run:  .venv/bin/python3 example/phase0_walkthrough.py
+Run:  .venv/bin/python3 examples/design/phase0_walkthrough.py
   (host venv needs Pillow + numpy for the render step; renders are skipped if absent)
 
 Outputs (written next to this script):
@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parent
+REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO))
 
 from ankusdrive import Worker  # noqa: E402

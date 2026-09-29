@@ -28,7 +28,7 @@ What it proves, concretely:
      integrated result passes interference, envelope, and interface-alignment gates,
      then writes + verifies the lockfile (`assembly_lock` / `assembly_lock_check`).
 
-Run:  .venv/bin/python3 example/host_agnostic_builder_demo.py
+Run:  .venv/bin/python3 examples/design/host_agnostic_builder_demo.py
 Exit: 0 iff every builder self-gate AND every integration gate passes.
 """
 import json
@@ -36,7 +36,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from ankusdrive import Worker  # noqa: E402

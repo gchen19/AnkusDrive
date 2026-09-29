@@ -1,11 +1,11 @@
 """3D optics examples — both lanes rendered to PNGs for viewing.
 
 Headless (matplotlib mplot3d, no GPU/VTK display needed). Writes
-examples/optics_gallery/05_lens_3d.png and 06_prism_tir_3d.png, built from REAL
+examples/optics/optics_gallery/05_lens_3d.png and 06_prism_tir_3d.png, built from REAL
 traced data: optiland's per-surface global ray coordinates, and KrakenOS's per-ray
 polylines (S.XYZ) returned by the production GPL subprocess runner.
 
-Run:  .venv/bin/python examples/optics_gallery_3d.py
+Run:  .venv/bin/python examples/optics/optics_gallery_3d.py
 """
 import json
 import os
@@ -19,10 +19,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "optics_gallery")
 os.makedirs(OUT, exist_ok=True)
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def fig_lens_3d():

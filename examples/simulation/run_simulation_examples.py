@@ -56,18 +56,18 @@ worker that lacks NumPy is reported as SKIP, not a failure, so the script is saf
 run on any box. Exit status is non-zero only if a gate that actually ran FAILS.
 
 Run (gated examples, needs FreeCAD + the solvers):
-    python3 examples/run_simulation_examples.py
+    python3 examples/simulation/run_simulation_examples.py
 
-Regenerate the result figures in ``examples/results/`` (needs matplotlib + the solvers,
+Regenerate the result figures in ``examples/simulation/results/`` (needs matplotlib + the solvers,
 but NOT FreeCAD — the plots are built straight from the analysis modules):
-    python3 examples/run_simulation_examples.py --plots [OUTDIR]
+    python3 examples/simulation/run_simulation_examples.py --plots [OUTDIR]
 """
 import math
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ankusdrive import Worker
 from ankusdrive.analysis import optics, thermal
@@ -796,7 +796,7 @@ def _plot_bridge(outdir):
     if not (solvers.is_available("elmer") and shutil.which("ElmerGrid")
             and solvers.is_available("openfoam")):
         return False
-    fixture = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "box20_coarse.unv"
+    fixture = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "box20_coarse.unv"
     k, rho, cp, h, dur = 200.0, 2700.0, 900.0, 10000.0, 0.6
 
     with tempfile.TemporaryDirectory() as d:

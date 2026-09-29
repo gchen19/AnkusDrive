@@ -12,14 +12,14 @@ the shared C, and the merge gate proves the whole train meshes.
 This is the host-agnostic substrate; a real run would fan one builder agent per
 gear. Here scripted reference gears stand in so it runs free (no API).
 
-Run: .venv/bin/python3 example/gearbox_manifest.py
+Run: .venv/bin/python3 examples/design/gearbox_manifest.py
 """
 import json
 import sys
 import tempfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from ankusdrive import Worker  # noqa: E402

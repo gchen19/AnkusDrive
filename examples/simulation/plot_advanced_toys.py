@@ -7,14 +7,14 @@ single number; this script sweeps the *same* pure-Python analysis functions acro
 a parameter range and plots the underlying curve, so you can see the law the toy
 gates on. No FreeCAD, no external solver — just ``ankusdrive.analysis`` + matplotlib.
 
-Five figures, one per batch, written to ``examples/results/``:
+Five figures, one per batch, written to ``examples/simulation/results/``:
   * toys_batch1.png — pure-math cores   (tolerance · materials · cfd)
   * toys_batch2.png — scaling laws      (machine_elements · vibration · durability)
   * toys_batch3.png — M6 newcomers      (cht · em)
   * toys_batch4.png — design-for-X      (dfx · cost · slicing · kinematics)
   * toys_batch5.png — round-out         (topology · optics · thermal)
 
-Run:  .venv/bin/python examples/plot_advanced_toys.py
+Run:  .venv/bin/python examples/simulation/plot_advanced_toys.py
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ matplotlib.use("Agg")                                   # headless: save PNGs, n
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ankusdrive.analysis import cfd                       # noqa: E402
 from ankusdrive.analysis import cht                       # noqa: E402
