@@ -1755,7 +1755,10 @@ def _substrate_override(value: str, *, is_dir: bool) -> str | None:
     same way, for the same reason (#361). Returns the normalized path, or None if it
     doesn't check out."""
     p = wsl_posix(value)                     # \\wsl$ overrides normalize to POSIX
-    if _posix_isdir(p) if is_dir else _posix_isfile(p):
+    # Under `container` a file on the HOST proves nothing (#460): a native install's
+    # path exists here and not in the image, which is exactly the trap below.
+    in_container = substrate() == "container"
+    if not in_container and (_posix_isdir(p) if is_dir else _posix_isfile(p)):
         return p
     if not (_opaque_substrate_available() and p.startswith("/")):
         return None
@@ -1765,7 +1768,7 @@ def _substrate_override(value: str, *, is_dir: bool) -> str | None:
     # inside a container that has no such file. The solve dies with `blockMesh: command
     # not found`, naming nothing that points at the real cause. Asking turns that into
     # a named miss at discovery time. An unreachable/older container still trusts.
-    if substrate() == "container" and container_state() == "running":
+    if in_container and container_state() == "running":
         return p if container_path_exists(p, is_dir=is_dir) else None
     return p                                 # in-VM path; host can't confirm
 
@@ -1941,6 +1944,15 @@ def _vm_binary_path(name: str, spec: dict):
         return _container_binary(spec)
     if not (spec.get("substrate_bins") and _opaque_substrate_available()):
         return None
+    if substrate() == "container":
+        # #460: the same rule as above for the OpenFOAM/FSI set — the override that
+        # wins by precedence is the one meant; one the container rejects is a miss
+        # (reported by _unwired_found), never a cue to try the next variable.
+        if container_excludes(name):         # the image says it left this one out
+            return None
+        if override := next(iter(_override_candidates(name, spec)), None):
+            return _substrate_override(override, is_dir=False)
+        return None
     for c in _override_candidates(name, spec):
         if r := _substrate_override(c, is_dir=False):
             return r
@@ -1999,7 +2011,23 @@ def _unwired_found(name: str, spec: dict):
                 f"this image does not include {key} ({reason}). Rebuild with it: "
                 f"`bash tools/build_solver_image.sh --solvers \"<yours> {key}\"`, "
                 f"or use the full {_SOLVER_IMAGE}. See docs/CONTAINER_SUBSTRATE.md")
-    if spec.get("container") and _container_routed(spec):
+    if name == "precice" and _container_routed(spec) and container_state() == "running":
+        # #460: the FSI stack is not probed — it resolves only from the exported
+        # in-container paths — so what is wrong is one of those overrides (named, with
+        # the image's own path) or that none is exported. Never the host's build.
+        eng, cname = container_cli(), container_name()
+        if hint := _fsi_override_hint():
+            return f"container {cname!r} (running)", hint
+        return (f"container {cname!r} (running)",
+                f"the solver container {cname!r} is running but the FSI stack is not "
+                f"wired into this shell — export ANKUSDRIVE_CCX_PRECICE, "
+                f"ANKUSDRIVE_PRECICE_LIB, ANKUSDRIVE_OPENFOAM_ADAPTER_LIB and "
+                f"ANKUSDRIVE_FSI_OPENFOAM_BASHRC as the image publishes them: "
+                f"`{eng} exec {cname} env | grep ANKUSDRIVE_`. "
+                f"See docs/CONTAINER_SUBSTRATE.md")
+    # precice arrives here only with the container stopped or absent (running is
+    # answered above), where the container's state is the whole hint
+    if (spec.get("container") or name == "precice") and _container_routed(spec):
         # #419: under `container` a host venv or binary is irrelevant; what is missing
         # is the container, its running state, or the solver inside that image
         eng, cname = container_cli(), container_name()
@@ -2331,6 +2359,13 @@ def find_solver(name: str) -> dict:
             # from substrate(): the two agree in production, and #349's guard fakes
             # multipass_available() on hosts whose default substrate is not multipass
             info["via"] = "container" if container_available() else "multipass"
+    if info["available"] and name == "precice" and fsi_override_problems():
+        # #460: ccx_preCICE alone is not the stack. A library/bashrc override the
+        # container rejects makes the solve fail just the same, so the family is not
+        # ready — _unwired_found names the variable instead of `doctor` saying ready.
+        info["available"] = False
+        info.pop("path", None)
+        info.pop("via", None)
     if info["available"]:
         info["status"] = "ok"
         return info
@@ -2465,7 +2500,12 @@ def ccx_precice_bin() -> str | None:
     if env := _config.get("ANKUSDRIVE_CCX_PRECICE"):
         if r := _substrate_override(env, is_dir=False):
             return r
-    return find_solver("precice").get("path")
+        if not _host_discovery_applies():  # container: rejected is reported, not stepped over (#460)
+            return None
+    # the binary alone — find_solver("precice") also judges the rest of the stack
+    spec = _SOLVERS["precice"]
+    return ((None if _container_routed(spec) else _binary_path("precice", spec))
+            or _vm_binary_path("precice", spec))
 
 
 def precice_lib_dir() -> str | None:
@@ -2523,6 +2563,8 @@ def fsi_openfoam_bashrc() -> str | None:
     if env := _config.get("ANKUSDRIVE_FSI_OPENFOAM_BASHRC"):
         if r := _substrate_override(env, is_dir=False):
             return r
+        if not _host_discovery_applies():  # container: rejected is reported, not stepped over (#460)
+            return None
     if not _host_discovery_applies():      # container: no host globs, override only (#361)
         return openfoam_bashrc()
     ofa = openfoam_adapter_lib_dir()
@@ -2546,12 +2588,99 @@ def fsi_openfoam_bashrc() -> str | None:
     return openfoam_bashrc()
 
 
+# --- FSI overrides under the container substrate (#460) ---------------------------
+# The FSI stack is not a probed solver: under `container` it resolves ONLY from these
+# exported in-container paths, so a stale one (a host build's, an older image's) is
+# the whole failure. The #443 rule applies: such an override is reported — naming the
+# variable and the path the image publishes for it — never silently stepped over.
+# (variable, is_dir, the variable the image publishes the equivalent path under)
+_FSI_OVERRIDES = (
+    ("ANKUSDRIVE_CCX_PRECICE", False, "ANKUSDRIVE_CCX_PRECICE"),
+    ("ANKUSDRIVE_PRECICE_PATH", False, "ANKUSDRIVE_CCX_PRECICE"),
+    ("ANKUSDRIVE_PRECICE_LIB", True, "ANKUSDRIVE_PRECICE_LIB"),
+    ("ANKUSDRIVE_OPENFOAM_ADAPTER_LIB", True, "ANKUSDRIVE_OPENFOAM_ADAPTER_LIB"),
+    ("ANKUSDRIVE_FSI_OPENFOAM_BASHRC", False, "ANKUSDRIVE_FSI_OPENFOAM_BASHRC"),
+)
+
+
+def container_published(var: str):
+    """The value the running container's image publishes for ``var`` in its own
+    environment (``<engine> exec <name> printenv <var>``) — only an absolute path,
+    else None. A read-only, cached probe; the value is DATA, reported, never run."""
+    if container_state() != "running":
+        return None
+    r = _container_probe(container_engine(), container_name(), ("printenv", var))
+    if not r or r[0] != 0:
+        return None
+    value = (r[1] or "").strip()
+    return value if value.startswith("/") and "\n" not in value else None
+
+
+def fsi_override_problems() -> list:
+    """The FSI overrides the RUNNING solver container rejects, as
+    ``[{var, value, why, image_path}]`` — ``image_path`` is what the image publishes
+    for that variable (None when it publishes nothing). Empty off the container
+    substrate, with the container stopped/absent (nothing to ask; the override is
+    trusted), and when the image's manifest says it lacks the stack: that is a
+    different report (#422), not a bad override."""
+    try:
+        if substrate() != "container" or container_state() != "running":
+            return []
+    except ValueError:
+        return []
+    if container_excludes("precice"):
+        return []
+    rows = list(_FSI_OVERRIDES)
+    if not _config.get("ANKUSDRIVE_FSI_OPENFOAM_BASHRC"):
+        # what the FSI fluid sources instead (fsi_openfoam_bashrc)
+        rows.append(("ANKUSDRIVE_OPENFOAM_BASHRC", False, "ANKUSDRIVE_OPENFOAM_BASHRC"))
+    cname, out = container_name(), []
+    for var, is_dir, published in rows:
+        value = _config.get(var)
+        if not value or _substrate_override(value, is_dir=is_dir):
+            continue
+        if not wsl_posix(value).startswith("/"):
+            why = f"is not an absolute path, so it names nothing inside container {cname!r}"
+        else:
+            why = (f"does not exist inside container {cname!r} — that looks like a path "
+                   f"from a HOST install or an older image")
+        out.append({"var": var, "value": value, "why": why,
+                    "image_path": container_published(published)})
+    return out
+
+
+def _fsi_override_hint(problems=None):
+    """One hint naming every rejected FSI override (#460) and, for each, the path the
+    image publishes — or None when there is nothing to report. Unlike a probed solver,
+    clearing the variable does NOT fall back to the image's copy (the FSI stack is
+    never probed), so the fix is to set it to that path."""
+    problems = fsi_override_problems() if problems is None else problems
+    if not problems:
+        return None
+    eng, cname = container_cli(), container_name()
+    parts = []
+    for p in problems:
+        own = (f"the image's own is {p['image_path']} — set {p['var']}={p['image_path']}"
+               if p["image_path"] and p["image_path"] != p["value"] else
+               f"the image publishes no {p['var']}, so it may not carry the FSI stack "
+               f"(the full {_SOLVER_IMAGE} does)")
+        parts.append(f"{p['var']}={p['value']} {p['why']}; {own}")
+    return ("; ".join(parts) + ". An override that is set is used, never stepped over "
+            f"(`{eng} exec {cname} env | grep ANKUSDRIVE_` lists what the image "
+            "publishes). See docs/CONTAINER_SUBSTRATE.md")
+
+
 def fsi_stack_status() -> dict:
     """Resolve the full FSI stack side-effect-free for the capabilities/degradation
     report: ``{ok, ccx_precice, precice_lib, openfoam_adapter_lib, openfoam_bashrc,
-    missing}``. ``ok`` is true only when all four resolve. ``openfoam_bashrc`` is
-    the *FSI-matched* one (``fsi_openfoam_bashrc``), i.e. the version the adapter
-    was built against — what ``run_coupled_fsi`` actually sources."""
+    missing, overrides, hint}``. ``ok`` is true only when all four resolve.
+    ``openfoam_bashrc`` is the *FSI-matched* one (``fsi_openfoam_bashrc``), i.e. the
+    version the adapter was built against — what ``run_coupled_fsi`` actually sources.
+
+    Under the container substrate (#460) ``overrides`` lists each exported path the
+    running container rejects (:func:`fsi_override_problems`), and ``hint`` says what
+    to do — naming the variable and the image's own path, or, when the image's
+    manifest says it was built without the stack, that. Otherwise ``[]`` / None."""
     ccx = ccx_precice_bin()
     lib = precice_lib_dir()
     ofa = openfoam_adapter_lib_dir()
@@ -2559,6 +2688,13 @@ def fsi_stack_status() -> dict:
     missing = [n for n, v in (("ccx_preCICE", ccx), ("libprecice", lib),
                               ("openfoam-adapter", ofa),
                               ("openfoam-bashrc", of)) if not v]
+    overrides = fsi_override_problems()
+    hint = _fsi_override_hint(overrides)
+    if missing and not hint and _container_routed(_SOLVERS["precice"]) \
+            and (reason := container_excludes("precice")):
+        hint = (f"this image does not include fsi ({reason}). Rebuild with it: "
+                f"`bash tools/build_solver_image.sh --solvers \"<yours> fsi\"`, or "
+                f"use the full {_SOLVER_IMAGE}. See docs/CONTAINER_SUBSTRATE.md")
     return {
         "ok": not missing,
         "ccx_precice": ccx,
@@ -2566,6 +2702,8 @@ def fsi_stack_status() -> dict:
         "openfoam_adapter_lib": ofa,
         "openfoam_bashrc": of,
         "missing": missing,
+        "overrides": overrides,
+        "hint": hint,
     }
 
 

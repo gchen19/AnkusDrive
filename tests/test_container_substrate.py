@@ -53,6 +53,12 @@ _C_PRECICE_LIB = "/opt/fsi/precice/lib"
 _C_ADAPTER_LIB = "/opt/fsi/openfoam-adapter/lib"
 _C_OIMS = "/opt/of7/OpenFOAM/site/7/platforms/linux64GccDPInt32Opt/bin/openInjMoldSim"
 _C_OIMS_BASHRC = "/opt/of7/OpenFOAM/OpenFOAM-7/etc/bashrc"
+_FSI_HOLDS = (_C_CCX, _C_PRECICE_LIB, _C_ADAPTER_LIB, _C_BASHRC)
+# what the image publishes in its own environment (`docker exec <c> env`)
+_IMAGE_ENV = {"ANKUSDRIVE_CCX_PRECICE": _C_CCX, "ANKUSDRIVE_PRECICE_LIB": _C_PRECICE_LIB,
+              "ANKUSDRIVE_OPENFOAM_ADAPTER_LIB": _C_ADAPTER_LIB,
+              "ANKUSDRIVE_FSI_OPENFOAM_BASHRC": _C_BASHRC,
+              "ANKUSDRIVE_OPENFOAM_BASHRC": _C_BASHRC}
 
 _ISOLATE = ("ANKUSDRIVE_SUBSTRATE", "ANKUSDRIVE_CONTAINER", "ANKUSDRIVE_CONTAINER_ENGINE",
             "ANKUSDRIVE_OPENFOAM_PATH", "ANKUSDRIVE_OPENFOAM_BASHRC",
@@ -67,13 +73,29 @@ _ISOLATE = ("ANKUSDRIVE_SUBSTRATE", "ANKUSDRIVE_CONTAINER", "ANKUSDRIVE_CONTAINE
             "ANKUSDRIVE_ALLOW_UNVERIFIED_IMAGE")
 
 
+# The four reads that reach a REAL container engine. A developer running the
+# container substrate has a live `ankusdrive-solvers` container, and a test that
+# forgets to fake one reads ITS state — passing in CI (no container on the runner)
+# and failing on exactly the machines that use this feature (#461). So every _patch
+# replaces them with "no engine answered" unless the test is about the reads
+# themselves (engine_exec=True — those fake subprocess.run beneath them instead).
+_ENGINE_EXEC = ("_container_inspect_exec", "_container_probe_exec",
+                "_container_inspect_config_exec", "_container_inspect_privileges_exec")
+
+
+def _no_engine(*_a, **_kw):
+    return None
+
+
 class _patch:
     """Patch module attributes and isolate the ANKUSDRIVE_* env + config.toml layer
-    (ANKUSDRIVE_CONFIG -> a nonexistent file, which config.load() treats as {})."""
+    (ANKUSDRIVE_CONFIG -> a nonexistent file, which config.load() treats as {}) and
+    the real container engine (see _ENGINE_EXEC)."""
 
-    def __init__(self):
+    def __init__(self, engine_exec=False):
         self._saved = {}
         self._env = {}
+        self._engine_exec = engine_exec
 
     def set(self, obj, attr, value):
         key = (id(obj), attr)
@@ -91,6 +113,9 @@ class _patch:
             os.path.dirname(__file__), "no-such-config.toml")
         solvers._ctr_info_cache.clear()
         solvers._ctr_probe_cache.clear()
+        if not self._engine_exec:
+            for seam in _ENGINE_EXEC:
+                self.set(solvers, seam, _no_engine)
         return self
 
     def __exit__(self, *exc):
@@ -229,7 +254,7 @@ def test_windows_container_probes_and_inspects_go_through_wsl():
     def fake_run(argv, **kw):
         seen.append(list(argv))
         return _Proc()
-    with _patch() as p:
+    with _patch(engine_exec=True) as p:
         _windows_container_host(p, distro="Ubuntu-24.04")
         p.set(subprocess, "run", fake_run)
         assert solvers.container_state() == "running"
@@ -329,10 +354,23 @@ def test_container_run_command_mounts_the_scratch_at_the_same_path():
 # --- opaque trust + host isolation ----------------------------------------------
 
 def test_substrate_override_trusts_in_container_paths_only_when_reachable():
+    """A running container is asked; a stopped/absent one cannot be, so an absolute
+    path is trusted; a relative path or a missing engine never is. A file that exists
+    on the HOST proves nothing under `container` (#460) — it is not what `<engine>
+    exec` sees. Every branch runs against a FAKE container (#461): a live one on the
+    developer's machine must not decide the answers."""
+    host_ccx = "/srv/calculix-adapter/bin/ccx_preCICE"       # a HOST build's path
     with _patch() as p:
-        _container_host(p)
+        _container_host(p, host_files={host_ccx})
+        _fake_container(p, holds=(_C_CCX, _C_PRECICE_LIB))
         assert solvers._substrate_override(_C_CCX, is_dir=False) == _C_CCX
         assert solvers._substrate_override(_C_PRECICE_LIB, is_dir=True) == _C_PRECICE_LIB
+        assert solvers._substrate_override("opt/fsi/bin/ccx_preCICE", is_dir=False) is None
+        assert solvers._substrate_override(host_ccx, is_dir=False) is None, \
+            "a host file was trusted as in-container"
+        _fake_container(p, state=None)                     # no container: nothing to ask
+        solvers._ctr_info_cache.clear()
+        assert solvers._substrate_override(host_ccx, is_dir=False) == host_ccx
         assert solvers._substrate_override("opt/fsi/bin/ccx_preCICE", is_dir=False) is None
         _container_host(p, engine_on_path=())              # engine missing
         assert solvers._substrate_override(_C_CCX, is_dir=False) is None
@@ -341,6 +379,7 @@ def test_substrate_override_trusts_in_container_paths_only_when_reachable():
 def test_openfoam_resolves_via_container_from_the_override():
     with _patch() as p:
         _container_host(p)
+        _fake_container(p, holds=(_C_BIN,))                # never a live one (#461)
         p.env(ANKUSDRIVE_OPENFOAM_PATH=_C_BIN)
         info = solvers.find_solver("openfoam")
         assert info["available"] is True and info["status"] == "ok", info
@@ -389,6 +428,9 @@ def test_a_host_install_is_ignored_under_container():
 def test_fsi_and_molding_resolvers_take_in_container_overrides():
     with _patch() as p:
         _container_host(p)
+        # the image holds every path exported below — a FAKE one (#461): a live
+        # container on the developer's machine must not decide this test
+        _fake_container(p, holds=_FSI_HOLDS + (_C_OIMS, _C_OIMS_BASHRC))
         p.env(ANKUSDRIVE_CCX_PRECICE=_C_CCX, ANKUSDRIVE_PRECICE_LIB=_C_PRECICE_LIB,
               ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=_C_ADAPTER_LIB,
               ANKUSDRIVE_FSI_OPENFOAM_BASHRC=_C_BASHRC,
@@ -437,7 +479,7 @@ def test_inspect_read_is_bounded_and_never_takes_stdin():
         class R:
             returncode, stdout = 0, '{"Running": true}'
         return R()
-    with _patch() as p:
+    with _patch(engine_exec=True) as p:
         p.set(solvers, "platform", _fake_platform("Linux"))   # Windows relays via WSL
         p.set(subprocess, "run", fake_run)
         out = solvers._container_inspect_exec("podman", "foam", 3.0)
@@ -519,6 +561,7 @@ def test_fsi_sweeps_participants_through_the_container():
 
     with _patch() as p:
         _container_host(p)
+        _fake_container(p, holds=_FSI_HOLDS)
         p.env(ANKUSDRIVE_CCX_PRECICE=_C_CCX, ANKUSDRIVE_PRECICE_LIB=_C_PRECICE_LIB,
               ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=_C_ADAPTER_LIB,
               ANKUSDRIVE_FSI_OPENFOAM_BASHRC=_C_BASHRC)
@@ -561,16 +604,20 @@ def _manifest(solvers=(), excluded=()):
     })
 
 
-def _fake_container(p, *, holds=(), pythons=(), state=_RUNNING, manifest=None):
+def _fake_container(p, *, holds=(), pythons=(), state=_RUNNING, manifest=None, env=None):
     """A container whose filesystem holds the executables ``holds``, whose interpreters
-    ``pythons`` import their solver's modules, and which publishes ``manifest`` (None =
-    an older image with no manifest). Records every probe."""
+    ``pythons`` import their solver's modules, which publishes ``manifest`` (None =
+    an older image with no manifest) and the environment ``env``. Records every
+    probe."""
     probes = []
+    env = env or {}
 
     def probe(engine, name, argv):
         probes.append(argv)
         if argv[0] == "cat":                         # the image's own manifest
             return (0, manifest) if manifest else (1, "")
+        if argv[0] == "printenv":                    # what the image publishes
+            return (0, env[argv[1]] + "\n") if argv[1] in env else (1, "")
         if argv[0] == "sh":                          # _container_binary's command -v scan
             script = argv[2]
             for path in holds:
@@ -747,7 +794,7 @@ def test_container_probe_is_bounded_and_never_takes_stdin():
         class R:
             returncode, stdout = 0, "/opt/yade/bin/yade\n"
         return R()
-    with _patch() as p:
+    with _patch(engine_exec=True) as p:
         p.set(solvers, "platform", _fake_platform("Linux"))   # Windows relays via WSL
         p.set(subprocess, "run", fake_run)
         out = solvers._container_probe_exec("podman", "foam", ("sh", "-c", "x"), 7.0)
@@ -937,6 +984,167 @@ def test_a_good_override_still_wins_and_an_unreachable_container_still_trusts():
         _fake_container(p, state=json.dumps({"Status": "exited", "Running": False}))
         p.env(ANKUSDRIVE_ELMER_PATH="/bogus/elmer")
         assert solvers._vm_binary_path("elmer", solvers._spec("elmer")) == "/bogus/elmer"
+
+
+# --- the FSI stack's overrides get the same treatment (#460) ----------------------
+
+_FSI_ENV = dict(ANKUSDRIVE_CCX_PRECICE=_C_CCX, ANKUSDRIVE_PRECICE_LIB=_C_PRECICE_LIB,
+                ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=_C_ADAPTER_LIB,
+                ANKUSDRIVE_FSI_OPENFOAM_BASHRC=_C_BASHRC)
+
+
+def _fsi_doctor(info):
+    """What `doctor` prints for the fsi family given find_solver("precice")."""
+    from ankusdrive import doctor
+    ok = info["available"]
+    caps = {"solvers": {"precice": info},
+            "families": {"fsi": {"solvers": ["precice"],
+                                 "available": ["precice"] if ok else [],
+                                 "unwired": [] if ok or info["status"] != "unwired"
+                                 else ["precice"],
+                                 "any_available": ok}}}
+    return "\n".join(doctor._fmt_solvers(caps))
+
+
+def test_a_stale_fsi_override_is_reported_naming_the_image_path():
+    """#460: a host build's ANKUSDRIVE_PRECICE_LIB (typical after moving from a native
+    or Multipass setup) used to leave fsi_stack_status saying only `libprecice`
+    missing, and doctor saying `fsi ready via precice` because ccx_preCICE alone
+    resolved. Now the stack status, the solver and doctor all name the variable, why,
+    and the path the image publishes for it."""
+    for var, stale, own, missing in (
+            ("ANKUSDRIVE_PRECICE_LIB", "/srv/precice-serial/lib", _C_PRECICE_LIB,
+             "libprecice"),
+            ("ANKUSDRIVE_OPENFOAM_ADAPTER_LIB", "/srv/OpenFOAM/u-v2512/lib",
+             _C_ADAPTER_LIB, "openfoam-adapter"),
+            ("ANKUSDRIVE_CCX_PRECICE", "/srv/calculix-adapter/bin/ccx_preCICE", _C_CCX,
+             "ccx_preCICE"),
+            ("ANKUSDRIVE_FSI_OPENFOAM_BASHRC", "/usr/lib/openfoam/openfoam2606/etc/bashrc",
+             _C_BASHRC, "openfoam-bashrc")):
+        with _patch() as p:
+            _container_host(p)
+            _fake_container(p, holds=_FSI_HOLDS, env=_IMAGE_ENV)
+            p.env(**{**_FSI_ENV, var: stale})
+            st = solvers.fsi_stack_status()
+            assert st["ok"] is False and st["missing"] == [missing], (var, st)
+            assert [(o["var"], o["value"], o["image_path"]) for o in st["overrides"]] \
+                == [(var, stale, own)], (var, st["overrides"])
+            assert f"{var}={stale} does not exist inside container 'ankusdrive-solvers'" \
+                in st["hint"], st["hint"]
+            assert f"set {var}={own}" in st["hint"], st["hint"]
+            assert "never stepped over" in st["hint"], st["hint"]
+            info = solvers.find_solver("precice")
+            assert info["available"] is False and info["status"] == "unwired", (var, info)
+            assert info["wire_hint"] == st["hint"], (info["wire_hint"], st["hint"])
+            assert "partly built" not in info["wire_hint"], "a host-build hint under container"
+            out = _fsi_doctor(info)
+            assert "unwired (precice)" in out and f"{var}={stale}" in out, out
+            assert "ready" not in out, out
+            r = solvers.require_solver("precice")
+            assert r["ok"] is False and f"set {var}={own}" in r["install"], r
+
+
+def test_a_rejected_fsi_override_is_never_stepped_over():
+    """The override that wins is the one meant. A stale ANKUSDRIVE_CCX_PRECICE must not
+    quietly give way to a good ANKUSDRIVE_PRECICE_PATH, nor a stale FSI bashrc to the
+    general ANKUSDRIVE_OPENFOAM_BASHRC — either would run something the user did not
+    choose, with nothing said."""
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, holds=_FSI_HOLDS, env=_IMAGE_ENV)
+        p.env(**{**_FSI_ENV, "ANKUSDRIVE_CCX_PRECICE": "/srv/ccx_preCICE",
+                 "ANKUSDRIVE_PRECICE_PATH": _C_CCX,
+                 "ANKUSDRIVE_FSI_OPENFOAM_BASHRC": "/srv/of/etc/bashrc",
+                 "ANKUSDRIVE_OPENFOAM_BASHRC": _C_BASHRC})
+        assert solvers.ccx_precice_bin() is None
+        assert solvers.fsi_openfoam_bashrc() is None
+        st = solvers.fsi_stack_status()
+        assert {o["var"] for o in st["overrides"]} == {
+            "ANKUSDRIVE_CCX_PRECICE", "ANKUSDRIVE_FSI_OPENFOAM_BASHRC"}, st["overrides"]
+        assert solvers.find_solver("precice")["available"] is False
+    with _patch() as p:                          # the registry's own precedence, too
+        _container_host(p)
+        _fake_container(p, holds=_FSI_HOLDS, env=_IMAGE_ENV)
+        p.env(ANKUSDRIVE_PRECICE_PATH="/srv/ccx_preCICE", ANKUSDRIVE_CCX_PRECICE=_C_CCX)
+        assert solvers._vm_binary_path("precice", solvers._spec("precice")) is None
+        info = solvers.find_solver("precice")
+        assert "ANKUSDRIVE_PRECICE_PATH=/srv/ccx_preCICE does not exist" \
+            in info["wire_hint"], info
+        # the image publishes no PRECICE_PATH: its ccx_preCICE is what it has instead
+        assert f"set ANKUSDRIVE_PRECICE_PATH={_C_CCX}" in info["wire_hint"], info
+
+
+def test_fsi_distinguishes_a_bad_override_from_an_image_without_the_stack():
+    """Three different answers to "fsi is not ready", and each says which it is: the
+    override names nothing in this image; the image was built without FSI (its
+    manifest says so — no override would help); the image publishes nothing for the
+    variable (an older or custom image that may not carry it)."""
+    stale = "/srv/precice-serial/lib"
+    with _patch() as p:                          # built without fsi: that, not the path
+        _container_host(p)
+        _fake_container(p, holds=_FSI_HOLDS, env=_IMAGE_ENV,
+                        manifest=_manifest(solvers=("openfoam",), excluded=("fsi",)))
+        p.env(**{**_FSI_ENV, "ANKUSDRIVE_PRECICE_LIB": stale})
+        st = solvers.fsi_stack_status()
+        assert st["overrides"] == [], st
+        assert st["hint"] and "does not include fsi" in st["hint"], st["hint"]
+        info = solvers.find_solver("precice")
+        assert "does not include fsi" in info["wire_hint"], info
+        assert stale not in info["wire_hint"], info
+    with _patch() as p:                          # no manifest, publishes nothing
+        _container_host(p)
+        _fake_container(p, holds=(_C_CCX, _C_ADAPTER_LIB, _C_BASHRC))
+        p.env(**{**_FSI_ENV, "ANKUSDRIVE_PRECICE_LIB": stale})
+        st = solvers.fsi_stack_status()
+        assert st["overrides"][0]["image_path"] is None, st
+        assert "the image publishes no ANKUSDRIVE_PRECICE_LIB" in st["hint"], st["hint"]
+    with _patch() as p:                          # a relative path names nothing inside
+        _container_host(p)
+        _fake_container(p, holds=_FSI_HOLDS, env=_IMAGE_ENV)
+        p.env(**{**_FSI_ENV, "ANKUSDRIVE_OPENFOAM_ADAPTER_LIB": "lib"})
+        st = solvers.fsi_stack_status()
+        assert "ANKUSDRIVE_OPENFOAM_ADAPTER_LIB=lib is not an absolute path" \
+            in st["hint"], st["hint"]
+    with _patch() as p:                          # running, nothing exported at all
+        _container_host(p)
+        _fake_container(p, holds=_FSI_HOLDS, env=_IMAGE_ENV)
+        info = solvers.find_solver("precice")
+        assert info["status"] == "unwired", info
+        assert "not wired into this shell" in info["wire_hint"], info
+        assert "docker exec ankusdrive-solvers env" in info["wire_hint"], info
+        assert solvers.fsi_stack_status()["hint"] is None
+
+
+def test_a_good_fsi_stack_and_an_unreachable_container_are_undisturbed():
+    """The report must not touch the cases that work: every override present in the
+    image is ready with nothing to say; a stopped container cannot be asked, so the
+    overrides are trusted as before; and off the container substrate the engine is
+    never asked at all."""
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, holds=_FSI_HOLDS, env=_IMAGE_ENV)
+        p.env(**_FSI_ENV)
+        st = solvers.fsi_stack_status()
+        assert st["ok"] and st["overrides"] == [] and st["hint"] is None, st
+        info = solvers.find_solver("precice")
+        assert info["available"] and info["via"] == "container", info
+    with _patch() as p:
+        _container_host(p)
+        _fake_container(p, state=json.dumps({"Status": "exited", "Running": False}))
+        p.env(**{**_FSI_ENV, "ANKUSDRIVE_PRECICE_LIB": "/srv/precice-serial/lib"})
+        assert solvers.fsi_override_problems() == []
+        assert solvers.fsi_stack_status()["ok"] is True
+    with _patch() as p:                          # native Linux: never asks an engine
+        ccx = os.path.join(os.path.expanduser("~"), "calculix-adapter", "bin", "ccx_preCICE")
+        _container_host(p, host_files={ccx})
+        os.environ.pop("ANKUSDRIVE_SUBSTRATE")
+        probes = _fake_container(p, holds=_FSI_HOLDS, env=_IMAGE_ENV)
+        p.env(ANKUSDRIVE_PRECICE_LIB="/srv/nowhere/lib")
+        assert solvers.fsi_override_problems() == []
+        st = solvers.fsi_stack_status()
+        assert st["overrides"] == [] and st["hint"] is None, st
+        assert solvers.find_solver("precice")["available"] is True
+        assert probes == [], probes
 
 
 # --- is this image ours? (#423) ---------------------------------------------------
