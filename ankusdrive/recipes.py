@@ -5,7 +5,7 @@ THE KEYSTONE (RFC docs/DESIGN_HIERARCHY.md §1, §2.1). AnkusDrive deliberately 
 NOT store an editable in-file feature tree, and it rejected live cross-file
 FreeCAD expression links as fragile-headless (MULTI_AGENT.md §11.1, §13). So the
 parametric model has to live somewhere else, and it is already latent in the
-codebase: ``example/gearbox_manifest.py``'s ``build_manifest(params)`` is a pure
+codebase: ``examples/design/gearbox_manifest.py``'s ``build_manifest(params)`` is a pure
 function from parameters to geometry, deterministic by construction (#123/#127
 guarantee same-inputs -> same-bytes).
 

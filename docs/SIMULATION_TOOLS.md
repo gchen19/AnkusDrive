@@ -426,7 +426,7 @@ Each family lists: the agent question it answers · backend · new-dependency we
   FreeCAD solid — a face the straight pull frees in neither direction is a
   re-entrant **undercut** — scored through `analysis/dfx.dfm_check`.
 - Acceptance evidence: **Example D** in
-  [`run_simulation_examples.py`](../examples/run_simulation_examples.py) (+ the
+  [`run_simulation_examples.py`](../examples/simulation/run_simulation_examples.py) (+ the
   `optics.png` figure); fast-lane gates in
   [`tests/test_optics.py`](../tests/test_optics.py).
 

@@ -1,10 +1,10 @@
 """Render the optics engines' results to PNGs for visual inspection.
 
-Headless (Agg) — writes to examples/optics_gallery/*.png. Covers both lanes:
+Headless (Agg) — writes to examples/optics/optics_gallery/*.png. Covers both lanes:
   sequential (optiland, in-process): singlet layout, spot diagram, optimize before/after
   non-sequential (KrakenOS, GPL subprocess via the production runner): prism TIR ray paths
 
-Run:  .venv/bin/python examples/optics_gallery.py
+Run:  .venv/bin/python examples/optics/optics_gallery.py
 """
 import json
 import os
@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "optics_gallery")
 os.makedirs(OUT, exist_ok=True)
@@ -124,7 +124,7 @@ def fig_prism_tir():
     stl = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
     stl.close()
     Ltri = _prism_stl(stl.name)
-    runner = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    runner = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                           "ankusdrive", "optics_gpl_runner.py")
     rays = [{"origin": [0.0, 6.0 + dy, -4.0], "dir": [0, 0, 1.0]} for dy in (-3, 0, 3, 6)]
     problem = {"problem": "solid_trace", "stl_path": stl.name, "glass": "BK7",

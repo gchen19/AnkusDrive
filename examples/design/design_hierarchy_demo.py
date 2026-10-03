@@ -7,7 +7,7 @@ layer (docs/DESIGN_HIERARCHY.md) makes possible, driven against the real worker:
     B) a drop-in SUBSTITUTION gate                -> Form/Fit/Function as code
     C) CHANGE CONTROL: where-used blast radius + an ECO + a reproducible baseline
 
-Run from the repo root:   python example/design_hierarchy_demo.py
+Run from the repo root:   python examples/design/design_hierarchy_demo.py
 (needs FreeCAD for toys A/B, like the other worker-driven examples; toy C is
 pure-Python over a lockfile + item registry. Artifacts go to a tempdir.)
 """
@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))  # prefer the repo source over any installed copy
 
 from ankusdrive import Worker  # noqa: E402
@@ -45,7 +45,7 @@ def toy_a_gear_family(outdir):
         print(f"    {'-' * 49}")
         for r in res["rows"]:
             vol = w.call("mass_properties", handle=r["handle"], density=7.9e-6)["volume_mm3"]
-            w.call("export_shape", handle=r["handle"], path=str(outdir / f"gear_{r['key']}.step"))
+            w.call("export_shape", object=r["name"], path=str(outdir / f"gear_{r['key']}.step"))
             print(f"    {r['key']:<14}{r['part_number']:<12}{res['recipe']:<11}{vol:>12.1f}")
     print(f"\n  -> {res['count']} STEP files written to {outdir}")
     print("  PAYOFF: change the family = edit the table; the recipe is authored ONCE.")

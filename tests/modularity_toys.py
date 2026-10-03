@@ -38,7 +38,7 @@ from ankusdrive import lifecycle as _lifecycle
 # =============================================================================
 # Toy 1 — family regen (the headline). One design table -> a whole gear family,
 # each an item + a sequential part number, vs. the hand-rolled Python-loop
-# baseline (example/gearbox_manifest.py shape). Metric: correctness (identical
+# baseline (examples/design/gearbox_manifest.py shape). Metric: correctness (identical
 # geometry) + edits-to-change-the-family (the modularity payoff).
 # =============================================================================
 
@@ -77,7 +77,7 @@ def modular_family(rows=None):
 
 
 def baseline_family(rows=None):
-    """The hand-rolled baseline (example/gearbox_manifest.py shape): each variant is
+    """The hand-rolled baseline (examples/design/gearbox_manifest.py shape): each variant is
     an INDEPENDENT inline block that re-spells the whole build rule AND its own
     bookkeeping (part number, item, file path) — there is no shared recipe and no
     family/item abstraction, so every variant is a standalone static artifact."""

@@ -2,7 +2,7 @@
 
 A solid glass sphere is the simplest "lens" to model and the worst to use. This script
 traces a collimated bundle through a meshed BK7 ball lens (via the production GPL
-subprocess runner) and renders two figures into examples/optics_gallery/:
+subprocess runner) and renders two figures into examples/optics/optics_gallery/:
 
   07_ball_lens_caustic_3d.png   — the rays do NOT meet at a point; they fold into a
                                    caustic. That smear IS spherical aberration.
@@ -24,7 +24,7 @@ Why a ball lens is hard (see README in this dir for the full write-up):
     Either way, coarse facets scatter rays (facet noise) that can swamp the real optics —
     so meshed spheres are for illustration, analytic surfaces for precision.
 
-Run:  .venv/bin/python examples/optics_ball_lens.py
+Run:  .venv/bin/python examples/optics/optics_ball_lens.py
 """
 import json
 import math
@@ -39,9 +39,9 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "optics_gallery")
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RUNNER = os.path.join(ROOT, "ankusdrive", "optics_gpl_runner.py")
 os.makedirs(OUT, exist_ok=True)
 

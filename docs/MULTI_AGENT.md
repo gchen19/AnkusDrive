@@ -551,7 +551,7 @@ interface positioned right but rotated slips through — `frame_orientation` gat
 the angle.
 
 **The gearbox becomes a manifest** (the canonical shared-constraint partition —
-12 gears, one shared centre distance per mesh): `example/gearbox_manifest.py`
+12 gears, one shared centre distance per mesh): `examples/design/gearbox_manifest.py`
 builds it as 12 components + 6 `gear_mesh` checks and merges + gates it in one
 call. This surfaced a real gate interaction worth recording: **a typed contact
 gate must be authoritative for its pair, because the blunt interference gate
@@ -873,7 +873,7 @@ Two pieces, both shipped:
   two-sided) as well as against real geometry.
 
 **Runnable proof (falsifiable "done").**
-[`example/host_agnostic_builder_demo.py`](../example/host_agnostic_builder_demo.py)
+[`examples/design/host_agnostic_builder_demo.py`](../examples/design/host_agnostic_builder_demo.py)
 is a plain-code orchestrator — no LLM — that decomposes a 3-component stacked
 bracket (base plate, spacer, cap) into three builder briefs, builds each in its own
 worker (the bundled-worker analog of a claimed workspace), self-gates each with
@@ -967,7 +967,7 @@ the swap gate in `tests/test_substitutability.py` and the builder half in
 
 - **Phase 0 — file handoff. ✅ shipped.** Two builders each `new_document` → build →
   `save_document`; a coordinator links the files and runs the gates.
-  `example/phase0_walkthrough.py`.
+  `examples/design/phase0_walkthrough.py`.
 - **Phase 1 — connective tissue. ✅ shipped 2026-05-30.** Manifest-driven
   `merge_assembly`; `publish_interface` + mate-by-frame (`add_part(mate=…)`);
   `interface_align_check`; recursive BOM + mass rollup; envelope gate.

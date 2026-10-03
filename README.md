@@ -453,8 +453,8 @@ with `ANKUSDRIVE_OPTICS_GPL_PYTHON=/path/to/python`. Because of that isolation t
 is **opt-in**: the no-argument `install-solvers.sh` run installs only the permissive
 extras and prints how to add `optics_gpl`. Rendered examples for both lanes (lens layout,
 spot diagram, optimization, prism TIR, and a ball-lens spherical-aberration study) live in
-[`examples/optics_gallery/`](https://github.com/gchen19/AnkusDrive/tree/main/examples/optics_gallery) — regenerate with
-`.venv/bin/python examples/optics_gallery.py` (and `…_3d.py`, `optics_ball_lens.py`), or
+[`examples/optics/optics_gallery/`](https://github.com/gchen19/AnkusDrive/tree/main/examples/optics/optics_gallery) — regenerate with
+`.venv/bin/python examples/optics/optics_gallery.py` (and `…_3d.py`, `optics_ball_lens.py`), or
 bootstrap everything in one shot (installs both lanes, then renders every figure):
 
 ```bash

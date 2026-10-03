@@ -71,7 +71,7 @@ trust the agent numbers it produces.**
 ### Layer M1 — mechanism (no LLM, runs in CI)
 
 Does the substrate — manifest → merge → gates — work, deterministically, when the
-builders are *scripted*? `example/phase0_walkthrough.py` is the seed of this layer
+builders are *scripted*? `examples/design/phase0_walkthrough.py` is the seed of this layer
 already. M1 answers "is the machinery sound and do the gates discriminate?" before
 a single agent is trusted to it. No API key; belongs in `run_all.sh`.
 
@@ -149,7 +149,7 @@ recursive BOM/interference, `envelope_check`, `interface_align_check`,
 Toy #6 is the odd one: it's about file *versions over time*, not one merged
 assembly's gates, so it has its own driver (`toy6_*`) and `test_change_propagation`
 rather than the Variant/`run_gates` shape. Its ancestor is
-`example/phase0_walkthrough.py` — a peg-*on*-plate with an embedded-peg clash as a
+`examples/design/phase0_walkthrough.py` — a peg-*on*-plate with an embedded-peg clash as a
 first negative control; toy #1 proper tightens it to a clearance fit with a
 *shared diameter* contract.
 
