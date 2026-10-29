@@ -35,12 +35,17 @@ def _tree(unreleased="The release that tests the release script.\n\n### Added\n\
     for rel in FILES:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO / rel, root / rel)
+    # Between releases main's CHANGELOG has its own Unreleased section (or none, right
+    # after one). Drop it so every test starts from the section it states, whichever
+    # state main is in.
+    cl = root / "CHANGELOG.md"
+    text = re.sub(r"^## \[Unreleased\]\n.*?(?=^## \[)", "",
+                  cl.read_text(encoding="utf-8"), count=1, flags=re.M | re.S)
     if unreleased is not None:
-        cl = root / "CHANGELOG.md"
-        text = cl.read_text(encoding="utf-8")
         first = re.search(r"^## \[\d", text, re.M).start()
-        cl.write_text(text[:first] + "## [Unreleased]\n\n" + unreleased + "\n" + text[first:],
-                      encoding="utf-8")
+        text = text[:first] + "## [Unreleased]\n\n" + unreleased + "\n" + text[first:]
+    cl.write_text(text, encoding="utf-8")
+    assert text.count("## [Unreleased]") == (unreleased is not None), "fixture changelog"
     return root
 
 
