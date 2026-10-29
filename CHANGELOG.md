@@ -53,9 +53,16 @@ worker so concurrent workspaces no longer share one.
 - **`fem_run`'s default workdir is `<TMPDIR>/ankusdrive_fem_<pid>`**, keyed by the
   worker's process id, instead of a single shared `<TMPDIR>/ankusdrive_fem`, so
   concurrent workspaces cannot write decks and results into the same directory. A
-  `workdir` you pass is used as before. These directories are not yet cleaned up
-  when a worker exits ([#483](https://github.com/gchen19/AnkusDrive/pull/483),
+  `workdir` you pass is used as before. A worker removes its own default workdir
+  when it exits, and its first default solve sweeps those left by killed workers
+  (dead pid and untouched for an hour); `ANKUSDRIVE_KEEP_SCRATCH=1` keeps them
+  ([#483](https://github.com/gchen19/AnkusDrive/pull/483),
   [#487](https://github.com/gchen19/AnkusDrive/issues/487)).
+- **`list_workspaces` and `close_workspace` report the pinned workspace.** `current`
+  is the workspace the call ran in (its `workspace` pin, else the server-wide
+  selection), and a new `selected` field gives the server-wide selection. Closing a
+  pinned workspace leaves the server-wide selection alone
+  ([#487](https://github.com/gchen19/AnkusDrive/issues/487)).
 
 ## [0.5.6] — 2026-09-23
 
