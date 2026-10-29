@@ -21,6 +21,42 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
+## [Unreleased]
+
+Concurrent agents on one server stop stepping on each other. Several agents sharing
+an MCP server (Claude Code subagents share their parent session's) could only
+separate their work with `use_workspace`, whose selection is server-wide, so one
+agent's switch quietly retargeted every other agent's calls. Each call can now name
+its own workspace. Two FEM changes ride along: a default mesh-size floor that stops
+sliver edges in imported CAD from exploding a mesh, and a ccx working directory per
+worker so concurrent workspaces no longer share one.
+
+### Added
+
+- **Every tool takes an optional `workspace` argument.** It pins that one call to the
+  named workspace (created on first use) without changing the server's current
+  selection, and the session journal records the workspace the call actually ran in.
+  On a shared server each concurrent agent should pass `workspace=<name>` on every
+  call; `use_workspace` remains for a single agent and is server-wide. See
+  `docs/MULTI_AGENT.md` §7 ([#483](https://github.com/gchen19/AnkusDrive/pull/483)).
+- `fem_mesh` takes `min_length` (mm), the smallest element size Gmsh may use, and
+  returns the value it applied ([#483](https://github.com/gchen19/AnkusDrive/pull/483)).
+
+### Changed
+
+- **`fem_mesh` now floors the element size at `char_length/10` by default.** A call
+  that passes `char_length` gets `CharacteristicLengthMin = char_length/10` where it
+  previously got FreeCAD's floor of 0, so a mesh of the same body can come out with
+  fewer, larger elements around small features. Pass `min_length=0` for the old
+  behavior. A `min_length` larger than `char_length` is rejected
+  ([#483](https://github.com/gchen19/AnkusDrive/pull/483)).
+- **`fem_run`'s default workdir is `<TMPDIR>/ankusdrive_fem_<pid>`**, keyed by the
+  worker's process id, instead of a single shared `<TMPDIR>/ankusdrive_fem`, so
+  concurrent workspaces cannot write decks and results into the same directory. A
+  `workdir` you pass is used as before. These directories are not yet cleaned up
+  when a worker exits ([#483](https://github.com/gchen19/AnkusDrive/pull/483),
+  [#487](https://github.com/gchen19/AnkusDrive/issues/487)).
+
 ## [0.5.6] — 2026-09-23
 
 The release that makes a result auditable and a Mac a real solver host. Every tool

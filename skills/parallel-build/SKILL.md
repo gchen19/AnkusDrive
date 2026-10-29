@@ -73,10 +73,12 @@ the whole 240+ tool surface — sketches, PartDesign, fillets, gears, FEM — no
 - **Own MCP server / worker** — the classic model: one agent = one `ankusdrive mcp`
   process = one worker = one file. Real OS-level parallelism, zero shared state.
 - **Own named workspace on a shared server** (issue #167) — one MCP server, each
-  builder calls `use_workspace("<component-id>")` once up front to claim its own
-  freecadcmd process; handles and documents do NOT cross workspaces
+  builder passes `workspace="<component-id>"` on **every** tool call to pin it to
+  its own freecadcmd process. Don't call `use_workspace` here: it is server-wide,
+  so one builder's switch retargets the others (Claude Code subagents share their
+  parent's server). Handles and documents do NOT cross workspaces
   (`list_workspaces` to see the pool, `close_workspace` to free a slot; cap
-  `ANKUSDRIVE_MAX_WORKSPACES`, default 4). Use this when you cannot spawn N servers.
+  `ANKUSDRIVE_MAX_WORKSPACES`, default 4 including `default`). Use this when you cannot spawn N servers.
 
 Either way: **handles never cross a builder boundary.** A handle from one
 builder is meaningless to another; the only cross-builder currency is the saved
