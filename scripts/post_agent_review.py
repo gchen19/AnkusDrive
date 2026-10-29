@@ -58,8 +58,9 @@ def main():
     repo, pr, sha = os.environ["REPO"], os.environ["PR"], os.environ["SHA"]
     raw = os.environ.get("REVIEW_JSON", "").strip()
     if not raw:
-        print("::error::The review agent returned no verdict (crashed, hit its turn limit, "
-              "or produced invalid output). See the Review step's log.")
+        print("::error::The review agent returned no verdict (an API error, its turn limit, "
+              "or invalid output). The action hides the API's error: a result with "
+              "total_cost_usd 0 in the Review step's log means the first API call failed.")
         return 1
     review = json.loads(raw)
     body = render(review, sha)

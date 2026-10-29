@@ -26,7 +26,8 @@ name: Agent review
 # main, not the agent, writes the comment. Worst case, injected text changes what
 # the comment says.
 #
-# Needs the ANTHROPIC_API_KEY repository secret.
+# Needs the ANTHROPIC_API_KEY repository secret, with no trailing newline:
+#   tr -d '\r\n' < keyfile | gh secret set ANTHROPIC_API_KEY -R gchen19/AnkusDrive
 
 on:
   pull_request_target:
@@ -63,7 +64,6 @@ jobs:
           ASSOC: ${{ github.event.pull_request.author_association }}
           DRAFT: ${{ github.event.pull_request.draft }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, '\n') }}
-          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
         run: |
           set -euo pipefail
           if [ "$AUTHOR" = "dependabot[bot]" ]; then
@@ -91,11 +91,34 @@ jobs:
               exit 1
             fi
           fi
-          if [ "$HAS_KEY" != "true" ]; then
-            echo "::error::ANTHROPIC_API_KEY repository secret is not set."
-            exit 1
-          fi
+          echo "trusted=$trusted" >> "$GITHUB_OUTPUT"
           echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check the API key before the review
+        # The action reports a rejected key only as "no structured_output", with the
+        # API's error hidden. One free models-endpoint call names the actual cause.
+        if: steps.gate.outputs.run == 'true'
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -uo pipefail
+          if [ -z "$KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY repository secret is not set."; exit 1
+          fi
+          case "$KEY" in
+            *[[:space:]]*)
+              echo "::error::ANTHROPIC_API_KEY contains whitespace (a trailing newline from 'gh secret set < file'?). Re-set it with: tr -d '\r\n' < keyfile | gh secret set ANTHROPIC_API_KEY"
+              exit 1 ;;
+          esac
+          # Model id kept in step with --model in the Review step.
+          code=$(curl -s -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/models/claude-opus-5-5 \
+                   -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01")
+          case "$code" in
+            200) ;;
+            401) echo "::error::Anthropic rejected ANTHROPIC_API_KEY (401 invalid x-api-key): revoked or mistyped. Set a valid key."; exit 1 ;;
+            403|404) echo "::error::The key cannot use claude-opus-5-5 (HTTP $code). Change --model below or the key's workspace access."; exit 1 ;;
+            *) echo "::error::Anthropic API check returned HTTP $code."; exit 1 ;;
+          esac
 
       # Base branch only (the default for pull_request_target): the agent gets the
       # repo's real context (CONTRIBUTING, neighbouring code) to judge the diff by.
@@ -111,9 +134,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
-          # The gate above already decided who is reviewed; this only lets the
-          # action run for the outside PRs the gate let through.
-          allowed_non_write_users: "*"
+          # Set only for an outside PR the gate let through (maintainer label). For a
+          # maintainer's own PR the action's write-permission check stays on.
+          allowed_non_write_users: ${{ steps.gate.outputs.trusted == 'false' && '*' || '' }}
           display_report: false
           prompt: |
             You are reviewing pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
