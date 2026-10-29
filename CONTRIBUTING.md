@@ -102,6 +102,12 @@ Two separate mechanisms, and it is worth knowing which is which:
   them would re-introduce exactly the flakiness the split removed. They run on
   pushes to `main`, nightly, and on demand via `workflow_dispatch`.
 
+- **`Agent review` waits for a label.** Every PR gets an automated Claude review,
+  posted as one comment that is updated on each push. On a PR from outside the
+  maintainers it runs only after a maintainer adds `safe-to-review`, and a new push
+  removes the label again. Until then the check shows red with a message saying
+  so. The review can block a merge but never approves one; a maintainer merges.
+
 So: fewer checks on a fork PR is not a judgement about you. If a change needs the
 heavy lanes to be believed, say so in the PR and the maintainer will run them.
 
