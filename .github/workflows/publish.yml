@@ -17,11 +17,13 @@ name: Publish to PyPI
 #      manual gate before each upload.
 #
 # Releasing:
-#   - Tag `vX.Y.Z` matching the version in pyproject.toml and push the tag.
-#     Tag push triggers the real PyPI upload, then the MCP Registry listing
-#     (publish-mcp-registry). Bump `version` in server.json — both places — in
-#     the same PR as __version__; the fast lane fails the PR if you forget.
-#   - Or run the workflow manually with target=testpypi to dry-run against
+#   - Normally: merge the release PR from scripts/prepare_release.py. Then
+#     release-tag.yml tags vX.Y.Z and dispatches this workflow on the tag with
+#     target=pypi. A tag pushed with the workflow token cannot trigger `push` here.
+#   - By hand, still supported: push a `vX.Y.Z` tag that matches __version__.
+#   - Either way the real PyPI upload runs only on a v* tag ref (checked below),
+#     then the MCP Registry listing and the MCPB release.
+#   - Run the workflow manually with target=testpypi to dry-run against
 #     TestPyPI without cutting a tag.
 
 on:
@@ -56,11 +58,20 @@ jobs:
       - name: Install build tooling
         run: python -m pip install --upgrade build twine
 
+      - name: Real PyPI only from a release tag
+        # A dispatch with target=pypi from a branch would burn a PyPI version that
+        # has no tag, no verified version match and no GitHub release to attach to.
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'pypi' && !startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "::error::target=pypi must run on a v* tag (gh workflow run publish.yml --ref vX.Y.Z -f target=pypi), not ${GITHUB_REF}"
+          exit 1
+
       - name: Verify tag matches package version
         # Version lives in ankusdrive/__init__.py (pyproject.toml reads it via
         # setuptools dynamic). Grep the line directly so we don't need to
         # import ankusdrive (which would require installing dependencies).
-        if: github.event_name == 'push'
+        # Keyed on the ref, not the event: release-tag.yml dispatches on the tag.
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkgver=$(grep -E '^__version__\s*=' ankusdrive/__init__.py | sed -E 's/.*"([^"]+)".*/\1/')

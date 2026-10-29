@@ -70,6 +70,11 @@ jobs:
         # surface there, after PyPI has burned the version — so catch it here.
         run: python tests/test_mcp_registry.py
 
+      - name: Release prep — the release PR script bumps every copy or nothing
+        # Merging a __version__ change now tags and publishes (release-tag.yml), so
+        # scripts/prepare_release.py must write a tree this lane accepts, or refuse.
+        run: python tests/test_prepare_release.py
+
       - name: MCPB bundle — mcpb/ launches the release it ships with (#201)
         # The bundle pins ankusdrive==<version> and passes the FreeCAD path through
         # a user_config placeholder. A stale pin or a placeholder that can arrive
