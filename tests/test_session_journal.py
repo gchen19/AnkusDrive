@@ -295,6 +295,8 @@ def test_server_applies_journal_last():
         pos = src.find(earlier)
         assert pos != -1 and pos < at, f"journal must apply after {earlier}"
     assert src.rfind("@mcp.tool(") < at, "a tool is registered after the journal is applied"
+    pin = src.find("_pin_call_workspace(mcp._tool_manager)")
+    assert pin > at, "the per-call workspace pin must wrap outside the journal"
 
 
 def test_journal_writes_nothing_to_disk():

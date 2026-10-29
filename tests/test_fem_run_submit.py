@@ -297,6 +297,34 @@ def test_door_checks():
         assert w.call("ping") == "pong"
 
 
+def test_mesh_floor_and_private_workdir():
+    """fem_mesh floors the element size at char_length/10 unless told otherwise (a 0
+    floor let sliver edges in imported CAD run Gmsh to a multi-GB mesh), and each
+    worker's default fem_run workdir is its own, so concurrent workspaces never
+    solve in the same directory."""
+    if not _freecad_available():
+        print("    SKIP — freecadcmd not found")
+        return
+    with Worker() as w1, Worker() as w2:
+        dirs = []
+        for w in (w1, w2):
+            h = _cantilever(w, doc="fem_floor")
+            dirs.append(w.call("fem_run", analysis=h["analysis"], _timeout=300.0)["workdir"])
+        assert dirs[0] != dirs[1], dirs
+
+        w1.call("new_document", name="fem_floor_args")
+        box = w1.call("add_primitive", kind="box", w=20, d=10, h=10)
+        an = w1.call("fem_new_analysis")
+        m = w1.call("fem_mesh", analysis=an["handle"], body=box["handle"], char_length=4.0)
+        assert abs(m["min_length"] - 0.4) < 1e-12, m
+        m = w1.call("fem_mesh", analysis=an["handle"], body=box["handle"], char_length=4.0,
+                    min_length=1.0, name="Mesh2")
+        assert m["min_length"] == 1.0, m
+        e = _expect_error(w1.call, "fem_mesh", analysis=an["handle"], body=box["handle"],
+                          char_length=4.0, min_length=5.0, name="Mesh3")
+        assert "min_length" in e.remote_message, e.remote_message
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():

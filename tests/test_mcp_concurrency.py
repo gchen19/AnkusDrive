@@ -187,6 +187,66 @@ def test_workspaces_isolate_handles():
         _reset_pool()
 
 
+def test_per_call_workspace_pin():
+    """Agents that share one server (subagents of one MCP client) cannot rely on
+    use_workspace: it is server-wide, so one agent's switch retargets the others.
+    The `workspace` argument pins a single call instead. Two threads build in
+    their own pinned workspaces while a third keeps flipping use_workspace; each
+    must only ever see its own object, and the global selection must not move
+    because of a pinned call."""
+    _reset_pool()
+    errors = []
+    stop = threading.Event()
+    try:
+        def agent(ws, edge):
+            try:
+                srv.new_document(name=ws, workspace=ws)
+                box = srv.add_primitive(kind="box", w=edge, d=edge, h=edge, workspace=ws)
+                for _ in range(15):
+                    vol = srv.mass_properties(handle=box["handle"], workspace=ws)["volume_mm3"]
+                    assert abs(vol - edge ** 3) < 1e-6, f"{ws} read {vol}, expected {edge ** 3}"
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        def flipper():
+            while not stop.is_set():
+                for ws in ("pinA", "pinB", srv.DEFAULT_WORKSPACE):
+                    srv.use_workspace(ws)
+
+        threads = [threading.Thread(target=agent, args=("pinA", 10)),
+                   threading.Thread(target=agent, args=("pinB", 30))]
+        flip = threading.Thread(target=flipper)
+        flip.start()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+        stop.set()
+        flip.join(30)
+        assert not errors, errors
+
+        srv.use_workspace(srv.DEFAULT_WORKSPACE)
+        srv.list_documents(workspace="pinA")
+        assert srv._current_workspace == srv.DEFAULT_WORKSPACE
+        srv.use_workspace("pinB", workspace="pinA")   # a pinned call never moves the global
+        assert srv._current_workspace == srv.DEFAULT_WORKSPACE
+
+        # Through the MCP entry point, the journal files a pinned call under the
+        # workspace it ran in, not the globally selected one.
+        import asyncio
+        from ankusdrive import journal as _j
+        asyncio.run(srv.mcp._tool_manager.call_tool("list_documents", {"workspace": "pinB"}))
+        last = _j.snapshot("pinB")["entries"][-1]
+        assert last["tool"] == "list_documents", last
+
+        tools = {t.name: t for t in srv.mcp._tool_manager.list_tools()}
+        bare = [n for n, t in tools.items() if "workspace" not in t.parameters.get("properties", {})]
+        assert not bare, f"tools without a workspace argument: {bare}"
+    finally:
+        stop.set()
+        _reset_pool()
+
+
 def test_pool_cap_and_close():
     """The pool is capped; claiming past the cap raises rather than leaking
     processes, and close_workspace frees a slot so the next claim succeeds."""

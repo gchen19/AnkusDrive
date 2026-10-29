@@ -12,8 +12,9 @@ that from corrupting the single-worker protocol:
   * Worker.call() is internally serialized (see client.py), so two threads can
     never interleave stdin writes / stdout reads on one process.
   * The server keeps a *pool* of named workspaces — `dict[str, Worker]`. Each
-    concurrent agent claims its own workspace via `use_workspace(name)` and gets
-    an isolated freecadcmd process; handles and documents do NOT cross
+    concurrent agent passes its own `workspace=<name>` on every tool call (a
+    per-call pin; `use_workspace` is server-wide) and gets an isolated
+    freecadcmd process; handles and documents do NOT cross
     workspaces. A client that never calls `use_workspace` sees exactly the old
     single-worker behavior (everything routes to the "default" workspace).
 
@@ -26,12 +27,16 @@ Run:   .venv/bin/python3 -m ankusdrive mcp
 """
 import atexit
 import base64
+import contextvars
+import functools
+import inspect
 import os
 import threading
 import time
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from .client import Worker, WorkerError
 from . import render as _render
@@ -64,6 +69,85 @@ _pool_lock = threading.Lock()
 # then works in it". Concurrent calls to the *same* workspace are made safe by
 # Worker.call()'s internal lock.
 _current_workspace = DEFAULT_WORKSPACE
+
+# Per-call override. Several agents behind one MCP client (e.g. subagents of one
+# Claude Code session) share this server process, so a global use_workspace()
+# from one agent silently retargets every other agent's calls. Every tool
+# therefore also takes an optional `workspace` argument; when given it pins that
+# one call to the named workspace without touching _current_workspace.
+_call_workspace: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "ankusdrive_call_workspace", default=None)
+
+
+def _active_workspace() -> str:
+    return _call_workspace.get() or _current_workspace
+
+
+_WORKSPACE_PARAM = inspect.Parameter(
+    "workspace", inspect.Parameter.KEYWORD_ONLY, default=None,
+    annotation=Annotated[str | None, Field(description=(
+        "Workspace to run this call in (created on first use). Pass the same "
+        "unique name on every call when other agents may be using AnkusDrive "
+        "concurrently; omit to use the workspace selected by use_workspace."))])
+
+
+def _with_workspace_param(fn):
+    """Add the optional per-call `workspace` argument to a tool function."""
+    sig = inspect.signature(fn)
+    if "workspace" in sig.parameters:
+        return fn
+    if inspect.iscoroutinefunction(fn):
+        raise TypeError(f"async tool {fn.__name__} needs a workspace-aware wrapper")
+
+    @functools.wraps(fn)
+    def wrapper(*args, workspace: str | None = None, **kwargs):
+        if workspace is not None and (not isinstance(workspace, str) or not workspace):
+            raise RuntimeError("workspace name must be a non-empty string")
+        token = _call_workspace.set(workspace)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _call_workspace.reset(token)
+
+    params = list(sig.parameters.values())
+    tail = [i for i, q in enumerate(params) if q.kind == inspect.Parameter.VAR_KEYWORD]
+    params.insert(tail[0] if tail else len(params), _WORKSPACE_PARAM)
+    wrapper.__signature__ = sig.replace(parameters=params)
+    wrapper.__ankusdrive_workspace_pin__ = True
+    return wrapper
+
+
+def _pin_call_workspace(manager) -> None:
+    """Set the per-call workspace before *any* tool-level wrapper runs, so the
+    journal (which wraps tool.fn from outside) attributes a pinned call to the
+    workspace it actually ran in. Applied after the journal so it is outermost."""
+    original = manager.call_tool
+
+    @functools.wraps(original)
+    async def call_tool(name, arguments, *a, **kw):
+        tool = manager._tools.get(name)
+        ws = arguments.get("workspace") if isinstance(arguments, dict) else None
+        if not (isinstance(ws, str) and ws
+                and getattr(getattr(tool, "fn", None), "__ankusdrive_workspace_pin__", False)):
+            return await original(name, arguments, *a, **kw)
+        token = _call_workspace.set(ws)
+        try:
+            return await original(name, arguments, *a, **kw)
+        finally:
+            _call_workspace.reset(token)
+
+    manager.call_tool = call_tool
+
+
+_fastmcp_tool = mcp.tool
+
+
+def _tool(*dargs, **dkwargs):
+    register = _fastmcp_tool(*dargs, **dkwargs)
+    return lambda fn: register(_with_workspace_param(fn))
+
+
+mcp.tool = _tool
 
 
 def _drop_locked(name: str) -> bool:
@@ -103,7 +187,7 @@ def _ensure_worker(name: str | None = None) -> Worker:
     spawning it if needed. Double-checked locking: the common hit path takes no
     lock; creation / dead-worker replacement is serialized under _pool_lock and
     enforces the pool cap (after first reaping anything idle)."""
-    name = name or _current_workspace
+    name = name or _active_workspace()
     w = _workers.get(name)
     if w is not None and w.proc.poll() is None:
         _last_used[name] = time.monotonic()
@@ -160,7 +244,7 @@ def restart_worker() -> dict:
     state). All open documents, unsaved changes, and handles in THIS workspace are
     lost — save first if needed. Other workspaces are untouched.
     Returns {restarted: True, workspace: <name>, freecad: [...]}."""
-    name = _current_workspace
+    name = _active_workspace()
     with _pool_lock:
         _drop_locked(name)
     w = _ensure_worker(name)
@@ -171,9 +255,12 @@ def restart_worker() -> dict:
 def use_workspace(name: str) -> dict:
     """Claim (creating if needed) an isolated workspace and make it the target of
     subsequent tool calls. Each workspace is its own freecadcmd process with its
-    own ActiveDocument and handle registry — handles do NOT cross workspaces. This
-    is how concurrent agents share one MCP server without clobbering each other's
-    documents: each agent calls use_workspace with a unique name once, up front.
+    own ActiveDocument and handle registry — handles do NOT cross workspaces.
+
+    The selection is SERVER-WIDE: it retargets every client sharing this server,
+    including other subagents of the same session. Concurrent agents must instead
+    pass `workspace=<unique name>` on every tool call, which pins just that call
+    and leaves this selection alone.
 
     The pool is capped (ANKUSDRIVE_MAX_WORKSPACES, default 4) and idle workspaces are
     reaped (ANKUSDRIVE_WORKSPACE_IDLE_S, default 900s); claiming a workspace beyond a
@@ -184,7 +271,8 @@ def use_workspace(name: str) -> dict:
         raise RuntimeError("workspace name must be a non-empty string")
     global _current_workspace
     w = _ensure_worker(name)          # spawn now so a full-pool error surfaces here
-    _current_workspace = name
+    if _call_workspace.get() is None:  # a pinned call must not move the global
+        _current_workspace = name
     return {"workspace": name, "freecad": w.freecad_version,
             "workspaces": sorted(_workers)}
 
@@ -306,7 +394,7 @@ def _session_provenance(ws: str, entries: list) -> dict | None:
     from . import provenance as _prov
     freecad = None
     try:
-        if ws == _current_workspace and _workers.get(ws) is not None:
+        if ws == _active_workspace() and _workers.get(ws) is not None:
             freecad = _call("version")
     except Exception:
         freecad = None
@@ -363,7 +451,7 @@ def _provenance_record() -> dict:
     """The #462 record for the active document of the current workspace (read back
     with `ankusdrive journal export file.FCStd`)."""
     from . import journal as _j
-    ws = _current_workspace
+    ws = _active_workspace()
     docs = _call("list_documents")
     active = next((d["name"] for d in docs if d.get("active")), None)
     if active is None:
@@ -3518,20 +3606,25 @@ def fem_mesh(
     char_length: float = 0.0,
     name: str = "Mesh",
     element_order: str | None = None,
+    min_length: float | None = None,
 ) -> dict:
     """Create a Gmsh mesh of `body`, attached to `analysis`.
 
     char_length: max characteristic element length in mm. 0 = let Gmsh pick.
+    min_length: min element length in mm. Default char_length/10, which keeps
+    sliver edges in imported CAD from exploding the mesh; 0 removes the floor.
     element_order: '1st' or '2nd' (quadratic). Use '2nd' for bending/modal accuracy —
     linear tets (C3D4) shear-lock and overstiffen thin sections (a cantilever's first
     natural frequency lands ~50% high with only 1-2 elements through the thickness;
     2nd-order tets bring it within ~1% of beam theory). Default lets Gmsh choose.
-    Returns {handle, name, nodes, tets}.
+    Returns {handle, name, nodes, tets, min_length}.
     """
     params = {"analysis": analysis, "body": body, "char_length": char_length,
               "name": name}
     if element_order is not None:
         params["element_order"] = element_order
+    if min_length is not None:
+        params["min_length"] = min_length
     return _call("fem_mesh", **params)
 
 
@@ -3557,7 +3650,7 @@ def fem_run(analysis: str, workdir: str | None = None) -> dict:
     meshes, modal/buckling with many modes, nonlinear material or geometry), so the
     channel stays free while ccx runs.
 
-    `workdir` defaults to `<TMPDIR>/ankusdrive_fem`. Raises if ccx exits non-zero
+    `workdir` defaults to `<TMPDIR>/ankusdrive_fem_<worker pid>`. Raises if ccx exits non-zero
     (with its *ERROR lines), or if a fem_run_submit solve is still running on this
     analysis or workdir. Returns {workdir, status: 'ok', returncode, analysis_type,
     result_objects, analysis}."""
@@ -8348,8 +8441,9 @@ def _worker_freecad(name: str):
                                   getattr(w, "worker_python", None))
 
 
-JOURNAL = _journal.apply(mcp, workspace_of=lambda: _current_workspace,
+JOURNAL = _journal.apply(mcp, workspace_of=_active_workspace,
                          worker_pid_of=_worker_pid, freecad_of=_worker_freecad)
+_pin_call_workspace(mcp._tool_manager)
 
 
 def run():
