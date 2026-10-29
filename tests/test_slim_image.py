@@ -469,7 +469,31 @@ def test_the_image_is_scanned_for_secrets_and_cves():
     assert "--severity CRITICAL --ignore-unfixed" in job, \
         "the CVE gate is fixable CRITICALs; failing on unfixable ones wedges the pipeline"
     assert "upload-sarif" in job, "CVEs should land in code scanning, not just a log"
+    assert "category: trivy-slim-image" in job
     assert (REPO / ".trivyignore").is_file(), "waivers need a reviewed home"
+
+
+def test_the_scan_checks_the_image_this_run_built():
+    """#490: scanning `:latest` failed PRs that could not touch the image whenever the
+    published one went stale, passed PRs that added a CRITICAL, and on main raced the
+    job that moves the tag. The scan's input must be this run's build: a PR's own
+    exported archive, or the digest main just pushed — never a floating tag."""
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    scan, slim = _job(wf, "scan"), _job(wf, "slim")
+    assert ":latest" not in scan.split("    steps:", 1)[1], \
+        "the scan must not read a floating tag"
+    # PR: the full/amd64 leg exports a docker archive and hands it over
+    assert "type=docker,name=ankusdrive-solvers:pr-scan,dest=" in slim
+    assert "name: slim-scan-image" in slim and "name: slim-scan-image" in scan
+    assert "--input $RUNNER_TEMP/scan/slim-full-amd64.tar" in scan
+    # main: the digest that leg pushed, not the tag slim-manifest moves later
+    assert "name: slim-digest-full-amd64" in scan
+    assert '${SLIM_IMAGE}@sha256:' in scan
+    assert "needs: slim\n" in scan, "the scan reads slim's own output"
+    # every trivy call reads the chosen input; `tee` must not swallow the secret gate
+    assert scan.count("${{ steps.img.outputs.args }}") == 4
+    secrets = scan[scan.index("Secrets — any finding fails"):]
+    assert "set -euo pipefail" in secrets.split("- name:", 1)[0]
 
 
 # --- the published sets, and the lane that tests what users pull (#422) ------------

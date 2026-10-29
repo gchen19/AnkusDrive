@@ -400,7 +400,20 @@ jobs:
           # resolve (tools/container_runtime_deps.sh --check, so the trimmed package
           # list is complete on THIS arch) and every solver must actually run. A PR
           # builds without pushing; main pushes by digest for the manifest below.
-          outputs: ${{ github.event_name != 'pull_request' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.SLIM_IMAGE) || 'type=cacheonly' }}
+          #
+          # A PR's full/amd64 leg writes the image to a docker-archive tarball instead
+          # of discarding it, so the `scan` job checks THIS build, not whatever :latest
+          # happens to be (#490). Its blobs are the compressed layers a user downloads —
+          # 1.15 GB on amd64 — so the file and its artifact are about that size, against
+          # the ~104 GB `df` reports free on the runner after "Free disk space". Loading
+          # it into the docker daemon instead would unpack it and buy nothing: trivy
+          # reads the archive directly (`--input`).
+          outputs: >-
+            ${{ github.event_name != 'pull_request'
+              && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.SLIM_IMAGE)
+              || (matrix.set == 'full' && matrix.platform.arch == 'amd64'
+                  && format('type=docker,name=ankusdrive-solvers:pr-scan,dest={0}/slim-full-amd64.tar', runner.temp)
+                  || 'type=cacheonly') }}
           cache-from: |
             type=registry,ref=${{ env.IMAGE }}:cache-system-${{ matrix.platform.arch }}
             type=registry,ref=${{ env.IMAGE }}:cache-yade-${{ matrix.platform.arch }}
@@ -431,6 +444,27 @@ jobs:
           name: slim-digest-${{ matrix.set }}-${{ matrix.platform.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
+          retention-days: 1
+      # The PR build the `scan` job checks, plus its digest so that job's log can name
+      # exactly what it scanned. The layers are already gzip'd: zipping them again
+      # costs CPU and saves nothing.
+      - name: Hand the PR build to the scan job
+        if: github.event_name == 'pull_request' && matrix.set == 'full' && matrix.platform.arch == 'amd64'
+        run: |
+          set -euo pipefail
+          echo "${{ steps.build.outputs.digest }}" > "$RUNNER_TEMP/slim-full-amd64.digest"
+          ls -l "$RUNNER_TEMP"/slim-full-amd64.*
+          echo "PR scan archive: $(du -m "$RUNNER_TEMP/slim-full-amd64.tar" | cut -f1) MB" >> "$GITHUB_STEP_SUMMARY"
+          df -h /
+      - if: github.event_name == 'pull_request' && matrix.set == 'full' && matrix.platform.arch == 'amd64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: slim-scan-image
+          path: |
+            ${{ runner.temp }}/slim-full-amd64.tar
+            ${{ runner.temp }}/slim-full-amd64.digest
+          if-no-files-found: error
+          compression-level: 0
           retention-days: 1
 
   slim-subset:
@@ -533,6 +567,20 @@ jobs:
     #             every unfixable CVE in a vendored Fortran library would wedge the
     #             pipeline and teach everyone to skip the job. Waivers live in
     #             .trivyignore, in the open, with a reason each.
+    #
+    # WHAT IT SCANS is the image THIS run built, never a floating tag (#490). It used
+    # to scan :latest everywhere: a PR then failed whenever the published image went
+    # stale (Dependabot pin bumps #481/#482, red on CVEs they could not touch) and
+    # passed a PR that introduced a CRITICAL as long as the old image was clean; on
+    # main it raced slim-manifest, which moves :latest, and usually scanned the
+    # previous image.
+    #   PR    — the docker archive the slim full/amd64 leg exported (~1.15 GB, the
+    #           compressed layers), handed over as an artifact and read with --input.
+    #   main  — the full/amd64 digest that leg pushed, from its slim-digest artifact.
+    #           A separate job, not a step in `slim`, so a CVE gate never holds back
+    #           the publish; the monthly rebuild is what learns about upstream CVEs.
+    # amd64 + `full` only, as before: same packages per arch, and `openfoam` is a
+    # strict subset of `full`.
     needs: slim
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -566,24 +614,49 @@ jobs:
           echo "${TRIVY_SHA256}  trivy.tar.gz" | sha256sum -c -
           tar -xzf trivy.tar.gz trivy
           ./trivy --version
+      - name: Fetch the PR's own build
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: slim-scan-image
+          path: ${{ runner.temp }}/scan
+      - name: Fetch the digest this run pushed
+        if: github.event_name != 'pull_request'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: slim-digest-full-amd64
+          path: ${{ runner.temp }}/scan
       - name: Which image to scan
         id: img
+        working-directory: ${{ runner.temp }}/scan
         run: |
-          # On main the freshly published tag; on a PR the image is built but not
-          # pushed, so scan the last published one — the PR still learns about a CVE
-          # that landed upstream, it just cannot see its own unpublished layers.
-          echo "ref=${SLIM_IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            # the image this PR built: the archive, plus the digest buildx reported
+            config=$(tar -xOf slim-full-amd64.tar manifest.json | jq -r '.[0].Config') || config=unknown
+            echo "Scanning this PR's build: digest $(cat slim-full-amd64.digest), config ${config}, archive $(du -m slim-full-amd64.tar | cut -f1) MB"
+            echo "args=--input $RUNNER_TEMP/scan/slim-full-amd64.tar" >> "$GITHUB_OUTPUT"
+          else
+            n=$(ls | wc -l)
+            [ "$n" -eq 1 ] || { echo "expected 1 full/amd64 digest, got $n" >&2; exit 1; }
+            ref="${SLIM_IMAGE}@sha256:$(ls)"
+            echo "Scanning the image this run pushed: $ref"
+            echo "args=$ref" >> "$GITHUB_OUTPUT"
+          fi
+      # pipefail: the default shell has none, so `tee` would return 0 and a found
+      # secret would pass
       - name: Secrets — any finding fails
         run: |
+          set -euo pipefail
           ./trivy image --scanners secret --exit-code 1 --no-progress \
-            --format table "${{ steps.img.outputs.ref }}" | tee secrets.txt
+            --format table ${{ steps.img.outputs.args }} | tee secrets.txt
       - name: Vulnerabilities — report all, fail on fixable CRITICAL
         run: |
           set -euo pipefail
           ./trivy image --scanners vuln --no-progress --format sarif \
-            --output trivy.sarif "${{ steps.img.outputs.ref }}"
+            --output trivy.sarif ${{ steps.img.outputs.args }}
           ./trivy image --scanners vuln --no-progress --format table \
-            --severity CRITICAL,HIGH "${{ steps.img.outputs.ref }}" | tee vulns.txt
+            --severity CRITICAL,HIGH ${{ steps.img.outputs.args }} | tee vulns.txt
           {
             echo '### Vulnerability scan'
             echo '```'
@@ -592,7 +665,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # the gate: fixable CRITICAL only
           ./trivy image --scanners vuln --no-progress --exit-code 1 \
-            --severity CRITICAL --ignore-unfixed "${{ steps.img.outputs.ref }}"
+            --severity CRITICAL --ignore-unfixed ${{ steps.img.outputs.args }}
       - name: Upload SARIF to code scanning
         if: always()
         uses: github/codeql-action/upload-sarif@977e6ceaea7361825998245d787fa3b4d6b9e5df # codeql-bundle-v2.27.0
