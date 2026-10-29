@@ -59,13 +59,13 @@ def test_bumps_every_copy_the_fast_lane_checks():
     new = _next(old)
     pr.prepare(root, new, "2026-01-02")
     assert pr.current_version(root) == new
-    server = json.loads((root / "server.json").read_text())
+    server = json.loads((root / "server.json").read_text(encoding="utf-8"))
     assert server["version"] == new and server["packages"][0]["version"] == new
-    assert json.loads((root / "mcpb/manifest.json").read_text())["version"] == new
-    toml = (root / "mcpb/pyproject.toml").read_text()
+    assert json.loads((root / "mcpb/manifest.json").read_text(encoding="utf-8"))["version"] == new
+    toml = (root / "mcpb/pyproject.toml").read_text(encoding="utf-8")
     assert f'version = "{new}"' in toml and f'"ankusdrive=={new}"' in toml
     for rel in FILES[:-1]:
-        assert old not in (root / rel).read_text(), f"{rel} still mentions {old}"
+        assert old not in (root / rel).read_text(encoding="utf-8"), f"{rel} still mentions {old}"
 
 
 def test_changelog_heading_and_links_roll():
@@ -73,7 +73,7 @@ def test_changelog_heading_and_links_roll():
     old = pr.current_version(root)
     new = _next(old)
     pr.prepare(root, new, "2026-01-02")
-    text = (root / "CHANGELOG.md").read_text()
+    text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     assert "## [Unreleased]" not in text
     assert f"## [{new}] — 2026-01-02\n" in text
     assert f"[Unreleased]: {pr.COMPARE}/v{new}...HEAD\n[{new}]: {pr.COMPARE}/v{old}...v{new}\n" in text
@@ -119,10 +119,10 @@ def test_refuses_same_or_lower_version_and_bad_format():
 def test_release_tag_workflow_reads_version_the_same_way():
     # release-tag.yml greps __version__ itself (no package import on the runner);
     # if the line's shape changes, both readers must change together.
-    wf = (REPO / ".github/workflows/release-tag.yml").read_text()
+    wf = (REPO / ".github/workflows/release-tag.yml").read_text(encoding="utf-8")
     assert "^__version__ = \"([^\"]+)\"$" in wf
     assert re.search(r'^__version__ = "([^"]+)"$',
-                     (REPO / "ankusdrive/__init__.py").read_text(), re.M)
+                     (REPO / "ankusdrive/__init__.py").read_text(encoding="utf-8"), re.M)
 
 
 def _discover():
