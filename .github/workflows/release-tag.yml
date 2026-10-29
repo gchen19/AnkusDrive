@@ -1,0 +1,75 @@
+name: Release tag
+
+# Merging the release PR is the release. When a push to main changes
+# ankusdrive/__init__.py and the __version__ it declares has no tag yet, this
+# tags that commit vX.Y.Z and runs publish.yml on the tag. The release PR comes
+# from scripts/prepare_release.py; CONTRIBUTING.md "Releasing" has the procedure.
+#
+# Why dispatch instead of letting the tag push trigger publish.yml: a tag pushed
+# with the workflow token does not start other workflows (GitHub's guard against
+# recursive runs), but a workflow_dispatch sent with it does. publish.yml then
+# runs on the tag ref exactly as a hand-pushed tag would. It verifies the tag
+# against __version__, the `pypi` environment's tag policy admits it, and the
+# MCPB release step finds the tag.
+#
+# A changed __version__ whose tag already exists (a re-run, or a hand-tagged
+# release) is a no-op, not an error.
+
+on:
+  push:
+    branches: [main]
+    paths: [ankusdrive/__init__.py]
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: Tag and publish
+    if: github.repository == 'gchen19/AnkusDrive'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # push the tag
+      actions: write    # dispatch publish.yml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # existing tags, to tell a new version from a re-run
+
+      - name: Tag a new version, if this is one
+        id: tag
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^__version__ = "([^"]+)"$/\1/p' ankusdrive/__init__.py)"
+          tag="v${version}"
+          if [ -z "$version" ]; then
+            echo "::error::No __version__ line in ankusdrive/__init__.py"; exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::notice::${tag} already exists; nothing to release."
+            echo "tag=" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # publish.yml builds the GitHub release from this section; fail here,
+          # before any tag exists, rather than after PyPI has the version.
+          if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${version}]' section. Run scripts/prepare_release.py."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$version" "$GITHUB_SHA"
+          git push origin "refs/tags/${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Tagged ${tag} at ${GITHUB_SHA}"
+
+      - name: Publish the tag
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: gh workflow run publish.yml --ref "$TAG" -f target=pypi
