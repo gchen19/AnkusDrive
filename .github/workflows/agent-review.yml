@@ -26,8 +26,11 @@ name: Agent review
 # main, not the agent, writes the comment. Worst case, injected text changes what
 # the comment says.
 #
-# Needs the ANTHROPIC_API_KEY repository secret, with no trailing newline:
-#   tr -d '\r\n' < keyfile | gh secret set ANTHROPIC_API_KEY -R gchen19/AnkusDrive
+# Credentials, one of (stored with no trailing newline: `tr -d '\r\n' < file | gh secret set NAME`):
+#   CLAUDE_CODE_OAUTH_TOKEN  a Pro/Max subscription token from `claude setup-token`
+#                            (sk-ant-oat...). Used when set. Reviews draw on the
+#                            subscription's usage limits.
+#   ANTHROPIC_API_KEY        a Console API key (sk-ant-api...), billed per token.
 
 on:
   pull_request_target:
@@ -94,25 +97,35 @@ jobs:
           echo "trusted=$trusted" >> "$GITHUB_OUTPUT"
           echo "run=true" >> "$GITHUB_OUTPUT"
 
-      - name: Check the API key before the review
-        # The action reports a rejected key only as "no structured_output", with the
-        # API's error hidden. One free models-endpoint call names the actual cause.
+      - name: Check the credential before the review
+        # The action reports a bad credential only as "no structured_output", with
+        # the API's error hidden. Name the actual cause here instead.
         if: steps.gate.outputs.run == 'true'
         env:
+          OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -uo pipefail
-          if [ -z "$KEY" ]; then
-            echo "::error::ANTHROPIC_API_KEY repository secret is not set."; exit 1
+          if [ -n "$OAUTH" ]; then name=CLAUDE_CODE_OAUTH_TOKEN; cred=$OAUTH
+          elif [ -n "$KEY" ]; then name=ANTHROPIC_API_KEY; cred=$KEY
+          else
+            echo "::error::Set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY."; exit 1
           fi
-          case "$KEY" in
+          case "$cred" in
             *[[:space:]]*)
-              echo "::error::ANTHROPIC_API_KEY contains whitespace (a trailing newline from 'gh secret set < file'?). Re-set it with: tr -d '\r\n' < keyfile | gh secret set ANTHROPIC_API_KEY"
+              echo "::error::$name contains whitespace (a trailing newline from 'gh secret set < file'?). Re-set it with: tr -d '\r\n' < file | gh secret set $name"
               exit 1 ;;
+          esac
+          case "$name:$cred" in
+            CLAUDE_CODE_OAUTH_TOKEN:sk-ant-oat*) exit 0 ;;   # no free endpoint to probe it
+            CLAUDE_CODE_OAUTH_TOKEN:*)
+              echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not a setup-token token (sk-ant-oat...). An API key goes in ANTHROPIC_API_KEY."; exit 1 ;;
+            ANTHROPIC_API_KEY:sk-ant-oat*)
+              echo "::error::ANTHROPIC_API_KEY holds a subscription token from claude setup-token. Store it as CLAUDE_CODE_OAUTH_TOKEN instead."; exit 1 ;;
           esac
           # Model id kept in step with --model in the Review step.
           code=$(curl -s -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/models/claude-opus-5-5 \
-                   -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01")
+                   -H "x-api-key: $cred" -H "anthropic-version: 2023-06-01")
           case "$code" in
             200) ;;
             401) echo "::error::Anthropic rejected ANTHROPIC_API_KEY (401 invalid x-api-key): revoked or mistyped. Set a valid key."; exit 1 ;;
@@ -132,7 +145,9 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         uses: anthropics/claude-code-action@d70510b174a1244958df0b03166a54912811f3e6 # v1.0.264
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Exactly one credential: the subscription token when set, else the API key.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           github_token: ${{ github.token }}
           # Set only for an outside PR the gate let through (maintainer label). For a
           # maintainer's own PR the action's write-permission check stays on.
