@@ -13290,15 +13290,115 @@ def _h_fem_mesh(p):
     }
 
 
+# Default ccx workdirs are named exactly `ankusdrive_fem_<pid>`; cleanup touches
+# nothing else in TMPDIR (a caller-named workdir is the caller's to keep).
+_FEM_WORKDIR_RE = re.compile(r"ankusdrive_fem_([1-9][0-9]*)")
+# A dead-pid dir is only swept once nothing in it has changed for this long. The pid
+# test alone is not enough when TMPDIR is shared across pid namespaces (containers,
+# a network home): there a live worker's pid can look dead from here.
+_FEM_WORKDIR_STALE_S = 3600.0
+_fem_workdirs_swept = False
+
+
+def _fem_workdir_path(pid):
+    import tempfile as _tempfile
+    return os.path.join(_tempfile.gettempdir(), f"ankusdrive_fem_{pid}")
+
+
 def _default_fem_workdir():
     """Default ccx working directory when the caller names none:
     `<TMPDIR>/ankusdrive_fem_<pid>`.
 
     Rooted at tempfile.gettempdir() rather than a literal /tmp so it honours
     TMPDIR and resolves to a real temp dir on Windows. Keyed by this worker's pid
-    so concurrent workspaces never write their decks/results into the same dir."""
+    so concurrent workspaces never write their decks/results into the same dir.
+    The worker removes it when it exits (_main); the first use in each worker
+    also sweeps the dirs of workers that died without getting that chance."""
+    global _fem_workdirs_swept
+    if not _fem_workdirs_swept:
+        _fem_workdirs_swept = True
+        _sweep_dead_fem_workdirs()
+    return _fem_workdir_path(os.getpid())
+
+
+def _pid_alive(pid):
+    """False only when `pid` is certainly not running on this host; any doubt
+    (no permission, an unexpected error) counts as alive, because the caller
+    deletes on False."""
+    if pid == os.getpid():
+        return True
+    try:
+        if os.name == "nt":
+            # os.kill(pid, 0) would TERMINATE the process on Windows.
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            h = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such pid
+            try:
+                code = ctypes.c_ulong()
+                return not k32.GetExitCodeProcess(h, ctypes.byref(code)) or code.value == 259
+            finally:
+                k32.CloseHandle(h)                    # 259 = STILL_ACTIVE
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except Exception:                                 # noqa: BLE001 - EPERM etc.: exists
+        return True
+    return True
+
+
+def _newest_mtime(path):
+    newest = os.lstat(path).st_mtime
+    with os.scandir(path) as it:
+        for e in it:
+            newest = max(newest, e.stat(follow_symlinks=False).st_mtime)
+    return newest
+
+
+def _sweep_dead_fem_workdirs(now=None):
+    """Remove default ccx workdirs left by workers that were killed (SIGKILL, a
+    crash) before _main could remove their own. A dir goes only if its name is
+    exactly `ankusdrive_fem_<pid>`, it is a real directory (not a symlink), its pid
+    is not running, and nothing in it changed for _FEM_WORKDIR_STALE_S. Never
+    raises. ANKUSDRIVE_KEEP_SCRATCH=1 turns it off. Returns the paths removed."""
+    if os.environ.get("ANKUSDRIVE_KEEP_SCRATCH"):
+        return []
+    import shutil
     import tempfile as _tempfile
-    return os.path.join(_tempfile.gettempdir(), f"ankusdrive_fem_{os.getpid()}")
+    import time as _time
+    now = _time.time() if now is None else now
+    root = _tempfile.gettempdir()
+    removed = []
+    try:
+        with os.scandir(root) as it:
+            entries = list(it)
+    except OSError:
+        return removed
+    for e in entries:
+        m = _FEM_WORKDIR_RE.fullmatch(e.name)
+        try:
+            if (not m or not e.is_dir(follow_symlinks=False)
+                    or _pid_alive(int(m.group(1)))
+                    or now - _newest_mtime(e.path) < _FEM_WORKDIR_STALE_S):
+                continue
+        except OSError:
+            continue                                  # vanished or unreadable: not ours
+        shutil.rmtree(e.path, ignore_errors=True)
+        removed.append(e.path)
+    return removed
+
+
+def _remove_own_fem_workdir():
+    """Remove this worker's default ccx workdir on exit. Its results were imported
+    into documents that die with the worker; a caller who wants the files after
+    that names its own workdir; ANKUSDRIVE_KEEP_SCRATCH=1 keeps it for debugging."""
+    if os.environ.get("ANKUSDRIVE_KEEP_SCRATCH"):
+        return
+    import shutil
+    path = _fem_workdir_path(os.getpid())
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path, ignore_errors=True)
 
 
 # A ccx solve is three phases with different threading needs, split so fem_run and
@@ -21790,6 +21890,15 @@ def _main():
     _respond({"ready": True, "freecad": list(App.Version())[:3],
               "python": list(sys.version_info[:3]),
               "version": _h_version(None)})
+    # A clean shutdown and a host that closed stdin both end the loop; a killed
+    # worker's dir is left for the next worker's sweep (_default_fem_workdir).
+    try:
+        _serve(mainthread)
+    finally:
+        _remove_own_fem_workdir()
+
+
+def _serve(mainthread):
     for line in sys.stdin:
         line = line.strip()
         if not line:

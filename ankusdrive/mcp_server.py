@@ -280,32 +280,44 @@ def list_workspaces() -> dict:
     """List the live workspaces (freecadcmd processes) and the pool limits. Each
     entry is {name, alive, idle_s, current}. Use to see who is holding a slot
     before claiming or closing one.
-    Returns {current, max, idle_reap_s, workspaces: [...]}."""
+
+    `current` is the workspace THIS call runs in: the `workspace` you passed, else
+    the use_workspace selection. `selected` is that server-wide selection, which a
+    pinned call neither follows nor moves.
+    Returns {current, selected, max, idle_reap_s, workspaces: [...]}."""
     now = time.monotonic()
+    current = _active_workspace()
     with _pool_lock:
         entries = [
             {"name": n, "alive": w.proc.poll() is None,
              "idle_s": round(now - _last_used.get(n, now), 1),
-             "current": n == _current_workspace}
+             "current": n == current}
             for n, w in sorted(_workers.items())
         ]
-    return {"current": _current_workspace, "max": _MAX_WORKSPACES,
+    return {"current": current, "selected": _current_workspace, "max": _MAX_WORKSPACES,
             "idle_reap_s": _IDLE_REAP_S, "workspaces": entries}
 
 
 @mcp.tool()
 def close_workspace(name: str) -> dict:
     """Shut down a workspace's worker and free its pool slot. All of that
-    workspace's documents, unsaved changes, and handles are lost. Closing the
-    workspace you are currently in returns you to the "default" workspace. The
-    default workspace can be closed too (its worker respawns clean on next use).
-    Returns {closed: <bool>, workspace: <name>, current: <name>}."""
+    workspace's documents, unsaved changes, and handles are lost. The default
+    workspace can be closed too (its worker respawns clean on next use).
+
+    If `name` is the use_workspace selection, the selection returns to "default",
+    whoever closes it. A call pinned with `workspace` never moves the selection
+    otherwise: closing your own pinned workspace leaves the pin as it is, so your
+    next call pinned to that name gets a fresh, empty worker (old handles fail).
+    `current` is the workspace this call ran in (as in list_workspaces), `selected`
+    the server-wide selection after the close.
+    Returns {closed: <bool>, workspace: <name>, current: <name>, selected: <name>}."""
     global _current_workspace
     with _pool_lock:
         existed = _drop_locked(name)
-    if _current_workspace == name:
-        _current_workspace = DEFAULT_WORKSPACE
-    return {"closed": existed, "workspace": name, "current": _current_workspace}
+        if _current_workspace == name:
+            _current_workspace = DEFAULT_WORKSPACE
+    return {"closed": existed, "workspace": name, "current": _active_workspace(),
+            "selected": _current_workspace}
 
 
 @mcp.tool()
@@ -3648,9 +3660,11 @@ def fem_run(analysis: str, workdir: str | None = None) -> dict:
     meshes, modal/buckling with many modes, nonlinear material or geometry), so the
     channel stays free while ccx runs.
 
-    `workdir` defaults to `<TMPDIR>/ankusdrive_fem_<worker pid>`. Raises if ccx exits non-zero
-    (with its *ERROR lines), or if a fem_run_submit solve is still running on this
-    analysis or workdir. Returns {workdir, status: 'ok', returncode, analysis_type,
+    `workdir` defaults to `<TMPDIR>/ankusdrive_fem_<worker pid>`, which is removed when
+    the worker exits (close_workspace, restart_worker, server shutdown); name your own
+    workdir to keep the .inp/.frd/.dat. Raises if ccx exits non-zero (with its *ERROR
+    lines), or if a fem_run_submit solve is still running on this analysis or workdir.
+    Returns {workdir, status: 'ok', returncode, analysis_type,
     result_objects, analysis}."""
     params = {"analysis": analysis}
     if workdir is not None:

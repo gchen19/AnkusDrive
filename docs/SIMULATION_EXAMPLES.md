@@ -104,9 +104,13 @@ Actual output from the bundled demo at default args (verified by running it):
   "nodes": 162, "tets": 392,
   "max_displacement_mm": 0.0510,
   "max_vonmises_mpa": 0.227,
-  "workdir": "/tmp/ankusdrive_fem"
+  "workdir": "/tmp/ankusdrive_fem_48213"
 }
 ```
+
+The default `workdir` is `<TMPDIR>/ankusdrive_fem_<worker pid>`, so the number varies
+per worker. The worker removes it when it exits; pass `workdir=` to keep the
+`.inp`/`.frd`/`.dat` files.
 
 ### Toy — verify by *scaling laws*, not absolute beam theory
 

@@ -325,6 +325,64 @@ def test_mesh_floor_and_private_workdir():
         assert "min_length" in e.remote_message, e.remote_message
 
 
+def test_default_workdir_reaped():
+    """The per-pid default workdirs do not accumulate: a worker removes its own on
+    exit, and its first default solve sweeps those of workers that died without
+    doing so. The sweep only takes `ankusdrive_fem_<pid>` dirs whose pid is gone
+    and that have sat untouched for an hour (TMPDIR may be shared with workers in
+    another pid namespace); a live pid, a fresh dir, a near-miss name, or a
+    caller-named workdir all survive, as does the solve that is still running."""
+    if not _freecad_available():
+        print("    SKIP — freecadcmd not found")
+        return
+    import shutil
+    import subprocess
+    root = tempfile.mkdtemp(prefix="ankusdrive_reap_")
+    old = time.time() - 2 * 3600
+
+    def dead_pid():
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        return p.pid
+
+    def plant(name, stale):
+        path = os.path.join(root, name)
+        os.makedirs(path)
+        Path(path, "Mesh.frd").write_text("x", encoding="utf-8")
+        if stale:
+            os.utime(os.path.join(path, "Mesh.frd"), (old, old))
+            os.utime(path, (old, old))
+        return path
+
+    gone = plant(f"ankusdrive_fem_{dead_pid()}", stale=True)
+    keep = [plant(f"ankusdrive_fem_{dead_pid()}", stale=False),   # dead, but fresh
+            plant(f"ankusdrive_fem_{os.getpid()}", stale=True),   # live pid
+            plant("ankusdrive_fem_0123", stale=True),             # not a name we make
+            plant("ankusdrive_fem_keep", stale=True)]
+    mine = os.path.join(root, "caller_workdir")
+    prev = os.environ.get("TMPDIR")
+    os.environ["TMPDIR"] = root                   # the worker inherits it
+    try:
+        with Worker() as w:
+            h = _cantilever(w, doc="fem_reap")
+            own = w.call("fem_run", analysis=h["analysis"], _timeout=300.0)["workdir"]
+            assert os.path.realpath(own) == os.path.realpath(
+                os.path.join(root, f"ankusdrive_fem_{w.proc.pid}")), own
+            assert os.path.isfile(os.path.join(own, "Mesh.frd")), os.listdir(own)
+            assert not os.path.exists(gone), "dead, stale workdir was not swept"
+            w.call("fem_run", analysis=h["analysis"], workdir=mine, _timeout=300.0)
+        assert not os.path.exists(own), "worker left its default workdir behind"
+        for path in keep:
+            assert os.path.isdir(path), f"swept a dir it must not touch: {path}"
+        assert os.path.isfile(os.path.join(mine, "Mesh.frd")), "caller workdir removed"
+    finally:
+        if prev is None:
+            os.environ.pop("TMPDIR", None)
+        else:
+            os.environ["TMPDIR"] = prev
+        shutil.rmtree(root, ignore_errors=True)
+
+
 # --- runner -------------------------------------------------------------------
 
 def _discover():
