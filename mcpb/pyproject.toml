@@ -5,11 +5,11 @@
 # without the other.
 [project]
 name = "ankusdrive-mcpb"
-version = "0.5.6"
+version = "0.5.7"
 description = "MCPB bundle environment for the AnkusDrive MCP server"
 requires-python = ">=3.10"
 dependencies = [
-    "ankusdrive==0.5.6",
+    "ankusdrive==0.5.7",
 ]
 
 [tool.uv]
