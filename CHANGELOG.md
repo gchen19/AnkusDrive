@@ -21,7 +21,7 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
-## [Unreleased]
+## [0.5.7] — 2026-10-29
 
 Concurrent agents on one server stop stepping on each other. Several agents sharing
 an MCP server (Claude Code subagents share their parent session's) could only
@@ -30,6 +30,11 @@ agent's switch quietly retargeted every other agent's calls. Each call can now n
 its own workspace. Two FEM changes ride along: a default mesh-size floor that stops
 sliver edges in imported CAD from exploding a mesh, and a ccx working directory per
 worker so concurrent workspaces no longer share one.
+
+Windows gets the Linux-only solvers. OpenFOAM, FSI, molding, YADE, openEMS and Bempp
+now run from the prebuilt solver image through Docker inside WSL, set up with one
+command, where they previously needed hours of source builds. A saved `.FCStd` can
+also carry the record of the session that built it.
 
 ### Added
 
@@ -41,6 +46,18 @@ worker so concurrent workspaces no longer share one.
   `docs/MULTI_AGENT.md` §7 ([#483](https://github.com/gchen19/AnkusDrive/pull/483)).
 - `fem_mesh` takes `min_length` (mm), the smallest element size Gmsh may use, and
   returns the value it applied ([#483](https://github.com/gchen19/AnkusDrive/pull/483)).
+- **Linux-only solver families run on Windows from the prebuilt image.** Under the
+  `container` substrate every engine call is relayed through `wsl -d <distro> -e
+  docker`, with `%TEMP%` and host paths translated into the container.
+  `ankusdrive container setup [--install-engine]` installs the engine, pulls the
+  image, starts the container and writes the substrate to `config.toml`, and `doctor`
+  offers it for Linux-only families on Windows. See `docs/WINDOWS.md` ([#470](https://github.com/gchen19/AnkusDrive/pull/470)).
+- `save_document` takes `attach_provenance` (default `False`). The saved `.FCStd`
+  then carries the `journal_export` record for the calls that built that document:
+  replay script, environment and solver identities, and a SHA-256 for each result.
+  Read it back with `ankusdrive journal export file.FCStd`. A save without the flag
+  drops an earlier record. `ANKUSDRIVE_JOURNAL_REDACT` applies as it does to the
+  journal ([#462](https://github.com/gchen19/AnkusDrive/issues/462), [#474](https://github.com/gchen19/AnkusDrive/pull/474)).
 
 ### Changed
 
@@ -63,6 +80,38 @@ worker so concurrent workspaces no longer share one.
   selection), and a new `selected` field gives the server-wide selection. Closing a
   pinned workspace leaves the server-wide selection alone
   ([#487](https://github.com/gchen19/AnkusDrive/issues/487)).
+- **`dem_pack_submit`'s `in_band` gates the bulk packing fraction.** It compared the
+  whole-bed fraction, deflated by the loose wall and free-surface layers, against the
+  0.60–0.66 random-close-packing band, so the default run reported `in_band: false`
+  at a bulk fraction of 0.602. The bulk fraction is gated when the runner can define
+  an interior cell, and the result reports `gated_on` and `gated_fraction`
+  ([#471](https://github.com/gchen19/AnkusDrive/issues/471), [#472](https://github.com/gchen19/AnkusDrive/pull/472)).
+- The default toolsets' longest docstrings are shorter: the default bundle's
+  `tools/list` is about 124,000 characters, down from 139,099 against a 140,000
+  budget. No argument's meaning changed ([#459](https://github.com/gchen19/AnkusDrive/issues/459), [#473](https://github.com/gchen19/AnkusDrive/pull/473)).
+- The examples live in one `examples/` tree (`design/`, `optics/`, `simulation/`);
+  `example/` is gone ([#478](https://github.com/gchen19/AnkusDrive/issues/478), [#479](https://github.com/gchen19/AnkusDrive/pull/479)).
+
+### Fixed
+
+- **DEM works on Windows with YADE installed inside WSL.** An in-distro YADE was
+  discovered and then launched as a native Windows process, so `dem` reported absent
+  whatever was installed. It now launches through `wsl -d <distro> -e`, and a
+  symlinked binary in the distro is no longer declared missing
+  ([#463](https://github.com/gchen19/AnkusDrive/issues/463), [#467](https://github.com/gchen19/AnkusDrive/pull/467)).
+- **A wheel install (pipx, uv tool, venv) no longer breaks FreeCAD's Qt.** The host
+  venv's PySide6 and numpy shadowed FreeCAD's own ("DLL load failed while importing
+  QtCore"); FreeCAD's bundled packages now win. `doctor` warns when the venv's Python
+  differs from FreeCAD's ([#468](https://github.com/gchen19/AnkusDrive/issues/468), [#469](https://github.com/gchen19/AnkusDrive/pull/469)).
+- The session journal records tool calls rejected at argument validation, and
+  unknown tool names, as `rejected: true`. Before, those calls were missing from both
+  `session_transcript` and the durable journal. The durable journal's FreeCAD
+  identity now includes the build hash ([#457](https://github.com/gchen19/AnkusDrive/issues/457), [#458](https://github.com/gchen19/AnkusDrive/issues/458),
+  [#475](https://github.com/gchen19/AnkusDrive/pull/475)).
+- Under `container`, a stale FSI override (`ANKUSDRIVE_CCX_PRECICE`, the FSI bashrc)
+  is reported by name with the path the image publishes. Before, `doctor` called FSI
+  ready and the override silently fell back to another variable
+  ([#460](https://github.com/gchen19/AnkusDrive/issues/460), [#476](https://github.com/gchen19/AnkusDrive/pull/476)).
 
 ## [0.5.6] — 2026-09-23
 
@@ -810,7 +859,8 @@ Before the first tag, in April 2026: the initial CLI and MCP scaffold over FreeC
 1.1.1, and Phase 2 — the full core mechanical-design surface, roughly 72 MCP tools.
 Those commits are in the git history rather than in this file.
 
-[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/gchen19/AnkusDrive/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/gchen19/AnkusDrive/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/gchen19/AnkusDrive/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/gchen19/AnkusDrive/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/gchen19/AnkusDrive/compare/v0.5.3...v0.5.4
