@@ -83,12 +83,12 @@ def _active_workspace() -> str:
     return _call_workspace.get() or _current_workspace
 
 
+# Kept deliberately small: this schema is repeated on every tool, so it counts
+# against the tools/list budget (#377) once per tool. use_workspace's docstring
+# and docs/MULTI_AGENT.md §7 carry the full explanation. "" means unpinned.
 _WORKSPACE_PARAM = inspect.Parameter(
-    "workspace", inspect.Parameter.KEYWORD_ONLY, default=None,
-    annotation=Annotated[str | None, Field(description=(
-        "Workspace to run this call in (created on first use). Pass the same "
-        "unique name on every call when other agents may be using AnkusDrive "
-        "concurrently; omit to use the workspace selected by use_workspace."))])
+    "workspace", inspect.Parameter.KEYWORD_ONLY, default="",
+    annotation=Annotated[str, Field(description="Run this call in this named workspace")])
 
 
 def _with_workspace_param(fn):
@@ -100,10 +100,8 @@ def _with_workspace_param(fn):
         raise TypeError(f"async tool {fn.__name__} needs a workspace-aware wrapper")
 
     @functools.wraps(fn)
-    def wrapper(*args, workspace: str | None = None, **kwargs):
-        if workspace is not None and (not isinstance(workspace, str) or not workspace):
-            raise RuntimeError("workspace name must be a non-empty string")
-        token = _call_workspace.set(workspace)
+    def wrapper(*args, workspace: str = "", **kwargs):
+        token = _call_workspace.set(workspace or None)
         try:
             return fn(*args, **kwargs)
         finally:
