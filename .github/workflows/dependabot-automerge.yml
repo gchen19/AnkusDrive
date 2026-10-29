@@ -1,0 +1,47 @@
+name: Dependabot auto-merge
+
+# Turns on auto-merge for the Dependabot PRs that are routine, so they land once
+# the required checks pass, with nobody clicking anything. Most of these are
+# action SHA bumps (#303); every `uses:` is pinned to a commit, and the version
+# comment moves with it.
+#
+#   github-actions  patch + minor  -> auto-merge
+#   pip             patch          -> auto-merge (runtime floors, mcp's <2 ceiling, #277)
+#   anything major, any pip minor  -> left for a person
+#
+# Auto-merge waits on branch protection, so this never merges past a red check.
+# Caveat: a merge performed by the workflow token does not fire `push` workflows on
+# main, so the post-merge test.yml run is skipped for these commits. The PR's own
+# runs of the same suites are what gated it; the nightly heavy lane still covers main.
+#
+# Needs the repo setting "Allow auto-merge" (Settings -> General).
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  automerge:
+    name: Enable auto-merge
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'gchen19/AnkusDrive'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Auto-merge routine bumps
+        if: >-
+          (steps.meta.outputs.package-ecosystem == 'github_actions' &&
+           (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+            steps.meta.outputs.update-type == 'version-update:semver-minor')) ||
+          (steps.meta.outputs.package-ecosystem == 'pip' &&
+           steps.meta.outputs.update-type == 'version-update:semver-patch')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"

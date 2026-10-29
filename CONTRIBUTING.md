@@ -185,6 +185,11 @@ arithmetic and which part is convention. `ankusdrive/inspection.py` with
   cuts instead of reporting a volume` rather than `fix boolean_op`.
 - **`main` is squash-merged and linear.** Force-push and deletion are blocked. Your
   PR title becomes the commit subject, so it is worth writing.
+- **Merging is the maintainer's call; the timing is automatic.** `CODEOWNERS` routes
+  every review request to the maintainer, who approves a PR by turning on
+  auto-merge. It then lands once the required checks are green. Routine Dependabot
+  bumps (action patch/minor, pip patch) turn auto-merge on themselves
+  (`dependabot-automerge.yml`).
 - **Add a `CHANGELOG.md` entry** under `## [Unreleased]` for anything a user would
   notice. Skip it for pure refactors and CI plumbing that changes no behaviour.
 - **Explain the failure, not just the fix.** The commit log here is written on the
