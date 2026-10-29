@@ -251,6 +251,10 @@ def wrap(name: str, fn: Callable, workspace_of: Callable[[], str],
     ``None`` (durable journal)."""
     if getattr(fn, "__ankusdrive_journaled__", False):
         return fn
+    # The per-call `workspace` routing argument added to every tool by mcp_server
+    # is not a model input: the entry's own `workspace` field records where the
+    # call ran, and a replay must not hard-code the original session's names.
+    routing = getattr(fn, "__ankusdrive_workspace_pin__", False)
 
     @functools.wraps(fn)
     def journaled(*a, **kwargs):
@@ -264,6 +268,8 @@ def wrap(name: str, fn: Callable, workspace_of: Callable[[], str],
             started = time.monotonic()
             workspace = workspace_of()
             args = _copy_args(kwargs)
+            if routing:
+                args.pop("workspace", None)
             with _lock:
                 _state["seq"] += 1
                 seq = _state["seq"]

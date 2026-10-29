@@ -288,12 +288,17 @@ processes:
   process, so it gets its own worker and file with true OS-level parallelism. This
   is what Appendix B assumes.
 - **Own named workspace on a shared server** — when a host runs a *single* MCP
-  server for all its agents, each builder calls `use_workspace("<component-id>")`
-  once up front to claim its own freecadcmd process inside that server. Handles and
-  documents do **not** cross workspaces; `list_workspaces` shows the pool and
-  `close_workspace` frees a slot (cap `ANKUSDRIVE_MAX_WORKSPACES`, default 4; idle
-  reap `ANKUSDRIVE_WORKSPACE_IDLE_S`). A client that never calls `use_workspace` sees
-  the historical single-worker behavior unchanged.
+  server for all its agents (Claude Code subagents, for one, share their parent
+  session's servers), each builder passes `workspace="<component-id>"` on **every**
+  tool call. That argument pins the one call to the builder's own freecadcmd process
+  inside the server, created on first use. Do not use `use_workspace` here: its
+  selection is server-wide, so one builder's switch silently retargets every other
+  builder's calls. Handles and documents do **not** cross workspaces;
+  `list_workspaces` shows the pool and `close_workspace` frees a slot (cap
+  `ANKUSDRIVE_MAX_WORKSPACES`, default 4 including `default`; idle reap
+  `ANKUSDRIVE_WORKSPACE_IDLE_S`). A single agent may still call `use_workspace` once
+  and omit the argument; a client that does neither sees the historical
+  single-worker behavior unchanged.
 
 Either way the invariant is the same: **a handle from one builder is meaningless to
 another** — the only cross-builder currency is the saved `.FCStd` and its published
@@ -1059,8 +1064,9 @@ binding. `orchestration/coordinator.py` implements the same loop host-side.
 3. **Fan out.** One subagent per leaf component (the `Agent` tool, or a `Workflow`
    `pipeline` stage), each prompted with *only* its resolved slice — a standalone
    `ankusdrive.builder_brief/1` (§11.11), rendered by `builder_brief_text`. Each runs
-   against its own AnkusDrive MCP server → its own worker → its own file (or its own
-   `use_workspace` on a shared server, §7), with the full tool surface.
+   against its own AnkusDrive MCP server → its own worker → its own file (or, on a
+   shared server such as a Claude Code session's, its own `workspace=` argument on
+   every call, §7), with the full tool surface.
 4. **Build & self-verify.** Each component agent builds to contract, calls
    `publish_interface` for its mating frames, then self-gates with
    `component_contract_check(handle, brief)` (§11.11 — watertight + envelope +

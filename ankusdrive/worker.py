@@ -13249,17 +13249,26 @@ def _h_fem_mesh(p):
     `char_length` caps the element size (mm). `element_order` is '1st' or '2nd'
     (quadratic): use '2nd' for bending/modal accuracy — linear tets (C3D4) shear-lock
     and badly overstiffen thin sections (a cantilever's first mode comes out ~50% high
-    with 1-2 elements through the thickness). Returns handle + node/element counts."""
+    with 1-2 elements through the thickness). `min_length` floors the element size
+    (mm); it defaults to char_length/10 so sliver edges in imported CAD cannot drive
+    Gmsh to a runaway mesh (FreeCAD's own default floor is 0). Returns handle +
+    node/element counts and the applied min_length."""
     from femmesh.gmshtools import GmshTools
     doc = _active_doc()
     analysis = _resolve_analysis(p["analysis"])
     body_obj = _shape_handle_to_obj(p["body"])
     char_length = float(p.get("char_length", 0.0))
+    min_length = p.get("min_length")
+    min_length = float(min_length) if min_length is not None else char_length / 10.0
+    if char_length > 0 and min_length > char_length:
+        raise ValueError("min_length must not exceed char_length")
 
     mesh = ObjectsFem.makeMeshGmsh(doc, p.get("name", "Mesh"))
     mesh.Shape = body_obj
     if char_length > 0:
         mesh.CharacteristicLengthMax = char_length
+    if min_length > 0:
+        mesh.CharacteristicLengthMin = min_length
     order = p.get("element_order")
     if order is not None:
         if order not in ("1st", "2nd"):
@@ -13277,16 +13286,19 @@ def _h_fem_mesh(p):
         "name": mesh.Name,
         "nodes": mesh.FemMesh.NodeCount,
         "tets": mesh.FemMesh.TetraCount,
+        "min_length": min_length,
     }
 
 
 def _default_fem_workdir():
-    """Default ccx working directory when the caller names none: `<TMPDIR>/ankusdrive_fem`.
+    """Default ccx working directory when the caller names none:
+    `<TMPDIR>/ankusdrive_fem_<pid>`.
 
     Rooted at tempfile.gettempdir() rather than a literal /tmp so it honours
-    TMPDIR and resolves to a real temp dir on Windows."""
+    TMPDIR and resolves to a real temp dir on Windows. Keyed by this worker's pid
+    so concurrent workspaces never write their decks/results into the same dir."""
     import tempfile as _tempfile
-    return os.path.join(_tempfile.gettempdir(), "ankusdrive_fem")
+    return os.path.join(_tempfile.gettempdir(), f"ankusdrive_fem_{os.getpid()}")
 
 
 # A ccx solve is three phases with different threading needs, split so fem_run and
