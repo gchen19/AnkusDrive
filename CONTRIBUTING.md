@@ -105,8 +105,10 @@ Two separate mechanisms, and it is worth knowing which is which:
 - **`Agent review` waits for a label.** Every PR gets an automated Claude review,
   posted as one comment that is updated on each push. On a PR from outside the
   maintainers it runs only after a maintainer adds `safe-to-review`, and a new push
-  removes the label again. Until then the check shows red with a message saying
-  so. The review can block a merge but never approves one; a maintainer merges.
+  removes the label again. Until then the check passes with a note saying it is
+  waiting. The review is advisory: a red result flags something for the maintainer
+  to look at, but it is not a required check and never approves a PR. A maintainer
+  merges.
 
 So: fewer checks on a fork PR is not a judgement about you. If a change needs the
 heavy lanes to be believed, say so in the PR and the maintainer will run them.

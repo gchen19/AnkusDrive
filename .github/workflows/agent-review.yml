@@ -1,9 +1,10 @@
 name: Agent review
 
 # A Claude review of every pull request, posted as one comment that is edited in
-# place on each push, and reported as a pass/fail check that branch protection can
-# require. The agent can block a PR; it cannot approve or merge one. Merging stays
-# a maintainer's decision.
+# place on each push, and reported as an ADVISORY check: it is not a required
+# status check, so red flags a problem for the maintainer but does not stop a merge
+# or auto-merge. It cannot approve or merge a PR either; merging stays a
+# maintainer's decision.
 #
 # Why pull_request_target: a fork PR's `pull_request` run gets no secrets, so the
 # review would never run on the PRs that most need it. pull_request_target runs
@@ -15,8 +16,9 @@ name: Agent review
 #   - owner / members / collaborators: every push.
 #   - anyone else: only once a maintainer adds the `safe-to-review` label, which is
 #     removed again on each new push, so every outside revision is looked at by a
-#     human before it is sent to the API. Until then this check FAILS on purpose: a
-#     skipped job would count as passing for a required check.
+#     human before it is sent to the API. Until then the check passes with a
+#     "waiting for label" notice. If this check is ever made required, turn those
+#     two exits back into failures: a passing gate would satisfy it unreviewed.
 #   - dependabot: passes without a review (SHA bumps; CI is the check that matters).
 #   - drafts: pass without a review; ready_for_review triggers one.
 #
@@ -86,12 +88,12 @@ jobs:
             printf '%b\n' "$LABELS" | grep -qx 'safe-to-review' && labelled=true
             if [ "$labelled" = true ] && [ "$ACTION" = "synchronize" ]; then
               gh pr edit "$PR" -R "$REPO" --remove-label safe-to-review
-              echo "::error::New commits since a maintainer last looked. A maintainer re-adds 'safe-to-review' to review this revision."
-              exit 1
+              echo "::notice::New commits since a maintainer last looked; not reviewed. A maintainer re-adds 'safe-to-review' to review this revision."
+              echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
             fi
             if [ "$labelled" = false ]; then
-              echo "::error::Waiting for a maintainer to add the 'safe-to-review' label. Outside PRs are read by a person before they are sent to the review agent."
-              exit 1
+              echo "::notice::Not reviewed yet: waiting for a maintainer to add the 'safe-to-review' label. Outside PRs are read by a person before they are sent to the review agent."
+              echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
             fi
           fi
           echo "trusted=$trusted" >> "$GITHUB_OUTPUT"

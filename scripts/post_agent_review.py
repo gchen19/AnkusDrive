@@ -43,8 +43,8 @@ def render(review, sha):
             where = f"`{defang(f['file'])}" + (f":{f['line']}`" if f.get("line") else "`")
             lines.append(f"- {where} — **{defang(f['title'])}**  ")
             lines.append(f"  {defang(f['detail']).strip()}")
-    lines += ["", "<sub>Automated review: it can block a PR but cannot approve one. "
-              "A maintainer decides the merge.</sub>"]
+    lines += ["", "<sub>Automated, advisory review: it flags problems but neither gates "
+              "nor approves the merge. A maintainer decides.</sub>"]
     return "\n".join(lines)
 
 
@@ -77,7 +77,7 @@ def main():
 
     if review["verdict"] == "block":
         n = sum(1 for f in review.get("findings") or [] if f.get("severity") == "blocking")
-        print(f"::error::Agent review blocked this PR ({n} blocking finding(s)); see the PR comment.")
+        print(f"::error::Agent review found {n} blocking issue(s); see the PR comment.")
         return 1
     print("::notice::Agent review passed.")
     return 0
