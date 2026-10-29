@@ -751,13 +751,16 @@ not shared co-editing of one live document (a single worker = one
 a thread pool, so a host can have several tool calls in flight at once. The
 server keeps a *pool* of named **workspaces**, each its own freecadcmd process
 with its own `App.ActiveDocument` and handle registry. Each concurrent agent
-claims its own workspace with `use_workspace(name)` at the start of its session;
-**handles and documents do not cross workspaces**. A client that never calls
-`use_workspace` sees the historical single-worker behavior byte-for-byte
-(everything routes to the `default` workspace). `Worker.call()` is internally
-serialized so two threads can never interleave the stdin/stdout protocol on one
-process. The pool is capped (`ANKUSDRIVE_MAX_WORKSPACES`, default 4) and idle
-workspaces are reaped (`ANKUSDRIVE_WORKSPACE_IDLE_S`, default 900s) so abandoned
+passes its own `workspace=<name>` on **every** tool call, which pins that call to
+its workspace (created on first use); **handles and documents do not cross
+workspaces**. Don't use `use_workspace` for this: its selection is server-wide, so
+one agent's switch retargets everyone's calls (Claude Code subagents, for one,
+share their parent session's server). A single agent may call `use_workspace` once
+instead; a client that does neither sees the historical single-worker behavior
+byte-for-byte (everything routes to the `default` workspace). `Worker.call()` is
+internally serialized so two threads can never interleave the stdin/stdout
+protocol on one process. The pool is capped (`ANKUSDRIVE_MAX_WORKSPACES`, default
+4 including `default`) and idle workspaces are reaped (`ANKUSDRIVE_WORKSPACE_IDLE_S`, default 900s) so abandoned
 sessions don't leak processes; `list_workspaces` / `close_workspace` manage it.
 
 The split of responsibilities is deliberate:

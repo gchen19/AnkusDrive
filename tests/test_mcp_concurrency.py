@@ -231,6 +231,27 @@ def test_per_call_workspace_pin():
         srv.use_workspace("pinB", workspace="pinA")   # a pinned call never moves the global
         assert srv._current_workspace == srv.DEFAULT_WORKSPACE
 
+        # list_workspaces reports the workspace the call runs in, and the global
+        # selection separately.
+        ws = srv.list_workspaces(workspace="pinA")
+        assert ws["current"] == "pinA" and ws["selected"] == srv.DEFAULT_WORKSPACE, ws
+        assert [w["name"] for w in ws["workspaces"] if w["current"]] == ["pinA"], ws
+        ws = srv.list_workspaces()
+        assert ws["current"] == ws["selected"] == srv.DEFAULT_WORKSPACE, ws
+
+        # Closing your own pinned workspace leaves the global alone; the next call
+        # pinned to it gets a fresh worker. Closing the global's workspace resets the
+        # global even from a call pinned elsewhere.
+        res = srv.close_workspace("pinA", workspace="pinA")
+        assert res["closed"] is True and res["current"] == "pinA", res
+        assert res["selected"] == srv.DEFAULT_WORKSPACE, res
+        assert srv._current_workspace == srv.DEFAULT_WORKSPACE
+        assert srv.list_documents(workspace="pinA") == []
+        srv.use_workspace("pinB")
+        res = srv.close_workspace("pinB", workspace="pinA")
+        assert res["current"] == "pinA" and res["selected"] == srv.DEFAULT_WORKSPACE, res
+        assert srv._current_workspace == srv.DEFAULT_WORKSPACE
+
         # Through the MCP entry point, the journal files a pinned call under the
         # workspace it ran in, not the globally selected one.
         import asyncio
