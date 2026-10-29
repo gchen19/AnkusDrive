@@ -29,6 +29,7 @@ The wrapper tests are POSIX-only (a /bin/sh script) and SKIP on Windows.
 Run: python3 tests/test_fem_run_submit.py
 """
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -366,8 +367,10 @@ def test_default_workdir_reaped():
         with Worker() as w:
             h = _cantilever(w, doc="fem_reap")
             own = w.call("fem_run", analysis=h["analysis"], _timeout=300.0)["workdir"]
-            assert os.path.realpath(own) == os.path.realpath(
-                os.path.join(root, f"ankusdrive_fem_{w.proc.pid}")), own
+            # Not w.proc.pid: on Windows that is the launcher, not the freecadcmd
+            # process whose os.getpid() names the dir.
+            assert os.path.realpath(os.path.dirname(own)) == os.path.realpath(root), own
+            assert re.fullmatch(r"ankusdrive_fem_[1-9]\d*", os.path.basename(own)), own
             assert os.path.isfile(os.path.join(own, "Mesh.frd")), os.listdir(own)
             assert not os.path.exists(gone), "dead, stale workdir was not swept"
             w.call("fem_run", analysis=h["analysis"], workdir=mine, _timeout=300.0)
