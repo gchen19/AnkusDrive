@@ -37,8 +37,12 @@ MODELS = {
 DEFAULT_TIER = "opus"
 
 # USD per million tokens: (input, cache write 5-min, cache read, output).
-# First-party API list prices. Haiku 5.5 is priced for prompts up to 100K tokens
-# (longer prompts cost $0.50/$2.50, which none of these harnesses reach).
+# Source: Anthropic first-party API list prices as of 2026-11 (platform pricing
+# page). Cache-read ratios really do differ by model: Opus 5.5 / Sonnet 5.5 /
+# Fable 5.2 list cache reads below the classic 0.1x input. Cache writes are 1.25x
+# input throughout. The Haiku 5.5 cache-read figure assumes the classic 0.1x and
+# needs checking against the pricing page. Haiku 5.5 is priced for prompts up to
+# 100K tokens (longer prompts cost $0.50/$2.50, which none of these harnesses reach).
 PRICING = {
     # current generation
     "claude-opus-5-5": (4.00, 5.00, 0.20, 20.00),
@@ -62,22 +66,31 @@ _NO_FORCED_TOOL_CHOICE = re.compile(
 
 
 def resolve_model(choice: str | None = None, *, env: str = "ANKUSDRIVE_EVAL_MODEL",
-                  default: str = DEFAULT_TIER) -> str:
+                  default: str = DEFAULT_TIER, require_pricing: bool = True) -> str:
     """Turn an alias or a full ID into a model ID.
 
     Precedence: an explicit ``choice``, then the ``env`` variable, then ``default``.
-    Anything that already looks like a model ID (``claude-...``) passes through
-    unchanged, so newer models work without editing this file. An unknown alias
-    raises ``ValueError`` with the valid ones listed, instead of sending a bad
-    model name to the API.
+    An explicit empty string is an error. It does not fall through to the default,
+    so a stray comma in a model list can't quietly add an Opus run.
+
+    A full ID (``claude-...``) passes through. With ``require_pricing`` (the
+    default), the ID must have a ``PRICING`` row. A harness that reports
+    ``cost_of`` then fails here, before any API spend, not after a billed trial.
+    Pass ``require_pricing=False`` only from a harness that never calls ``cost_of``.
+    An unknown alias raises ``ValueError`` with the valid aliases listed.
     """
+    if choice is not None and not choice.strip():
+        raise ValueError("empty model name")
     raw = (choice or os.environ.get(env) or default).strip()
-    if raw in MODELS:
-        return MODELS[raw]
-    if raw.startswith("claude-"):
-        return raw
-    raise ValueError(
-        f"unknown model {raw!r}: use one of {sorted(MODELS)} or a full 'claude-...' ID")
+    mid = MODELS.get(raw, raw)
+    if not mid.startswith("claude-"):
+        raise ValueError(
+            f"unknown model {raw!r}: use one of {sorted(MODELS)} or a full 'claude-...' ID")
+    if require_pricing and mid not in PRICING:
+        raise ValueError(
+            f"no pricing for {mid!r}: add it to orchestration/claude_models.PRICING "
+            "(cost reports would otherwise fail after the paid call)")
+    return mid
 
 
 def cost_of(usage: dict, model: str) -> float:

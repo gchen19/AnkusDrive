@@ -365,7 +365,7 @@ def main():
         import anthropic
         client = anthropic.Anthropic()
         models = [agentkit.resolve_model(m.strip()) for m in
-                  os.environ.get("ANKUSDRIVE_MODELS", "sonnet").split(",")]
+                  os.environ.get("ANKUSDRIVE_MODELS", "sonnet").split(",") if m.strip()]
         trials = int(os.environ.get("ANKUSDRIVE_TRIALS", "5"))
     else:
         print("\n[dry run] RUN_RELIABILITY unset — using the scripted stub client "

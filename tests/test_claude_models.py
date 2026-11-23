@@ -29,6 +29,14 @@ def test_resolve_precedence(monkeypatch_env):
     monkeypatch_env("ANKUSDRIVE_EVAL_MODEL", "sonnet")
     assert cm.resolve_model(default="haiku") == cm.MODELS["sonnet"]
     assert cm.resolve_model("claude-haiku-4-5") == "claude-haiku-4-5"  # explicit wins
+    for bad in ("", "  ", "claude-not-a-priced-model"):
+        try:
+            cm.resolve_model(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{bad!r} must raise before any spend")
+    assert cm.resolve_model("claude-new-x", require_pricing=False) == "claude-new-x"
     try:
         cm.resolve_model("gpt")
     except ValueError as e:

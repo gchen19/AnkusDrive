@@ -131,7 +131,11 @@ def run_suite() -> dict:
             else:
                 t0 = time.time()
                 response = call_claude(pair)
-                txt_path.write_text(response, encoding="utf-8")
+                # An empty answer (e.g. thinking used up max_tokens) is not cached, so it
+                # isn't re-graded as a model failure forever. It's graded as a fail this
+                # run and re-queried next run.
+                if response.strip():
+                    txt_path.write_text(response, encoding="utf-8")
                 cached = False
                 print(f"  [api] {spec.name} ({time.time() - t0:.1f}s)")
 
