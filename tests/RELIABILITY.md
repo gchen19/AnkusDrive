@@ -81,6 +81,50 @@ basic primitives" but not "model is hallucinating features that aren't there".
 above chance, below "indistinguishable from a human" (~95%), and gives the
 renderer headroom to improve without making the bar arbitrary.
 
+### LLM judge (opt-in, issue #507)
+
+The keyword grader has two known failure modes: it fails correct paraphrases
+("rectangular prism" for a box, "bore" for a hole), and it fails answers that
+mention an anti-keyword in a negation ("not a sphere" trips
+`must_not_match: sphere`). Growing the suite then means maintaining synonym
+lists. An opt-in judge grades on meaning instead.
+
+| `RELIABILITY_GRADER` | What runs | What the 70% gate uses |
+|---|---|---|
+| `keyword` (default) | keyword grader only, no extra API calls | keyword |
+| `judge` | keyword + judge | **judge** (an ungraded verdict counts as a fail) |
+| `both` | keyword + judge, plus a disagreement section | keyword (the report says so) |
+
+```bash
+RUN_RELIABILITY=1 RELIABILITY_GRADER=both .venv/bin/python3 tests/test_reliability.py
+```
+
+- **Judge model:** `RELIABILITY_JUDGE_MODEL` (alias or full ID), default
+  `opus`. It does not fall back to `ANKUSDRIVE_EVAL_MODEL`, so the model under
+  test never grades its own answers unless you ask for that.
+- **What the judge sees:** the question asked, the shape's ground-truth
+  `description`, the keyword spec (as a hint about which features matter, not
+  a required word list), and the answer. It does not see the image, so a
+  judgement is a short text-only call. The prompt is in
+  `tests/reliability_judge.py` (`JUDGE_SYSTEM`).
+- **Structured verdict:** the call uses structured outputs
+  (`output_config.format` with a `{pass: bool, reason: str}` JSON schema), so
+  the verdict is parsed with `json.loads`, with no free-text matching.
+- **Ungraded results:** a `refusal` or `max_tokens` stop, or output that
+  doesn't match the schema, is recorded as `status: "ungraded"` with
+  `pass: null`. It is never a pass and never a disagreement. The report counts
+  ungraded results separately.
+- **`both` mode** lists every shape where the judge and the keyword grader
+  differ, with the judge's reason and the keyword grader's reasons. A
+  judge-pass/keyword-fail row usually means a keyword spec needs a synonym or
+  a narrower anti-keyword. A judge-fail/keyword-pass row is worth reading: the
+  answer matched a word without describing the part.
+- **Cost:** one extra text call per shape on a verdict-cache miss.
+
+Offline coverage: `tests/test_reliability_judge.py` (fake client; runs in the
+fast-checks lane). Layers B and C still use their own keyword /
+MATCHES-VIOLATES parsers.
+
 ---
 
 ## Cache mechanics
@@ -89,7 +133,8 @@ renderer headroom to improve without making the bar arbitrary.
 
 ```
 cube_iso.png                    ← Layer A: single-shape render
-cube_iso.txt                    ← Layer A: model response
+cube_iso.<model>.txt            ← Layer A: model response
+cube_iso.<model>.judge.<judge>.json ← Layer A: judge verdict (judge/both modes)
 hole_removed_diff.png           ← Layer B: paired A/B render
 hole_removed_diff.txt           ← Layer B: model response
 cube_30mm__correct_loop.png     ← Layer C: spec-matching render
@@ -105,6 +150,13 @@ report_agent_loop.json          ← Layer C
   whole dir) when you actually want a re-render.
 - **TXT cache** survives across grader tweaks. Iterating on synonym lists is
   free; only deleting the .txt forces a re-billed API call.
+- **Judge cache** is keyed by the answered model and the judge model. A
+  cached verdict is reused only while the answer text, the shape's
+  `description` and the judge prompt (`JUDGE_PROMPT_VERSION` plus the prompt
+  itself) are unchanged, so editing any of them re-judges automatically.
+  Editing a keyword list does not, because the judge only uses it as a hint and
+  fixing lists after a `both` run should stay free. Ungraded verdicts are
+  not cached, so the next run retries them.
 
 This is intentional: the cost of running the suite is in the API call, not
 the render. Caching them separately means you can refine the grader on real
@@ -195,6 +247,8 @@ negative-control. Multi-trial (pass *rate*, not pass/fail) × multi-model
 **Adding a shape:** append a `(builder, ShapeSpec)` to `SHAPES` in
 `tests/reliability_shapes.py`. Builder takes a Worker, returns a handle. Run
 the suite, eyeball the response, iterate on the spec's keyword lists.
+
+**Changing the grader:** set `RELIABILITY_GRADER` (see "LLM judge" above).
 
 **Changing the prompt:** edit `PROMPT` at the top of `test_reliability.py`.
 This invalidates all cached `.txt` files (since the question changed); delete
