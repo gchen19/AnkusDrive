@@ -18,8 +18,7 @@ Every AnkusDrive MCP tool falls into one of three determinism classes:
 
   "nondeterministic-by-design"
       A tool whose output legitimately varies run-to-run (timestamps, random IDs).
-      None today — kept as a declared class so a future such tool has a home other
-      than the silent gap.
+      visual_review (#509) lives here: a remote vision model's advisory verdict.
 
 WHY A REGISTRY: the determinism suite only guards the tools it knows about. Without
 a forced declaration, every newly-added tool silently re-opens the coverage gap.
@@ -103,10 +102,12 @@ BOUNDED_TOOLS = {
     "optimize_submit",
 }
 
-# No tool is intentionally non-reproducible today, but the class is declared so a
-# future one (random IDs, wall-clock stamps) is classified rather than slipping
-# through.
-NONDETERMINISTIC_TOOLS = set()
+# Tools whose output legitimately varies run-to-run.
+NONDETERMINISTIC_TOOLS = {
+    # #509: the verdict is a remote vision model's reading of the rendered views —
+    # advisory, and not reproducible across calls or model versions.
+    "visual_review",
+}
 
 
 def determinism_class(tool_name):

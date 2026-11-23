@@ -115,7 +115,7 @@ FAMILIES: dict = {
         project_resolve_manifest where_used change_impact eco_validate eco_create
         baseline_create baseline_verify release_package
     """,
-    "rendering": "render_photoreal render_photoreal_submit render_job render_capabilities",
+    "rendering": "render_photoreal render_photoreal_submit render_job render_capabilities visual_review",
 }
 FAMILIES = {k: frozenset(v.split()) for k, v in FAMILIES.items()}
 
@@ -132,7 +132,7 @@ LABELS = {
     "hand_calcs": "Engineering hand calculations and quick screens",
     "simulation": "External-solver simulation: CFD, thermal, EM, acoustics, FSI, molding, DEM, optimization",
     "plm": "Design control: part numbers, recipes, lifecycle, change orders, releases",
-    "rendering": "Photorealistic rendering (Blender / Render add-on)",
+    "rendering": "Photorealistic rendering (Blender / Render add-on) and opt-in visual review",
 }
 
 # The Claude Desktop extension's toggle defaults: model -> drawing -> analysis.

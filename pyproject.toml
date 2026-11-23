@@ -164,6 +164,15 @@ em_gpl = [
     # openEMS + CSXCAD are NOT here — they are source-built (GPL-3.0); see
     # scripts/install-solvers.sh em_gpl and update_openEMS.sh --python.
 ]
+# Opt-in visual second opinion (visual_review, #509): sends rendered views + intent
+# text to the Anthropic API, and only when ANKUSDRIVE_VISUAL_REVIEW=1 and credentials
+# are set (PRIVACY.md). Floor = the OLDEST SDK whose messages.create takes
+# `output_config={"format": {"type": "json_schema", ...}}` (structured outputs):
+# 0.77.0 (0.76.0 has no output_config; checked in each wheel's messages.py), and the
+# offline test (tests/test_visual_review.py) passes with 0.77.0 installed.
+review = [
+    "anthropic>=0.77",
+]
 cfd = []                    # OpenFOAM / SU2 ship via apt/conda — see scripts/install-solvers.sh
 # Partitioned fluid-structure interaction (FSI) runs on preCICE (LGPL-3.0) coupling
 # OpenFOAM <-> CalculiX. preCICE itself is NOT a pip wheel for this path (the version-

@@ -75,6 +75,7 @@ ALLOWED = {
     "ankusdrive/solvers.py": "the _SOLVERS registry; find_solver/require_solver go through install_hint()",
     "ankusdrive/analysis/fluids.py": "_INSTALL_HINT; handed out only via _install_hint()",
     "ankusdrive/install_kind.py": "the rewrites themselves (pipx/uv/uvx/mcpb commands)",
+    "ankusdrive/visual_review.py": "_INSTALL_HINT; handed out only via _install_hint() (#509)",
 }
 
 
@@ -104,6 +105,10 @@ def test_registries_hand_out_only_adapted_hints():
         f"registry install_hint read outside install_hint(): {raw_reads}"
     fluids = (PKG / "analysis" / "fluids.py").read_text(encoding="utf-8")
     assert fluids.count("_INSTALL_HINT") == 2, "fluids reads _INSTALL_HINT outside _install_hint()"
+    review = (PKG / "visual_review.py").read_text(encoding="utf-8")
+    assert re.findall(r"\b_INSTALL_HINT\b", review).count("_INSTALL_HINT") == 2 \
+        and "return _install_kind.adapt(_INSTALL_HINT)" in review, \
+        "visual_review reads _INSTALL_HINT outside _install_hint()"
     worker = (PKG / "worker.py").read_text(encoding="utf-8")
     assert not re.search(r'info\.get\("install_hint",', worker), \
         "worker.py has a raw install_hint fallback — use `or solvers.install_hint(name)`"

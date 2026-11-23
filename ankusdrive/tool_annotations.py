@@ -36,9 +36,11 @@ The three classes, and the rule each one follows:
   The classification is conservative on purpose: a false "read-only" lets a client
   run a mutation unasked, while a false "destructive" only costs a confirmation.
 
-``openWorldHint`` is false for every tool: AnkusDrive makes no network requests
-(no HTTP client, no telemetry). Local solver subprocesses, WSL and the Multipass VM
-run on the user's own machine.
+``openWorldHint`` is false for every tool except those in ``OPEN_WORLD``: AnkusDrive
+makes no network requests of its own (no telemetry). Local solver subprocesses, WSL
+and the Multipass VM run on the user's own machine. The one exception is
+``visual_review`` (#509), which, only when the user opts in, sends rendered views to
+the Anthropic API; it changes nothing locally, so it is READ_ONLY and open-world.
 
 Titles are derived from the tool name (``fem_run`` -> "FEM Run") with the acronym
 table below, plus explicit overrides where the name alone reads badly.
@@ -55,7 +57,7 @@ catalog_search catalog_nearest catalog_check envelope_check list_face_roles
 verify_intent verify_contract component_contract_check interface_align_check
 validate_manifest assembly_lock_check get_interface
 drawing_gate drawing_legibility inspection_plan
-render_view render_views render_fem_results render_capabilities
+render_view render_views render_fem_results render_capabilities visual_review
 solve_capabilities setup_status
 fem_modal_results fem_buckling_results fem_thermal_results fem_results fem_result_probe
 material_get material_select material_list fluid_props
@@ -157,6 +159,10 @@ DESTRUCTIVE = {
     "run_script": "executes caller-supplied Python with full access to the documents and filesystem",
 }
 
+# Tools that reach an external service (``openWorldHint: true``). Each also sits in
+# one of the three classes above.
+OPEN_WORLD = frozenset({"visual_review"})
+
 _ACRONYMS = {
     "fem": "FEM", "cfd": "CFD", "cht": "CHT", "em": "EM", "fsi": "FSI", "dem": "DEM",
     "dfm": "DFM", "dfa": "DFA", "cnc": "CNC", "bom": "BOM", "eco": "ECO", "fai": "FAI",
@@ -196,12 +202,13 @@ def title_for(name: str) -> str:
 def hints_for(name: str) -> dict:
     """The ToolAnnotations fields for ``name``. Raises KeyError for an unclassified
     tool — never a silent default."""
+    ow = name in OPEN_WORLD
     if name in READ_ONLY:
-        return {"readOnlyHint": True, "openWorldHint": False}
+        return {"readOnlyHint": True, "openWorldHint": ow}
     if name in ADDITIVE:
-        return {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+        return {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": ow}
     if name in DESTRUCTIVE:
-        return {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
+        return {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": ow}
     raise KeyError(f"tool {name!r} has no annotation class — add it to READ_ONLY, "
                    f"ADDITIVE or DESTRUCTIVE in ankusdrive/tool_annotations.py")
 

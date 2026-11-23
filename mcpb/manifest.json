@@ -146,8 +146,8 @@
     },
     "toolset_rendering": {
       "type": "boolean",
-      "title": "Tools: Photorealistic rendering (Blender / Render add-on)",
-      "description": "Register the 4 rendering tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
+      "title": "Tools: Photorealistic rendering (Blender / Render add-on) and opt-in visual review",
+      "description": "Register the 5 rendering tools. Each enabled family adds to the context every conversation uses; turn on what you need.",
       "required": false,
       "default": false
     }

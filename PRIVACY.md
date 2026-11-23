@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Effective 2026-09-13. Applies to AnkusDrive: the PyPI package `ankusdrive`, the
+_Effective 2026-11-23. Applies to AnkusDrive: the PyPI package `ankusdrive`, the
 `ankusdrive-<version>.mcpb` desktop extension, and the MCP server they run._
 
 AnkusDrive is software you run on your own computer. It drives your local FreeCAD
@@ -10,13 +10,15 @@ installation. It has no accounts, no servers of its own, and no telemetry.
 
 **Nothing.** AnkusDrive does not collect, transmit, sell or share personal data, usage data,
 analytics, crash reports, or the contents of your models. The maintainer receives no
-information about you or how you use it.
+information about you or how you use it. The one way model content can leave your machine is
+a `visual_review` call you have explicitly enabled, which sends rendered images of a part to
+Anthropic (see [Network access](#network-access)).
 
 ## Network access
 
-The AnkusDrive code makes **no network requests**: it contains no HTTP client and no telemetry
-or update check. Network traffic happens only in these cases, each one run by other software
-and each one started by you:
+By default the AnkusDrive code makes **no network requests**: no telemetry and no update check.
+The single exception is the opt-in `visual_review` tool, described below. Otherwise network
+traffic happens only in these cases, each one run by other software and each one started by you:
 
 - **Installing or updating.** `pip`, `pipx` or `uv` download AnkusDrive and its dependencies
   from PyPI. Claude Desktop may download `uv` from GitHub to set up the extension. These are
@@ -27,6 +29,17 @@ and each one started by you:
   AI client, or an IDE, sends your prompts together with AnkusDrive's tool inputs and results
   to its AI model provider. That transfer is governed by the host's and the provider's privacy
   policies, not this one. AnkusDrive itself sends nothing anywhere.
+- **`visual_review`, only if you turn it on.** This tool asks Anthropic's Claude for an
+  independent visual check of a part. It runs only when all three hold: `ANKUSDRIVE_VISUAL_REVIEW=1`
+  is set, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set, and the optional `anthropic`
+  package is installed (`pip install 'ankusdrive[review]'`). Otherwise it returns a "disabled"
+  result and sends nothing. When it does run, each call sends the **Anthropic API**
+  (api.anthropic.com, or the `ANTHROPIC_BASE_URL` you set) a few rendered PNG views of the one
+  part you named, at 512 px, plus the intent text: what you passed, or the part's
+  `declare_intent` contract. No model file, document, file path or other tool data is sent.
+  Your own Anthropic account carries the request, and Anthropic's commercial terms and privacy
+  policy govern it (https://www.anthropic.com/legal/privacy). The result's request ID is
+  logged to the server's stderr.
 - **Third-party software you install** alongside AnkusDrive: FreeCAD, CalculiX, Gmsh, OpenFOAM,
   Elmer, SU2 and the other optional solvers. It runs locally under its own terms.
 
@@ -67,7 +80,8 @@ keeps names out of a file you share, it is not encryption.
 
 ## Sharing and retention
 
-AnkusDrive shares no data with the maintainer or any third party. It keeps no records beyond
+AnkusDrive shares no data with the maintainer or any third party, apart from what an
+opted-in `visual_review` call sends to Anthropic, as described above. It keeps no records beyond
 the local files listed above, which you control and can delete at any time.
 
 ## Children
