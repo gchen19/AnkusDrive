@@ -107,6 +107,10 @@ jobs:
         # Offline: the shared Claude model/pricing module the paid eval harnesses use.
         run: python tests/test_claude_models.py
 
+      - name: Reliability LLM judge — request shape, verdicts, cache, disagreements (#507)
+        # Offline: a fake client stands in for the API; no key, no FreeCAD.
+        run: python tests/test_reliability_judge.py
+
       - name: Tool annotations — every tool classified, read-only means read-only (#368)
         # Clients auto-approve tools marked read-only. Sweeps every @mcp.tool() into
         # exactly one class and fails a READ_ONLY tool whose handler visibly mutates.

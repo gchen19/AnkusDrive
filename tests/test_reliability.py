@@ -12,10 +12,16 @@ Usage:
     export ANTHROPIC_API_KEY=...
     RUN_RELIABILITY=1 .venv/bin/python3 tests/test_reliability.py
 
+Grader (RELIABILITY_GRADER, see tests/reliability_judge.py):
+    keyword  (default) keyword lists from reliability_shapes.py, no extra calls
+    judge    an LLM judge (RELIABILITY_JUDGE_MODEL, default opus) drives the gate
+    both     both run, the gate stays on keyword, disagreements are listed
+
 Cache layout:
     tests/reliability_cache/
-        cube_iso.png            # rendered image
-        cube_iso.txt            # model response (plain text)
+        cube_iso.png                                  # rendered image
+        cube_iso.<model>.txt                          # model response (plain text)
+        cube_iso.<model>.judge.<judge model>.json     # judge verdict (judge/both)
         ...
         report.json             # structured per-shape grades
 
@@ -32,9 +38,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from ankusdrive import Worker  # noqa: E402
+# ankusdrive (Worker, render) is imported inside the functions that need it, so the
+# offline judge test can import the graders here on the FreeCAD-free CI lane.
 from orchestration.claude_models import first_text, resolve_model, response_cache_name  # noqa: E402
-from ankusdrive import render as render_lib  # noqa: E402
+from tests import reliability_judge as judge_lib  # noqa: E402
 from tests.reliability_shapes import SHAPES, ShapeSpec  # noqa: E402
 
 
@@ -49,6 +56,7 @@ PROMPT = (
 
 
 def render_shape(w, builder, view: str = "iso", deflection: float = 0.3) -> bytes:
+    from ankusdrive import render as render_lib
     handle = builder(w)
     mesh = w.call("tessellate", handle=handle, deflection=deflection)
     return render_lib.render_mesh(
@@ -114,9 +122,59 @@ def grade_response(spec: ShapeSpec, text: str) -> dict:
     }
 
 
-def run_reliability_suite() -> dict:
-    CACHE_DIR.mkdir(exist_ok=True, parents=True)
+def _anthropic_client():
+    import anthropic
+    return anthropic.Anthropic()
+
+
+def grade_all(items: list[dict], mode: str, *, answered_model: str, judge: str | None = None,
+              get_client=_anthropic_client, cache_dir: Path = CACHE_DIR) -> dict:
+    """Grade collected answers and build the report. No rendering, no Worker.
+
+    ``items`` are ``{"spec", "response", "cached"}`` dicts. In ``judge`` / ``both``
+    mode each answer also gets a judge verdict (cached on disk); ``get_client`` is
+    only called on a verdict cache miss.
+    """
     results = []
+    for it in items:
+        spec, response = it["spec"], it["response"]
+        grade = grade_response(spec, response)
+        verdict = None
+        if mode in ("judge", "both"):
+            verdict = judge_lib.cached_judge(
+                get_client, spec, response, PROMPT, cache_dir=cache_dir,
+                stem=f"{spec.name}_iso", answered_model=answered_model, judge=judge)
+        results.append({
+            "shape": spec.name,
+            "description": spec.description,
+            "response": response,
+            "grade": grade,
+            "judge": verdict,
+            "pass": judge_lib.gate_pass(grade, verdict, mode),
+            "cached": it.get("cached", False),
+        })
+
+    correct = sum(1 for r in results if r["pass"])
+    total = len(results)
+    report = {
+        "model": answered_model,
+        "grader": mode,
+        "gate_on": "judge" if mode == "judge" else "keyword",
+        "judge_model": judge if mode != "keyword" else None,
+        "total": total,
+        "correct": correct,
+        "accuracy": correct / total if total else 0.0,
+        "results": results,
+    }
+    if mode != "keyword":
+        report["judge_summary"] = judge_lib.judge_summary(results)
+    return report
+
+
+def run_reliability_suite(mode: str = "keyword") -> dict:
+    from ankusdrive import Worker
+    CACHE_DIR.mkdir(exist_ok=True, parents=True)
+    items = []
 
     with Worker() as w:
         for builder, spec in SHAPES:
@@ -142,49 +200,74 @@ def run_reliability_suite() -> dict:
                     txt_path.write_text(response, encoding="utf-8")
                 cached = False
                 print(f"  [api] {spec.name} ({time.time() - t0:.1f}s)")
+            items.append({"spec": spec, "response": response, "cached": cached})
 
-            grade = grade_response(spec, response)
-            results.append({
-                "shape": spec.name,
-                "description": spec.description,
-                "response": response,
-                "grade": grade,
-                "cached": cached,
-            })
-
-    correct = sum(1 for r in results if r["grade"]["pass"])
-    total = len(results)
-    accuracy = correct / total if total else 0.0
-    report = {
-        "model": MODEL,
-        "total": total,
-        "correct": correct,
-        "accuracy": accuracy,
-        "results": results,
-    }
+    judge = judge_lib.judge_model() if mode != "keyword" else None
+    report = grade_all(items, mode, answered_model=MODEL, judge=judge)
     (CACHE_DIR / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
 
+def _verdict_tag(verdict: dict | None) -> str:
+    if not verdict:
+        return ""
+    if verdict["status"] != "graded":
+        return " judge=UNGRADED"
+    return " judge=" + ("PASS" if verdict["pass"] else "FAIL")
+
+
 def print_report(report: dict):
+    mode = report.get("grader", "keyword")
     print()
     print("=" * 70)
-    print(f"Reliability suite: {report['model']}")
-    print(f"  {report['correct']}/{report['total']} correct = {report['accuracy']:.0%}")
+    print(f"Reliability suite: {report['model']}  (grader={mode}"
+          + (f", judge={report['judge_model']}" if report.get("judge_model") else "") + ")")
+    print(f"  {report['correct']}/{report['total']} correct = {report['accuracy']:.0%}"
+          f"  (gate on {report.get('gate_on', 'keyword')} verdicts)")
     print("=" * 70)
     for r in report["results"]:
-        mark = "PASS" if r["grade"]["pass"] else "FAIL"
+        mark = "PASS" if r["pass"] else "FAIL"
         cache = " (cached)" if r["cached"] else ""
-        print(f"\n  [{mark}] {r['shape']}{cache}")
+        extra = ""
+        if mode == "both":
+            extra = " keyword=" + ("PASS" if r["grade"]["pass"] else "FAIL") + _verdict_tag(r["judge"])
+        print(f"\n  [{mark}] {r['shape']}{cache}{extra}")
         print(f"        spec: {r['description']}")
         # First 200 chars of response.
         truncated = r["response"].replace("\n", " ").strip()
         if len(truncated) > 220:
             truncated = truncated[:220] + "..."
         print(f"        said: {truncated}")
-        if not r["grade"]["pass"]:
-            for reason in r["grade"]["reasons"]:
-                print(f"        why:  {reason}")
+        if not r["pass"]:
+            if mode == "judge":
+                print(f"        why:  {r['judge']['reason'] if r['judge'] else 'no judge verdict'}")
+            else:
+                for reason in r["grade"]["reasons"]:
+                    print(f"        why:  {reason}")
+    print_judge_summary(report)
+
+
+def print_judge_summary(report: dict):
+    js = report.get("judge_summary")
+    if not js:
+        return
+    print()
+    print("-" * 70)
+    print(f"Judge ({report['judge_model']}): {js['judge_correct']}/{js['graded']} pass,"
+          f" {js['ungraded']} ungraded (refusal / max_tokens / bad output, not counted as pass)")
+    if report.get("grader") != "both":
+        return
+    print(f"Judge vs keyword: {js['agree']} agree, {js['disagree']} disagree"
+          f" ({js['judge_pass_keyword_fail']} judge-pass/keyword-fail,"
+          f" {js['judge_fail_keyword_pass']} judge-fail/keyword-pass)."
+          " The gate above uses the KEYWORD grade.")
+    for d in js["disagreements"]:
+        kw = "PASS" if d["keyword_pass"] else "FAIL"
+        jd = "PASS" if d["judge_pass"] else "FAIL"
+        print(f"\n  {d['shape']}: keyword={kw} judge={jd}")
+        print(f"        judge: {d['judge_reason']}")
+        for reason in d["keyword_reasons"]:
+            print(f"        keyword: {reason}")
 
 
 def main():
@@ -200,7 +283,8 @@ def main():
         print("ERROR: ANTHROPIC_API_KEY not set", file=sys.stderr)
         sys.exit(1)
 
-    report = run_reliability_suite()
+    mode = judge_lib.grader_mode()  # validate before spending anything
+    report = run_reliability_suite(mode)
     print_report(report)
 
     # Hard fail if accuracy drops below a sensible bar.
