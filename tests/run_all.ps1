@@ -264,6 +264,7 @@ Test-Module 'Experiment-readiness gate'                  'test_experiment_readin
 $savedRel = $env:RUN_RELIABILITY
 $env:RUN_RELIABILITY = ''
 Test-Module 'Reliability Layer D - harness validator (free stub)' 'test_reliability_tasks.py'
+Test-Module 'Tool selection - corpus + paid path vs fake client (free, #508)' 'test_tool_selection.py'
 $env:RUN_RELIABILITY = $savedRel
 
 # The OpenFOAM-backed suites run on Windows since #193 (launches route through the
@@ -296,6 +297,7 @@ if ($env:RUN_RELIABILITY -eq '1') {
     Test-Module 'Reliability Layer B (diff detection)' 'test_reliability_diff.py'
     Test-Module 'Reliability Layer C (agent-loop closure)' 'test_reliability_agent_loop.py'
     Test-Module 'Reliability Layer D (LLM-drives-MCP)' 'test_reliability_tasks.py'
+    Test-Module 'Tool selection (description disambiguation, #508)' 'test_tool_selection.py'
 } else {
     Write-Host '(Skipping reliability suites - set RUN_RELIABILITY=1 to enable.)'
 }

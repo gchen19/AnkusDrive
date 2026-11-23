@@ -15,6 +15,7 @@ scratch/out/
 .venv-openems/
 tests/reliability_cache/
 tests/multiagent_cache/
+tests/tool_selection_cache/
 # generated CAD artifacts (scratch/gen_artifacts.py output)
 results/
 

@@ -45,6 +45,12 @@ re-grading the old model's answers. Results recorded before 2026-11 used
 them. Opus costs in MULTI_AGENT_EVAL.md rows from that period were computed at
 the old $15/$75 rate, so they are 3× too high.
 
+**Tool selection.** A separate paid eval checks whether each tool's description
+makes Claude pick that tool over its look-alikes (`fem_modal` vs `beam_modal`,
+`section_view` vs `add_section_view`, and so on). Its free tier runs in
+fast-checks. See [TOOL_SELECTION.md](TOOL_SELECTION.md) for how to run it, what it
+costs, and how to turn its confusion list into description rewrites.
+
 ---
 
 ## What it tests today (Layer A)

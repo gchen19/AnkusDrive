@@ -612,6 +612,10 @@ echo "== Reliability Layer D — harness validator (free, scripted stub) =="
 RUN_RELIABILITY= $VENV_PY tests/test_reliability_tasks.py
 
 echo
+echo "== Tool selection — corpus, descriptions, paid path vs a fake client (free, #508) =="
+RUN_RELIABILITY= $VENV_PY tests/test_tool_selection.py
+
+echo
 if [[ "$RUN_PERF" == "1" ]]; then
     echo "== Perf baselines =="
     $VENV_PY tests/test_perf.py
@@ -632,6 +636,9 @@ if [[ "$RUN_RELIABILITY" == "1" ]]; then
     echo
     echo "== Reliability Layer D (LLM-drives-MCP, real models) =="
     $VENV_PY tests/test_reliability_tasks.py
+    echo
+    echo "== Tool selection (does each description make Claude pick its tool? #508) =="
+    $VENV_PY tests/test_tool_selection.py
 else
     echo "(Skipping reliability suites — set RUN_RELIABILITY=1 to enable. See tests/RELIABILITY.md)"
 fi
