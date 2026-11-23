@@ -49,6 +49,7 @@ _NAME_DIFFERS_OK = {
     "render_view", "render_views",   # both call "tessellate", rasterize host-side
     "render_fem_results",            # calls "fem_field_surface" (#174), rasterizes host-side
     "granular_screen",               # public DFx screen → closed-form "granular_oracle" handler
+    "visual_review",                 # calls "tessellate" (+ "get_object"), rasterizes host-side (#509)
 }
 
 # Handlers intentionally NOT surfaced as an MCP tool (worker-internal only).

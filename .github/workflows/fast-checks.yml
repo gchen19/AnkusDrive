@@ -114,6 +114,12 @@ jobs:
         # toggles and their defaults match toolsets.BUNDLE_DEFAULT.
         run: python tests/test_toolsets.py
 
+      - name: visual_review — opt-in, nothing sent by default, verdict parsed (#509)
+        # Render step stubbed and the Anthropic SDK faked: each missing opt-in condition
+        # builds no client, the request carries images + intent + output_config, and
+        # refusals / SDK errors become structured results. No FreeCAD, no network.
+        run: python tests/test_visual_review.py
+
       - name: run_script gate — agent code only where the install allows it (#378)
         # Static tier here (switch parsing, origin tag, worker checks before exec, the
         # bundle toggle defaults off); the server and worker tiers SKIP without mcp /

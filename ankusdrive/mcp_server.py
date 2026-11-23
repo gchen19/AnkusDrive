@@ -3025,6 +3025,38 @@ def render_views(
 
 
 @mcp.tool()
+def visual_review(handle: str, intent: str | None = None, views: list[str] | None = None) -> dict:
+    """Independent second opinion: renders views (default iso, front, top, right) and
+    asks a Claude vision model whether they match the intent (the text you pass, else
+    the declare_intent contract). ADVISORY: never replaces geometric gates
+    (verify_intent, check_shape). Opt-in, off by default: runs only with
+    ANKUSDRIVE_VISUAL_REVIEW=1, ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) and
+    ankusdrive[review] installed; then the PNGs and intent text go to the Anthropic API.
+
+    Returns {enabled: false, reason, how_to_enable} when off; else {enabled, ok,
+    verdict: {matches_intent, confidence, observed_features, discrepancies, notes},
+    model, usage, request_id, views, intent_source, advisory} or {ok: false, error}.
+    """
+    import json as _json
+    from ankusdrive import visual_review as _vr
+
+    def _render_pngs(names, size):
+        mesh = _call("tessellate", handle=handle, deflection=0.5)
+        return {v: _render.render_mesh(mesh["vertices"], mesh["triangles"], width=size,
+                                       height=size, view=v, edges=False, supersample=2)
+                for v in names}
+
+    def _declared_intent():
+        raw = (_call("get_object", handle=handle).get("properties") or {}).get("AD_Intent")
+        try:
+            return _json.loads(raw) if raw else {}
+        except ValueError:
+            return {}
+
+    return _vr.review(handle, intent, views, render=_render_pngs, read_intent=_declared_intent)
+
+
+@mcp.tool()
 def render_fem_results(
     analysis: str,
     field: str = "vonmises",

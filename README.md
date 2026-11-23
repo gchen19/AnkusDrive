@@ -538,7 +538,7 @@ every day.
 | Inspection (first-article) | `balloon_drawing` (revision-stable balloon numbering), `inspection_plan` (characteristic list with a measurement method per row, by the gauge-maker's 10:1 rule), `fai_report` (AS9102-Form-3-*shaped* CSV/SVG/PDF — not a certified submission); `drawing_gate(require_ballooned=True)` makes a ballooned print a release requirement |
 | Release packages (vendor / RFQ) | `release_package` — the one-call deliverable bundle for an item at a revision: STEP + drawings (PDF/SVG/DXF) + recursive BOM + inspection package + a blake2b-checksummed manifest. Gated *before* anything is written: the item must be in a releasable lifecycle state (or `draft=True`, which watermarks every artifact PRELIMINARY), `drawing_gate` must pass for every included page, and the title block's part number / revision / material must match the items registry — a mismatch is a failure with a naming diff, never a silent fix. Byte-reproducible (the same revision re-releases to identical checksums), stamps the ECO into the manifest and the print, and `rfq=True` adds quantity breaks + the `cost_estimate` rollup while dropping internal-only artifacts |
 | Off-the-shelf parts (buyability) | `catalog_search` (what standard components exist, in which sizes and stocked lengths), `catalog_nearest` (snap a wanted size to a real one — asked for an M4×13 it answers 12 and 16), `catalog_check`, `standard_part_designate` (canonical designations: `ISO 4762 M4×12 A2`, `608-2RS`, `AS568-214 NBR70`, stamped on the part at creation), `designation_check`, `bom_extract(orderable=True)` (per-line stocked / not_stocked with alternatives) |
-| Visual feedback | `render_view`, `render_views` (8 preset views, multi-view sheets), `render_photoreal` / `render_photoreal_submit` (Blender studio scene with per-part appearance for whole assemblies, or the FreeCAD Render add-on renderers; `renderer="auto"`), `render_capabilities` |
+| Visual feedback | `render_view`, `render_views` (8 preset views, multi-view sheets), `render_photoreal` / `render_photoreal_submit` (Blender studio scene with per-part appearance for whole assemblies, or the FreeCAD Render add-on renderers; `renderer="auto"`), `render_capabilities`, `visual_review` (opt-in second opinion from Claude's vision, see [below](#a-second-pair-of-eyes-visual_review)) |
 | FEM (FreeCAD/CalculiX/Elmer) | `fem_new_analysis`, `fem_set_solver`, `fem_set_material`, `fem_set_nonlinear_material`, `fem_add_constraint` (fixed/force/pressure/displacement/temperature/heatflux/initial_temperature), `contact_setup`, `fem_mesh`, `fem_mesh_refinement`, `fem_modal`, `fem_buckling`, `fem_run`, `fem_run_submit` (the same CalculiX solve off the MCP channel; results readers accept its `job_id`), `fem_results`, `fem_result_probe` (stress/disp/temp at a point or face), `fem_modal_results`, `fem_buckling_results`, `fem_thermal_results`, plus the legacy `fem_cantilever_demo` |
 | Engineering oracles & hand-calcs | machine elements (`gear_rating`, `bearing_life`, `belt_drive`, `spring_check`, `bolted_joint_check`, `press_fit_stress`, `seal_check`), structural (`beam_modal`, `beam_buckling`, `plate_check`, `hertz_contact`, `elastica_deflection`, `plastic_collapse`, `random_vibration`, `harmonic_response`), durability (`fatigue_check`, `fracture_check`, `creep_flag`, `wear_estimate`), thermal (`thermal_lumped`, `thermal_transient_1d`, `thermal_composite_wall`, `h_estimate`), tolerance/GD&T (`tolerance_stackup`, `fit_check`, `fit_class`, `gdt_check`) |
 | Simulation families (external solvers, async) | screens + full solves that shell out to OpenFOAM/Elmer/CalculiX/openEMS/YADE/KrakenOS, most via a submit→poll job pattern: thermal/CHT (`cht_channel_submit`, `cht_graetz_submit`, `thermal_transient_submit`, `thermal_radiation_submit`), CFD (`cfd_pipe_flow`, `cfd_body_drag`, `cfd_internal_flow_submit`, `cfd_external_flow_submit` — including the virtual wind tunnel: hand it a solid and get Cd/Cl/Cm from an integrated force, gated against the sphere drag curve; every steady solve carries a trust block (convergence, checkMesh, measured y+) and `cfd_mesh_independence_submit`/`grid_convergence` put a Richardson/GCI error band on geometry with no analytic twin), EM (`em_skin_depth`, `em_dc_resistance`, `em_field`, `em_conduction_submit`, `em_induction_submit`, `em_fullwave_submit`), acoustics (`acoustic_screen`, `acoustic_fem_submit`, `acoustic_radiation_submit`), FSI (`fsi_*`), molding (`molding_screen`, `molding_fill_submit`, `molding_warpage_submit`), drop/impact (`drop_impact`, `bar_impact`, `impact_dynamics_submit` — the meshed part flown into a rigid floor, flat / edge / corner, gated against the exact St-Venant bar), granular/DEM (`granular_screen`, `dem_pack_submit`, `dem_flow_submit`), optics (`optics_lens_design`, `optics_lens_optimize`, `optics_raytrace`, `optics_solid_trace`), multibody (`mechanism_kinematics`, `mechanism_simulate_submit`), topology (`topology_optimize_submit`, `topology_to_solid`) |
@@ -596,6 +596,27 @@ The escape hatch costs more (the agent has to write FreeCAD Python) but
 makes the entire FreeCAD API reachable. The Phase 2 plan's "After Phase 2"
 section calls out which run_script patterns deserve promotion to typed
 tools — that's how the surface grows over time.
+
+### A second pair of eyes: `visual_review`
+
+The agent that built a part is a poor judge of its own render: it sees what it meant to
+build. `visual_review(handle, intent=None, views=None)` renders the part (iso, front, top
+and right by default, 512 px) and asks an independent Claude vision model, through the
+Anthropic API, whether the views match the intent: the text you pass, or the part's
+`declare_intent` contract. It returns `{matches_intent, confidence, observed_features,
+discrepancies, notes}` plus the model used and token usage. The verdict is **advisory**:
+it does not replace the geometric gates (`verify_intent`, `check_shape`, `verify_feature`).
+
+It is **off by default** and sends nothing until you opt in:
+
+```bash
+pip install 'ankusdrive[review]'
+export ANKUSDRIVE_VISUAL_REVIEW=1 ANTHROPIC_API_KEY=...   # in the MCP server's environment
+# optional: ANKUSDRIVE_VISUAL_REVIEW_MODEL (default claude-opus-5-5)
+```
+
+Otherwise the tool returns `{enabled: false, reason, how_to_enable}`. It lives in the
+`rendering` toolset. What a call sends, and to whom, is in [`PRIVACY.md`](https://github.com/gchen19/AnkusDrive/blob/main/PRIVACY.md).
 
 ### Regenerating a session
 
@@ -877,7 +898,8 @@ at, with the script that regenerates each one — is indexed in
 ## Privacy Policy
 
 AnkusDrive runs entirely on your computer and **collects nothing**: no telemetry, no
-analytics, no accounts, and no network requests from its own code. It reads and writes
+analytics, no accounts, and no network requests from its own code unless you opt in to
+`visual_review` (above). It reads and writes
 only the files you point it at, plus its config file and temp working directories. Your
 MCP host (e.g. Claude Desktop) sends tool inputs and results to its AI model provider
 under the host's own policy. The full policy, including exactly what is stored where, is

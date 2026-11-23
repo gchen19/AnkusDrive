@@ -139,7 +139,7 @@ def test_titles_names_and_reasons():
         title = ta.title_for(name)
         assert title and title.strip() == title and len(title) <= 60, (name, title)
         hints = ta.hints_for(name)
-        assert "readOnlyHint" in hints and hints["openWorldHint"] is False, (name, hints)
+        assert "readOnlyHint" in hints and hints["openWorldHint"] is (name in ta.OPEN_WORLD), (name, hints)
         if not hints["readOnlyHint"]:
             assert "destructiveHint" in hints, name
     for name, why in ta.DESTRUCTIVE.items():
