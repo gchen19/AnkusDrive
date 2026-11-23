@@ -67,7 +67,9 @@ class _StubClient:
         self._brief = brief
 
     def create(self, **kw):
-        assert kw["tool_choice"]["name"] == "emit_brief", "decompose must force the tool"
+        from orchestration.claude_models import tool_choice_for
+        assert kw["tool_choice"] == tool_choice_for(kw["model"], "emit_brief"), \
+            "decompose must request emit_brief (forced where the model allows it)"
         return types.SimpleNamespace(content=[_ToolBlock(self._brief)], usage=_Usage())
 
 

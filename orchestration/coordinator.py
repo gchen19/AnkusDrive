@@ -157,16 +157,16 @@ def validate_brief(brief):
 
 
 def decompose(client, model, spec, log=print):
-    """Free-text spec -> validated brief via a forced emit_brief tool call.
+    """Free-text spec -> validated brief via an emit_brief tool call (forced where the
+    model allows it; on models that reject forced tool_choice the system prompt asks
+    for it and a missing call raises below).
     Returns (brief, usage). Raises ValueError if the emitted brief fails validation."""
     resp = client.messages.create(
         model=model, max_tokens=2048, system=DECOMPOSE_SYSTEM,
-        tools=[_EMIT_TOOL], tool_choice={"type": "tool", "name": "emit_brief"},
+        tools=[_EMIT_TOOL], tool_choice=agentkit.tool_choice_for(model, "emit_brief"),
         messages=[{"role": "user", "content": spec}],
     )
-    usage = {"in_tokens": resp.usage.input_tokens, "out_tokens": resp.usage.output_tokens,
-             "cache_read": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
-             "cache_write": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0}
+    usage = agentkit.usage_dict(resp)
     calls = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
     if not calls:
         raise ValueError("decompose: model did not call emit_brief")
@@ -538,9 +538,12 @@ def _live_main():
         print("ERROR: ANTHROPIC_API_KEY not set. Run `anthropic-key` first.", file=sys.stderr)
         sys.exit(1)
 
-    model = agentkit.MODELS.get(os.environ.get("M2_MODEL", "haiku"))
-    if model is None:
-        print(f"ERROR: M2_MODEL must be one of {sorted(agentkit.MODELS)}", file=sys.stderr)
+    try:
+        # alias (haiku|sonnet|opus) or a full ID, e.g. M2_MODEL=claude-haiku-4-5 to
+        # reproduce a recorded 2026-06 run on the model it actually used
+        model = agentkit.resolve_model(os.environ.get("M2_MODEL"), env="M2_MODEL", default="haiku")
+    except ValueError as e:
+        print(f"ERROR: M2_MODEL: {e}", file=sys.stderr)
         sys.exit(1)
 
     import anthropic

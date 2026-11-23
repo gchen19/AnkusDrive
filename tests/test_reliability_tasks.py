@@ -200,7 +200,7 @@ def run_trial(client, model, task, save_path):
         for turn in range(MAX_TURNS):
             agentkit._mark_conversation_cache(messages)
             resp = client.messages.create(
-                model=model, max_tokens=1024, system=sys_blocks,
+                model=model, max_tokens=4096, system=sys_blocks,
                 tools=tools, messages=messages)
             usage["in_tokens"] += resp.usage.input_tokens
             usage["out_tokens"] += resp.usage.output_tokens
@@ -364,7 +364,7 @@ def main():
     if real:
         import anthropic
         client = anthropic.Anthropic()
-        models = [agentkit.MODELS[m] for m in
+        models = [agentkit.resolve_model(m.strip()) for m in
                   os.environ.get("ANKUSDRIVE_MODELS", "sonnet").split(",")]
         trials = int(os.environ.get("ANKUSDRIVE_TRIALS", "5"))
     else:

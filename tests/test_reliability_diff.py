@@ -27,12 +27,13 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from ankusdrive import Worker  # noqa: E402
+from orchestration.claude_models import first_text, resolve_model, response_cache_name  # noqa: E402
 from ankusdrive import render as render_lib  # noqa: E402
 from tests.reliability_diffs import DIFFS, DiffSpec  # noqa: E402
 
 
 CACHE_DIR = REPO / "tests" / "reliability_cache"
-MODEL = "claude-sonnet-4-5"
+MODEL = resolve_model(default="sonnet")  # ANKUSDRIVE_EVAL_MODEL overrides (alias or full ID)
 PROMPT = (
     "Image A and Image B show the same 3D mechanical part with one "
     "modification between them. In one or two sentences, describe what "
@@ -76,7 +77,7 @@ def call_claude(image_bytes: bytes) -> str:
     b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=200,
+        max_tokens=4096,  # headroom: current models think before answering
         messages=[
             {
                 "role": "user",
@@ -94,7 +95,7 @@ def call_claude(image_bytes: bytes) -> str:
             }
         ],
     )
-    return resp.content[0].text
+    return first_text(resp)
 
 
 def grade(spec: DiffSpec, text: str) -> dict:
@@ -114,7 +115,7 @@ def run_suite() -> dict:
     with Worker() as w:
         for builder_a, builder_b, spec in DIFFS:
             img_path = CACHE_DIR / f"{spec.name}_diff.png"
-            txt_path = CACHE_DIR / f"{spec.name}_diff.txt"
+            txt_path = CACHE_DIR / response_cache_name(f"{spec.name}_diff", MODEL)
 
             if img_path.exists():
                 pair = img_path.read_bytes()
