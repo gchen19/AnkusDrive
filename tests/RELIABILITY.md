@@ -32,7 +32,18 @@ ANTHROPIC_API_KEY=sk-... RUN_RELIABILITY=1 .venv/bin/python3 tests/test_reliabil
 ```
 
 First run renders + hits the API for all 10 shapes (~30s, a few cents on
-Sonnet 4.5). Subsequent runs are instant from cache.
+Sonnet). Subsequent runs are instant from cache.
+
+**Choosing the model.** Every harness resolves its model through
+`orchestration/claude_models.py`. Set `ANKUSDRIVE_EVAL_MODEL` to a tier alias
+(`opus` / `sonnet` / `haiku`, which resolve to the current generation) or to a
+full model ID. The default is `sonnet` for the reliability suites and `haiku`
+for M2 (`M2_MODEL` still works). Cached responses are keyed by model
+(`cube_iso.<model>.txt`), so switching models re-queries instead of silently
+re-grading the old model's answers. Results recorded before 2026-11 used
+`claude-sonnet-4-5` / `claude-haiku-4-5-20251001`. Pass those IDs to reproduce
+them. Opus costs in MULTI_AGENT_EVAL.md rows from that period were computed at
+the old $15/$75 rate, so they are 3× too high.
 
 ---
 

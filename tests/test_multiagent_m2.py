@@ -45,17 +45,7 @@ sys.path.insert(0, str(REPO))
 from ankusdrive import Worker  # noqa: E402
 from ankusdrive.manifest import resolve_constraints  # noqa: E402
 
-MODELS = {
-    "haiku": "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-5",
-    "opus": "claude-opus-4-8",
-}
-# per-million-token pricing (USD): input, cache-write (1.25x), cache-read (0.1x), output
-PRICING = {
-    "claude-haiku-4-5-20251001": (1.0, 1.25, 0.10, 5.0),
-    "claude-sonnet-4-5": (3.0, 3.75, 0.30, 15.0),
-    "claude-opus-4-8": (15.0, 18.75, 1.50, 75.0),
-}
+from orchestration.claude_models import MODELS, PRICING, resolve_model  # noqa: E402,F401
 # Per-agent turn budget. The default has a known ceiling: an nslot8 plate is
 # ~19 sequential tool calls (box + 8 cylinders + 8 cuts + save), so at 12 turns
 # only agents that BATCH tool calls per turn can finish — every unsaved k=8
@@ -74,11 +64,8 @@ SYSTEM = (
 
 def cost_of(result, model):
     """USD for one result dict's token counts under a model's pricing."""
-    pi, pcw, pcr, po = PRICING[model]
-    return (result.get("in_tokens", 0) * pi
-            + result.get("cache_write", 0) * pcw
-            + result.get("cache_read", 0) * pcr
-            + result.get("out_tokens", 0) * po) / 1e6
+    from orchestration.claude_models import cost_of as _cost
+    return _cost(result, model)
 
 
 # --- the AnkusDrive tool surface exposed to the agent --------------------------
@@ -316,7 +303,7 @@ def run_agent(client, model, system, task, save_path):
         for turn in range(MAX_TURNS):
             _mark_conversation_cache(messages)
             resp = client.messages.create(
-                model=model, max_tokens=1024, system=sys_blocks,
+                model=model, max_tokens=4096, system=sys_blocks,
                 tools=tools, messages=messages,
             )
             in_tok += resp.usage.input_tokens
@@ -3349,9 +3336,12 @@ def main():
         print("ERROR: ANTHROPIC_API_KEY not set. Run `anthropic-key` first.", file=sys.stderr)
         sys.exit(1)
 
-    model = MODELS.get(os.environ.get("M2_MODEL", "haiku"))
-    if model is None:
-        print(f"ERROR: M2_MODEL must be one of {sorted(MODELS)}", file=sys.stderr)
+    try:
+        # alias (haiku|sonnet|opus) or a full ID, e.g. M2_MODEL=claude-haiku-4-5 to
+        # reproduce a recorded 2026-06 run on the model it actually used
+        model = resolve_model(os.environ.get("M2_MODEL"), env="M2_MODEL", default="haiku")
+    except ValueError as e:
+        print(f"ERROR: M2_MODEL: {e}", file=sys.stderr)
         sys.exit(1)
     trials = int(os.environ.get("M2_TRIALS", "1"))
 

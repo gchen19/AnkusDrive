@@ -38,12 +38,13 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from ankusdrive import Worker  # noqa: E402
+from orchestration.claude_models import first_text, resolve_model, response_cache_name  # noqa: E402
 from ankusdrive import render as render_lib  # noqa: E402
 from tests.reliability_specs import SPECS, Spec  # noqa: E402
 
 
 CACHE_DIR = REPO / "tests" / "reliability_cache"
-MODEL = "claude-sonnet-4-5"
+MODEL = resolve_model(default="sonnet")  # ANKUSDRIVE_EVAL_MODEL overrides (alias or full ID)
 
 PROMPT_TEMPLATE = (
     "DESIGN SPEC: {spec}\n\n"
@@ -70,7 +71,7 @@ def call_claude(image_bytes: bytes, prompt: str) -> str:
     b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=200,
+        max_tokens=4096,  # headroom: current models think before answering
         messages=[
             {
                 "role": "user",
@@ -88,7 +89,7 @@ def call_claude(image_bytes: bytes, prompt: str) -> str:
             }
         ],
     )
-    return resp.content[0].text
+    return first_text(resp)
 
 
 def parse_verdict(text: str) -> bool | None:
@@ -119,7 +120,7 @@ def run_suite() -> dict:
             ]:
                 key = f"{spec.name}__{variant_name}"
                 img_path = CACHE_DIR / f"{key}_loop.png"
-                txt_path = CACHE_DIR / f"{key}_loop.txt"
+                txt_path = CACHE_DIR / response_cache_name(f"{key}_loop", MODEL)
 
                 if img_path.exists():
                     png = img_path.read_bytes()
@@ -148,7 +149,11 @@ def run_suite() -> dict:
                     prompt = PROMPT_TEMPLATE.format(spec=spec.description)
                     t0 = time.time()
                     response = call_claude(png, prompt)
-                    txt_path.write_text(response, encoding="utf-8")
+                    # An empty answer (e.g. thinking used up max_tokens) is not cached, so it
+                    # isn't re-graded as a model failure forever. It's graded as a fail this
+                    # run and re-queried next run.
+                    if response.strip():
+                        txt_path.write_text(response, encoding="utf-8")
                     cached = False
                     print(f"  [api] {key} ({time.time() - t0:.1f}s)")
 

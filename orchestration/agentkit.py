@@ -15,17 +15,9 @@ import types
 from ankusdrive import Worker
 
 
-MODELS = {
-    "haiku": "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-5",
-    "opus": "claude-opus-4-8",
-}
-# per-million-token pricing (USD): input, cache-write (1.25x), cache-read (0.1x), output
-PRICING = {
-    "claude-haiku-4-5-20251001": (1.0, 1.25, 0.10, 5.0),
-    "claude-sonnet-4-5": (3.0, 3.75, 0.30, 15.0),
-    "claude-opus-4-8": (15.0, 18.75, 1.50, 75.0),
-}
+from orchestration.claude_models import (  # noqa: E402,F401  (re-exported)
+    MODELS, PRICING, cost_of, resolve_model, tool_choice_for, usage_dict,
+)
 MAX_TURNS = 14
 
 BUILDER_SYSTEM = (
@@ -77,11 +69,6 @@ TOOLS = [
 ]
 
 
-def cost_of(usage, model):
-    """USD for a {in_tokens, cache_write, cache_read, out_tokens} dict."""
-    pi, pcw, pcr, po = PRICING[model]
-    return (usage.get("in_tokens", 0) * pi + usage.get("cache_write", 0) * pcw
-            + usage.get("cache_read", 0) * pcr + usage.get("out_tokens", 0) * po) / 1e6
 
 
 def _dispatch(w, save_path, name, args):
@@ -135,7 +122,7 @@ def run_builder(client, model, task, save_path, system=BUILDER_SYSTEM):
         for turn in range(MAX_TURNS):
             _mark_conversation_cache(messages)
             resp = client.messages.create(
-                model=model, max_tokens=1024, system=sys_blocks,
+                model=model, max_tokens=4096, system=sys_blocks,
                 tools=tools, messages=messages)
             in_tok += resp.usage.input_tokens
             out_tok += resp.usage.output_tokens
@@ -207,13 +194,10 @@ def run_reviewer(client, model, slice_text):
     """One builder's round-0 review of its slice. Returns
     {verdict, reason, patch, in_tokens, out_tokens, cache_read, cache_write}."""
     resp = client.messages.create(
-        model=model, max_tokens=512, system=_cached_system(REVIEWER_SYSTEM),
-        tools=[_REVIEW_TOOL], tool_choice={"type": "tool", "name": "emit_review"},
+        model=model, max_tokens=2048, system=_cached_system(REVIEWER_SYSTEM),
+        tools=[_REVIEW_TOOL], tool_choice=tool_choice_for(model, "emit_review"),
         messages=[{"role": "user", "content": slice_text}])
-    usage = {"in_tokens": resp.usage.input_tokens,
-             "out_tokens": resp.usage.output_tokens,
-             "cache_read": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
-             "cache_write": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0}
+    usage = usage_dict(resp)
     calls = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
     if not calls:
         return {"verdict": "accept", "reason": "no review emitted", "patch": {}, **usage}
