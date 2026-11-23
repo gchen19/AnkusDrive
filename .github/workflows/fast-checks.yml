@@ -103,6 +103,10 @@ jobs:
         # in seconds, on every PR, without a Docker build.
         run: python tests/test_slim_image.py
 
+      - name: Eval harness model table — aliases priced, thinking-safe text (#506)
+        # Offline: the shared Claude model/pricing module the paid eval harnesses use.
+        run: python tests/test_claude_models.py
+
       - name: Tool annotations — every tool classified, read-only means read-only (#368)
         # Clients auto-approve tools marked read-only. Sweeps every @mcp.tool() into
         # exactly one class and fails a READ_ONLY tool whose handler visibly mutates.
