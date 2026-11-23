@@ -128,6 +128,14 @@ jobs:
         # refusals / SDK errors become structured results. No FreeCAD, no network.
         run: python tests/test_visual_review.py
 
+      - name: Tool selection — corpus tools exist, descriptions non-stub, paid path offline (#508)
+        # Free tier of the description-disambiguation eval: every tool the corpus names
+        # is registered (ast, no import) and exposed in the paid run's toolset, no
+        # description is a stub, and the paid path runs against a fake client (request
+        # shape, cache_control on the last tool, grading, confusion, cache keying).
+        # The live tools/list tier SKIPs without mcp; the paid run is RUN_RELIABILITY=1.
+        run: python tests/test_tool_selection.py
+
       - name: run_script gate — agent code only where the install allows it (#378)
         # Static tier here (switch parsing, origin tag, worker checks before exec, the
         # bundle toggle defaults off); the server and worker tiers SKIP without mcp /
