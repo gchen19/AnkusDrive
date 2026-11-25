@@ -166,9 +166,10 @@ class Worker:
         # Serializes call(): the worker loop is strictly one request → one
         # response, so two host threads must never interleave stdin writes /
         # stdout readline()s on the same process (that races the id/response
-        # pairing → "id mismatch" / WorkerDied). FastMCP runs sync tools in an
-        # anyio thread pool, so concurrent tool calls land here in parallel; this
-        # lock makes each call atomic without making the worker multi-threaded.
+        # pairing → "id mismatch" / WorkerDied). mcp 2.x's MCPServer runs sync
+        # tools in an anyio thread pool, so concurrent tool calls land here in
+        # parallel (#516); this lock makes each call atomic without making the
+        # worker multi-threaded.
         self._call_lock = threading.Lock()
 
         ready = self._read_response(timeout=boot_timeout)

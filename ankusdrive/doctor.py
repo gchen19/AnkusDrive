@@ -387,12 +387,13 @@ def build_report(probe_version: bool = True, mcp_serve: bool = False,
 # (issue #277) and nothing on the CLI path ever imports the `mcp` package, so
 # doctor certified an install whose entire reason for existing — serving the tools
 # to an LLM client — did not work. These probes report that absence instead of
-# filling it in by omission.
+# filling it in by omission. The server now runs on both SDK lines (#516), but the
+# probes stay: the next major can break the import the same way.
 
 # Printed verbatim as the remediation. It is the pyproject pin: the floor is where
 # FastMCP tools gained `title` (1.10, needed by the tool annotations, #368), the
-# ceiling is where `mcp.server.fastmcp` was removed.
-MCP_PIN_FIX = 'pip install "mcp>=1.10,<2"'
+# ceiling is the next SDK major, which nothing has been verified against (#516).
+MCP_PIN_FIX = 'pip install "mcp>=1.10,<3"'
 
 
 def _pin_fix() -> str:
@@ -463,7 +464,7 @@ def mcp_import_report() -> dict:
     does.
 
     Returns ``{available, package_version, error?, fix?}``. ``available`` is True
-    only when the server module (and therefore ``mcp.server.fastmcp``) imported;
+    only when the server module (and therefore the SDK's server half) imported;
     otherwise ``error`` carries the exception text and ``fix`` the pin."""
     rep: dict = {"available": False, "package_version": _installed_mcp_version()}
     try:
@@ -562,7 +563,9 @@ def mcp_serve_report(timeout: float = 60.0, argv: list[str] | None = None) -> di
                         await send_ping()
                         out["ping_s"] = round(time.monotonic() - t1, 2)
                     out["tools"] = len((await session.list_tools()).tools)
-                    out["server"] = getattr(init.serverInfo, "name", None)
+                    # serverInfo on mcp 1.x, server_info on mcp 2.x (#516).
+                    info = getattr(init, "server_info", None) or getattr(init, "serverInfo", None)
+                    out["server"] = getattr(info, "name", None)
                     return out
 
         async def _timeboxed() -> dict:

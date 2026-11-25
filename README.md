@@ -179,8 +179,9 @@ cd AnkusDrive
 powershell -ExecutionPolicy Bypass -File scripts\install-core.ps1
 ```
 
-That creates `.venv`, installs AnkusDrive with the pins that matter (notably `mcp<2` —
-`mcp` 2.x installs cleanly and then breaks `ankusdrive mcp`), verifies the resolved
+That creates `.venv`, installs AnkusDrive with the pins that matter (notably `mcp<3` —
+an `mcp` major the server has not been ported to installs cleanly and then breaks
+`ankusdrive mcp`), verifies the resolved
 `mcp`/`numpy`/`Pillow`, runs `ankusdrive doctor` + `ankusdrive ping`, completes a real MCP
 stdio handshake, and finally prints your registration block. Useful switches:
 `-Python 'C:\Program Files\Python313\python.exe'` to pick an interpreter,
@@ -768,8 +769,8 @@ whole back up with the joints actually fitting. The design is written up in
 not shared co-editing of one live document (a single worker = one
 `App.ActiveDocument`, so concurrent mutation is a non-goal for now).
 
-**Concurrent agents on one MCP server — workspaces.** FastMCP runs sync tools in
-a thread pool, so a host can have several tool calls in flight at once. The
+**Concurrent agents on one MCP server — workspaces.** On mcp 2.x the server runs
+sync tools in a thread pool, so a host can have several tool calls executing at once. The
 server keeps a *pool* of named **workspaces**, each its own freecadcmd process
 with its own `App.ActiveDocument` and handle registry. Each concurrent agent
 passes its own `workspace=<name>` on **every** tool call, which pins that call to

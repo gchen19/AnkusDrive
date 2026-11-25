@@ -38,7 +38,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
-from _mcp_python import HOST_DEPS, ensure_mcp_interpreter, mcp_skip_reason  # noqa: E402
+from _mcp_python import HOST_DEPS, ensure_mcp_interpreter, is_error as _is_error, mcp_skip_reason  # noqa: E402
 
 # The numbers docs/REVIEWER_GUIDE.md quotes. Change them together.
 PLATE_VOLUME_MM3 = 60 * 40 * 10 - 4 * math.pi * 2.75 ** 2 * 10          # 23,049.67
@@ -68,7 +68,7 @@ class Session:
             except Exception:
                 parsed.append(c.text)
         out = parsed[0] if len(parsed) == 1 else parsed
-        if res.isError:
+        if _is_error(res):
             raise AssertionError(f"{_tool_name} returned an error: {str(out)[:300]}")
         return out
 

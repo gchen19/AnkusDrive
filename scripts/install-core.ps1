@@ -15,11 +15,12 @@
        brand-new CPython used to fail deep inside pip's resolver (or silently
        source-build) with nothing pointing at the interpreter as the cause. This
        script states the supported range BEFORE touching pip.
-    2. THE PINS. `pip install -e .` carries pyproject's `mcp>=1.2,<2` ceiling
-       (issue #277 - mcp 2.0.0 drops mcp.server.fastmcp, installs clean, then
-       `ankusdrive mcp` dies with ImportError while ping/doctor still pass). The
+    2. THE PINS. `pip install -e .` carries pyproject's `mcp>=1.10,<3` ceiling
+       (issue #277 - mcp 2.0.0 dropped mcp.server.fastmcp, installed clean, and
+       `ankusdrive mcp` died with ImportError while ping/doctor still passed; the
+       server now serves on mcp 1.x and 2.x, #516). The
        script re-verifies the resolved mcp/numpy/Pillow AFTER the install and
-       proves `mcp.server.fastmcp` actually imports, so a bad resolve is caught
+       proves the SDK's server class actually imports, so a bad resolve is caught
        here rather than by the MCP host.
     3. THE MCP STEP. It prints `claude mcp add ankusdrive -- <abs>\ankusdrive.exe mcp`
        and the claude_desktop_config.json block with ABSOLUTE paths, plus the
@@ -193,7 +194,7 @@ if (Test-Path $venvPy) {
 Write-Step 'Installing ankusdrive (editable) + pinned host deps'
 & $venvPy -m pip install --upgrade --quiet pip
 if ($LASTEXITCODE -ne 0) { throw 'pip self-upgrade failed' }
-# The pins live in pyproject.toml - notably `mcp>=1.2,<2` (#277). Deliberately no
+# The pins live in pyproject.toml - notably `mcp>=1.10,<3` (#277, #516). Deliberately no
 # --upgrade/--pre here: the point is to resolve exactly what pyproject allows.
 & $venvPy -m pip install -e .
 if ($LASTEXITCODE -ne 0) {
@@ -203,18 +204,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Prove the RESOLVED dependency set is the working one. `pip install` succeeding is not
-# the same as `ankusdrive mcp` booting: mcp 2.x installs cleanly and then fails to import
-# mcp.server.fastmcp (#277) while ping/doctor keep passing.
+# the same as `ankusdrive mcp` booting: an SDK major the server was not ported to installs
+# cleanly and then fails to import its server class (#277) while ping/doctor keep passing.
 Write-Step 'Verifying the resolved host dependencies'
 $probe = @'
 import sys
 from importlib.metadata import version     # the mcp package exposes no __version__
 import numpy, PIL
-from mcp.server.fastmcp import FastMCP     # the symbol ankusdrive/mcp_server.py needs (#277)
+from ankusdrive import _mcp_compat         # MCPServer on mcp 2.x, FastMCP on 1.x (#277, #516)
 import ankusdrive
 print("  python   %s" % sys.version.split()[0])
 print("  ankusdrive %s" % ankusdrive.__version__)
-print("  mcp      %s   (mcp.server.fastmcp imports OK)" % version("mcp"))
+print("  mcp      %s   (%s imports OK)" % (version("mcp"), _mcp_compat.Server.__name__))
 print("  numpy    %s" % numpy.__version__)
 print("  Pillow   %s" % PIL.__version__)
 '@
@@ -222,7 +223,7 @@ print("  Pillow   %s" % PIL.__version__)
 $probe | & $venvPy -
 if ($LASTEXITCODE -ne 0) {
     throw ('the installed dependency set does not import - `ankusdrive mcp` would fail. Check the ' +
-           'mcp version above against pyproject''s `mcp>=1.2,<2` (issue #277).')
+           'mcp version above against pyproject''s `mcp>=1.10,<3` (issues #277, #516).')
 }
 
 # --- 4. optional pip-wheel solver extras ----------------------------------------

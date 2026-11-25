@@ -33,7 +33,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))   # the shared _mcp_python helper
 
-from _mcp_python import ensure_mcp_interpreter  # noqa: E402
+from _mcp_python import ensure_mcp_interpreter, is_error as _is_error  # noqa: E402
 
 _tried = ensure_mcp_interpreter(__file__)
 if _tried is not None:
@@ -67,7 +67,7 @@ SERVER_PARAMS = StdioServerParameters(
 
 def _text_payload(result):
     """Pull the JSON / text out of a CallToolResult."""
-    assert not result.isError, f"tool error: {result}"
+    assert not _is_error(result), f"tool error: {result}"
     parts = []
     for c in result.content:
         if hasattr(c, "text"):
@@ -169,7 +169,7 @@ async def _test_run_script_tool(session):
 async def _test_tool_error_returns_cleanly(session):
     """A failing tool call must not crash the session; subsequent calls still work."""
     r = await session.call_tool("boolean_op", {"op": "cut", "base": "nope_1", "tool": "nope_2"})
-    assert r.isError, "expected error result, got success"
+    assert _is_error(r), "expected error result, got success"
     r2 = await session.call_tool("ping", {})
     assert "pong" in _text_payload(r2)
 
@@ -196,7 +196,7 @@ async def _test_restart_worker_clears_state(session):
 
     # Stale handle should now be unknown.
     bad = await session.call_tool("get_object", {"handle": box["handle"]})
-    assert bad.isError, f"expected stale handle to fail, got: {bad}"
+    assert _is_error(bad), f"expected stale handle to fail, got: {bad}"
 
     # Worker is healthy: ping responds, can create a fresh doc.
     pong = await session.call_tool("ping", {})
