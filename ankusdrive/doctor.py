@@ -118,14 +118,80 @@ def config_report() -> dict:
     solvers_tbl = data.get("solvers")
     if isinstance(solvers_tbl, dict):
         keys += [f"solvers.{k}" for k in sorted(solvers_tbl)]
-    # Anything still resolving through a pre-rename shim (#295) is reported here
-    # rather than left to a one-line startup warning the user scrolls past: the
-    # shims go away in 0.6, and `doctor` is where someone looks to find out what
-    # on their machine is not yet migrated.
-    legacy_env = _config.adopted_legacy_env()
-    legacy_config = os.path.basename(os.path.dirname(path)) == "driftpin"
     return {"path": path, "present": os.path.isfile(path), "keys": keys,
-            "legacy_env": legacy_env, "legacy_config": legacy_config}
+            **legacy_report()}
+
+
+# --- pre-rename leftovers (#295, removed in 0.6 by #519) -----------------------
+#
+# 0.5 renamed DriftPin -> AnkusDrive and kept a shim for every surface a user's
+# machine holds; 0.6 deleted them. Each deletion fails SILENTLY on an unmigrated
+# box: a DRIFTPIN_* override is simply unset, so the solver auto-discovers and
+# "works" against the wrong binary; an old config file is simply unread; solvers
+# under the old provisioning directory simply stop resolving. Nothing below is
+# read or used. It is detected only so `doctor` can name what the user was
+# relying on, and say how to move it.
+_LEGACY_ENV_PREFIX = "DRIFTPIN_"
+_LEGACY_NAME = "driftpin"
+
+
+def _legacy_solver_dirs(system: str | None = None) -> list:
+    """(old, new) provisioned-solver directories, for the ones whose old directory
+    still exists. Same per-platform roots solvers.py probes for the new name."""
+    system = system or platform.system()
+    pairs = []
+    if system == "Windows" and (lad := os.environ.get("LOCALAPPDATA")):
+        pairs = [(os.path.join(lad, "DriftPin", "solvers"),
+                  os.path.join(lad, "AnkusDrive", "solvers"))]
+    elif system == "Darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+        pairs = [(os.path.join(base, "DriftPin", "solvers"),
+                  os.path.join(base, "AnkusDrive", "solvers"))]
+    return [{"path": old, "move_to": new} for old, new in pairs if os.path.isdir(old)]
+
+
+def legacy_report(environ=None, system: str | None = None) -> dict:
+    """What on this machine still uses a pre-rename spelling that 0.6 no longer
+    reads: ``legacy_env`` (DRIFTPIN_* names set, each with whether its
+    ANKUSDRIVE_* name is also set), ``legacy_config`` (the old config file's path,
+    or None), ``legacy_solver_dirs`` and ``legacy_command`` (a ``driftpin`` still on
+    PATH, which is a stale pre-0.5 install rather than this one)."""
+    import shutil
+
+    from . import config as _config
+    env = os.environ if environ is None else environ
+    legacy_env = [{"name": k, "new": "ANKUSDRIVE_" + k[len(_LEGACY_ENV_PREFIX):],
+                   "new_set": bool(env.get("ANKUSDRIVE_" + k[len(_LEGACY_ENV_PREFIX):]))}
+                  for k in sorted(env) if k.startswith(_LEGACY_ENV_PREFIX)]
+    old_cfg = os.path.join(_config._config_base(), _LEGACY_NAME, "config.toml")
+    return {
+        "legacy_env": legacy_env,
+        "legacy_config": old_cfg if os.path.isfile(old_cfg) else None,
+        "legacy_solver_dirs": _legacy_solver_dirs(system),
+        "legacy_command": shutil.which(_LEGACY_NAME),
+    }
+
+
+def _fmt_legacy(cfg: dict) -> list[str]:
+    """The 0.6 removal notices: one line per pre-rename surface still present."""
+    why = "pre-rename spelling, not read since 0.6; see MIGRATION.md"
+    lines = []
+    for v in cfg.get("legacy_env") or []:
+        fix = (f"delete it, {v['new']} is already set" if v["new_set"]
+               else f"rename it to {v['new']}")
+        lines.append(f"  IGNORED: env var {v['name']} ({why}) — {fix}.")
+    if cfg.get("legacy_config"):
+        fix = (f"delete it, settings come only from {cfg['path']}" if cfg.get("present")
+               else f"move it to {cfg['path']}")
+        lines.append(f"  IGNORED: config file {cfg['legacy_config']} ({why}) — {fix}.")
+    for d in cfg.get("legacy_solver_dirs") or []:
+        lines.append(f"  IGNORED: solvers under {d['path']} ({why}) — move them to "
+                     f"{d['move_to']}, or re-run the solver installer.")
+    if cfg.get("legacy_command"):
+        lines.append(f"  IGNORED: `driftpin` on PATH ({cfg['legacy_command']}) is a "
+                     "pre-0.5 install, not this one — `pipx uninstall driftpin`, and "
+                     "point MCP host configs, scripts and aliases at `ankusdrive`.")
+    return lines
 
 
 def freecad_report(probe_version: bool = True, boot_timeout: float = 20.0) -> dict:
@@ -840,13 +906,7 @@ def render(report: dict) -> str:
                  if cfg["present"] and cfg["keys"]
                  else ("present, no keys set" if cfg["present"] else "not present"))
         out.append(f"config: {cfg['path']} ({state})")
-        if cfg.get("legacy_config"):
-            out.append("  DEPRECATED: that is the pre-rename config location. The next "
-                       "`ankusdrive setup` migrates it; removed in 0.6.")
-        if cfg.get("legacy_env"):
-            out.append("  DEPRECATED: reading %d pre-rename env var(s) — %s. Rename them "
-                       "to ANKUSDRIVE_*; removed in 0.6." %
-                       (len(cfg["legacy_env"]), ", ".join(cfg["legacy_env"])))
+        out += _fmt_legacy(cfg)
     out.append("")
     inst = report.get("install")
     if inst:

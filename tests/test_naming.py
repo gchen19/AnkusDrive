@@ -39,24 +39,20 @@ OLD = re.compile(rb"driftpin", re.I)
 # short and keep every reason falsifiable — `test_allowlist_is_honest` deletes
 # the temptation to leave a stale entry lying around.
 ALLOWED = {
-    # Compatibility shims. Each one exists to keep a pre-rename install working
-    # and names the old spelling on purpose; all are marked "Deprecated: 0.6".
-    "ankusdrive/__init__.py":       "promotes legacy DRIFTPIN_* env vars",
-    "ankusdrive/config.py":         "legacy env prefix + pre-rename config path",
-    "ankusdrive/solvers.py":        "probes the pre-rename provisioned-solver dir",
-    "ankusdrive/doctor.py":         "reports what still resolves through a shim",
-    "ankusdrive/_legacy_cli.py":    "the deprecated `driftpin` console script",
-    # NOTE: ankusdrive/props.py carries the pre-rename DP_* property fallback but
-    # is NOT listed — "DP_" is not the old name, so it passes the sweep unaided.
-    "pyproject.toml":               "declares the deprecated `driftpin` script",
+    # The 0.6 removal (#519) left one place that has to name the old spelling:
+    # `doctor` detects what a user still has on the pre-rename name and says how
+    # to move it. (The DP_* property fallback in ankusdrive/props.py stays, but
+    # "DP_" is not the old name, so it passes the sweep unaided.)
+    "ankusdrive/doctor.py":         "names pre-rename env vars / config / solver dir / command it no longer reads",
     "tests/test_naming.py":         "this file — it has to name what it forbids",
-    "tests/test_compat_rename.py":  "asserts the compatibility shims still work",
+    "tests/test_compat_rename.py":  "asserts the old spellings are ignored and doctor names them",
     "MIGRATION.md":                 "tells users what changed and how to move",
     "CHANGELOG.md":                 "0.5.0 IS the rename — the entry and its deprecation list must name what was renamed",
     "docs/archive/PUBLISHING_PLAN.md": "the old name is an unclaimed PyPI project to reserve",
     # Migration aids. These do not keep anything working — they DETECT the
-    # pre-rename state and say how to move off it, so they must name it. All go
-    # when the shims do, in 0.6.
+    # pre-rename state and say how to move off it, so they must name it. They
+    # outlive the 0.6 shim removal on purpose: with the shims gone, a leftover
+    # DRIFTPIN_* var is silently unset, which is exactly what these catch.
     "scripts/ci-macos-preflight.sh": "fails an environment still on the legacy prefix",
     "scripts/ci-linux-preflight.sh": "fails a heavy-lane environment still on the legacy prefix (#339)",
     "scripts/ci-windows-preflight.ps1": "fails a Windows-lane environment still on the legacy prefix (#316)",
@@ -139,7 +135,7 @@ def test_the_sweep_actually_swept():
     tracked = _tracked()
     assert len(tracked) > 200, f"only {len(tracked)} tracked files — sweep is broken"
     assert any(p.startswith("ankusdrive/") for p in tracked), "package tree not seen"
-    assert OLD.search((REPO / "ankusdrive" / "config.py").read_bytes()), \
+    assert OLD.search((REPO / "ankusdrive" / "doctor.py").read_bytes()), \
         "the matcher cannot find the old name where it is known to be"
 
 

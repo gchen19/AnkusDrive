@@ -86,10 +86,10 @@ echo "== CI runner capacity: a nightly that never got a runner is not a failure 
 python3 tests/test_ci_runner_capacity.py
 
 echo
-echo "== Rename compatibility shims: legacy env / config / DP_* props (#295) =="
-# The shims that keep a <=0.4.x install working. Every one of them fails SILENTLY
-# if it regresses (an unset override auto-discovers; an unread property reads as
-# un-annotated), so they are asserted, not assumed. Delete with the shims in 0.6.
+echo "== Rename leftovers: old spellings ignored + named by doctor, DP_* props kept (#295, #519) =="
+# 0.6 removed the env / config / solver-dir / CLI shims. Each removal fails
+# SILENTLY on an unmigrated box (an unset override auto-discovers), so doctor
+# naming them is asserted, as is the DP_* property fallback that stays.
 python3 tests/test_compat_rename.py
 
 echo

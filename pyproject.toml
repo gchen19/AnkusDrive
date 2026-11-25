@@ -200,11 +200,6 @@ dem_gpl = []                # YADE (GPL-3.0) is source-built — see scripts/ins
 
 [project.scripts]
 ankusdrive = "ankusdrive.cli:main"
-# Deprecated pre-0.5 name (#295). Kept for one minor release so existing MCP
-# host configs, aliases and scripts don't break with `command not found`; the
-# shim prints a rename notice, then delegates. Remove in 0.6 together with
-# ankusdrive/_legacy_cli.py.
-driftpin = "ankusdrive._legacy_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/gchen19/AnkusDrive"

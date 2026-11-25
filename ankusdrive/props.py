@@ -18,7 +18,9 @@ Lives here rather than in ``worker.py`` for one reason: ``worker.py`` opens with
 ``import FreeCAD`` and only ever runs inside ``freecadcmd``, so nothing it
 contains can be tested in the fast lane. These four functions are pure attribute
 lookups over any object, so ``tests/test_compat_rename.py`` exercises them on a
-stub. Deprecated: drop the fallback with a document migration in 0.6."""
+stub. Kept through 0.6 on purpose (#519): unlike the other rename shims, this
+one guards the user's own documents, so it goes only together with an explicit
+document migration."""
 from __future__ import annotations
 
 _LEGACY_PROP_PREFIX = "DP_"

@@ -185,9 +185,10 @@ jobs:
         # both run in run_all.
         run: python tests/test_audit_provenance.py
 
-      - name: Rename compatibility shims — legacy env / config / DP_* props (#295)
-        # Each shim keeps a <=0.4.x install working and each fails silently if it
-        # regresses. Delete this step with the shims in 0.6.
+      - name: Rename leftovers — old spellings ignored, doctor names them, DP_* props kept (#295, #519)
+        # 0.6 removed the env / config / solver-dir / CLI shims, and each removal
+        # fails silently on an unmigrated box, so doctor naming them is pinned here,
+        # along with the DP_* property fallback that stays.
         run: python tests/test_compat_rename.py
 
       - name: Packaging — built wheel/sdist carries every runtime corpus (#249)
