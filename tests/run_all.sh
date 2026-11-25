@@ -593,6 +593,13 @@ $VENV_PY -m orchestration.dryrun
 $VENV_PY tests/test_coordinator.py
 
 echo
+echo "== Shared Claude tool-use loop (#518 — agentkit.tool_loop; M2 + Layer D run it, no key) =="
+# One copy of the loop serves the coordinator, M2 and Layer D. The unit checks use
+# a fake worker; the M2 dry run drives the real worker through M2's own wiring.
+$VENV_PY tests/test_agentkit_loop.py
+M2_DRYRUN=1 $VENV_PY tests/test_multiagent_m2.py
+
+echo
 echo "== Motion oracle (RFC 11.9 — mobility/ratio gate; rigid lock vs selective, no key) =="
 $VENV_PY tests/test_mechanism.py
 
