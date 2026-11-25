@@ -48,7 +48,10 @@ annotated part read back as a bare solid.
   a pre-rename config file, a pre-rename solver directory that still exists, and a
   `driftpin` command still on `PATH`, each with its fix. `--json` carries them under
   `config` as `legacy_env`, `legacy_config`, `legacy_solver_dirs` and
-  `legacy_command` [#519](https://github.com/gchen19/AnkusDrive/issues/519).
+  `legacy_command`. Two of those keys existed in 0.5 with another shape:
+  `legacy_env` was a list of names and is now a list of `{name, new, new_set}`
+  objects, and `legacy_config` was a bool and is now the old file's path or `null`
+  [#519](https://github.com/gchen19/AnkusDrive/issues/519).
 - **The MCP server runs on mcp 2.x.** The `mcp` pin is now `>=1.10,<3` (was `<2`),
   so a fresh install resolves the current SDK instead of being held on 1.x. The
   server takes `MCPServer` on 2.x and `FastMCP` on 1.x from one compatibility

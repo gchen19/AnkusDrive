@@ -78,9 +78,10 @@ def test_legacy_env_var_is_not_promoted():
         import importlib
 
         import ankusdrive
-        importlib.reload(ankusdrive)
-        assert "ANKUSDRIVE_SU2_PATH" not in os.environ, "import promoted a legacy var"
-        assert config.lookup("ANKUSDRIVE_SU2_PATH")[0] is None
+        with _config_root():          # not the machine's real config.toml
+            importlib.reload(ankusdrive)
+            assert "ANKUSDRIVE_SU2_PATH" not in os.environ, "import promoted a legacy var"
+            assert config.lookup("ANKUSDRIVE_SU2_PATH")[0] is None
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None)
