@@ -29,6 +29,10 @@ one ``messages.create`` per case, graded on the first ``tool_use`` block's name.
   TOOL_SELECTION_TOOLSETS  'bundle' (default: bundle default + the families of the
                            case's cluster) or 'all' (every family, the pip default)
   TOOL_SELECTION_CASES     comma list of case ids or cluster names to run
+  TOOL_SELECTION_LOADING   'eager' (default: every schema up front), 'search_bm25' /
+                           'search_regex' (every tool deferred behind Anthropic's
+                           server-side tool search) or 'client_search' (deferred
+                           names listed, a Claude-Code-shaped client search; #514)
   TOOL_SELECTION_MIN       fail (exit 1) if overall accuracy is below this, e.g. 0.8
   TOOL_SELECTION_REFRESH=1 ignore cached responses and re-query
 
@@ -65,6 +69,32 @@ MIN_CASES = 40
 
 CACHE_DIR = REPO / "tests" / "tool_selection_cache"
 MAX_TOKENS = 4096
+
+# How the tools reach the model (#514). 'eager' sends every schema up front (#508).
+# The others defer every MCP tool behind a search, the way an agent hosting 300+
+# tools loads them: Anthropic's server-side tool search (bm25 / regex), or a
+# Claude-Code-shaped client search that lists deferred NAMES in the system prompt
+# and answers `tool_search` calls with tool_reference blocks.
+LOADING_MODES = ("eager", "search_bm25", "search_regex", "client_search")
+SERVER_SEARCH = {"search_bm25": {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+                 "search_regex": {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}}
+CLIENT_SEARCH_NAME = "tool_search"
+CLIENT_SEARCH_LIMIT = 5
+MAX_TURNS = 6          # search -> (search ->) call; a cap so a looping model ends
+CLIENT_SEARCH_TOOL = {
+    "name": CLIENT_SEARCH_NAME,
+    "description": (
+        "Load deferred tools so they can be called. Only the tools this returns become "
+        "callable. Query forms: 'select:name1,name2' loads those exact tools; any other "
+        "text is a keyword search over tool names and descriptions, returning the best "
+        f"matches (up to max_results, default {CLIENT_SEARCH_LIMIT})."),
+    "input_schema": {"type": "object", "properties": {
+        "query": {"type": "string", "description": "'select:a,b' or keywords"},
+        "max_results": {"type": "integer", "description": "maximum tools to return"}},
+        "required": ["query"]},
+}
+SEARCH_NOTE = ("Tools are loaded on demand. Search the AnkusDrive tool catalog for the tool "
+               "that performs the request, then call it.")
 
 SYSTEM_PROMPT = (
     "You are a CAD and engineering assistant working through the AnkusDrive FreeCAD "
@@ -128,7 +158,13 @@ def exposed_names(families: tuple) -> frozenset:
     return frozenset().union(*(TS.FAMILIES[f] for f in families))
 
 
-def to_anthropic(tools: list, families: tuple) -> list:
+def check_loading(loading: str) -> str:
+    if loading not in LOADING_MODES:
+        raise ValueError(f"TOOL_SELECTION_LOADING must be one of {LOADING_MODES}, not {loading!r}")
+    return loading
+
+
+def to_anthropic(tools: list, families: tuple, loading: str = "eager") -> list:
     """tools/list entries -> Anthropic tool definitions, for the enabled families.
 
     Keeps the server's order (deterministic, and what a client sends), copies
@@ -139,15 +175,69 @@ def to_anthropic(tools: list, families: tuple) -> list:
     keep = exposed_names(families)
     out = [{"name": t["name"], "description": t.get("description") or "",
             "input_schema": t["inputSchema"]} for t in tools if t["name"] in keep]
-    if out:
-        out[-1] = {**out[-1], "cache_control": {"type": "ephemeral"}}
-    return out
+    if check_loading(loading) == "eager":
+        if out:
+            out[-1] = {**out[-1], "cache_control": {"type": "ephemeral"}}
+        return out
+    # Deferred: every MCP tool is sent (the API needs the definitions to search and
+    # expand them) but none is in context. A deferred tool may not carry
+    # cache_control, so the breakpoint moves to the system prompt (build_request).
+    out = [{**t, "defer_loading": True} for t in out]
+    search = SERVER_SEARCH.get(loading) or CLIENT_SEARCH_TOOL
+    return out + [dict(search)]
 
 
-def build_request(case: dict, tools: list, model: str) -> dict:
-    return {"model": model, "max_tokens": MAX_TOKENS, "system": SYSTEM_PROMPT, "tools": tools,
+def deferred_names(tools: list) -> list:
+    return [t["name"] for t in tools if t.get("defer_loading")]
+
+
+def system_for(tools: list, loading: str):
+    if loading == "eager":
+        return SYSTEM_PROMPT
+    text = f"{SYSTEM_PROMPT}\n\n{SEARCH_NOTE}"
+    if loading == "client_search":
+        # Claude Code's shape: the model sees every deferred tool's NAME, not its
+        # description, and loads definitions through the search tool.
+        text += (f"\n\nDeferred tools, callable only after `{CLIENT_SEARCH_NAME}` loads them:\n"
+                 + "\n".join(deferred_names(tools)))
+    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+
+
+def build_request(case: dict, tools: list, model: str, loading: str = "eager") -> dict:
+    return {"model": model, "max_tokens": MAX_TOKENS, "system": system_for(tools, loading), "tools": tools,
             "tool_choice": {"type": "auto"},
             "messages": [{"role": "user", "content": case["request"]}]}
+
+
+# --- the client-side search (client_search mode) -------------------------------
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def client_search(query: str, catalog: list, limit: int | None = None) -> list:
+    """Names of the tools a ``tool_search`` call returns, best first.
+
+    ``select:a,b`` returns those exact names that exist. Anything else is a keyword
+    search: a query word scores 3 when it is a word of the tool's name, 2 when it
+    is a substring of the name, and 1 when it appears in the description. Ties keep
+    the catalog (tools/list) order. This approximates an agent's search; it is not
+    Claude Code's ranking."""
+    names = [t["name"] for t in catalog]
+    q = (query or "").strip()
+    if q.lower().startswith("select:"):
+        want = [w.strip() for w in q[7:].split(",") if w.strip()]
+        return [w for w in dict.fromkeys(want) if w in names]
+    limit = max(1, min(int(limit or CLIENT_SEARCH_LIMIT), len(catalog) or 1))
+    words = set(_WORD.findall(q.lower()))
+    scored = []
+    for i, t in enumerate(catalog):
+        name = t["name"].lower()
+        name_words = set(_WORD.findall(name.replace("_", " ")))
+        desc = set(_WORD.findall((t.get("description") or "").lower()))
+        score = sum(3 if w in name_words else 2 if w in name else 1 if w in desc else 0 for w in words)
+        if score:
+            scored.append((-score, i, t["name"]))
+    return [n for _, _, n in sorted(scored)[:limit]]
 
 
 def request_key(req: dict) -> str:
@@ -170,15 +260,35 @@ def serialize(resp) -> dict:
             blocks.append({"type": kind, "name": b.name, "input": getattr(b, "input", {})})
         elif kind == "text":
             blocks.append({"type": kind, "text": b.text})
+        elif kind == "server_tool_use":
+            blocks.append({"type": kind, "name": b.name, "input": getattr(b, "input", {})})
+        elif kind == "tool_search_tool_result":
+            body = getattr(b, "content", None)
+            refs = [r.tool_name for r in getattr(body, "tool_references", None) or []]
+            blocks.append({"type": kind, "refs": refs, "error": getattr(body, "error_code", None)})
         else:
             blocks.append({"type": kind})       # thinking etc.: presence only
     return {"content": blocks, "stop_reason": getattr(resp, "stop_reason", None),
             "usage": usage_dict(resp)}
 
 
-def grade(case: dict, rec: dict) -> dict:
-    """pass / wrong / no_tool / refusal / max_tokens, and the picked tool."""
-    picked = next((b["name"] for b in rec["content"] if b["type"] == "tool_use"), None)
+def searches_in(content: list) -> list:
+    """[{query, refs}] for every search the model ran, server-side or client-side."""
+    out = []
+    for b in content:
+        if b["type"] == "server_tool_use" or (b["type"] == "tool_use" and b["name"] == CLIENT_SEARCH_NAME):
+            inp = b.get("input") or {}
+            out.append({"query": inp.get("query", inp.get("pattern")), "refs": []})
+        elif b["type"] in ("tool_search_tool_result", "client_search_result") and out:
+            out[-1]["refs"] = list(b.get("refs") or [])
+    return out
+
+
+def grade(case: dict, rec: dict, loading: str = "eager") -> dict:
+    """pass / wrong / no_tool / refusal / max_tokens, the picked tool, and, under a
+    deferred loading mode, whether search ever surfaced an accepted tool."""
+    picked = next((b["name"] for b in rec["content"]
+                   if b["type"] == "tool_use" and b["name"] != CLIENT_SEARCH_NAME), None)
     stop = rec.get("stop_reason")
     if picked is not None:
         outcome = "pass" if picked in case["accept"] else "wrong"
@@ -187,15 +297,62 @@ def grade(case: dict, rec: dict) -> dict:
     else:
         outcome = "no_tool"
     text = " ".join(b.get("text", "") for b in rec["content"] if b["type"] == "text").strip()
+    searches = searches_in(rec["content"])
+    found = {n for s in searches for n in s["refs"]}
     return {"id": case["id"], "cluster": case["cluster"], "accept": list(case["accept"]),
             "picked": picked, "outcome": outcome, "stop_reason": stop,
-            "text": text[:300], "usage": rec["usage"]}
+            "text": text[:300], "usage": rec["usage"],
+            "searches": searches, "turns": rec.get("turns", 1),
+            "surfaced": None if loading == "eager" else bool(found & set(case["accept"]))}
+
+
+# --- one case, possibly several turns -------------------------------------------
+
+def converse(client, req: dict, loading: str) -> dict:
+    """Run one case to its first non-search tool call (or a stop) and return the
+    cache record: every turn's blocks flattened, the last stop_reason, summed usage.
+
+    Eager and server-side search usually take one call. A ``pause_turn`` (a long
+    server-side turn) is resumed by sending the assistant content back. Under
+    client_search, each ``tool_search`` call is answered with a tool_result of
+    tool_reference blocks, which the API expands into the definitions."""
+    catalog = [t for t in req["tools"] if t.get("defer_loading")]
+    msgs, content, usage, stop, turns = list(req["messages"]), [], Counter(), None, 0
+    while turns < MAX_TURNS:
+        turns += 1
+        resp = client.messages.create(**{**req, "messages": list(msgs)})
+        rec = serialize(resp)
+        content += rec["content"]
+        usage.update(rec["usage"])
+        stop = rec["stop_reason"]
+        uses = [b for b in rec["content"] if b["type"] == "tool_use"]
+        if any(b["name"] != CLIENT_SEARCH_NAME for b in uses):
+            break                                   # the graded call
+        if stop == "pause_turn":
+            msgs.append({"role": "assistant", "content": resp.content})
+            continue
+        if loading == "client_search" and uses:
+            results = []
+            for b in resp.content:
+                if getattr(b, "type", None) == "tool_use" and b.name == CLIENT_SEARCH_NAME:
+                    inp = getattr(b, "input", {}) or {}
+                    refs = client_search(inp.get("query", ""), catalog, inp.get("max_results"))
+                    content.append({"type": "client_search_result", "refs": refs})
+                    results.append({"type": "tool_result", "tool_use_id": b.id,
+                                    "content": [{"type": "tool_reference", "tool_name": n} for n in refs]
+                                    or "No tools matched. Try other keywords."})
+            msgs += [{"role": "assistant", "content": resp.content}, {"role": "user", "content": results}]
+            continue
+        break
+    return {"content": content, "stop_reason": stop, "turns": turns,
+            "usage": {k: usage.get(k, 0) for k in ("in_tokens", "out_tokens", "cache_read", "cache_write")}}
 
 
 # --- the run ------------------------------------------------------------------
 
 def run_cases(client_factory, tools_list: list, model: str, cases: list, mode: str = "bundle",
-              cache_dir: Path | None = None, refresh: bool = False, log=print) -> list:
+              cache_dir: Path | None = None, refresh: bool = False, log=print,
+              loading: str = "eager") -> list:
     """Query (or read from cache) and grade every case. ``client_factory`` is called
     at most once, and only if some case is not cached, so a fully cached rerun needs
     no API key. Cases are ordered so those sharing a tool block run back to back,
@@ -208,22 +365,23 @@ def run_cases(client_factory, tools_list: list, model: str, cases: list, mode: s
     for case in plan:
         fams = exposed_families(case["cluster"], mode)
         if fams not in tool_blocks:
-            tool_blocks[fams] = to_anthropic(tools_list, fams)
-        req = build_request(case, tool_blocks[fams], model)
+            tool_blocks[fams] = to_anthropic(tools_list, fams, loading)
+        req = build_request(case, tool_blocks[fams], model, loading)
         path = cache_path(case, req, cache_dir)
         if path.exists() and not refresh:
             rec, cached = json.loads(path.read_text(encoding="utf-8")), True
         else:
             if client is None:
                 client = client_factory()
-            rec, cached = serialize(client.messages.create(**req)), False
+            rec, cached = converse(client, req, loading), False
             path.write_text(json.dumps(rec, indent=1), encoding="utf-8")
-        g = grade(case, rec)
+        g = grade(case, rec, loading)
         g["from_cache"] = cached
         g["n_tools"] = len(req["tools"])
         results.append(g)
         mark = {"pass": "ok  "}.get(g["outcome"], "MISS")
-        log(f"  {mark} {case['id']:20s} {g['outcome']:10s} picked={g['picked']}"
+        seen = "" if g["surfaced"] is None else f"  surfaced={g['surfaced']} searches={len(g['searches'])}"
+        log(f"  {mark} {case['id']:20s} {g['outcome']:10s} picked={g['picked']}{seen}"
             f"{'' if cached else '  (fresh)'}")
     return results
 
@@ -235,7 +393,28 @@ def _sum_usage(rows) -> dict:
     return {k: tot.get(k, 0) for k in ("in_tokens", "cache_write", "cache_read", "out_tokens")}
 
 
-def summarize(results: list, model: str, mode: str) -> dict:
+def discovery(results: list) -> dict | None:
+    """Deferred modes only: how often search surfaced an accepted tool, and the misses
+    split into a disambiguation problem (surfaced, still picked wrong) vs a
+    discoverability problem (never surfaced)."""
+    rows = [r for r in results if r.get("surfaced") is not None]
+    if not rows:
+        return None
+    miss = [r for r in rows if r["outcome"] != "pass"]
+    per = defaultdict(lambda: [0, 0])
+    for r in rows:
+        per[r["cluster"]][0] += 1
+        per[r["cluster"]][1] += r["surfaced"]
+    return {"surfaced": sum(r["surfaced"] for r in rows), "n": len(rows),
+            "recall": round(sum(r["surfaced"] for r in rows) / len(rows), 4),
+            "miss_surfaced": sum(r["surfaced"] for r in miss),
+            "miss_never_surfaced": sum(not r["surfaced"] for r in miss),
+            "mean_searches": round(sum(len(r["searches"]) for r in rows) / len(rows), 2),
+            "per_cluster_recall": {c: round(s / n, 3) for c, (n, s) in
+                                   sorted(per.items(), key=lambda kv: (kv[1][1] / kv[1][0], kv[0]))}}
+
+
+def summarize(results: list, model: str, mode: str, loading: str = "eager") -> dict:
     n = len(results)
     outcomes = Counter(r["outcome"] for r in results)
     per = defaultdict(lambda: {"n": 0, "pass": 0})
@@ -249,7 +428,9 @@ def summarize(results: list, model: str, mode: str) -> dict:
         if r["outcome"] != "pass":
             picked = r["picked"] or f"<{r['outcome']}>"
             conf[("/".join(sorted(r["accept"])), picked)].append(r["id"])
-    confusion = [{"expected": e, "picked": p, "count": len(ids), "cases": ids}
+    hidden = {r["id"] for r in results if r.get("surfaced") is False}
+    confusion = [{"expected": e, "picked": p, "count": len(ids), "cases": ids,
+                  "never_surfaced": sum(i in hidden for i in ids)}
                  for (e, p), ids in sorted(conf.items(), key=lambda kv: (-len(kv[1]), kv[0]))]
     usage = _sum_usage(results)
     fresh = _sum_usage(r for r in results if not r["from_cache"])
@@ -259,7 +440,8 @@ def summarize(results: list, model: str, mode: str) -> dict:
     uncached = {"in_tokens": usage["in_tokens"] + usage["cache_write"] + usage["cache_read"],
                 "out_tokens": usage["out_tokens"]}
     no_cache_cost = cost_of(uncached, model)
-    return {"model": model, "toolsets": mode, "n": n,
+    return {"model": model, "toolsets": mode, "loading": loading, "n": n,
+            "discovery": discovery(results),
             "accuracy": round(outcomes["pass"] / n, 4) if n else 0.0,
             "outcomes": dict(outcomes), "per_cluster": per_cluster, "confusion": confusion,
             "usage": usage, "cost_usd": round(cost, 4),
@@ -271,16 +453,27 @@ def summarize(results: list, model: str, mode: str) -> dict:
 
 
 def print_report(rep: dict) -> None:
-    print(f"\n== tool selection: {rep['model']}, toolsets={rep['toolsets']} ==")
+    print(f"\n== tool selection: {rep['model']}, toolsets={rep['toolsets']}, "
+          f"loading={rep.get('loading', 'eager')} ==")
     print(f"  accuracy {rep['accuracy']:.1%}  ({rep['outcomes'].get('pass', 0)}/{rep['n']})   "
           f"outcomes {rep['outcomes']}")
     print("  per cluster (worst first):")
     for c, v in rep["per_cluster"].items():
         print(f"    {c:18s} {v['pass']:2d}/{v['n']:<2d}  {v['accuracy']:.0%}")
+    d = rep.get("discovery")
+    if d:
+        print(f"  discovery: an accepted tool surfaced in {d['surfaced']}/{d['n']} ({d['recall']:.0%}); "
+              f"{d['mean_searches']} searches/case")
+        print(f"  misses: {d['miss_surfaced']} surfaced but picked wrong (description), "
+              f"{d['miss_never_surfaced']} never surfaced (discoverability)")
+        low = {c: v for c, v in d["per_cluster_recall"].items() if v < 1}
+        if low:
+            print("  clusters where search missed: " + ", ".join(f"{c} {v:.0%}" for c, v in low.items()))
     if rep["confusion"]:
-        print("  confusions (asked for -> picked, count):")
+        print("  confusions (asked for -> picked, count[, never surfaced]):")
         for row in rep["confusion"]:
-            print(f"    {row['expected']:34s} -> {row['picked']:28s} x{row['count']}  {row['cases']}")
+            ns = f" ({row['never_surfaced']} never surfaced)" if row.get("never_surfaced") else ""
+            print(f"    {row['expected']:34s} -> {row['picked']:28s} x{row['count']}{ns}  {row['cases']}")
     u = rep["usage"]
     print(f"  tokens: input {u['in_tokens']}, cache write {u['cache_write']}, "
           f"cache read {u['cache_read']}, output {u['out_tokens']}")
@@ -497,6 +690,157 @@ def test_selftest_case_selection():
         raise AssertionError("an unknown case name must stop the run")
 
 
+# --- FREE tier: deferred loading (#514) ----------------------------------------
+
+def _ns_tool_use(name, inp, i="t1"):
+    return SimpleNamespace(type="tool_use", id=i, name=name, input=inp)
+
+
+def _ns_server_search(query, refs):
+    return [SimpleNamespace(type="server_tool_use", id="srvtoolu_1", name="tool_search_tool_bm25",
+                            input={"query": query}),
+            SimpleNamespace(type="tool_search_tool_result", tool_use_id="srvtoolu_1",
+                            content=SimpleNamespace(type="tool_search_tool_search_result",
+                                                    tool_references=[SimpleNamespace(type="tool_reference",
+                                                                                     tool_name=n) for n in refs]))]
+
+
+class _TurnClient:
+    """Answers each case turn by turn: {request substring: [turn0 blocks+stop, turn1 ...]}."""
+
+    def __init__(self, script):
+        self.script, self.calls = script, []
+        self.messages = self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        req = kw["messages"][0]["content"]
+        turns = next(v for k, v in self.script.items() if k in req)
+        turn = sum(m["role"] == "assistant" for m in kw["messages"])
+        blocks, stop = turns[min(turn, len(turns) - 1)]
+        usage = SimpleNamespace(input_tokens=10, output_tokens=20,
+                                cache_creation_input_tokens=0, cache_read_input_tokens=0)
+        return SimpleNamespace(content=[SimpleNamespace(type="thinking", thinking="")] + blocks,
+                               stop_reason=stop, usage=usage)
+
+
+def test_deferred_request_shape():
+    import tempfile
+    cases, tools, _ = _selftest_fixture(None)
+    case = cases[0]
+    want = exposed_names(exposed_families("modal")) & {t["name"] for t in tools}
+    for loading in ("search_bm25", "search_regex", "client_search"):
+        fake = _TurnClient({case["request"]: [([_ns_tool_use(case["accept"][0], {})], "tool_use")]})
+        with tempfile.TemporaryDirectory() as td:
+            run_cases(lambda: fake, tools, "claude-sonnet-5-5", [case], cache_dir=Path(td),
+                      log=lambda *_: None, loading=loading)
+        kw = fake.calls[0]
+        mcp_tools = [t for t in kw["tools"] if t["name"] in want]
+        assert {t["name"] for t in mcp_tools} == want
+        assert all(t.get("defer_loading") is True for t in mcp_tools), "every MCP tool must be deferred"
+        assert not any("cache_control" in t for t in kw["tools"]), "a deferred tool may not carry cache_control"
+        search = kw["tools"][-1]
+        assert not search.get("defer_loading"), "the search tool itself must stay loaded"
+        assert len(kw["tools"]) == len(want) + 1
+        if loading in SERVER_SEARCH:
+            assert search == SERVER_SEARCH[loading]
+        else:
+            assert search["name"] == CLIENT_SEARCH_NAME and "input_schema" in search
+        sys_block = kw["system"]
+        assert isinstance(sys_block, list) and sys_block[-1]["cache_control"] == {"type": "ephemeral"}
+        text = sys_block[0]["text"]
+        assert text.startswith(SYSTEM_PROMPT) and SEARCH_NOTE in text
+        listed = loading == "client_search"
+        assert all((f"\n{n}" in text) == listed for n in want), \
+            "client_search lists every deferred name; the server modes list none"
+        assert kw["tool_choice"] == {"type": "auto"}
+    # eager is untouched: the #508 request, and so its cached responses, stay valid
+    assert build_request(case, to_anthropic(tools, exposed_families("modal")), "m")["system"] == SYSTEM_PROMPT
+    try:
+        to_anthropic(tools, exposed_families("modal"), "lazy")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unknown loading mode must be rejected")
+
+
+def test_client_search_engine():
+    cat = [{"name": "fem_modal", "description": "Set up a CalculiX eigenfrequency analysis on a meshed body."},
+           {"name": "beam_modal", "description": "Closed-form natural frequencies of a beam, no mesh."},
+           {"name": "fem_modal_results", "description": "Read mode shapes from a solved analysis."},
+           {"name": "render_view", "description": "Fast preview image."}]
+    assert client_search("select:beam_modal,nope,fem_modal,beam_modal", cat) == ["beam_modal", "fem_modal"]
+    assert client_search("SELECT:render_view", cat) == ["render_view"]
+    got = client_search("modal frequencies beam", cat)
+    assert got[0] == "beam_modal", got                      # name word x2 + description
+    assert "render_view" not in got
+    assert client_search("modal", cat, 2) == ["fem_modal", "beam_modal"], "ties keep tools/list order"
+    assert client_search("zzz", cat) == []
+    assert len(client_search("a", [{"name": f"t{i}", "description": "a"} for i in range(9)])) == CLIENT_SEARCH_LIMIT
+
+
+def test_deferred_loop_and_grading():
+    import tempfile
+    cases, tools, _ = _selftest_fixture(None)
+    a, b, c, d = cases
+    right, wrong = a["accept"][0], "harmonic_response"
+    assert wrong not in a["accept"] + b["accept"]
+    # client_search: search -> loaded -> call; the tool_result carries tool_reference blocks
+    script = {
+        a["request"]: [([_ns_tool_use(CLIENT_SEARCH_NAME, {"query": f"select:{right}"}, "s1")], "tool_use"),
+                       ([_ns_tool_use(right, {})], "tool_use")],
+        b["request"]: [([_ns_tool_use(CLIENT_SEARCH_NAME, {"query": f"select:{wrong}"}, "s1")], "tool_use"),
+                       ([_ns_tool_use(wrong, {})], "tool_use")],
+        # never stops searching -> capped at MAX_TURNS, graded no_tool
+        c["request"]: [([_ns_tool_use(CLIENT_SEARCH_NAME, {"query": "zzz"}, "s1")], "tool_use")],
+        d["request"]: [([SimpleNamespace(type="text", text="Which one?")], "end_turn")],
+    }
+    fake = _TurnClient(script)
+    with tempfile.TemporaryDirectory() as td:
+        res = run_cases(lambda: fake, tools, "claude-sonnet-5-5", cases, cache_dir=Path(td),
+                        log=lambda *_: None, loading="client_search")
+    by = {r["id"]: r for r in res}
+    assert by[a["id"]]["outcome"] == "pass" and by[a["id"]]["surfaced"] is True and by[a["id"]]["turns"] == 2
+    assert by[a["id"]]["searches"] == [{"query": f"select:{right}", "refs": [right]}]
+    assert by[b["id"]]["outcome"] == "wrong" and by[b["id"]]["surfaced"] is False
+    assert by[c["id"]]["outcome"] == "no_tool" and by[c["id"]]["turns"] == MAX_TURNS
+    assert by[d["id"]]["outcome"] == "no_tool" and by[d["id"]]["searches"] == []
+    second = next(kw for kw in fake.calls if a["request"] in kw["messages"][0]["content"]
+                  and len(kw["messages"]) == 3)
+    tr = second["messages"][2]["content"][0]
+    assert tr["type"] == "tool_result" and tr["tool_use_id"] == "s1"
+    assert tr["content"] == [{"type": "tool_reference", "tool_name": right}]
+    assert second["tools"] == fake.calls[0]["tools"], "every turn resends the same tools array"
+    empty = next(kw for kw in fake.calls if c["request"] in kw["messages"][0]["content"] and len(kw["messages"]) == 3)
+    assert isinstance(empty["messages"][2]["content"][0]["content"], str), "no matches -> a text result, not []"
+    rep = summarize(res, "claude-sonnet-5-5", "bundle", "client_search")
+    dsc = rep["discovery"]
+    assert dsc["surfaced"] == 1 and dsc["n"] == 4 and dsc["miss_surfaced"] == 0 and dsc["miss_never_surfaced"] == 3
+    row = next(r for r in rep["confusion"] if r["picked"] == wrong)
+    assert row["never_surfaced"] == 1
+    assert rep["usage"]["in_tokens"] == 10 * sum(r["turns"] for r in res), "usage sums every turn"
+    # server-side search: one call, blocks in the same response; pause_turn is resumed
+    script = {
+        a["request"]: [(_ns_server_search("eigenfrequency mesh", [right, wrong]), "pause_turn"),
+                       ([_ns_tool_use(wrong, {})], "tool_use")],
+        b["request"]: [(_ns_server_search("modes", [b["accept"][0]]) + [_ns_tool_use(b["accept"][0], {})],
+                        "tool_use")],
+    }
+    fake = _TurnClient(script)
+    with tempfile.TemporaryDirectory() as td:
+        res = run_cases(lambda: fake, tools, "claude-sonnet-5-5", [a, b], cache_dir=Path(td),
+                        log=lambda *_: None, loading="search_bm25")
+    by = {r["id"]: r for r in res}
+    assert by[a["id"]]["outcome"] == "wrong" and by[a["id"]]["surfaced"] is True and by[a["id"]]["turns"] == 2
+    assert by[a["id"]]["searches"] == [{"query": "eigenfrequency mesh", "refs": [right, wrong]}]
+    assert by[b["id"]]["outcome"] == "pass" and by[b["id"]]["turns"] == 1
+    assert len(fake.calls) == 3
+    rep = summarize(res, "claude-sonnet-5-5", "bundle", "search_bm25")
+    assert rep["discovery"]["miss_surfaced"] == 1 and rep["discovery"]["recall"] == 1.0
+    # eager rows carry no discovery block
+    assert summarize([dict(r, surfaced=None) for r in res], "claude-sonnet-5-5", "bundle")["discovery"] is None
+
+
 def test_gitignore_covers_the_response_cache():
     lines = (REPO / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "tests/tool_selection_cache/" in lines, "add tests/tool_selection_cache/ to .gitignore"
@@ -566,19 +910,21 @@ def paid_main():
             sys.exit(f"RUN_RELIABILITY=1 needs `{mod}` importable ({mcp_skip_reason(HOST_DEPS + ('anthropic',))})")
     model = resolve_model(os.environ.get("TOOL_SELECTION_MODEL"), default="sonnet")
     mode = os.environ.get("TOOL_SELECTION_TOOLSETS", "bundle").strip() or "bundle"
+    loading = check_loading(os.environ.get("TOOL_SELECTION_LOADING", "eager").strip() or "eager")
     cases = select_cases(os.environ.get("TOOL_SELECTION_CASES"))
-    print(f"tool selection: {len(cases)} cases, model {model}, toolsets {mode}")
+    print(f"tool selection: {len(cases)} cases, model {model}, toolsets {mode}, loading {loading}")
 
     def client():
         import anthropic
         return anthropic.Anthropic(max_retries=4)
 
-    results = run_cases(client, live_tools_list(), model, cases, mode=mode,
+    results = run_cases(client, live_tools_list(), model, cases, mode=mode, loading=loading,
                         refresh=os.environ.get("TOOL_SELECTION_REFRESH") == "1")
-    rep = summarize(results, model, mode)
+    rep = summarize(results, model, mode, loading)
     print_report(rep)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    out = CACHE_DIR / response_cache_name(f"report.{mode}", model, "json")
+    stem = f"report.{mode}" if loading == "eager" else f"report.{mode}.{loading}"
+    out = CACHE_DIR / response_cache_name(stem, model, "json")
     out.write_text(json.dumps(rep, indent=1), encoding="utf-8")
     print(f"  report: {out}")
     floor = os.environ.get("TOOL_SELECTION_MIN")

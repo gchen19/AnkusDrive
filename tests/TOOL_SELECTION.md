@@ -60,6 +60,7 @@ The grade is the **first `tool_use` block's name**. It is `pass` if that name is
 | `TOOL_SELECTION_MODEL` | alias (`opus`/`sonnet`/`haiku`) or full ID; default `sonnet` (via `orchestration/claude_models.resolve_model`) |
 | `TOOL_SELECTION_TOOLSETS` | `bundle` (default) or `all`. See below |
 | `TOOL_SELECTION_CASES` | comma list of case ids and/or cluster names |
+| `TOOL_SELECTION_LOADING` | `eager` (default), `search_bm25`, `search_regex` or `client_search`. See [Deferred loading](#deferred-loading-514) |
 | `TOOL_SELECTION_MIN` | exit 1 if overall accuracy is below this (e.g. `0.8`) |
 | `TOOL_SELECTION_REFRESH=1` | ignore cached responses |
 
@@ -110,6 +111,51 @@ prompt, user message, and every tool schema in the block. Editing a description
 therefore re-queries exactly the clusters whose block contains that tool. Changing
 a tool outside a cluster's families leaves that cluster cached. A run where every
 response is already cached never constructs an API client.
+
+## Deferred loading (#514)
+
+`eager` sends every schema up front. That gives an upper bound, not what an agent
+user gets. An agent hosting 300+ tools (Claude Code, for one) defers them: the
+model sees little or nothing of each tool, calls a search, and only the
+definitions the search returns are loaded. Two failures appear that eager mode
+cannot show:
+
+- **Never surfaced.** The search doesn't return the right tool, so the model picks
+  the best of what it found. The fix is in the description's *search keywords*.
+- **Narrowed confusion.** The search returns `beam_modal` but not `fem_modal`, so
+  the model never compares the two.
+
+| `TOOL_SELECTION_LOADING` | What the model sees | Mechanism |
+|---|---|---|
+| `eager` | every schema in the family set | #508, unchanged; its cached responses stay valid |
+| `search_bm25` | only the search tool; every MCP tool `defer_loading: true` | Anthropic server-side `tool_search_tool_bm25_20251119` (natural-language queries) |
+| `search_regex` | same | server-side `tool_search_tool_regex_20251119` (regex patterns) |
+| `client_search` | every deferred tool's **name** in the system prompt, plus a client `tool_search` tool | Claude-Code-shaped. `select:a,b` loads exact names, and other text is a keyword search (top 5). Results go back as `tool_reference` blocks in a `tool_result`, which the API expands into the definitions |
+
+The grade is still the first `tool_use` that isn't a search. Each case also
+records every search query, the tools it returned, and `surfaced`: whether any
+accepted tool appeared in any result. The report adds discovery recall, per-cluster
+recall, searches per case, and a split of the misses:
+
+- **surfaced but picked wrong**: a disambiguation problem. Fix it as in eager mode.
+- **never surfaced**: a discoverability problem. Put the words a user would type
+  into the right tool's name or description early. Both server variants search
+  names, descriptions, argument names and argument descriptions.
+
+A case is capped at 6 calls (`MAX_TURNS`). A `pause_turn` is resumed by sending the
+assistant content back. A deferred tool can't carry `cache_control`, so the cache
+breakpoint sits on the system prompt instead. With no tool block in context, a
+deferred-mode case costs a few thousand tokens plus whatever definitions the
+search loads, much less than an eager case.
+
+Run the same corpus three ways and compare them: `eager` vs `search_bm25` vs
+`client_search`, with `TOOL_SELECTION_TOOLSETS=all`, since `all` is the case where
+deferral matters. Reports are written as `report.<toolsets>.<loading>.<model>.json`.
+
+Limits: this reproduces deferred loading through the API, not a specific agent.
+Claude Code's own system prompt, its exact ToolSearch ranking, and its
+`mcp__<server>__` name prefix aren't modelled, and neither is how Codex or
+OpenCode load tools.
 
 ## Reading the report
 
