@@ -79,15 +79,15 @@ def _run(reports, baseline=None, expect=None):
     with tempfile.TemporaryDirectory() as td:
         d = pathlib.Path(td)
         for suite, rep in reports.items():
-            (d / per.SUITES[suite][0]).write_text(json.dumps(rep))
-        (d / "baseline.json").write_text(json.dumps(baseline or {}))
+            (d / per.SUITES[suite][0]).write_text(json.dumps(rep), encoding="utf-8")
+        (d / "baseline.json").write_text(json.dumps(baseline or {}), encoding="utf-8")
         out = d / "out.json"
         summary = d / "summary.md"
         with contextlib.redirect_stdout(io.StringIO()):
             code = per.main([str(d), "--baseline", str(d / "baseline.json"),
                              "--expect", ",".join(expect or per.SUITES),
                              "--summary", str(summary), "--out", str(out)])
-        return code, json.loads(out.read_text()), summary.read_text()
+        return code, json.loads(out.read_text(encoding="utf-8")), summary.read_text(encoding="utf-8")
 
 
 def _baseline_from(reports):
@@ -210,7 +210,7 @@ def test_unknown_suite_is_an_error():
 
 
 def test_committed_baseline_parses():
-    data = json.loads((REPO / "tests" / "paid_eval_baseline.json").read_text())
+    data = json.loads((REPO / "tests" / "paid_eval_baseline.json").read_text(encoding="utf-8"))
     assert isinstance(data.get("suites"), dict) and 0 < data["margin"] < 1
     for suite, models in data["suites"].items():
         assert suite in per.SUITES, suite
