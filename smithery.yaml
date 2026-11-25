@@ -161,10 +161,10 @@ license: Apache-2.0
 # boundary exposes, and both are live in the tree right now.
 #
 #   * TRANSPORT (#296 B1 / M0). cli.py's cmd_mcp calls mcp_server.run() with
-#     no options, and run() is stdio-only. FastMCP already speaks
-#     streamable-http under the mcp>=1.2,<2 pin (#277), so this is a flag and
-#     not a rewrite: `ankusdrive mcp --transport streamable-http --host --port
-#     --path`, with stdio remaining the default.
+#     no options, and run() is stdio-only. The SDK's server class already
+#     speaks streamable-http on both lines of the mcp>=1.10,<3 pin (#516), so
+#     this is a flag and not a rewrite: `ankusdrive mcp --transport
+#     streamable-http --host --port --path`, with stdio remaining the default.
 #
 #   * SESSION ISOLATION (#296 B2) — a CROSS-TENANT DATA LEAK, not a race.
 #     `_current_workspace` (mcp_server.py:65) is a module-level global that

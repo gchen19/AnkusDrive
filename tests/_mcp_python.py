@@ -62,6 +62,15 @@ PIN_FLAG = "ANKUSDRIVE_TEST_MCP_THIS_PYTHON"
 HOST_DEPS = ("mcp", "numpy", "PIL")
 
 
+def is_error(result) -> bool:
+    """A CallToolResult's error flag on either SDK line: ``isError`` on mcp 1.x,
+    ``is_error`` on mcp 2.x, whose result models use snake_case attributes (#516)."""
+    for name in ("is_error", "isError"):
+        if hasattr(result, name):
+            return bool(getattr(result, name))
+    raise AttributeError(f"{type(result).__name__} has neither is_error nor isError")
+
+
 def venv_python(root: Path) -> Path:
     """The interpreter a venv rooted at *root* exposes, per platform."""
     return root / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")

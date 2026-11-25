@@ -21,6 +21,20 @@ Only the latest release is patched; there are no maintenance branches. See
 GitHub release notes are generated from the sections below rather than written
 separately, so this file is the source and the release page is the copy.
 
+## [Unreleased]
+
+### Changed
+
+- **The MCP server runs on mcp 2.x.** The `mcp` pin is now `>=1.10,<3` (was `<2`),
+  so a fresh install resolves the current SDK instead of being held on 1.x. The
+  server takes `MCPServer` on 2.x and `FastMCP` on 1.x from one compatibility
+  module. Tool names, titles, annotations and schemas are identical on both lines,
+  and so is the text of a failed call: mcp 2.x would otherwise send only
+  `Error executing tool <name>` and drop the message that says what went wrong. On
+  2.x, sync tools run in a worker thread, so calls to different workspaces now
+  execute at the same time instead of one after another
+  ([#516](https://github.com/gchen19/AnkusDrive/issues/516)).
+
 ## [0.5.7] — 2026-10-29
 
 Concurrent agents on one server stop stepping on each other. Several agents sharing

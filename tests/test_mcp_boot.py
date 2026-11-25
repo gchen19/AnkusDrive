@@ -5,8 +5,9 @@ This is the step where #279's reporter got stuck: `pip install` succeeded, but
 could speak stdio at all. That failure has two shapes, and both pass `ankusdrive
 ping`/`doctor`:
 
-  * a bad dependency resolve — mcp 2.0.0 drops ``mcp.server.fastmcp`` (#277), so
-    the import dies at server start while ping/doctor keep working;
+  * a bad dependency resolve — mcp 2.0.0 dropped ``mcp.server.fastmcp`` (#277), so
+    a server that imported only it died at start while ping/doctor kept working
+    (the server now serves on both SDK lines, #516);
   * a Python the resolved dep set doesn't actually support, which is only visible
     once something imports it.
 
@@ -87,22 +88,62 @@ def test_stdio_initialize_and_list_tools_without_freecad():
     box with no FreeCAD — the check the Windows core-install CI lane runs."""
     assert not os.path.exists(_NO_FREECAD), "fixture path must not exist"
     init, names = asyncio.run(asyncio.wait_for(_handshake(), timeout=120))
-    assert init.serverInfo.name, init
+    # serverInfo on mcp 1.x, server_info on mcp 2.x (#516).
+    info = getattr(init, "server_info", None) or getattr(init, "serverInfo", None)
+    assert info is not None and info.name, init
     missing = _EXPECT - names
     assert not missing, f"MCP server advertised no {sorted(missing)} (got {len(names)} tools)"
     # The registry is large; a handful of tools would mean a half-loaded module.
     assert len(names) >= 200, f"only {len(names)} tools advertised — registry did not load"
 
 
-def test_fastmcp_symbol_is_importable():
-    """ankusdrive/mcp_server.py imports `mcp.server.fastmcp.FastMCP`; mcp 2.x dropped it
-    (#277). Fail here with the resolved version rather than at a user's MCP host."""
-    from mcp.server.fastmcp import FastMCP           # noqa: F401
+def test_server_class_matches_installed_sdk_major():
+    """The server class comes from ankusdrive/_mcp_compat.py: MCPServer on mcp 2.x,
+    FastMCP on 1.x (#516). Fail here, naming the resolved version, if the installed
+    SDK is a major the compat layer does not know (the #277 shape) rather than at a
+    user's MCP host."""
     from importlib.metadata import version
-    assert int(version("mcp").split(".")[0]) < 2, (
-        f"mcp {version('mcp')} is 2.x — it has no mcp.server.fastmcp; "
-        "pyproject pins mcp<2 (#277), so this resolve is wrong"
+    from ankusdrive import _mcp_compat
+    installed = int(version("mcp").split(".")[0])
+    assert installed in (1, 2), (
+        f"mcp {version('mcp')} is a major AnkusDrive has not been ported to; "
+        "pyproject pins mcp<3 (#516), so this resolve is wrong"
     )
+    assert _mcp_compat.MAJOR == installed, (_mcp_compat.MAJOR, version("mcp"))
+    expected = "MCPServer" if installed >= 2 else "FastMCP"
+    assert _mcp_compat.Server.__name__ == expected, _mcp_compat.Server
+
+
+async def _calls(calls):
+    async with stdio_client(_server_params()) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return [await session.call_tool(name, args) for name, args in calls]
+
+
+def test_tool_error_text_and_workspace_pin_reach_the_client():
+    """Two call-path properties that must hold on both SDK lines (#516), checked over
+    stdio with tools that need no FreeCAD:
+
+      * a tool that raises reports its own message. mcp 2.x sends only
+        "Error executing tool <name>" for an exception that is not a ToolError;
+        _mcp_compat.as_tool_error restores the 1.x text the agent needs to recover.
+      * a per-call `workspace` pin reaches the tool body. On mcp 2.x the body runs
+        in an anyio worker thread, so this is the contextvar crossing the thread."""
+    import json
+
+    from _mcp_python import is_error
+    bad, pinned = asyncio.run(asyncio.wait_for(_calls([
+        ("use_workspace", {"name": ""}),
+        ("list_workspaces", {"workspace": "boot_pin"}),
+    ]), timeout=120))
+    assert is_error(bad), bad
+    text = bad.content[0].text
+    assert text == ("Error executing tool use_workspace: "
+                    "workspace name must be a non-empty string"), text
+    assert not is_error(pinned), pinned
+    body = json.loads(pinned.content[0].text)
+    assert body["current"] == "boot_pin" and body["selected"] == "default", body
 
 
 # --- runner -------------------------------------------------------------------

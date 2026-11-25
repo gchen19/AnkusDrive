@@ -57,10 +57,11 @@ script for the *optional solvers* and none for the *core*. It runs, in order:
 1. **Interpreter check first** — states the supported range before pip can fail inside its
    resolver with no attribution.
 2. **FreeCAD lookup** (report only; the client resolves it at runtime the same way).
-3. **venv + `pip install -e .`** with pyproject's pins, notably `mcp>=1.10,<2` (#277, #368).
+3. **venv + `pip install -e .`** with pyproject's pins, notably `mcp>=1.10,<3` (#277, #368, #516).
 4. **Dependency verification** — re-imports the resolved `mcp`/`numpy`/`Pillow` and proves
-   `mcp.server.fastmcp` is really there. `pip install` succeeding is not the same thing:
-   mcp 2.x installs cleanly, `ping`/`doctor` keep passing, and only `ankusdrive mcp` dies.
+   the SDK's server class (`MCPServer` on 2.x, `FastMCP` on 1.x) is really there. `pip
+   install` succeeding is not the same thing: an `mcp` major the server was not ported to
+   installs cleanly, `ping`/`doctor` keep passing, and only `ankusdrive mcp` dies.
 5. **`ankusdrive doctor` + `ankusdrive ping`**, then a real **MCP stdio handshake**
    (`tests/test_mcp_boot.py` — initialize + `tools/list`, no FreeCAD needed).
 6. **The MCP registration block**, with resolved absolute paths.

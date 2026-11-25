@@ -736,15 +736,15 @@ def test_mcp_tests_resolve_their_interpreter():
 
 
 def test_mcp_dependency_is_ceiling_pinned():
-    """pyproject's mcp dependency must carry a <2 upper bound (issue #277).
+    """pyproject's mcp dependency must carry a ceiling at the next SDK major (#277, #516).
 
-    mcp 2.0.0 restructured the server package and dropped `mcp.server.fastmcp`
-    — the exact symbol mcp_server.py imports — so an unconstrained resolve
-    installs cleanly and then `ankusdrive mcp` dies with ImportError while
-    ping/doctor still pass. The break came from OUTSIDE the repo, so only a
-    declared ceiling (plus this guard that it never regresses) protects a
-    fresh install. Loosen this test only alongside an actual port of
-    mcp_server.py to the 2.x server API.
+    mcp 2.0.0 restructured the server package and dropped `mcp.server.fastmcp`,
+    the symbol mcp_server.py imported then, so an unconstrained resolve installed
+    cleanly and `ankusdrive mcp` died with ImportError while ping/doctor still
+    passed. The port (#516) serves on 1.x and 2.x through ankusdrive/_mcp_compat.py,
+    so the ceiling is now <3: the next major is as unverified as 2.0.0 was, and only
+    a declared ceiling protects a fresh install from a break that comes from
+    outside the repo. Raise it only alongside a port to that major.
     """
     pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
     m = re.search(r'^dependencies\s*=\s*\[(.*?)\]', pyproject, re.S | re.M)
@@ -753,19 +753,32 @@ def test_mcp_dependency_is_ceiling_pinned():
     mcp_deps = [d for d in deps if re.match(r"mcp\s*[<>=~\[]", d) or d == "mcp"]
     assert len(mcp_deps) == 1, f"expected exactly one mcp dependency, got {mcp_deps}"
     spec = mcp_deps[0]
-    assert re.search(r"<\s*2", spec), (
-        f'mcp dependency {spec!r} has no "<2" ceiling — mcp 2.x drops '
-        "mcp.server.fastmcp and silently breaks `ankusdrive mcp` on fresh "
-        "installs (issue #277)"
+    ceiling = re.search(r"<\s*(\d+)", spec)
+    assert ceiling, (
+        f'mcp dependency {spec!r} has no "<N" ceiling — an unverified SDK major can '
+        "drop the server import and silently break `ankusdrive mcp` (issue #277)"
     )
-    # The ceiling exists to protect this exact import — if the import ever
-    # changes (2.x port), this line fails and forces the pin to be revisited.
+    # The ceiling is tied to the SDK lines the compat layer knows: mcp_server.py
+    # must take its server class from _mcp_compat, and _mcp_compat must import the
+    # server for every major below the ceiling and for no major at or above it.
+    major = int(ceiling.group(1))
     mcp_src = MCP.read_text(encoding="utf-8")
-    assert "from mcp.server.fastmcp import FastMCP" in mcp_src, (
-        "mcp_server.py no longer imports mcp.server.fastmcp.FastMCP — "
-        "re-evaluate the <2 ceiling in pyproject.toml (issue #277) and update "
-        "this test"
+    assert "from ._mcp_compat import Server" in mcp_src, (
+        "mcp_server.py no longer takes its server class from _mcp_compat — "
+        "re-evaluate the mcp ceiling in pyproject.toml (issues #277, #516)"
     )
+    assert "mcp.server" not in re.sub(r"(?m)^\s*#.*$|\"\"\".*?\"\"\"", "", mcp_src, flags=re.S), (
+        "mcp_server.py imports the SDK's server half directly; go through _mcp_compat"
+    )
+    compat = (REPO / "ankusdrive" / "_mcp_compat.py").read_text(encoding="utf-8")
+    known = {1: "from mcp.server.fastmcp import FastMCP",
+             2: "from mcp.server.mcpserver import MCPServer"}
+    assert major == max(known) + 1, (
+        f"mcp ceiling is <{major}, but _mcp_compat.py knows SDK majors {sorted(known)}; "
+        "port the server to the new major before raising the ceiling"
+    )
+    for n, line in known.items():
+        assert line in compat, f"_mcp_compat.py lost its mcp {n}.x import ({line!r})"
 
 
 # --- runner (mirrors tests/test_worker.py) ------------------------------------

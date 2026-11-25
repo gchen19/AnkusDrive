@@ -2,8 +2,9 @@
 
 A field install had `ankusdrive ping` and `ankusdrive doctor` both passing while
 `ankusdrive mcp` was dead on arrival — mcp 2.0.0 dropped ``mcp.server.fastmcp``
-(issue #277) and no CLI path ever imported the `mcp` package. These tests pin the
-section that closes that hole:
+(issue #277) and no CLI path ever imported the `mcp` package. The server now serves
+on mcp 1.x and 2.x (#516), but the next major can break it the same way. These tests
+pin the section that closes that hole:
 
   * the interpreter window (pyproject's requires-python has no ceiling, so a host
     newer than the verified range installs cleanly and then breaks on a dependency
@@ -13,7 +14,7 @@ section that closes that hole:
   * that the default report never spawns a server — the MCP server's own
     setup_status tool calls build_report().
 
-The mcp-2.0.0 failure path is exercised by INJECTION (a fake ``mcp`` package in
+The unported-major failure path is exercised by INJECTION (a fake ``mcp`` package in
 sys.modules, restored on exit), never by touching the real environment: no test
 here installs, uninstalls, or upgrades anything.
 
@@ -38,22 +39,27 @@ from ankusdrive import doctor  # noqa: E402
 # assert the healthy-install acceptance, which only means anything when it is.
 try:
     import mcp  # noqa: F401
-    from mcp.server.fastmcp import FastMCP  # noqa: F401
+    from ankusdrive._mcp_compat import Server  # noqa: F401  (either SDK line, #516)
     HAVE_MCP = True
 except Exception:
     HAVE_MCP = False
 
+# ankusdrive._mcp_compat holds the imported server class (#516), so it goes too: a
+# cached copy would hand the re-imported server the real SDK and hide the break.
 _MCP_KEYS = lambda: [k for k in sys.modules  # noqa: E731
-                     if k == "mcp" or k.startswith("mcp.") or k == "ankusdrive.mcp_server"]
+                     if k == "mcp" or k.startswith("mcp.")
+                     or k in ("ankusdrive.mcp_server", "ankusdrive._mcp_compat")]
 
 
 @contextmanager
-def _fake_mcp_2_0_0():
-    """Stand in for a venv holding mcp 2.0.0: the package imports, but the
-    ``mcp.server.fastmcp`` module that 2.0.0 removed is gone.
+def _fake_unported_mcp():
+    """Stand in for a venv holding an SDK major AnkusDrive has not been ported to
+    (the #277 shape, which mcp 2.0.0 was before #516): the package imports, but
+    neither server module the compat layer knows (``mcp.server.mcpserver`` for 2.x,
+    ``mcp.server.fastmcp`` for 1.x) is there.
 
     sys.modules is snapshotted and restored, so the real SDK is back afterwards —
-    the alternative (pip-installing mcp 2.0.0) would wreck the developer's env."""
+    the alternative (pip-installing such an SDK) would wreck the developer's env."""
     saved_modules = {k: sys.modules[k] for k in _MCP_KEYS()}
     saved_version = doctor._installed_mcp_version
     try:
@@ -61,12 +67,12 @@ def _fake_mcp_2_0_0():
             del sys.modules[k]
         pkg = types.ModuleType("mcp")
         pkg.__path__ = []                  # a package, but with nothing to find in it
-        pkg.__version__ = "2.0.0"
+        pkg.__version__ = "3.0.0"
         server = types.ModuleType("mcp.server")
         server.__path__ = []
         sys.modules["mcp"] = pkg
         sys.modules["mcp.server"] = server
-        doctor._installed_mcp_version = lambda: "2.0.0"
+        doctor._installed_mcp_version = lambda: "3.0.0"
         yield
     finally:
         doctor._installed_mcp_version = saved_version
@@ -77,7 +83,7 @@ def _fake_mcp_2_0_0():
 
 def test_pin_fix_is_the_pyproject_pin_verbatim():
     """The remediation string is what the user must type, character for character."""
-    assert doctor.MCP_PIN_FIX == 'pip install "mcp>=1.10,<2"', doctor.MCP_PIN_FIX
+    assert doctor.MCP_PIN_FIX == 'pip install "mcp>=1.10,<3"', doctor.MCP_PIN_FIX
 
 
 def test_python_report_flags_an_untested_interpreter():
@@ -107,14 +113,15 @@ def test_python_report_flags_an_untested_interpreter():
     assert live["version"] == " ".join(sys.version.split()), live
 
 
-def test_mcp_2_0_0_fails_the_section_with_the_pin_printed_verbatim():
-    """THE acceptance case: on a venv with mcp 2.0.0, the MCP section fails and the
-    exact pin command is printed. Injected, not installed."""
-    with _fake_mcp_2_0_0():
+def test_unported_mcp_major_fails_the_section_with_the_pin_printed_verbatim():
+    """THE acceptance case: on a venv with an SDK major the server has not been
+    ported to, the MCP section fails and the exact pin command is printed. Injected,
+    not installed."""
+    with _fake_unported_mcp():
         imp = doctor.mcp_import_report()
     assert imp["available"] is False, imp
-    assert imp["package_version"] == "2.0.0", imp
-    assert "fastmcp" in imp["error"], imp
+    assert imp["package_version"] == "3.0.0", imp
+    assert "mcp.server" in imp["error"], imp
     assert imp["fix"] == doctor.MCP_PIN_FIX, imp
 
     # …and it survives rendering: the user reads lines, not dicts.
@@ -125,8 +132,8 @@ def test_mcp_2_0_0_fails_the_section_with_the_pin_printed_verbatim():
     })
     text = "\n".join(lines)
     assert doctor._MARK["missing"] in text, text
-    assert "mcp 2.0.0 installed" in text, text
-    assert 'pip install "mcp>=1.10,<2"' in text, text
+    assert "mcp 3.0.0 installed" in text, text
+    assert 'pip install "mcp>=1.10,<3"' in text, text
 
 
 def test_serve_probe_is_skipped_when_the_import_is_broken():
@@ -138,7 +145,7 @@ def test_serve_probe_is_skipped_when_the_import_is_broken():
     saved = doctor.mcp_serve_report
     doctor.mcp_serve_report = _explode
     try:
-        with _fake_mcp_2_0_0():
+        with _fake_unported_mcp():
             rep = doctor.mcp_report(serve=True)
     finally:
         doctor.mcp_serve_report = saved

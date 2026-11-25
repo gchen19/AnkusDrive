@@ -5,9 +5,18 @@ A Worker (a freecadcmd process with its own App.ActiveDocument + handle
 registry) is spawned lazily and reused across tool calls, so document state
 persists across an MCP session (the whole point).
 
-**Concurrency (issue #167).** FastMCP runs sync tools in an anyio thread pool,
-so a client can have several tool calls in flight at once. Two safeguards keep
-that from corrupting the single-worker protocol:
+**SDK lines (issue #516).** The server object comes from ``_mcp_compat``: mcp
+2.x's ``MCPServer`` or mcp 1.x's ``FastMCP``, which register tools the same way.
+See that module for the two behaviors it reconciles (crash text, field names).
+
+**Concurrency (issue #167).** On mcp 2.x, ``MCPServer`` runs every sync tool in
+an anyio worker thread, so a client can have several tool calls executing at
+once. (mcp 1.x's FastMCP calls a sync tool directly on the event-loop thread,
+so there calls run one at a time; the safeguards below cost nothing there.)
+The per-call ``workspace`` pin is a contextvar set in ``_pin_call_workspace``'s
+async wrapper; ``anyio.to_thread.run_sync`` copies the context into the worker
+thread, so the pin reaches the tool body. Two safeguards keep concurrent calls
+from corrupting the single-worker protocol:
 
   * Worker.call() is internally serialized (see client.py), so two threads can
     never interleave stdin writes / stdout reads on one process.
@@ -35,15 +44,15 @@ import threading
 import time
 from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from .client import Worker, WorkerError
+from ._mcp_compat import Server as _Server, as_tool_error as _as_tool_error
 from . import render as _render
 from . import fcstd_provenance as _fcstd_prov
 
 
-mcp = FastMCP("ankusdrive")
+mcp = _Server("ankusdrive")
 
 # --- workspace pool -----------------------------------------------------------
 #
@@ -118,21 +127,32 @@ def _with_workspace_param(fn):
 def _pin_call_workspace(manager) -> None:
     """Set the per-call workspace before *any* tool-level wrapper runs, so the
     journal (which wraps tool.fn from outside) attributes a pinned call to the
-    workspace it actually ran in. Applied after the journal so it is outermost."""
+    workspace it actually ran in. Applied after the journal so it is outermost.
+
+    Also the one seam both SDK lines share for the call path (#516): ``context``
+    defaults to None here because mcp 2.x made it a required argument of
+    ``ToolManager.call_tool`` and no AnkusDrive tool takes a Context, and a 2.x
+    crash is turned back into a ToolError carrying the tool's own message
+    (``_mcp_compat.as_tool_error``), which is what mcp 1.x sent the client."""
     original = manager.call_tool
 
     @functools.wraps(original)
-    async def call_tool(name, arguments, *a, **kw):
+    async def call_tool(name, arguments, context=None, *a, **kw):
         tool = manager._tools.get(name)
         ws = arguments.get("workspace") if isinstance(arguments, dict) else None
-        if not (isinstance(ws, str) and ws
-                and getattr(getattr(tool, "fn", None), "__ankusdrive_workspace_pin__", False)):
-            return await original(name, arguments, *a, **kw)
-        token = _call_workspace.set(ws)
+        pinned = (isinstance(ws, str) and ws
+                  and getattr(getattr(tool, "fn", None), "__ankusdrive_workspace_pin__", False))
+        token = _call_workspace.set(ws) if pinned else None
         try:
-            return await original(name, arguments, *a, **kw)
+            return await original(name, arguments, context, *a, **kw)
+        except Exception as e:
+            err = _as_tool_error(e)
+            if err is e:
+                raise
+            raise err from err.__cause__
         finally:
-            _call_workspace.reset(token)
+            if token is not None:
+                _call_workspace.reset(token)
 
     manager.call_tool = call_tool
 
