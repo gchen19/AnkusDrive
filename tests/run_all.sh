@@ -80,6 +80,12 @@ echo "== CI parity diff: a green job's untested coverage is reported (#342; no F
 python3 tests/test_ci_parity_diff.py
 
 echo
+echo "== CI runner capacity: a nightly that never got a runner is not a failure (#515; no FreeCAD) =="
+# heavy-solves-retry.yml re-runs a red heavy-solves run only when every non-passing
+# job never reached a runner. Calling a real failure "capacity" would hide it.
+python3 tests/test_ci_runner_capacity.py
+
+echo
 echo "== Rename compatibility shims: legacy env / config / DP_* props (#295) =="
 # The shims that keep a <=0.4.x install working. Every one of them fails SILENTLY
 # if it regresses (an unset override auto-discovers; an unread property reads as
