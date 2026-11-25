@@ -113,27 +113,27 @@ def test_summary_names_each_lane_and_the_cause():
 def test_cli_writes_outputs_from_a_jobs_response():
     with tempfile.TemporaryDirectory() as d:
         d = pathlib.Path(d)
-        (d / "jobs.json").write_text(json.dumps({"total_count": len(NOV_17), "jobs": NOV_17}))
+        (d / "jobs.json").write_text(json.dumps({"total_count": len(NOV_17), "jobs": NOV_17}), encoding="utf-8")
         out, summary = d / "out", d / "summary"
         with contextlib.redirect_stdout(io.StringIO()):
             rc_ = rc.main(["--jobs-json", str(d / "jobs.json"), "--attempt", "1",
                            "--output", str(out), "--summary", str(summary)])
         assert rc_ == 0
-        assert out.read_text() == "verdict=no-runner\nrerun=true\n", out.read_text()
-        assert LANE_D in summary.read_text()
+        assert out.read_text(encoding="utf-8") == "verdict=no-runner\nrerun=true\n", out.read_text(encoding="utf-8")
+        assert LANE_D in summary.read_text(encoding="utf-8")
 
-        (d / "jobs.json").write_text(json.dumps(NOV_17))  # a bare list works too
+        (d / "jobs.json").write_text(json.dumps(NOV_17), encoding="utf-8")  # a bare list works too
         out.unlink()
         with contextlib.redirect_stdout(io.StringIO()):
             rc.main(["--jobs-json", str(d / "jobs.json"), "--attempt", "2", "--output", str(out)])
-        assert out.read_text() == "verdict=no-runner\nrerun=false\n", out.read_text()
+        assert out.read_text(encoding="utf-8") == "verdict=no-runner\nrerun=false\n", out.read_text(encoding="utf-8")
 
 
 def test_an_empty_run_is_an_error_not_green():
     # A fetch that returned nothing must not read as "nothing failed".
     with tempfile.TemporaryDirectory() as d:
         p = pathlib.Path(d) / "jobs.json"
-        p.write_text(json.dumps({"jobs": []}))
+        p.write_text(json.dumps({"jobs": []}), encoding="utf-8")
         with contextlib.redirect_stderr(io.StringIO()):
             assert rc.main(["--jobs-json", str(p)]) == 2
 
