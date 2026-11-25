@@ -22,14 +22,14 @@ that do matter are handled here, once:
     that message is what tells the agent what to fix, so
     :func:`as_tool_error` turns a 2.x crash back into a ``ToolError`` with the
     1.x text.
-  * **Client-side field names.** mcp 2.x result models use snake_case
-    attributes (``is_error``, ``server_info``, ``input_schema``) where 1.x used
-    the wire's camelCase (``isError``, ``serverInfo``, ``inputSchema``).
-    :func:`field` reads either.
+
+Client-side code is not handled here, because importing this module imports the
+SDK's server half: mcp 2.x result models use snake_case attributes
+(``is_error``, ``server_info``) where 1.x used the wire's camelCase, and the two
+readers (doctor's serve probe, tests/_mcp_python.is_error) try both names.
 """
 from __future__ import annotations
 
-from typing import Any
 
 try:                                         # mcp >= 2.0
     from mcp.server.mcpserver import MCPServer as Server
@@ -47,7 +47,7 @@ except ModuleNotFoundError:                  # mcp 1.10 .. 1.x
     UnexpectedToolError = None
     MAJOR = 1
 
-__all__ = ["MAJOR", "Server", "ToolError", "as_tool_error", "field"]
+__all__ = ["MAJOR", "Server", "ToolError", "as_tool_error"]
 
 
 def as_tool_error(exc: BaseException) -> BaseException:
@@ -66,12 +66,3 @@ def as_tool_error(exc: BaseException) -> BaseException:
     rebuilt.__cause__ = cause
     return rebuilt
 
-
-def field(obj: Any, camel: str, default: Any = None) -> Any:
-    """``obj.<camel>`` on mcp 1.x, ``obj.<snake_case>`` on mcp 2.x: the client-side
-    result models renamed their attributes between the two lines."""
-    snake = "".join("_" + c.lower() if c.isupper() else c for c in camel)
-    for name in (snake, camel):
-        if hasattr(obj, name):
-            return getattr(obj, name)
-    return default
