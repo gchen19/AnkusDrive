@@ -1,0 +1,5 @@
+{
+  "_doc": "Pass-rate baselines for the scheduled paid evals (.github/workflows/paid-evals.yml, #517). scripts/paid_eval_report.py fails a run when a suite's rate falls below its entry here by more than max(margin, 2 x the baseline's binomial standard error). Entries are keyed by suite, then by the full model ID that ran, so a new model generation starts with no baseline instead of being compared to the old one. Each run's job summary ends with a block built from that run: paste it under suites once its numbers look right. An entry may set its own margin. The m2 entry also records the panel (toys, conditions, trials) and only compares against a run of the same panel.",
+  "margin": 0.15,
+  "suites": {}
+}

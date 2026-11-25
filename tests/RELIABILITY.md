@@ -179,6 +179,57 @@ responses without paying again.
 
 Don't run it on every commit. Run it on every renderer change.
 
+### Scheduled run (#517)
+
+`.github/workflows/paid-evals.yml` runs Layers A-D, the tool-selection eval and a
+fixed M2 panel every Monday at 09:00 UTC on the current Haiku, and on demand from
+the Actions tab (`workflow_dispatch` takes the suites, the model, the M2 toys and
+the M2 trial count). It needs an `ANTHROPIC_API_KEY` repository secret. A free
+preflight probes the key against the models endpoint and stops the run before any
+paid call if the key is missing or rejected.
+
+Each job runs on a fresh runner, so every answer is a new API call and nothing is
+graded from a stale cache. Layer A is graded by the judge
+(`RELIABILITY_GRADER=judge`, judge on Opus). The M2 job runs `M2_SELFTEST` on its
+panel first and stops if a gate no longer catches its scripted negatives.
+
+`scripts/paid_eval_report.py` posts each suite's pass rate and what it billed to
+the run's summary, and it is the only gate:
+
+- **Red** when a suite crashed before writing its report, or its pass rate fell
+  below `tests/paid_eval_baseline.json` by more than the allowed drop:
+  `max(margin, 2 × standard error of the baseline rate)`. The default margin is
+  0.15. An entry can set its own. The standard-error term keeps ordinary sampling
+  noise on the 7- and 10-item layers from going red.
+- **Not red** when a harness misses its own bar (Layer A's 70% and so on). The
+  exit code is logged as a warning and the number is in the table.
+- **No baseline yet**, a new model ID, or a different M2 panel: reported and
+  green. Baselines are keyed by the full model ID, so a new Haiku generation starts
+  fresh instead of being compared with the old one.
+
+The summary ends with a baseline block built from that run. To start comparing,
+paste it under `suites` in `tests/paid_eval_baseline.json` once the numbers look
+right.
+
+**Cost.** Estimated at list prices (`orchestration/claude_models.PRICING`) for
+Haiku 5.5. It thinks by default, so output is assumed at 2-3× the Haiku 4.5
+rounds' token counts:
+
+| Suite | Calls per run | Estimate |
+|---|---|---|
+| Layers A-C | 27 single-image calls | under $0.02 |
+| Layer A judge (Opus) | 10 short text calls | ~$0.10-0.20 |
+| Layer D | 4 tasks × 5 trials, cached tool block | ~$0.05-0.10 |
+| Tool selection (`bundle`) | 63 cases, cached tool blocks | ~$0.10 |
+| M2 panel | 9 toys × 2 conditions × 5 trials = 90 agent runs | ~$0.90-1.50 |
+| **Total** | | **~$1-3 a week** |
+
+The M2 figure scales the billed Haiku 4.5 rounds in
+[MULTI_AGENT_EVAL.md](MULTI_AGENT_EVAL.md) ($0.03-0.08 a trial on these toys) to
+a tenth of the price. Every run's summary has the real figure, so check the first
+one against this table. A manual run on `sonnet` costs about 20× as much, and on
+`opus` about 40×.
+
 ---
 
 ## Layers B and C — scaffolded 2026-04-25

@@ -1,0 +1,330 @@
+name: Paid evals
+
+# The evals that call the paid Anthropic API, on a schedule (#517). Until this
+# workflow they ran only by hand with RUN_RELIABILITY=1, so a change to the
+# renderer or to a tool's docstring could lower agent pass rates with no CI lane
+# noticing.
+#
+#   reliability      Layers A-D (tests/RELIABILITY.md): classify a render, spot a
+#                    diff, judge a render against a spec, drive the tools to a goal.
+#                    Layer A is graded by the #507 judge, so a paraphrase is not a
+#                    regression.
+#   tool-selection   does each tool's description make Claude pick it (#508,
+#                    tests/TOOL_SELECTION.md). Bundle toolsets, no FreeCAD needed.
+#   m2               a fixed panel of multi-agent toys, partition and single
+#                    (tests/MULTI_AGENT_EVAL.md): the toys with billed history,
+#                    from the at-ceiling controls to the ones that discriminate.
+#   summary          scripts/paid_eval_report.py posts every pass rate and what
+#                    the run billed to the job summary, and is the only gate.
+#
+# WHAT GOES RED. Only (1) a suite that crashed before writing its report and
+# (2) a pass rate that fell below tests/paid_eval_baseline.json by more than the
+# margin. A harness's own accuracy bar (Layer A's 70% and so on) is ignored here:
+# its exit code is logged as a warning, and the number is in the summary. A suite
+# with no baseline for the model that ran passes, and the summary prints a
+# baseline block to commit once the numbers look right.
+#
+# MODEL. The current Haiku (`haiku` resolves through orchestration/claude_models.py)
+# for every model under test. Prompt caching is already on where a prefix repeats:
+# Layer D and M2 cache the tool block and system prompt (agentkit / M2's own loop),
+# tool selection caches the tool block across a cluster. Layers A-C send one image
+# and a short prompt per call, below the cacheable minimum, so there is nothing to
+# cache. Layer A's judge stays on Opus (its default), so the model under test never
+# grades its own answers.
+#
+# COST. Estimated $1-3 a week at list prices, mostly M2; the summary prints the
+# real figure every run. See the "Scheduled run" section of tests/RELIABILITY.md
+# for the per-suite breakdown and the assumptions behind it.
+#
+# TRIGGERS. Weekly and workflow_dispatch only. Never pull_request: it would bill
+# on every push, and a fork PR gets no secrets anyway. The repository guard keeps
+# a fork's copy of this schedule from running.
+#
+# SECRET. ANTHROPIC_API_KEY (an API key, not a claude setup-token token). The
+# preflight job probes it against the free models endpoint and stops the run
+# before any paid call if it is missing or rejected.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"   # Mondays 09:00 UTC
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: "Comma list of layer_a,layer_b,layer_c,layer_d,tool_selection,m2, or all"
+        default: all
+      model:
+        description: "Model under test: opus / sonnet / haiku, or a full claude-... ID"
+        default: haiku
+      m2_toys:
+        description: "M2 toys (a different panel is not compared to the baseline)"
+        default: peg,flange,bracket,twopin,nslot4,nslot6,tchain6,tchainu_r,kin_gearbox3
+      m2_trials:
+        description: "M2 trials per toy and condition"
+        default: "5"
+
+concurrency:
+  group: paid-evals
+  cancel-in-progress: false   # a cancelled run has already billed what it ran
+
+permissions:
+  contents: read
+
+env:
+  # Inputs are empty on a scheduled run, so each falls back to the default here.
+  SUITES: ${{ inputs.suites || 'all' }}
+  EVAL_MODEL: ${{ inputs.model || 'haiku' }}
+  M2_PANEL: ${{ inputs.m2_toys || 'peg,flange,bracket,twopin,nslot4,nslot6,tchain6,tchainu_r,kin_gearbox3' }}
+  M2_PANEL_TRIALS: ${{ inputs.m2_trials || '5' }}
+
+jobs:
+  preflight:
+    name: Key check + suite selection (free)
+    if: github.repository == 'gchen19/AnkusDrive'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      expect: ${{ steps.pick.outputs.expect }}
+      model_id: ${{ steps.pick.outputs.model_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Resolve the model and the suites
+        id: pick
+        run: |
+          set -euo pipefail
+          model_id=$(python3 -c "import os, sys; sys.path.insert(0, '.'); from orchestration.claude_models import resolve_model; print(resolve_model(os.environ['EVAL_MODEL']))")
+          all="layer_a,layer_b,layer_c,layer_d,tool_selection,m2"
+          if [ "$SUITES" = "all" ]; then expect=$all; else expect=$(echo "$SUITES" | tr -d ' '); fi
+          IFS=, read -ra picked <<< "$expect"
+          for s in "${picked[@]}"; do
+            case ",$all," in *",$s,"*) ;; *) echo "::error::unknown suite '$s' (known: $all)"; exit 1 ;; esac
+          done
+          echo "model_id=$model_id" >> "$GITHUB_OUTPUT"
+          echo "expect=$expect" >> "$GITHUB_OUTPUT"
+          echo "Model under test: \`$model_id\`. Suites: $expect" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the API key before any paid call
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL_ID: ${{ steps.pick.outputs.model_id }}
+        run: |
+          set -uo pipefail
+          if [ -z "$KEY" ]; then
+            echo "::error::Add an ANTHROPIC_API_KEY repository secret to run the paid evals. Nothing was billed."
+            exit 1
+          fi
+          case "$KEY" in
+            *[[:space:]]*) echo "::error::ANTHROPIC_API_KEY contains whitespace (a trailing newline?). Re-set it with: tr -d '\r\n' < file | gh secret set ANTHROPIC_API_KEY"; exit 1 ;;
+            sk-ant-oat*) echo "::error::ANTHROPIC_API_KEY holds a claude setup-token token. These harnesses call the Messages API and need an API key."; exit 1 ;;
+          esac
+          # GET /v1/models/{id} is free: it proves the key works and can see the model.
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://api.anthropic.com/v1/models/$MODEL_ID" \
+                   -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01")
+          case "$code" in
+            200) ;;
+            401) echo "::error::Anthropic rejected ANTHROPIC_API_KEY (401): revoked or mistyped."; exit 1 ;;
+            403|404) echo "::error::The key cannot use $MODEL_ID (HTTP $code)."; exit 1 ;;
+            *) echo "::error::Anthropic API check returned HTTP $code."; exit 1 ;;
+          esac
+
+  reliability:
+    name: Reliability layers A-D
+    needs: preflight
+    if: contains(needs.preflight.outputs.expect, 'layer_')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -el {0}   # login shell so the conda env stays activated
+    env:
+      RUN_RELIABILITY: "1"
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANKUSDRIVE_EVAL_MODEL: ${{ needs.preflight.outputs.model_id }}   # Layers A-C
+      ANKUSDRIVE_MODELS: ${{ needs.preflight.outputs.model_id }}       # Layer D
+      ANKUSDRIVE_TRIALS: "5"
+      RELIABILITY_GRADER: judge
+      RELIABILITY_JUDGE_MODEL: opus
+      EXPECT: ${{ needs.preflight.outputs.expect }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Miniforge (conda-forge)
+        uses: conda-incubator/setup-miniconda@be893c923ea9cf1cf7cd510fbdde27c7e18cbdcb # v4.1.0
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: ankusdrive
+          python-version: "3.11"
+
+      - name: Install FreeCAD 1.1 + CalculiX + the eval deps
+        # Same provisioning as test.yml (see its header), plus the SDK the paid
+        # harnesses call.
+        run: |
+          conda install -y "freecad>=1.1,<1.2" calculix
+          python -m pip install -e ".[review]"
+          echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
+
+      - name: Run the selected layers
+        # A harness that exits 1 for missing its own bar still wrote its report;
+        # the summary job grades the drop. One with no report crashed, and the
+        # summary job fails on that.
+        run: |
+          set -uo pipefail
+          mkdir -p paid-eval-reports
+          run() {  # suite, script, report written by the script
+            case ",$EXPECT," in *",$1,"*) ;; *) return 0 ;; esac
+            echo "::group::$1 ($2)"
+            python "tests/$2" || echo "::warning::$2 exited $? (its own accuracy bar; the summary compares against the baseline)"
+            echo "::endgroup::"
+            if [ -f "$3" ]; then cp "$3" "paid-eval-reports/$1.json"; else echo "::error::$2 wrote no report"; fi
+          }
+          run layer_a test_reliability.py            tests/reliability_cache/report.json
+          run layer_b test_reliability_diff.py       tests/reliability_cache/report_diff.json
+          run layer_c test_reliability_agent_loop.py tests/reliability_cache/report_agent_loop.json
+          run layer_d test_reliability_tasks.py      tests/reliability_cache/report_tasks.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: paid-eval-reliability
+          path: paid-eval-reports/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  tool-selection:
+    name: Tool selection
+    needs: preflight
+    if: contains(needs.preflight.outputs.expect, 'tool_selection')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUN_RELIABILITY: "1"
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TOOL_SELECTION_MODEL: ${{ needs.preflight.outputs.model_id }}
+      TOOL_SELECTION_TOOLSETS: bundle
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Install AnkusDrive + the SDK
+        # tools/list is served by the MCP server alone; no FreeCAD needed.
+        run: python -m pip install -e ".[review]"
+
+      - name: Run the eval
+        run: |
+          set -uo pipefail
+          mkdir -p paid-eval-reports
+          python tests/test_tool_selection.py || echo "::warning::test_tool_selection.py exited $?"
+          rep=$(ls tests/tool_selection_cache/report.bundle.*.json 2>/dev/null | head -1)
+          if [ -n "$rep" ]; then cp "$rep" paid-eval-reports/tool_selection.json; else echo "::error::no report"; fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: paid-eval-tool-selection
+          path: paid-eval-reports/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  m2:
+    name: M2 multi-agent panel
+    needs: preflight
+    if: contains(needs.preflight.outputs.expect, 'm2')
+    runs-on: ubuntu-latest
+    # 9 toys x 2 conditions x 5 trials = 90 agent runs, each a few to a dozen
+    # turns against a live worker.
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      RUN_RELIABILITY: "1"
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      M2_MODEL: ${{ needs.preflight.outputs.model_id }}
+      M2_FRESH: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Miniforge (conda-forge)
+        uses: conda-incubator/setup-miniconda@be893c923ea9cf1cf7cd510fbdde27c7e18cbdcb # v4.1.0
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: ankusdrive
+          python-version: "3.11"
+
+      - name: Install FreeCAD 1.1 + CalculiX + the eval deps
+        run: |
+          conda install -y "freecad>=1.1,<1.2" calculix
+          python -m pip install -e ".[review]"
+          echo "ANKUSDRIVE_FREECADCMD=$(which freecadcmd)" >> "$GITHUB_ENV"
+
+      - name: Gates still catch every scripted negative (free)
+        # Never bill agents against a gate that can't tell right from wrong.
+        run: M2_SELFTEST=1 M2_TOYS="$M2_PANEL" python tests/test_multiagent_m2.py
+
+      - name: Run the panel
+        run: |
+          set -uo pipefail
+          mkdir -p paid-eval-reports
+          M2_TOYS="$M2_PANEL" M2_TRIALS="$M2_PANEL_TRIALS" python tests/test_multiagent_m2.py \
+            || echo "::warning::test_multiagent_m2.py exited $?"
+          if [ -f tests/multiagent_cache/report_m2.json ]; then
+            cp tests/multiagent_cache/report_m2.json paid-eval-reports/m2.json
+          else
+            echo "::error::no report"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: paid-eval-m2
+          path: paid-eval-reports/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  summary:
+    name: Pass rates, cost, and the regression gate
+    needs: [preflight, reliability, tool-selection, m2]
+    # Runs when a suite job failed or was cancelled too: a missing report is
+    # exactly what it has to report.
+    if: always() && needs.preflight.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: paid-eval-*
+          merge-multiple: true
+          path: paid-eval-reports/
+
+      - name: Summarise and gate
+        env:
+          EXPECT: ${{ needs.preflight.outputs.expect }}
+        run: |
+          mkdir -p paid-eval-reports
+          python3 scripts/paid_eval_report.py paid-eval-reports --expect "$EXPECT" \
+            --summary "$GITHUB_STEP_SUMMARY" --out paid-eval-summary.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: paid-eval-summary
+          path: paid-eval-summary.json
+          if-no-files-found: ignore
+          retention-days: 90

@@ -616,6 +616,10 @@ echo "== Tool selection — corpus, descriptions, paid path vs a fake client (fr
 RUN_RELIABILITY= $VENV_PY tests/test_tool_selection.py
 
 echo
+echo "== Paid-eval summary — scheduled run's gate: crash or drop past baseline (free, #517) =="
+python3 tests/test_paid_eval_report.py
+
+echo
 if [[ "$RUN_PERF" == "1" ]]; then
     echo "== Perf baselines =="
     $VENV_PY tests/test_perf.py

@@ -136,6 +136,10 @@ jobs:
         # The live tools/list tier SKIPs without mcp; the paid run is RUN_RELIABILITY=1.
         run: python tests/test_tool_selection.py
 
+      - name: Paid-eval summary — red only for a crash or a drop past the baseline margin (#517)
+        # The only gate on paid-evals.yml, which ignores the harnesses' own exit codes.
+        run: python tests/test_paid_eval_report.py
+
       - name: run_script gate — agent code only where the install allows it (#378)
         # Static tier here (switch parsing, origin tag, worker checks before exec, the
         # bundle toggle defaults off); the server and worker tiers SKIP without mcp /

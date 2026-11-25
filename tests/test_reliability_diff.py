@@ -27,13 +27,17 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from ankusdrive import Worker  # noqa: E402
-from orchestration.claude_models import first_text, resolve_model, response_cache_name  # noqa: E402
+from orchestration.claude_models import (  # noqa: E402
+    cost_of, first_text, resolve_model, response_cache_name, usage_dict)
 from ankusdrive import render as render_lib  # noqa: E402
 from tests.reliability_diffs import DIFFS, DiffSpec  # noqa: E402
 
 
 CACHE_DIR = REPO / "tests" / "reliability_cache"
 MODEL = resolve_model(default="sonnet")  # ANKUSDRIVE_EVAL_MODEL overrides (alias or full ID)
+# Tokens this process billed (cached answers add nothing). The report carries
+# them as "usage" / "cost_usd" so the scheduled run (#517) can post its spend.
+USAGE = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "cache_write": 0}
 PROMPT = (
     "Image A and Image B show the same 3D mechanical part with one "
     "modification between them. In one or two sentences, describe what "
@@ -95,6 +99,8 @@ def call_claude(image_bytes: bytes) -> str:
             }
         ],
     )
+    for k, v in usage_dict(resp).items():
+        USAGE[k] += v
     return first_text(resp)
 
 
@@ -154,6 +160,7 @@ def run_suite() -> dict:
     report = {
         "model": MODEL, "total": total, "correct": correct,
         "accuracy": accuracy, "results": results,
+        "usage": dict(USAGE), "cost_usd": round(cost_of(USAGE, MODEL), 4),
     }
     (CACHE_DIR / "report_diff.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
