@@ -1,0 +1,73 @@
+name: Heavy solver regressions — runner-capacity retry
+
+# A red "Heavy solver regressions" run is only a regression signal if a lane ran
+# and failed (#515). Three of seven November nightlies went red with every solver
+# test passing: the macOS lanes queued until GitHub gave up with "The job was not
+# acquired by Runner of type hosted even after multiple attempts" (hosted macOS
+# arm64 capacity). Those jobs end cancelled, with no runner and no steps.
+#
+# This runs after every failed heavy-solves run and, via scripts/ci_runner_capacity.py:
+#   * writes a per-lane table to its summary: passed / never got a runner / failed;
+#   * when the ONLY problem is jobs that never got a runner, re-runs the failed
+#     jobs once (`gh run rerun --failed`), so the run's latest attempt shows what the
+#     lanes actually did. Lanes that passed are not repeated; a lane D re-run reuses
+#     heavy-vmdisk's cached disk.
+# A run with any real failure (a FAIL, a timeout, a step error) is never re-run: a
+# retry would spend hours of macOS minutes repeating it and a green second attempt
+# could hide a flaky regression. If the retry also gets no runner, the run stays red
+# and this summary says it was capacity.
+#
+# Its own workflow, not a job in heavy-solves.yml, because a run cannot re-run
+# itself while it is still in progress.
+
+on:
+  workflow_run:
+    workflows: ["Heavy solver regressions"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    name: Runner capacity or a real failure?
+    # Only failed runs (a superseded run ends "cancelled" and needs nothing), and only
+    # runs of this repository's own workflow.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write   # gh run rerun
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      # The default branch's script, never the triggering run's head: this job holds
+      # actions: write.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/ci_runner_capacity.py
+          sparse-checkout-cone-mode: false
+
+      - name: Classify every lane of the run
+        id: classify
+        run: >-
+          python3 scripts/ci_runner_capacity.py
+          --repo "$GITHUB_REPOSITORY" --run-id "$RUN_ID" --attempt "$RUN_ATTEMPT"
+          --max-attempts 2 --run-url "$RUN_URL"
+          --summary "$GITHUB_STEP_SUMMARY" --output "$GITHUB_OUTPUT"
+
+      - name: Re-run the jobs that never got a runner
+        if: steps.classify.outputs.rerun == 'true'
+        run: |
+          echo "::notice::run $RUN_ID attempt $RUN_ATTEMPT failed only on runner capacity; re-running its failed jobs"
+          gh run rerun "$RUN_ID" --failed -R "$GITHUB_REPOSITORY"
+
+      - name: Say why it stays red
+        if: steps.classify.outputs.verdict == 'no-runner' && steps.classify.outputs.rerun != 'true'
+        run: echo "::warning::run $RUN_ID attempt $RUN_ATTEMPT is red on runner capacity alone (no lane failed); automatic retries used up"
