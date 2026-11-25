@@ -9,8 +9,10 @@ signal, so .github/workflows/heavy-solves-retry.yml calls this on every failed
 run and re-runs it once when capacity is the only thing that went wrong.
 
 A job that never reached a runner has a recognisable shape in the jobs API: it
-ended (conclusion ``cancelled`` or ``failure``) with no ``runner_name`` and no
-steps, because nothing ever ran. Anything else that did not succeed (a FAILed
+ended ``cancelled`` (or ``timed_out``) with no ``runner_name`` and no steps,
+because nothing ever ran. One that ended ``failure`` with no runner failed
+before a runner was requested, like a workflow expression error, and counts as
+a failure: a retry would only repeat it. Anything else that did not succeed (a FAILed
 test, a timeout, a step error) is a real failure, and a run with one of those is
 never re-run: retrying would only spend hours of macOS minutes to repeat it, and
 a green retry could hide a flaky regression.
@@ -49,6 +51,10 @@ NO_RUNNER = "no-runner"
 FAILED = "failed"
 
 _OK_CONCLUSIONS = {"success", "skipped", "neutral"}
+# How a job that waited in the queue and never got a runner ends. A job that ends
+# "failure" with no runner failed before one was ever requested (a broken `if:`,
+# `runs-on:` or `uses:` after an edit to heavy-solves.yml): retrying repeats it.
+_QUEUE_CONCLUSIONS = {"cancelled", "timed_out"}
 
 _LABEL = {
     OK: "passed",
@@ -62,7 +68,7 @@ def classify_job(job):
     conclusion = job.get("conclusion")
     if conclusion in _OK_CONCLUSIONS:
         return OK
-    if not job.get("runner_name") and not job.get("steps"):
+    if conclusion in _QUEUE_CONCLUSIONS and not job.get("runner_name") and not job.get("steps"):
         return NO_RUNNER
     return FAILED
 

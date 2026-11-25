@@ -79,6 +79,14 @@ def test_timeouts_and_runner_side_cancels_are_failures():
     assert rc.classify_job(timed_out) == rc.FAILED
     # A runner was assigned but the job died before its first step: not "never got one".
     assert rc.classify_job(_ran(LANE_C, "failure", steps=0)) == rc.FAILED
+    # Failed before any runner was requested (a broken `if:`/`runs-on:`/`uses:` after an
+    # edit to heavy-solves.yml): the same empty shape, but a retry would only repeat it.
+    broken = {"name": LANE_C, "status": "completed", "conclusion": "failure",
+              "runner_name": "", "steps": []}
+    assert rc.classify_job(broken) == rc.FAILED
+    assert rc.verdict(NOV_18[:2] + [broken])[0] == rc.FAILED
+    # A queue timeout with no runner is still capacity.
+    assert rc.classify_job(dict(broken, conclusion="timed_out")) == rc.NO_RUNNER
 
 
 def test_a_real_failure_wins_over_missing_runners():
