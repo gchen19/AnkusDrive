@@ -180,55 +180,15 @@ TASKS = [
 
 
 # --- agent loop (keeps the worker open so the checker can inspect live) -------
-
-def _prep_tools(tools):
-    cached = [dict(t) for t in tools]
-    cached[-1] = {**cached[-1], "cache_control": {"type": "ephemeral"}}
-    return cached
-
+# The loop itself is agentkit.tool_loop (issue #518); it runs on a worker this
+# harness opens, so the checker grades the live geometry before it closes.
 
 def run_trial(client, model, task, save_path):
     """One end-to-end attempt. Returns dict with passed/detail/turns/cost/trace."""
-    tools = _prep_tools(TOOLS)
-    sys_blocks = agentkit._cached_system(agentkit.BUILDER_SYSTEM)
     trace = []
-    usage = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "cache_write": 0}
-    saved = False
-    turn = 0
     with Worker() as w:
-        messages = [{"role": "user", "content": task.prompt}]
-        for turn in range(MAX_TURNS):
-            agentkit._mark_conversation_cache(messages)
-            resp = client.messages.create(
-                model=model, max_tokens=4096, system=sys_blocks,
-                tools=tools, messages=messages)
-            usage["in_tokens"] += resp.usage.input_tokens
-            usage["out_tokens"] += resp.usage.output_tokens
-            usage["cache_read"] += getattr(resp.usage, "cache_read_input_tokens", 0) or 0
-            usage["cache_write"] += getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
-            messages.append({"role": "assistant", "content": resp.content})
-
-            tool_uses = [b for b in resp.content if b.type == "tool_use"]
-            if not tool_uses:
-                break
-            results = []
-            for tu in tool_uses:
-                try:
-                    out = agentkit._dispatch(w, save_path, tu.name, dict(tu.input))
-                    trace.append({"name": tu.name, "args": dict(tu.input),
-                                  "result": out, "error": False})
-                    if tu.name == "save_component":
-                        saved = True
-                    payload, is_err = json.dumps(out), False
-                except Exception as e:
-                    trace.append({"name": tu.name, "args": dict(tu.input),
-                                  "result": f"{type(e).__name__}: {e}", "error": True})
-                    payload, is_err = f"ERROR: {type(e).__name__}: {e}", True
-                results.append({"type": "tool_result", "tool_use_id": tu.id,
-                                "content": payload, "is_error": is_err})
-            messages.append({"role": "user", "content": results})
-            if saved:
-                break
+        result = agentkit.tool_loop(w, client, model, task.prompt, save_path,
+                                    tools=TOOLS, max_turns=MAX_TURNS, trace=trace)
 
         # Grade against the LIVE worker before it closes.
         try:
@@ -237,9 +197,9 @@ def run_trial(client, model, task, save_path):
             passed, detail = False, f"checker raised {type(e).__name__}: {e}"
 
     return {
-        "passed": passed, "detail": detail, "built": saved,
-        "turns": turn + 1,
-        "cost_usd": agentkit.cost_of(usage, model) if model in agentkit.PRICING else 0.0,
+        "passed": passed, "detail": detail, "built": result["ok_built"],
+        "turns": result["turns"],
+        "cost_usd": agentkit.cost_of(result, model) if model in agentkit.PRICING else 0.0,
         "trace": [{"name": t["name"], "args": t["args"],
                    "error": t["error"]} for t in trace],
     }

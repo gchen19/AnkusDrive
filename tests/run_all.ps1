@@ -257,6 +257,10 @@ Invoke-Step 'Host-agnostic builder demo' @('examples\design\host_agnostic_builde
 Invoke-Step 'Orchestration selftest'  @('-m', 'orchestration.selftest')
 Invoke-Step 'Orchestration dryrun'    @('-m', 'orchestration.dryrun')
 Test-Module 'Orchestration coordinator'                  'test_coordinator.py'
+Test-Module 'Shared Claude tool-use loop (#518, no key)'  'test_agentkit_loop.py'
+$env:M2_DRYRUN = '1'
+Test-Module 'M2 dry run - shared loop, stubbed model (#518)' 'test_multiagent_m2.py'
+Remove-Item Env:M2_DRYRUN
 Test-Module 'Motion oracle (mobility/ratio gate)'        'test_mechanism.py'
 Test-Module 'Geometry-realizes-declaration (needs FreeCAD)' 'test_realize.py'
 Test-Module 'Experiment-readiness gate'                  'test_experiment_readiness.py'

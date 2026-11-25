@@ -5,9 +5,11 @@ The reusable parts of an LLM-driven component builder: the AnkusDrive tool surfa
 exposed to a model, a tool-use loop with prompt caching, cost accounting, and a
 scripted stub client so the whole orchestration can be exercised with no API.
 
-Mirrors the proven loop in tests/test_multiagent_m2.py. (The benchmark keeps its
-own copy so it stays self-contained; this is the canonical host-side version that
-the coordinator builds on. A future cleanup could dedupe M2 onto this.)
+This is the one copy of the loop (issue #518). The coordinator, the M2 benchmark
+(tests/test_multiagent_m2.py) and the Layer D reliability tasks
+(tests/test_reliability_tasks.py) all run it. A harness that needs more tools, a
+different dispatch, its own turn budget, or the live worker after the loop passes
+them to :func:`tool_loop` instead of keeping a copy, so an API change lands once.
 """
 import json
 import types
@@ -82,8 +84,9 @@ def _dispatch(w, save_path, name, args):
 _EPHEMERAL = {"type": "ephemeral"}
 
 
-def _cached_tools():
-    cached = [dict(t) for t in TOOLS]
+def _cached_tools(tools=None):
+    """A copy of ``tools`` (default :data:`TOOLS`) with a cache breakpoint on the last."""
+    cached = [dict(t) for t in (TOOLS if tools is None else tools)]
     cached[-1] = {**cached[-1], "cache_control": _EPHEMERAL}
     return cached
 
@@ -93,6 +96,7 @@ def _cached_system(system):
 
 
 def _mark_conversation_cache(messages):
+    """Move a cache breakpoint to the last block of the latest user message."""
     for m in messages:
         if m["role"] == "user" and isinstance(m["content"], list):
             for blk in m["content"]:
@@ -109,46 +113,70 @@ def _mark_conversation_cache(messages):
             tail["cache_control"] = _EPHEMERAL
 
 
-def run_builder(client, model, task, save_path, system=BUILDER_SYSTEM):
-    """Drive one component-builder agent through a tool-use loop in its own Worker.
-    Returns {ok_built, turns, in_tokens, out_tokens, cache_read, cache_write}."""
-    in_tok = out_tok = cache_read = cache_write = 0
-    tools = _cached_tools()
+def tool_loop(w, client, model, task, save_path, *, system=BUILDER_SYSTEM, tools=None,
+              dispatch=None, max_turns=MAX_TURNS, trace=None):
+    """Run one builder conversation against an already-open Worker ``w``.
+
+    The loop ends when the model stops calling tools, when ``save_component``
+    succeeds, or after ``max_turns`` model calls. The caller owns the worker, so it
+    can inspect the live geometry afterwards (the reliability checkers do).
+
+    tools    : tool schemas sent to the model (default :data:`TOOLS`).
+    dispatch : ``(w, save_path, name, args) -> result`` (default :func:`_dispatch`).
+    trace    : optional list; each tool call appends
+               ``{name, args, result, error}`` (result is the error text on failure).
+
+    Returns ``{ok_built, turns, in_tokens, out_tokens, cache_read, cache_write}``.
+    """
+    dispatch = dispatch or _dispatch
+    cached_tools = _cached_tools(tools)
     sys_blocks = _cached_system(system)
+    usage = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "cache_write": 0}
     saved = False
     turn = 0
-    with Worker() as w:
-        messages = [{"role": "user", "content": task}]
-        for turn in range(MAX_TURNS):
-            _mark_conversation_cache(messages)
-            resp = client.messages.create(
-                model=model, max_tokens=4096, system=sys_blocks,
-                tools=tools, messages=messages)
-            in_tok += resp.usage.input_tokens
-            out_tok += resp.usage.output_tokens
-            cache_read += getattr(resp.usage, "cache_read_input_tokens", 0) or 0
-            cache_write += getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
-            messages.append({"role": "assistant", "content": resp.content})
+    messages = [{"role": "user", "content": task}]
+    for turn in range(max_turns):
+        _mark_conversation_cache(messages)
+        resp = client.messages.create(
+            model=model, max_tokens=4096, system=sys_blocks,
+            tools=cached_tools, messages=messages)
+        for k, v in usage_dict(resp).items():
+            usage[k] += v
+        messages.append({"role": "assistant", "content": resp.content})
 
-            tool_uses = [b for b in resp.content if b.type == "tool_use"]
-            if not tool_uses:
-                break
-            results = []
-            for tu in tool_uses:
-                try:
-                    out = _dispatch(w, save_path, tu.name, dict(tu.input))
-                    if tu.name == "save_component":
-                        saved = True
-                    payload, is_err = json.dumps(out), False
-                except Exception as e:
-                    payload, is_err = f"ERROR: {type(e).__name__}: {e}", True
-                results.append({"type": "tool_result", "tool_use_id": tu.id,
-                                "content": payload, "is_error": is_err})
-            messages.append({"role": "user", "content": results})
-            if saved:
-                break
-    return {"ok_built": saved, "turns": turn + 1, "in_tokens": in_tok,
-            "out_tokens": out_tok, "cache_read": cache_read, "cache_write": cache_write}
+        tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
+        if not tool_uses:
+            break
+        results = []
+        for tu in tool_uses:
+            args = dict(tu.input)
+            try:
+                out = dispatch(w, save_path, tu.name, args)
+                if trace is not None:
+                    trace.append({"name": tu.name, "args": args, "result": out, "error": False})
+                if tu.name == "save_component":
+                    saved = True
+                payload, is_err = json.dumps(out), False
+            except Exception as e:
+                if trace is not None:
+                    trace.append({"name": tu.name, "args": args,
+                                  "result": f"{type(e).__name__}: {e}", "error": True})
+                payload, is_err = f"ERROR: {type(e).__name__}: {e}", True
+            results.append({"type": "tool_result", "tool_use_id": tu.id,
+                            "content": payload, "is_error": is_err})
+        messages.append({"role": "user", "content": results})
+        if saved:
+            break
+    return {"ok_built": saved, "turns": turn + 1, **usage}
+
+
+def run_builder(client, model, task, save_path, system=BUILDER_SYSTEM, *, tools=None,
+                dispatch=None, max_turns=MAX_TURNS):
+    """Drive one component-builder agent through :func:`tool_loop` in its own Worker.
+    Returns {ok_built, turns, in_tokens, out_tokens, cache_read, cache_write}."""
+    with Worker() as w:
+        return tool_loop(w, client, model, task, save_path, system=system, tools=tools,
+                         dispatch=dispatch, max_turns=max_turns)
 
 
 # --- round 0 contract review (RFC §8 / §11.8) --------------------------------
