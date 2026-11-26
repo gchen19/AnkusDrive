@@ -257,15 +257,18 @@ def serialize(resp) -> dict:
     for b in getattr(resp, "content", None) or []:
         kind = getattr(b, "type", None)
         if kind == "tool_use":
-            blocks.append({"type": kind, "name": b.name, "input": getattr(b, "input", {})})
+            blocks.append({"type": kind, "id": getattr(b, "id", None), "name": b.name,
+                           "input": getattr(b, "input", {})})
         elif kind == "text":
             blocks.append({"type": kind, "text": b.text})
         elif kind == "server_tool_use":
-            blocks.append({"type": kind, "name": b.name, "input": getattr(b, "input", {})})
+            blocks.append({"type": kind, "id": getattr(b, "id", None), "name": b.name,
+                           "input": getattr(b, "input", {})})
         elif kind == "tool_search_tool_result":
             body = getattr(b, "content", None)
             refs = [r.tool_name for r in getattr(body, "tool_references", None) or []]
-            blocks.append({"type": kind, "refs": refs, "error": getattr(body, "error_code", None)})
+            blocks.append({"type": kind, "tool_use_id": getattr(b, "tool_use_id", None), "refs": refs,
+                           "error": getattr(body, "error_code", None)})
         else:
             blocks.append({"type": kind})       # thinking etc.: presence only
     return {"content": blocks, "stop_reason": getattr(resp, "stop_reason", None),
@@ -273,14 +276,23 @@ def serialize(resp) -> dict:
 
 
 def searches_in(content: list) -> list:
-    """[{query, refs}] for every search the model ran, server-side or client-side."""
-    out = []
+    """[{query, refs}] for every search the model ran, server-side or client-side.
+
+    A result is paired with its search by tool_use id. Order alone is not enough:
+    when the model runs two client searches in one turn, both tool_use blocks come
+    before either result. A result whose id names no search (a response cached
+    before ids were recorded) falls back to the latest search, which is right for
+    one search a turn."""
+    out, by_id = [], {}
     for b in content:
         if b["type"] == "server_tool_use" or (b["type"] == "tool_use" and b["name"] == CLIENT_SEARCH_NAME):
             inp = b.get("input") or {}
             out.append({"query": inp.get("query", inp.get("pattern")), "refs": []})
+            if b.get("id"):
+                by_id[b["id"]] = out[-1]
         elif b["type"] in ("tool_search_tool_result", "client_search_result") and out:
-            out[-1]["refs"] = list(b.get("refs") or [])
+            rid = b.get("tool_use_id")
+            (by_id[rid] if rid in by_id else out[-1])["refs"] = list(b.get("refs") or [])
     return out
 
 
@@ -337,7 +349,7 @@ def converse(client, req: dict, loading: str) -> dict:
                 if getattr(b, "type", None) == "tool_use" and b.name == CLIENT_SEARCH_NAME:
                     inp = getattr(b, "input", {}) or {}
                     refs = client_search(inp.get("query", ""), catalog, inp.get("max_results"))
-                    content.append({"type": "client_search_result", "refs": refs})
+                    content.append({"type": "client_search_result", "tool_use_id": b.id, "refs": refs})
                     results.append({"type": "tool_result", "tool_use_id": b.id,
                                     "content": [{"type": "tool_reference", "tool_name": n} for n in refs]
                                     or "No tools matched. Try other keywords."})
@@ -839,6 +851,43 @@ def test_deferred_loop_and_grading():
     assert rep["discovery"]["miss_surfaced"] == 1 and rep["discovery"]["recall"] == 1.0
     # eager rows carry no discovery block
     assert summarize([dict(r, surfaced=None) for r in res], "claude-sonnet-5-5", "bundle")["discovery"] is None
+
+
+def test_two_client_searches_in_one_turn():
+    """Parallel searches: both tool_use blocks precede both results, so pairing by
+    order would hand search 1's tools to search 2 and lose them (#525 review)."""
+    import tempfile
+    cases, tools, _ = _selftest_fixture(None)
+    a = cases[0]
+    right, wrong = a["accept"][0], "harmonic_response"
+    assert wrong not in a["accept"]
+    script = {a["request"]: [([_ns_tool_use(CLIENT_SEARCH_NAME, {"query": f"select:{right}"}, "s1"),
+                               _ns_tool_use(CLIENT_SEARCH_NAME, {"query": f"select:{wrong}"}, "s2")], "tool_use"),
+                              ([_ns_tool_use(wrong, {})], "tool_use")]}
+    fake = _TurnClient(script)
+    with tempfile.TemporaryDirectory() as td:
+        res = run_cases(lambda: fake, tools, "claude-sonnet-5-5", [a], cache_dir=Path(td),
+                        log=lambda *_: None, loading="client_search")
+    r = res[0]
+    assert r["searches"] == [{"query": f"select:{right}", "refs": [right]},
+                             {"query": f"select:{wrong}", "refs": [wrong]}], r["searches"]
+    assert r["outcome"] == "wrong" and r["surfaced"] is True and r["turns"] == 2
+    second = fake.calls[1]["messages"][2]["content"]
+    assert [(t["tool_use_id"], t["content"]) for t in second] == \
+        [("s1", [{"type": "tool_reference", "tool_name": right}]),
+         ("s2", [{"type": "tool_reference", "tool_name": wrong}])]
+    dsc = summarize(res, "claude-sonnet-5-5", "bundle", "client_search")["discovery"]
+    assert dsc["miss_surfaced"] == 1 and dsc["miss_never_surfaced"] == 0, dsc
+    # results listed out of order still land on their own search
+    tu = [{"type": "tool_use", "id": i, "name": CLIENT_SEARCH_NAME, "input": {"query": q}}
+          for i, q in (("s1", "one"), ("s2", "two"))]
+    res_blocks = [{"type": "client_search_result", "tool_use_id": "s2", "refs": ["y"]},
+                  {"type": "client_search_result", "tool_use_id": "s1", "refs": ["x"]}]
+    assert searches_in(tu + res_blocks) == [{"query": "one", "refs": ["x"]}, {"query": "two", "refs": ["y"]}]
+    # a record cached before ids were stored still pairs one search a turn by order
+    legacy = [{"type": "tool_use", "name": CLIENT_SEARCH_NAME, "input": {"query": "one"}},
+              {"type": "client_search_result", "refs": ["x"]}]
+    assert searches_in(legacy) == [{"query": "one", "refs": ["x"]}]
 
 
 def test_gitignore_covers_the_response_cache():
