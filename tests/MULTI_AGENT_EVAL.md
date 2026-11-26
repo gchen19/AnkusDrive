@@ -100,6 +100,12 @@ spend tokens only on the agent calls.
 M2 answers the real question: **does partitioning work when LLMs drive it, and is
 it better than one agent doing the whole thing?**
 
+A fixed panel (peg, flange, bracket, twopin, nslot4, nslot6, tchain6, tchainu_r,
+kin_gearbox3; partition and single, 5 trials each) runs weekly on the current
+Haiku in `.github/workflows/paid-evals.yml` (#517). The run goes red when the
+pooled pass rate drops past its baseline. See "Scheduled run" in
+[RELIABILITY.md](RELIABILITY.md#scheduled-run-517).
+
 ---
 
 ## Metrics

@@ -270,6 +270,7 @@ $savedRel = $env:RUN_RELIABILITY
 $env:RUN_RELIABILITY = ''
 Test-Module 'Reliability Layer D - harness validator (free stub)' 'test_reliability_tasks.py'
 Test-Module 'Tool selection - corpus + paid path vs fake client (free, #508)' 'test_tool_selection.py'
+Test-Module 'Paid-eval summary - crash or drop past baseline (free, #517)' 'test_paid_eval_report.py'
 $env:RUN_RELIABILITY = $savedRel
 
 # The OpenFOAM-backed suites run on Windows since #193 (launches route through the

@@ -40,13 +40,17 @@ sys.path.insert(0, str(REPO))
 
 # ankusdrive (Worker, render) is imported inside the functions that need it, so the
 # offline judge test can import the graders here on the FreeCAD-free CI lane.
-from orchestration.claude_models import first_text, resolve_model, response_cache_name  # noqa: E402
+from orchestration.claude_models import (  # noqa: E402
+    cost_of, first_text, resolve_model, response_cache_name, usage_dict)
 from tests import reliability_judge as judge_lib  # noqa: E402
 from tests.reliability_shapes import SHAPES, ShapeSpec  # noqa: E402
 
 
 CACHE_DIR = REPO / "tests" / "reliability_cache"
 MODEL = resolve_model(default="sonnet")  # ANKUSDRIVE_EVAL_MODEL overrides (alias or full ID)
+# Tokens this process billed (cached answers add nothing). The report carries
+# them as "usage" / "cost_usd" so the scheduled run (#517) can post its spend.
+USAGE = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "cache_write": 0}
 PROMPT = (
     "You are looking at a rendered 3D mechanical part from an isometric view. "
     "In one or two sentences, describe what shape and features you see. Be "
@@ -90,6 +94,8 @@ def call_claude(image_bytes: bytes) -> str:
             }
         ],
     )
+    for k, v in usage_dict(resp).items():
+        USAGE[k] += v
     return first_text(resp)
 
 
@@ -204,6 +210,8 @@ def run_reliability_suite(mode: str = "keyword") -> dict:
 
     judge = judge_lib.judge_model() if mode != "keyword" else None
     report = grade_all(items, mode, answered_model=MODEL, judge=judge)
+    report["usage"] = dict(USAGE)  # the answered model only; judge calls carry their own
+    report["cost_usd"] = round(cost_of(USAGE, MODEL), 4)
     (CACHE_DIR / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
