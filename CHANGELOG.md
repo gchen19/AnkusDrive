@@ -11,7 +11,7 @@ Every entry ends with the pull request or issue number that carried it.
 ## Versioning
 
 AnkusDrive is **pre-1.0, and a minor release may break compatibility.** That is not
-an accident of the numbering — 0.5.0 renamed the project and 0.6.0 will delete the
+an accident of the numbering — 0.5.0 renamed the project and 0.6.0 deletes the
 shims that made the rename survivable. Read a minor bump as "check the entry below
 before upgrading", and pin an exact version if you need the guarantee.
 
@@ -23,8 +23,35 @@ separately, so this file is the source and the release page is the copy.
 
 ## [Unreleased]
 
+0.6.0 deletes the DriftPin rename shims, as 0.5.0 promised. The old command, the
+`DRIFTPIN_*` environment variables, the old config file and the old solver directory
+are no longer read. Each of those now fails silently on a machine that never
+migrated, so `ankusdrive doctor` names every one it finds and says how to move it.
+The `DP_*` document properties are the exception and keep working: they live inside
+users' saved parts, and dropping them without a document migration would make an
+annotated part read back as a bare solid.
+
+### Removed
+
+- The `driftpin` console script and `ankusdrive/_legacy_cli.py`. Use `ankusdrive`,
+  and point MCP host configs, scripts and aliases at it [#519](https://github.com/gchen19/AnkusDrive/issues/519).
+- `DRIFTPIN_*` environment variables are no longer promoted to `ANKUSDRIVE_*` at
+  import. A leftover one is simply unset [#519](https://github.com/gchen19/AnkusDrive/issues/519).
+- `~/.config/driftpin/config.toml` and `%APPDATA%\driftpin\config.toml` are no
+  longer read. Move the file to the `ankusdrive` directory [#519](https://github.com/gchen19/AnkusDrive/issues/519).
+- Solvers under a `DriftPin/solvers` directory are no longer discovered on Windows
+  or macOS. Move them to `AnkusDrive/solvers` or re-run the solver installer [#519](https://github.com/gchen19/AnkusDrive/issues/519).
+
 ### Changed
 
+- `ankusdrive doctor` reports, as `IGNORED`, each `DRIFTPIN_*` variable still set,
+  a pre-rename config file, a pre-rename solver directory that still exists, and a
+  `driftpin` command still on `PATH`, each with its fix. `--json` carries them under
+  `config` as `legacy_env`, `legacy_config`, `legacy_solver_dirs` and
+  `legacy_command`. Two of those keys existed in 0.5 with another shape:
+  `legacy_env` was a list of names and is now a list of `{name, new, new_set}`
+  objects, and `legacy_config` was a bool and is now the old file's path or `null`
+  [#519](https://github.com/gchen19/AnkusDrive/issues/519).
 - **The MCP server runs on mcp 2.x.** The `mcp` pin is now `>=1.10,<3` (was `<2`),
   so a fresh install resolves the current SDK instead of being held on 1.x. The
   server takes `MCPServer` on 2.x and `FastMCP` on 1.x from one compatibility
@@ -34,6 +61,13 @@ separately, so this file is the source and the release page is the copy.
   2.x, sync tools run in a worker thread, so calls to different workspaces now
   execute at the same time instead of one after another
   ([#516](https://github.com/gchen19/AnkusDrive/issues/516)).
+
+### Kept
+
+- **`DP_*` document properties still read, and a write still updates the old
+  property in place.** This is a decision, not an oversight: the fallback goes only
+  together with an explicit document migration, which does not exist yet. New parts
+  are stamped `AD_*` as before [#519](https://github.com/gchen19/AnkusDrive/issues/519).
 
 ## [0.5.7] — 2026-10-29
 

@@ -35,51 +35,6 @@ from __future__ import annotations
 import os
 
 _ENV_PREFIX = "ANKUSDRIVE_"
-# Pre-0.5 spelling. The project was renamed DriftPin -> AnkusDrive (#295); the
-# ~40 env vars came with it. A user's vars live in shell profiles, CI secrets,
-# and MCP-host `env` blocks we cannot reach, and the failure mode of dropping
-# them is the WORST one available here: an unset override doesn't error, it
-# silently falls through to auto-discovery and "works" against the wrong
-# solver. So the legacy prefix is honoured for one minor release.
-_LEGACY_ENV_PREFIX = "DRIFTPIN_"
-
-_adopted: list = []          # legacy var names promoted this process (for doctor)
-
-
-def adopt_legacy_env(environ=None, warn=True) -> list:
-    """Promote every ``DRIFTPIN_*`` var to its ``ANKUSDRIVE_*`` name when the new
-    name is unset, and return the legacy names that were promoted.
-
-    Called once at package import (``ankusdrive/__init__.py``) so EVERY entry
-    point — CLI, MCP server, and the worker inside freecadcmd — sees one already-
-    normalised environment. That is what lets the other ~40 read sites keep
-    naming only the new var. Idempotent; an explicitly-set new var always wins.
-    Deprecated: to be deleted in 0.6."""
-    env = os.environ if environ is None else environ
-    promoted = []
-    for key in list(env):
-        if not key.startswith(_LEGACY_ENV_PREFIX):
-            continue
-        new = _ENV_PREFIX + key[len(_LEGACY_ENV_PREFIX):]
-        if env.get(new):
-            continue                      # explicit new spelling wins
-        env[new] = env[key]
-        promoted.append(key)
-    if promoted and warn:
-        import sys
-        sys.stderr.write(
-            "AnkusDrive: %d DRIFTPIN_* environment variable(s) are deprecated and "
-            "were read as ANKUSDRIVE_* (%s). Rename them before 0.6.\n"
-            % (len(promoted), ", ".join(sorted(promoted)))
-        )
-    if environ is None:
-        _adopted[:] = sorted(promoted)
-    return sorted(promoted)
-
-
-def adopted_legacy_env() -> list:
-    """The legacy env vars promoted at import — what ``doctor`` reports."""
-    return list(_adopted)
 # (path, mtime) -> parsed dict; a missing file caches under mtime None so a
 # server process doesn't stat-parse on every solver probe yet picks up a file
 # created/edited later.
@@ -90,16 +45,7 @@ def config_path() -> str:
     """The config file location for this platform (the file may not exist).
     ``ANKUSDRIVE_CONFIG`` overrides outright; else ``%APPDATA%\\ankusdrive\\config.toml``
     on Windows, ``$XDG_CONFIG_HOME|~/.config/ankusdrive/config.toml`` elsewhere."""
-    path = _current_config_path()
-    # Pre-0.5 location (#295). Read-only fallback, and only when the user has
-    # not migrated: a file at the new path always wins, and write() always
-    # targets the new path, so the first `ankusdrive setup` moves them forward
-    # (carrying the old contents, because load() read them). Deprecated: 0.6.
-    if not os.environ.get("ANKUSDRIVE_CONFIG") and not os.path.exists(path):
-        legacy = os.path.join(_config_base(), "driftpin", "config.toml")
-        if os.path.exists(legacy):
-            return legacy
-    return path
+    return _current_config_path()
 
 
 def _config_base() -> str:
@@ -110,7 +56,7 @@ def _config_base() -> str:
 
 
 def _current_config_path() -> str:
-    """The 0.5+ location, ignoring any pre-rename file — what ``write`` targets."""
+    """The config file location, before any existence check — what ``write`` targets."""
     if env := os.environ.get("ANKUSDRIVE_CONFIG"):
         return env
     return os.path.join(_config_base(), "ankusdrive", "config.toml")
@@ -225,8 +171,7 @@ def write(values: dict) -> str:
     doesn't name are preserved; the directory is created if needed. Values are
     written with forward slashes (valid TOML without escaping, and Windows
     accepts them)."""
-    path = _current_config_path()      # always migrate forward, never rewrite
-                                       # a pre-rename file in place (#295)
+    path = _current_config_path()
     data = load()
     top = dict(data)
     solvers_tbl = dict(top.pop("solvers", {}) or {})

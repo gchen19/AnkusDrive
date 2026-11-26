@@ -82,13 +82,12 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 ok "macOS $(sw_vers -productVersion 2>/dev/null || echo '?') on $(uname -m)"
 
-# --- 1b. legacy env var names (deprecated with the shim: delete in 0.6) -------
-# The 0.5 rename (#295) moved every override to ANKUSDRIVE_*. ankusdrive's own
-# import-time shim still promotes a DRIFTPIN_* var in-process, so Python-side
-# resolution keeps working and `doctor` looks healthy -- but this script reads the
-# environment DIRECTLY, and so does everything else outside Python. A machine
-# whose env was never renamed therefore fails below as six separate "is unset"
-# errors that each name the wrong fix. Say the real one, once, up front.
+# --- 1b. legacy env var names ------------------------------------------------
+# The 0.5 rename (#295) moved every override to ANKUSDRIVE_*, and 0.6 (#519)
+# removed the shim that promoted a DRIFTPIN_* var, so nothing reads the old names
+# any more. A machine whose env was never renamed therefore fails below as six
+# separate "is unset" errors that each name the wrong fix. Say the real one,
+# once, up front.
 step "Environment naming"
 legacy=$(env | sed -n 's/^\(DRIFTPIN_[A-Za-z0-9_]*\)=.*/\1/p' | sort | tr '\n' ' ')
 if [ -n "$legacy" ]; then
@@ -271,7 +270,7 @@ if [ "$WANT_SU2" = 1 ]; then
   # Prints an explicit "OK "/"MISSING " sentinel rather than the bare path. The
   # bare form could not be read safely: its not-found verdict was the EMPTY
   # string, which command substitution strips along with the trailing newline, so
-  # a single line of stderr (the DRIFTPIN_* deprecation warning, a numpy notice)
+  # a single line of stderr (a deprecation warning, a numpy notice)
   # became the whole captured value and matched the catch-all -- reporting
   # "SU2_CFD -> <warning text>" and passing the lane green with SU2 unverified.
   # With a sentinel, anything unrecognised is a failure instead of a pass.

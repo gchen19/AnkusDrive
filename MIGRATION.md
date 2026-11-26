@@ -3,10 +3,10 @@
 The project was renamed in **0.5.0** ([#295](https://github.com/gchen19/AnkusDrive/issues/295)).
 Same tool, same tools, new name.
 
-Nothing on your machine breaks the moment you upgrade: every surface below keeps
-accepting the old spelling for one minor release, with a deprecation notice on
-stderr. **All of it is removed in 0.6**, so treat this as a to-do list, not a
-permanent guarantee.
+0.5.x kept accepting the old spelling on every surface below, with a deprecation
+notice on stderr. **0.6 removed all of it except the `.FCStd` properties**, so a
+machine that never migrated now behaves as though those settings were never made.
+Run `ankusdrive doctor`: it names each leftover it finds and how to move it.
 
 ## What you have to change
 
@@ -25,24 +25,27 @@ Fastest path:
 
 ```bash
 pipx uninstall driftpin && pipx install ankusdrive
-ankusdrive doctor          # reports anything still resolving through a shim
+ankusdrive doctor          # names anything still on the old spelling
 ```
 
 Then edit your MCP host config — the `mcpServers` key, the command, and any
 `env` block — or just re-run `ankusdrive setup` and paste what it prints.
 
-## What keeps working until 0.6
+## What 0.6 stopped reading
 
-- **`driftpin` on the command line.** Still installed; prints a rename notice and
-  runs `ankusdrive`.
-- **`DRIFTPIN_*` environment variables.** Promoted to their `ANKUSDRIVE_*` name at
-  startup unless you have already set the new one, which always wins. One stderr
-  line lists what was promoted.
-- **`~/.config/driftpin/config.toml`.** Still read when no `ankusdrive/config.toml`
-  exists. Writes always go to the new path, so the next `ankusdrive setup`
-  migrates you, contents included.
-- **Solvers provisioned under `DriftPin/solvers`.** Still discovered on Windows and
-  macOS. New provisioning uses the new directory.
+- **`driftpin` on the command line.** No longer installed. An MCP host config,
+  script or alias that still names it gets `command not found`.
+- **`DRIFTPIN_*` environment variables.** No longer promoted to `ANKUSDRIVE_*`.
+  A leftover one is simply unset, so the solver it pointed at falls through to
+  auto-discovery.
+- **`~/.config/driftpin/config.toml`.** No longer read. Move it to
+  `…/ankusdrive/config.toml`.
+- **Solvers provisioned under `DriftPin/solvers`.** No longer discovered on
+  Windows or macOS. Move them to `AnkusDrive/solvers`, or re-run the solver
+  installer.
+
+`ankusdrive doctor` reports each of these as `IGNORED` with its fix, and the CI
+preflight scripts still fail an environment that sets a `DRIFTPIN_*` variable.
 
 ## Your existing `.FCStd` files
 
@@ -61,8 +64,8 @@ had the old names simply been dropped, an annotated part would have opened fine
 and read back as though it had never been annotated — no interfaces, no intent,
 no verdict, no error. `tests/test_compat_rename.py` pins the behaviour.
 
-Removing the fallback in 0.6 will come with an explicit document migration, not
-a quiet deletion.
+That is why this fallback **stays in 0.6**. It goes only together with an
+explicit document migration, not a quiet deletion.
 
 ## The logo
 

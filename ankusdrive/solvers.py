@@ -1868,16 +1868,14 @@ def _binary_candidates(name: str, spec: dict) -> list:
     #    ~/Library/Application Support/AnkusDrive/solvers — so a provisioned box
     #    resolves them with NO env var, the way an MCP host with a minimal
     #    environment launches `ankusdrive mcp` (issue #205 / #199 / #194).
-    #    Both the current name and the pre-rename "DriftPin" one are probed: a box
-    #    provisioned by <=0.4.x has real binaries on disk under the old directory,
-    #    and dropping it would silently un-resolve a solver that is still there
-    #    (#295). New provisioning only ever writes the new path. Deprecated: 0.6.
+    #    A box provisioned by <=0.4.x under the pre-rename directory is no longer
+    #    probed (removed in 0.6, #519); `ankusdrive doctor` names that directory
+    #    when it still holds solvers, so the miss is never silent.
     prov_bases = []
     if platform.system() == "Windows" and (lad := os.environ.get("LOCALAPPDATA")):
-        prov_bases = [os.path.join(lad, n, "solvers") for n in ("AnkusDrive", "DriftPin")]
+        prov_bases = [os.path.join(lad, "AnkusDrive", "solvers")]
     elif platform.system() == "Darwin":
-        prov_bases = [os.path.expanduser(f"~/Library/Application Support/{n}/solvers")
-                      for n in ("AnkusDrive", "DriftPin")]
+        prov_bases = [os.path.expanduser("~/Library/Application Support/AnkusDrive/solvers")]
     if prov_bases:
         import glob as _glob
         suffix = ".exe" if platform.system() == "Windows" else ""

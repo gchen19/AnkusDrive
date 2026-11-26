@@ -428,11 +428,10 @@ the built-in CFD builders resolve through `ANKUSDRIVE_OPENFOAM_*`, *not* the FSI
 Omitting them leaves `test_openfoam` / `test_meshbridge` / `test_wind_tunnel` skipping
 their live halves, which is exactly what the preflight refuses to let pass.
 
-> A Mac provisioned before 0.5 may still name these `DRIFTPIN_*` in a shell profile. The
-> in-process shim (`config.adopt_legacy_env`) promotes them, so `doctor` looks healthy, but
-> the preflight reads the environment directly and sees them as unset. Rename them. Solvers
-> under `~/Library/Application Support/DriftPin/solvers` resolve only until 0.6; move them
-> to `.../AnkusDrive/solvers`.
+> A Mac provisioned before 0.5 may still name these `DRIFTPIN_*` in a shell profile. Since
+> 0.6 nothing reads that spelling, so they behave as unset; `doctor` and the preflight both
+> name them. Rename them. Solvers under `~/Library/Application Support/DriftPin/solvers` are
+> no longer discovered either; move them to `.../AnkusDrive/solvers`.
 
 ### The preflight step
 
