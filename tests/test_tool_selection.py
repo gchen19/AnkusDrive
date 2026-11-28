@@ -43,10 +43,12 @@ Editing a description therefore re-queries the clusters that expose that tool.
 import ast
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 import re
 import sys
+import textwrap
 import time
 import traceback
 from collections import Counter, defaultdict
@@ -227,7 +229,7 @@ def client_search(query: str, catalog: list, limit: int | None = None) -> list:
     if q.lower().startswith("select:"):
         want = [w.strip() for w in q[7:].split(",") if w.strip()]
         return [w for w in dict.fromkeys(want) if w in names]
-    limit = max(1, min(int(limit or CLIENT_SEARCH_LIMIT), len(catalog) or 1))
+    limit = max(1, min(search_limit(limit), len(catalog) or 1))
     words = set(_WORD.findall(q.lower()))
     scored = []
     for i, t in enumerate(catalog):
@@ -240,13 +242,54 @@ def client_search(query: str, catalog: list, limit: int | None = None) -> list:
     return [n for _, _, n in sorted(scored)[:limit]]
 
 
-def request_key(req: dict) -> str:
-    """Hash of everything that decides the answer: model, prompt, request, every schema."""
-    return hashlib.sha256(json.dumps(req, sort_keys=True).encode()).hexdigest()
+def search_limit(value) -> int:
+    """``max_results`` as the model sent it, or the default when it is missing or not
+    a number. The model writes this value, so a string such as "five" must not raise
+    inside converse() and end a paid run with no report."""
+    try:
+        return int(value) if value else CLIENT_SEARCH_LIMIT     # 0 / None / "" -> default, as before
+    except (TypeError, ValueError, OverflowError):
+        return CLIENT_SEARCH_LIMIT
 
 
-def cache_path(case: dict, req: dict, cache_dir: Path | None = None) -> Path:
-    return (cache_dir or CACHE_DIR) / response_cache_name(f"{case['id']}.{request_key(req)[:16]}", req["model"], "json")
+def _code_fingerprint(fn) -> str:
+    """Hash of a function's code with its docstring, comments and layout dropped, so
+    rewording a comment keeps the cache but changing what the code does clears it."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.body and \
+                isinstance(node.body[0], ast.Expr) and isinstance(getattr(node.body[0], "value", None), ast.Constant) \
+                and isinstance(node.body[0].value.value, str):
+            node.body = node.body[1:] or [ast.Pass()]
+    tree.body[0].name = "_"       # the code counts, not what it is called
+    return hashlib.sha256(ast.dump(tree).encode()).hexdigest()
+
+
+def loop_fingerprint(loading: str) -> dict | None:
+    """What decides a deferred case beyond its first request (#525 review): the turn
+    cap and the multi-turn loop, plus, under client_search, the search engine that
+    answers each ``tool_search`` call. Eager is one call, so it has none, and its
+    keys stay the #508 keys."""
+    if loading == "eager":
+        return None
+    fp = {"max_turns": MAX_TURNS, "converse": _code_fingerprint(converse)}
+    if loading == "client_search":
+        fp["client_search"] = _code_fingerprint(client_search)
+        fp["search_limit"] = _code_fingerprint(search_limit)
+    return fp
+
+
+def request_key(req: dict, loading: str = "eager") -> str:
+    """Hash of everything that decides the answer: model, prompt, request, every
+    schema, and, under a deferred loading mode, the code that runs the later turns."""
+    loop = loop_fingerprint(loading)
+    keyed = req if loop is None else {"request": req, "loop": loop}
+    return hashlib.sha256(json.dumps(keyed, sort_keys=True).encode()).hexdigest()
+
+
+def cache_path(case: dict, req: dict, cache_dir: Path | None = None, loading: str = "eager") -> Path:
+    key = request_key(req, loading)[:16]
+    return (cache_dir or CACHE_DIR) / response_cache_name(f"{case['id']}.{key}", req["model"], "json")
 
 
 # --- one response -> a grade ---------------------------------------------------
@@ -379,7 +422,7 @@ def run_cases(client_factory, tools_list: list, model: str, cases: list, mode: s
         if fams not in tool_blocks:
             tool_blocks[fams] = to_anthropic(tools_list, fams, loading)
         req = build_request(case, tool_blocks[fams], model, loading)
-        path = cache_path(case, req, cache_dir)
+        path = cache_path(case, req, cache_dir, loading)
         if path.exists() and not refresh:
             rec, cached = json.loads(path.read_text(encoding="utf-8")), True
         else:
@@ -789,6 +832,77 @@ def test_client_search_engine():
     assert client_search("modal", cat, 2) == ["fem_modal", "beam_modal"], "ties keep tools/list order"
     assert client_search("zzz", cat) == []
     assert len(client_search("a", [{"name": f"t{i}", "description": "a"} for i in range(9)])) == CLIENT_SEARCH_LIMIT
+    # max_results is model-written: a value that is not a number falls back to the default
+    many = [{"name": f"t{i}", "description": "a"} for i in range(9)]
+    for bad in ("five", "", [], {}, float("inf"), float("nan")):
+        assert len(client_search("a", many, bad)) == CLIENT_SEARCH_LIMIT, bad
+    assert len(client_search("a", many, "3")) == 3 and len(client_search("a", many, 2.0)) == 2
+    assert len(client_search("a", many, 0)) == CLIENT_SEARCH_LIMIT, "0 still means the default"
+
+
+def test_deferred_cache_key_covers_the_loop():
+    """#525 review: a deferred record also depends on code outside its first request
+    (the turn cap, the loop, the client search engine), so changing that code must
+    miss the cache instead of reporting old discovery numbers as new."""
+    import tempfile
+    g = globals()
+    cases, tools, _ = _selftest_fixture(None)
+    case = cases[0]
+    req = build_request(case, to_anthropic(tools, exposed_families("modal"), "client_search"),
+                        "claude-sonnet-5-5", "client_search")
+    # eager keys are exactly the #508 keys, so its cached responses stay valid
+    plain = hashlib.sha256(json.dumps(req, sort_keys=True).encode()).hexdigest()
+    assert request_key(req) == request_key(req, "eager") == plain
+    keys = {m: request_key(req, m) for m in LOADING_MODES}
+    assert len(set(keys.values())) == 3 and keys["search_bm25"] == keys["search_regex"] != plain
+
+    saved = {n: g[n] for n in ("MAX_TURNS", "client_search")}
+    try:
+        g["MAX_TURNS"] = saved["MAX_TURNS"] + 1
+        assert all(request_key(req, m) != keys[m] for m in LOADING_MODES if m != "eager")
+        g["MAX_TURNS"] = saved["MAX_TURNS"]
+
+        def reweighted(query, catalog, limit=None):
+            return [t["name"] for t in catalog][:search_limit(limit)]
+        g["client_search"] = reweighted
+        assert request_key(req, "client_search") != keys["client_search"]
+        assert request_key(req, "search_bm25") == keys["search_bm25"], \
+            "the client engine does not decide a server-side search"
+    finally:
+        g.update(saved)
+    assert {m: request_key(req, m) for m in LOADING_MODES} == keys
+
+    # comments, docstrings and layout do not count, so rewording them keeps a paid cache
+    def a(x):
+        """one"""
+        return x + 1   # a comment
+
+    def b(x):
+        """two"""
+        # another comment
+        return (x
+                + 1)
+
+    def c(x):
+        return x + 2
+    assert _code_fingerprint(a) == _code_fingerprint(b) != _code_fingerprint(c)
+
+    # end to end: a cached client_search case is served from disk until MAX_TURNS changes
+    with tempfile.TemporaryDirectory() as td:
+        def run():
+            fake = _TurnClient({case["request"]: [([_ns_tool_use(case["accept"][0], {})], "tool_use")]})
+            res = run_cases(lambda: fake, tools, "claude-sonnet-5-5", [case], cache_dir=Path(td),
+                            log=lambda *_: None, loading="client_search")
+            return fake, res
+        run()
+        fake, res = run()
+        assert not fake.calls and res[0]["from_cache"]
+        try:
+            g["MAX_TURNS"] = saved["MAX_TURNS"] + 1
+            fake, res = run()
+        finally:
+            g.update(saved)
+        assert len(fake.calls) == 1 and not res[0]["from_cache"]
 
 
 def test_deferred_loop_and_grading():
